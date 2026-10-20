@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.scripting.callback
 
 import xyz.block.trailblaze.logs.model.SessionId
+import kotlinx.coroutines.Job
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import java.util.UUID
@@ -66,6 +67,13 @@ object JsScriptingInvocationRegistry {
     val toolRepo: TrailblazeToolRepo,
     val executionContext: TrailblazeToolExecutionContext,
     val depth: Int = 0,
+    /**
+     * What this invocation's callbacks are cancelled with: a child of the invoking tool call's Job
+     * when there is one, so cancelling the tool cancels them, and cancelled itself when the
+     * invocation closes, so a tool
+     * that returns with a callback still pending neither waits on it nor leaves it running.
+     */
+    val job: Job? = null,
   )
 
   /**
@@ -75,7 +83,7 @@ object JsScriptingInvocationRegistry {
    */
   class Handle internal constructor(val invocationId: String) : AutoCloseable {
     override fun close() {
-      entries.remove(invocationId)
+      entries.remove(invocationId)?.job?.cancel()
     }
   }
 
@@ -96,9 +104,12 @@ object JsScriptingInvocationRegistry {
     toolRepo: TrailblazeToolRepo,
     executionContext: TrailblazeToolExecutionContext,
     depth: Int = 0,
+    job: Job? = null,
   ): Handle {
     val id = UUID.randomUUID().toString()
-    entries[id] = Entry(sessionId, toolRepo, executionContext, depth)
+    // A Job even with no invoking one (a session finalizer), so closing the invocation still has its
+    // pending callbacks to cancel.
+    entries[id] = Entry(sessionId, toolRepo, executionContext, depth, Job(job))
     return Handle(id)
   }
 

@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.quickjs.tools
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -89,7 +91,8 @@ class QuickJsToolRegistration(
       descriptor = descriptor,
       executeTool = { args: QuickJsTrailblazeTool ->
         val context = trailblazeToolContextProvider()
-        val result = args.execute(context)
+        // The model calls this directly, not through an agent's dispatch, so record it here.
+        val result = ToolCallHistory.recordExecution(context, args) { args.execute(context) }
         "Executed QuickJS tool: ${name.toolName} — result: $result"
       },
     )

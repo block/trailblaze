@@ -16,7 +16,7 @@ internal object GitTrailSourceUrl {
     val root = GitRefTree.gitRootOf(sourceFile.parentFile) ?: return null
     val path = root.toPath().relativize(sourceFile.toPath()).toString().replace('\\', '/')
     val commit = GitRefTree.resolveCommit(root, "HEAD") ?: return null
-    val remote = GitRefTree.runGit(root, "remote", "get-url", "origin").getOrNull()?.trim() ?: return null
+    val remote = GitRefTree.runGit(root, "config", "--get", "remote.origin.url").getOrNull()?.trim() ?: return null
     val url = gitHubTrailSourceUrl(remote, commit, path) ?: return null
     val requestedRepo = envReader("TRAIL_SOURCE_REPO")?.takeIf { it.isNotBlank() }
     if (requestedRepo != null && gitHubTrailSourceUrl(requestedRepo, commit, path) != url) return null

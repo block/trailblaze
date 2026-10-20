@@ -49,7 +49,7 @@ object TrailmapCatalogBuilder {
   // `ToolYamlConfig`/`InlineScriptToolConfig` carry no source-file path (confirmed: neither type
   // has a path field), so a component whose declared name differs from its filename — a multi-tool
   // descriptor exporting several names from one file, or a component nested under a subdirectory
-  // like `shortcuts/web/` — can't have its relPath reconstructed from `id`/`name` alone. Extract the
+  // like `trailheads/web/` — can't have its relPath reconstructed from `id`/`name` alone. Extract the
   // real `id:` from each YAML file's own text (cheap, same weight class as DISPLAY_NAME/CLASS_KEY)
   // to look up its REAL discovered path instead of guessing one from the resolved name.
   private val ID_FIELD = Regex("(?m)^\\s*id:\\s*[\"']?(.+?)[\"']?\\s*$")
@@ -148,9 +148,9 @@ object TrailmapCatalogBuilder {
 
     // Real discovered relPath for every YAML component, keyed by "<trailmapId>::<id>" — see
     // ID_FIELD's kdoc for why this can't be reconstructed from the resolved model alone. A cheap
-    // scan (three suffix walks, regex over text), same weight class as the rest of this file.
+    // scan (two suffix walks, regex over text), same weight class as the rest of this file.
     val yamlRelPathById: Map<String, String> = buildMap {
-      listOf(".tool.yaml", ".trailhead.yaml", ".shortcut.yaml").forEach { suffix ->
+      listOf(".tool.yaml", ".trailhead.yaml").forEach { suffix ->
         runCatching { resourceSource.discoverAndLoadRecursive(dir, suffix) }.getOrElse {
           Console.log("[TrailmapCatalogBuilder] discovery of '$suffix' failed: ${it.message}")
           emptyMap()
@@ -242,12 +242,11 @@ object TrailmapCatalogBuilder {
     }
 
     // Operational YAML-composed tools — never scripted; those live on target.tools below.
-    // `Mode.METADATA` (trailhead-/shortcut-only YAMLs) is handled by branching on the field
+    // `Mode.METADATA` (trailhead-only YAMLs) is handled by branching on the field
     // itself rather than a separate mode dispatch.
     val yamlTools = tools.map { t ->
       val subdir = when {
         t.trailhead != null -> "trailheads"
-        t.shortcut != null -> "shortcuts"
         else -> "tools"
       }
       val suffix = TOOL_LAYOUT_BY_DIR.getValue(subdir).suffix
@@ -270,7 +269,7 @@ object TrailmapCatalogBuilder {
 
     // Trailheads: union of YAML-sourced (`trailhead != null`) and scripted-sourced
     // (InlineScriptToolConfig.trailhead != null, analyzer-resolved) — mirrors the same union
-    // ToolDiscoveryToolSet.computeRoleNames already does for the CLI/desktop, now backed by the
+    // ToolDiscoveryToolSet.computeTrailheadNames already does for the CLI/desktop, now backed by the
     // identical resolved data instead of a parallel regex. A scripted trailhead's entry carries
     // its flavor (so pickers know a parameter schema is fetchable via scripted-tool-params) and
     // its supported platforms (from the analyzer-enriched `_meta`, the durable platform signal

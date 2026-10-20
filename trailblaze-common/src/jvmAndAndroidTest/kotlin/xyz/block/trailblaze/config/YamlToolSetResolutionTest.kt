@@ -12,19 +12,21 @@ import kotlin.test.assertTrue
 /**
  * Guards the "toolsets list tools by bare name, regardless of backing" invariant.
  *
- * After the YAML-defined tool migration, `core_interaction.yaml` lists `eraseText` alongside
- * class-backed tools like `hideKeyboard`. Authors should not need to know which backing a
- * tool uses; the resolver + resolved toolset must handle both uniformly.
+ * A toolset can list a YAML-defined tool ([YamlDefinedToolFixture]) alongside class-backed tools
+ * like `hideKeyboard`. Authors should not need to know which backing a tool uses; the resolver +
+ * resolved toolset must handle both uniformly.
  */
 class YamlToolSetResolutionTest {
 
-  private val resolver = ToolNameResolver.fromBuiltInAndCustomTools()
+  private val resolver = YamlDefinedToolFixture.registered { ToolNameResolver.fromBuiltInAndCustomTools() }
+
+  private val yamlTool = YamlDefinedToolFixture.NAME
 
   @Test
-  fun `resolver reports eraseText as known via the YAML backing`() {
-    assertTrue(resolver.isKnown("eraseText"), "eraseText should be known (YAML-defined)")
-    assertNull(resolver.resolveOrNull("eraseText"), "eraseText has no KClass — resolveOrNull returns null")
-    assertEquals(ToolName("eraseText"), resolver.resolveYamlNameOrNull("eraseText"))
+  fun `resolver reports a YAML-defined tool as known via the YAML backing`() {
+    assertTrue(resolver.isKnown(yamlTool), "$yamlTool should be known (YAML-defined)")
+    assertNull(resolver.resolveOrNull(yamlTool), "$yamlTool has no KClass — resolveOrNull returns null")
+    assertEquals(ToolName(yamlTool), resolver.resolveYamlNameOrNull(yamlTool))
   }
 
   @Test
@@ -51,10 +53,10 @@ class YamlToolSetResolutionTest {
   @Test
   fun `partitionLenient splits a mixed name list by backing`() {
     val partitioned = resolver.partitionLenient(
-      names = listOf("hideKeyboard", "eraseText", "definitelyNotARealTool"),
+      names = listOf("hideKeyboard", yamlTool, "definitelyNotARealTool"),
     )
     assertEquals(1, partitioned.classBacked.size, "hideKeyboard is class-backed")
-    assertEquals(setOf(ToolName("eraseText")), partitioned.yamlDefinedNames)
+    assertEquals(setOf(ToolName(yamlTool)), partitioned.yamlDefinedNames)
   }
 
   @Test
@@ -90,7 +92,7 @@ class YamlToolSetResolutionTest {
   }
 
   @Test
-  fun `core_interaction toolset resolves eraseText through the YAML backing`() {
+  fun `a toolset resolves a YAML-defined tool through the YAML backing`() {
     val yaml = """
       id: test_core
       description: Test toolset
@@ -98,7 +100,7 @@ class YamlToolSetResolutionTest {
         - android-ondevice-instrumentation
       tools:
         - hideKeyboard
-        - eraseText
+        - $yamlTool
     """.trimIndent()
 
     val toolSet = ToolSetYamlLoader.loadFromYaml(yaml, resolver)
@@ -106,7 +108,7 @@ class YamlToolSetResolutionTest {
       it.simpleName?.removeSuffix("TrailblazeTool") ?: it.toString()
     }.toSet()
     assertTrue("HideKeyboard" in classNames, "hideKeyboard should appear as class-backed")
-    assertEquals(setOf(ToolName("eraseText")), toolSet.resolvedYamlToolNames)
+    assertEquals(setOf(ToolName(yamlTool)), toolSet.resolvedYamlToolNames)
   }
 
   @Test
@@ -118,16 +120,16 @@ class YamlToolSetResolutionTest {
         - android-ondevice-instrumentation
       tools:
         - hideKeyboard
-        - eraseText
+        - $yamlTool
     """.trimIndent()
 
     val entry = ToolSetYamlLoader.loadFromYaml(yaml, resolver).toCatalogEntry()
-    assertEquals(setOf(ToolName("eraseText")), entry.yamlToolNames)
-    assertTrue(entry.toolNames.containsAll(listOf("hideKeyboard", "eraseText")))
+    assertEquals(setOf(ToolName(yamlTool)), entry.yamlToolNames)
+    assertTrue(entry.toolNames.containsAll(listOf("hideKeyboard", yamlTool)))
   }
 
   @Test
-  fun `YamlBackedHostAppTarget exposes eraseText via the new yaml tool names accessor`() {
+  fun `YamlBackedHostAppTarget exposes a YAML-defined tool via the yaml tool names accessor`() {
     val coreToolSet = ToolSetYamlLoader.loadFromYaml(
       yamlString = """
         id: test_core
@@ -136,7 +138,7 @@ class YamlToolSetResolutionTest {
           - android-ondevice-instrumentation
         tools:
           - hideKeyboard
-          - eraseText
+          - $yamlTool
       """.trimIndent(),
       toolNameResolver = resolver,
     )
@@ -154,13 +156,13 @@ class YamlToolSetResolutionTest {
     )
 
     assertEquals(
-      setOf(ToolName("eraseText")),
+      setOf(ToolName(yamlTool)),
       target.getCustomYamlToolNamesForDriver(
         TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       ),
     )
     val iosYaml = target.getCustomYamlToolNamesForDriver(TrailblazeDriverType.IOS_HOST)
-    assertFalse(ToolName("eraseText") in iosYaml, "iOS platform isn't wired here, so nothing is exposed")
+    assertFalse(ToolName(yamlTool) in iosYaml, "iOS platform isn't wired here, so nothing is exposed")
   }
 
   @Suppress("NOTHING_TO_INLINE")

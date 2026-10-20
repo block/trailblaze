@@ -66,11 +66,11 @@ class KoogTestAgentRunner(
   private val logger: TrailblazeLogger,
   private val sessionProvider: () -> TrailblazeSession,
   private val maxLlmCalls: Int? = null,
-  systemPromptTemplate: String,
+  private val systemPromptTemplate: String,
   /** Where the decision engine's settings are read; see [runPromptsWithKoogStrategyGraph]. */
   private val decisionSettings: (String) -> String? = System::getenv,
   /** Tools the LLM is shown even when the decision engine hides tools; see [runPromptsWithKoogStrategyGraph]. */
-  private val alwaysShownTools: Set<String> = emptySet(),
+  val alwaysShownTools: Set<String> = emptySet(),
 ) : TestAgentRunner {
 
   /** Dynamic session context re-read before each step (e.g. roster + active device). */
@@ -98,10 +98,19 @@ class KoogTestAgentRunner(
   override fun recover(
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
-  ): AgentTaskStatus = runBlocking { blaze(promptStep, healObjectiveStep(promptStep, recordingResult)) }
+  ): AgentTaskStatus = runBlocking { recoverSuspend(promptStep, recordingResult) }
+
+  override suspend fun recoverSuspend(
+    promptStep: PromptStep,
+    recordingResult: PromptRecordingResult.Failure,
+  ): AgentTaskStatus = blaze(promptStep, healObjectiveStep(promptStep, recordingResult))
 
   override fun appendToSystemPrompt(context: String) {
     currentSystemPrompt = currentSystemPrompt + "\n" + context
+  }
+
+  override fun resetSystemPrompt() {
+    currentSystemPrompt = systemPromptTemplate
   }
 
   /** Runs [objectiveStep] through the graph while the logs name [prompt], the step as written. */

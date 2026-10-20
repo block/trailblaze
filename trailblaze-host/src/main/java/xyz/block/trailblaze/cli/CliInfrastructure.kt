@@ -1077,7 +1077,7 @@ internal suspend fun resolveDeviceWithAutodetect(
  *
  * Use from picocli `call()` methods that aren't entering a `cliReusable`/
  * `cliOneShot` wrapper themselves — e.g. `ToolboxCommand`, `TrailCommand`,
- * `WaypointShortcutVerifyCommand`, the `session` subcommands. The wrappers in
+ * the `session` subcommands. The wrappers in
  * [cliReusableWithDevice] / [cliOneShotWithDevice] use the suspending form
  * directly since they're already inside a `runBlocking`.
  */

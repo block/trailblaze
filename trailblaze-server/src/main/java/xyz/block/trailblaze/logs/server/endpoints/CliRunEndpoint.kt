@@ -194,7 +194,7 @@ data class CliRunResponse(
   val deviceClassifiers: List<String> = emptyList(),
   /**
    * The multi-device configuration the session selected (a `config.devices:` configuration
-   * entry's name, e.g. `x2`), or null for a single-device run. When set, the CLI keys the
+   * entry's name, e.g. `pair`), or null for a single-device run. When set, the CLI keys the
    * recording save-back by this name instead of [deviceClassifiers]. Null from older daemons —
    * absent degrades to classifier keying.
    */

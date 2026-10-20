@@ -168,7 +168,7 @@ interface ExecutableTrailblazeTool : TrailblazeTool {
 }
 ```
 
-Examples: `tapOnElementWithText`, `inputText`, `assertVisible`
+Examples: `tapOnElementBySelector`, `inputText`, `assertVisible`
 
 #### DelegatingTrailblazeTool
 
@@ -285,8 +285,10 @@ trail:
   - step: Tap the login button
     recording:
       android:
-        - tapOnElementWithText:
-            text: "Login"
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Login"
 ```
 
 The `recording:` block is keyed by device classifier (`android`, `ios-iphone`, `web`,
@@ -326,7 +328,7 @@ Structurally it's a step (one NL `step:` plus per-classifier recordings), but it
 bootstrap rather than an assertion, so it can never be a `verify:`. Trailheads are
 authored as their own tool type (`*.trailhead.yaml`) — one deterministic tool that reaches
 a known starting state from any point — see
-[Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
+[Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-trailheadyaml).
 
 ## Execution Modes
 

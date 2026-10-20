@@ -109,6 +109,13 @@ val bundlePerfReportCore by tasks.registering(Exec::class) {
     "generated-resources/perf-report/xyz/block/trailblaze/trailrunner/web/app/perf-core.js",
   )
   inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
+  // perf-extract.ts inlines ../report/device-clock-sync.ts; same hazard as bundleRunReportCore's.
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/report")) {
+      include("**/*.ts")
+      exclude("**/*.test.ts")
+    },
+  ).withPropertyName("reportCliSources")
   outputs.file(out)
   workingDir(srcDir)
   commandLine(

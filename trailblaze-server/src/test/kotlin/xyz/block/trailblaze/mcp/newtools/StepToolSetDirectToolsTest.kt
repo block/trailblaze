@@ -695,7 +695,7 @@ class StepToolSetDirectToolsTest {
         screenStateProvider = { _, _, _ -> dummyScreenState },
         availableToolsProvider = {
           listOf(
-            TrailblazeToolDescriptor(name = "tapOnElementWithText"),
+            TrailblazeToolDescriptor(name = "tapOnElementBySelector"),
             TrailblazeToolDescriptor(name = "inputText"),
           )
         },

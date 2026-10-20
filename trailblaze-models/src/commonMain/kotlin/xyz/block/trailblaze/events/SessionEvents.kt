@@ -2,6 +2,7 @@ package xyz.block.trailblaze.events
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
  * The generic, pluggable session-events artifact format.
@@ -37,6 +38,16 @@ import kotlinx.serialization.json.JsonElement
  * pulls the order key from the first present of [TIME_FIELD] (`timeMs`, the envelope field) then
  * [LEGACY_TIME_FIELD] (`timestampMs`, what `NetworkEvent` already carries), falling back to `0`. So
  * an envelope stream and a bare-`NetworkEvent` stream both order correctly with no per-shape branch.
+ *
+ * ## Clocks
+ *
+ * The order key is when the event HAPPENED, on the clock named by the record's top-level
+ * [CLOCK_FIELD]: `"device"` for a time the device stamped (an app event stamped when it was emitted),
+ * absent for the host's. Same vocabulary and same absent-means-host rule as trace events
+ * (`SessionTraceFile`) and logs ([TrailblazeClockDomain]). Readers put device-clock records on the
+ * host timeline with the session's measured `session_device_clock.json` offsets when it has them, and keep
+ * the raw stamp when it doesn't. An on-device run stamps everything on the device clock, so its
+ * records need no conversion.
  */
 object SessionEvents {
 
@@ -51,6 +62,9 @@ object SessionEvents {
 
   /** Fallback ordering field for rich schemas that predate the envelope (e.g. `NetworkEvent`). */
   const val LEGACY_TIME_FIELD: String = "timestampMs"
+
+  /** Which clock stamped the order key; `"device"` or absent (host). See "Clocks" above. */
+  const val CLOCK_FIELD: String = "clock"
 
   /**
    * The style token every legacy `<name>.<style>.ndjson` producer actually wrote, and therefore a
@@ -97,7 +111,7 @@ object SessionEvents {
 }
 
 /**
- * The default per-line envelope: a host-stamped epoch-millis timestamp plus an arbitrary payload.
+ * The default per-line envelope: an epoch-millis timestamp plus an arbitrary payload.
  *
  * Producers that don't already have a rich on-disk schema should write one [SessionEvent] per line.
  * [data] is whatever the renderer understands (a key/value map, a log string, a nested object, …).
@@ -105,4 +119,10 @@ object SessionEvents {
  * renderer decides how [data] is displayed.
  */
 @Serializable
-data class SessionEvent(val timeMs: Long, val data: JsonElement)
+data class SessionEvent(
+  /** When the event happened, in epoch millis on [clock]. */
+  val timeMs: Long,
+  val data: JsonElement,
+  /** [TrailblazeClockDomain.DEVICE] for a device-stamped [timeMs]; null (omitted) means host. */
+  val clock: TrailblazeClockDomain? = null,
+)

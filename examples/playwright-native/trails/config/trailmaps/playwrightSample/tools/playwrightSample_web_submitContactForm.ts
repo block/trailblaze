@@ -56,7 +56,9 @@ export const playwrightSample_web_submitContactForm = trailblaze.tool<SubmitCont
     await ctx.tools.web_click({
       ref: "css=button[type='submit']",
     });
-    await ctx.tools.web_verifyTextVisible({ text: "Form submitted!" });
+    await ctx.tools.web_verifyElementVisible({
+      ref: 'css=#form-result strong:text-is("Form submitted!")',
+    });
 
     return `Submitted the sample contact form for ${name} (${email}).`;
   },

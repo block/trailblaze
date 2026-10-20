@@ -192,6 +192,41 @@ class TrailblazeNodeSelectorResolverTest {
   }
 
   @Test
+  fun `native Android selector can carry Maestro flags for migrated text assertions`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Balance\nAVAILABLE"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Balance\nPENDING"))
+    val root = node(children = listOf(target, other))
+
+    // Android replacements keep the retired Maestro matcher semantics in the pattern itself:
+    // case-insensitive, dotAll, and multiline. The negative sibling proves this is still a
+    // real regex constraint rather than a broad text presence check.
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "(?ism)balance.*available"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `Maestro flags do not break a dollar literal when the pattern quotes it`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "\$3.00"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "\$4.00"))
+    val root = node(children = listOf(target, other))
+
+    // Prefixing `(?ism)` onto an unescaped `$3.00` would bypass the native resolver's literal
+    // fallback. A migrated literal that contains regex punctuation must quote the value instead.
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "(?ism)\\Q\$3.00\\E"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
   fun `literal fallback is case-sensitive`() {
     nextId = 1L
     // "abc" is a valid regex that doesn't match "ABC" (case-sensitive), and the literal
@@ -472,6 +507,56 @@ class TrailblazeNodeSelectorResolverTest {
     val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
     assertEquals(node1.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `legacy text tap selector preserves literal substring matching and filters`() {
+    nextId = 1L
+    val first = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "Total\n\$5.00 due",
+        resourceId = "com.example:id/pay",
+        isEnabled = true,
+        isSelected = false,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+    )
+    val second = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "total \$5.00 due",
+        resourceId = "com.example:id/pay",
+        isEnabled = true,
+        isSelected = false,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 50, 100, 100),
+    )
+    val selected = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "Total \$5.00 due",
+        resourceId = "com.example:id/pay",
+        isEnabled = true,
+        isSelected = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 150),
+    )
+    val root = node(children = listOf(first, second, selected))
+
+    // The retired text tap used Maestro's case-insensitive, dot-all regex dialect around a
+    // Regex.escape(text) literal, then applied id/state predicates and the 0-based index.
+    val literal = "\$5.00"
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(
+        textRegex = "(?is).*${Regex.escape(literal)}.*",
+        resourceIdRegex = "com.example:id/pay",
+        isEnabled = true,
+        isSelected = false,
+      ),
+      index = 1,
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(second.nodeId, result.node.nodeId)
   }
 
   // -- index out of range --

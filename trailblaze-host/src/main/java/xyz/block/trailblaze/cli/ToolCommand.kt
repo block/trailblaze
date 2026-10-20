@@ -407,10 +407,10 @@ private fun hasToolFileUnder(dir: Path, maxDepth: Int): Boolean {
       // Toolset YAMLs are plain `<id>.yaml` inside a `toolsets/` directory — no
       // filename-level discriminator, so the detection has to look one segment up.
       // A workspace with only toolsets still defines new dispatch surfaces (each toolset
-      // lists tool names) and must disable the fast-path. Shortcut/trailhead YAMLs are
-      // intentionally excluded: they're navigation operations on existing tools rather
+      // lists tool names) and must disable the fast-path. Trailhead YAMLs are
+      // intentionally excluded: they're setup operations on existing tools rather
       // than new tool-name registrations, and including them would false-detect any
-      // workspace that ships waypoint navigation primitives.
+      // workspace that ships trailheads.
       p.parent?.fileName?.toString() == "toolsets"
     }
   }

@@ -113,7 +113,7 @@ class HostMaestroTrailblazeAgent(
         TrailblazeToolResult.Success()
       }
       // For multiple matches, mark the first resolved node — consistent with how
-      // verifyTextEquality / resolveToCenter pick a representative from a match list — rather
+      // resolveToCenter picks a representative from a match list — rather
       // than defaulting the marker to screen center.
       is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
         logAssertScreenState(nodeSelector = nodeSelector, matchedNode = result.nodes.firstOrNull(), isVisible = true)

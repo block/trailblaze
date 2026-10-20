@@ -33,6 +33,20 @@ export const SELECTORS = Object.freeze({
   footerPrivacyLink: "css=#footer-places-privacy a, a[href*='Privacy_policy']",
 } as const);
 
+/**
+ * A ref to the article heading whose whole text is `heading`, in any letter
+ * case: a heading derived from a query or title ("albert einstein") still
+ * matches the article's own capitalization ("Albert Einstein"). The text
+ * match runs inside the heading because the title sits in a child span.
+ * Spaces and underscores between words match any whitespace, as Wikipedia
+ * reads them ("Albert  Einstein" and "Albert_Einstein" both open "Albert
+ * Einstein").
+ */
+export function articleHeadingRef(heading: string): string {
+  const words = heading.trim().split(/[\s_]+/).map((word) => word.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+  return `${SELECTORS.firstHeading} >> text=/^${words.join("\\s+")}$/i`;
+}
+
 /** Returns `value` if it's a non-empty string; otherwise the `fallback`. */
 export function nonEmptyString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;

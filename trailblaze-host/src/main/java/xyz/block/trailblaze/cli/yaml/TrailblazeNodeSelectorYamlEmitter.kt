@@ -5,21 +5,12 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 /**
  * Single source of truth for hand-rolled `TrailblazeNodeSelector` YAML emission.
  *
- * Two callers want the same byte shape (so authors who run `suggest-selector` can paste
- * the result directly into a waypoint YAML, and a future `shortcut.yaml` round-trips
- * through the same loader the runtime uses):
- *
- *  - `ShortcutYamlEmitter` writes whole-file output to a `StringBuilder`.
- *  - `WaypointSuggestSelectorCommand` streams interactive output via `Console.log`.
- *
- * They previously kept private copies of the recursion + per-field `?.let { … }` ladder.
- * That drifted: `isMultiLine` landed in the shortcut emitter but not the suggest-selector
- * emitter, so any selector touching `isMultiLine` would silently drop the constraint in
- * one path but not the other. Consolidating the ladder behind a single [SelectorYamlSink]
- * removes the only place where the two could ever disagree on the field set.
+ * `WaypointSuggestSelectorCommand` streams its output through [SelectorYamlSink] in the same
+ * byte shape the runtime loader reads, so authors can paste the result directly into a
+ * waypoint YAML.
  *
  * Output style (load-bearing, intentionally matches the hand-authored `*.waypoint.yaml`
- * and `*.shortcut.yaml` files in the repo):
+ * files in the repo):
  *  - 2-space indent.
  *  - Double-quoted scalar values with backslash + double-quote escapes only (see
  *    [yamlQuote]). `\Q…\E` literal regex blocks survive verbatim — they're valid YAML
@@ -187,18 +178,14 @@ object TrailblazeNodeSelectorYamlEmitter {
     require(unsupportedDrivers.isEmpty()) {
       "TrailblazeNodeSelectorYamlEmitter supports androidAccessibility / androidView / iosMaestro / " +
         "iosAxe driver matchers today; got unsupported driver(s): ${unsupportedDrivers.joinToString(", ")}. " +
-        "Support for the remaining drivers arrives when the upstream synthesizers (ShortcutProposer, " +
-        "WaypointSuggestSelectorCommand) are platform-aware for them."
+        "Support for the remaining drivers arrives when WaypointSuggestSelectorCommand is " +
+        "platform-aware for them."
     }
   }
 
   /**
    * Double-quoted YAML scalar with backslash + double-quote escapes.
    *
-   * `internal` so `WaypointShortcutVerifyCommand.buildTrailYaml` can route every
-   * interpolated scalar through the same escape semantics the selector emitter uses —
-   * keeps one code path for the "what makes a YAML scalar safe" question so a future
-   * escape-rule change doesn't have to be mirrored in two places.
    */
   internal fun yamlQuote(s: String): String =
     "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""

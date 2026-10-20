@@ -277,8 +277,8 @@ class TrailmapCatalogBuilderTest {
   @Test
   fun `a nested operational YAML component keeps its real subdirectory in relPath`() {
     // Regression test: ToolYamlConfig carries no source-path field either, so a relPath
-    // reconstructed from just the component's id (e.g. "shortcuts/<id>.shortcut.yaml") loses any
-    // subdirectory nesting — a real, common shape (see trailmaps/square/shortcuts/web/*.yaml).
+    // reconstructed from just the component's id (e.g. "trailheads/<id>.trailhead.yaml") loses any
+    // subdirectory nesting, such as a per-platform `trailheads/web/` folder.
     val configDir = tempFolder.newFolder("config-nested")
     val trailmapDir = File(configDir, "trailmaps/demo5").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(
@@ -288,13 +288,12 @@ class TrailmapCatalogBuilderTest {
         display_name: Demo5
       """.trimIndent(),
     )
-    val nestedShortcutsDir = File(trailmapDir, "shortcuts/web").apply { mkdirs() }
-    File(nestedShortcutsDir, "demo5_webShortcut.shortcut.yaml").writeText(
+    val nestedTrailheadsDir = File(trailmapDir, "trailheads/web").apply { mkdirs() }
+    File(nestedTrailheadsDir, "demo5_webTrailhead.trailhead.yaml").writeText(
       """
-      id: demo5_webShortcut
-      shortcut:
-        from: demo5/a
-        to: demo5/b
+      id: demo5_webTrailhead
+      trailhead:
+        to: demo5/a
       tools: []
       """.trimIndent(),
     )
@@ -302,9 +301,9 @@ class TrailmapCatalogBuilderTest {
     withWorkspace(configDir) {
       val catalog = TrailmapCatalogBuilder.build()
       val demo5 = catalog.single { it.id == "demo5" }
-      val component = demo5.tools.singleOrNull { it.name == "demo5_webShortcut" }
-        ?: error("expected demo5_webShortcut in tools, got ${demo5.tools}")
-      assertEquals("trails/config/trailmaps/demo5/shortcuts/web/demo5_webShortcut.shortcut.yaml", component.relPath)
+      val component = demo5.tools.singleOrNull { it.name == "demo5_webTrailhead" }
+        ?: error("expected demo5_webTrailhead in tools, got ${demo5.tools}")
+      assertEquals("trails/config/trailmaps/demo5/trailheads/web/demo5_webTrailhead.trailhead.yaml", component.relPath)
     }
   }
 

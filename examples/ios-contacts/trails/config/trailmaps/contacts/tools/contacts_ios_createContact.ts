@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { LABELS, ensureContactsRoot, nonEmptyString } from "./contacts_ios_shared";
+import { LABELS, ensureContactsRoot, nonEmptyString, tapOnText } from "./contacts_ios_shared";
 
 const DEFAULT_FIRST_NAME = "Trailblaze";
 const DEFAULT_LAST_NAME = "Demo";
@@ -17,7 +17,7 @@ export interface CreateContactArgs {
  * Create and save a new iOS contact, then verify its full name shows on the
  * detail screen.
  */
-// Implementation note: each field tap goes through `tapOnElementWithText` against
+// Implementation note: each field tap goes through the selector tap helper against
 // the field's placeholder label rather than a generic "first text field"
 // descriptor — iOS Contacts mounts the fields lazily as the user scrolls, and a
 // positional selector would otherwise tap the wrong row when the form is mid-scroll.
@@ -31,27 +31,23 @@ export const contacts_ios_createContact = trailblaze.tool<CreateContactArgs>(
 
     await ensureContactsRoot(ctx);
 
-    await ctx.tools.tapOnElementWithText({
-      text: LABELS.addButton,
-    });
+    await tapOnText(ctx, LABELS.addButton);
     await ctx.tools.assertVisibleWithAccessibilityText({
       accessibilityText: LABELS.firstNameField,
     });
 
-    await ctx.tools.tapOnElementWithText({ text: LABELS.firstNameField });
+    await tapOnText(ctx, LABELS.firstNameField);
     await ctx.tools.inputText({ text: firstName });
 
-    await ctx.tools.tapOnElementWithText({ text: LABELS.lastNameField });
+    await tapOnText(ctx, LABELS.lastNameField);
     await ctx.tools.inputText({ text: lastName });
 
     if (phoneNumber.length > 0) {
-      await ctx.tools.tapOnElementWithText({ text: LABELS.addPhoneField });
+      await tapOnText(ctx, LABELS.addPhoneField);
       await ctx.tools.inputText({ text: phoneNumber });
     }
 
-    await ctx.tools.tapOnElementWithText({
-      text: LABELS.doneButton,
-    });
+    await tapOnText(ctx, LABELS.doneButton);
     await ctx.tools.assertVisibleWithAccessibilityText({ accessibilityText: fullName });
 
     return phoneNumber.length > 0

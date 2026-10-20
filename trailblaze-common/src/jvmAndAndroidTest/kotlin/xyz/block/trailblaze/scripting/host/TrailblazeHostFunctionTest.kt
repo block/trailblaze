@@ -7,7 +7,17 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.doesNotContain
 import assertk.assertions.isNull
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.KSerializer
@@ -37,6 +47,7 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackRequest
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackResult
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -67,6 +78,13 @@ internal class HostTestCrash : TrailblazeHostFunction<HostTestGreeting> {
     error("kaboom")
 }
 
+/** A valid host function in every way but its name, which `ctx.host.os` already holds. */
+@Serializable
+@TrailblazeHostFunctionClass(name = "os", result = HostTestGreeting::class)
+internal class HostTestNamedOs : TrailblazeHostFunction<HostTestGreeting> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext) = HostTestGreeting("shadowed", 0)
+}
+
 /** Annotated, but doesn't implement [TrailblazeHostFunction] — the registry must skip it. */
 @Serializable
 @TrailblazeHostFunctionClass(name = "test_not_a_function", result = HostTestGreeting::class)
@@ -94,6 +112,42 @@ internal data class HostTestNested(val options: HostTestOptions = HostTestOption
 internal class HostTestDepth : TrailblazeHostFunction<HostTestGreeting> {
   override suspend fun invoke(context: TrailblazeToolExecutionContext) =
     HostTestGreeting("depth", currentCoroutineContext()[JsScriptingCallbackDispatchDepth]?.depth ?: 0)
+}
+
+/** Waits far longer than any test runs, the way a long event wait does; counts down [started] first. */
+@Serializable
+@TrailblazeHostFunctionClass(name = "test_wait", result = HostTestGreeting::class)
+internal class HostTestWait : TrailblazeHostFunction<HostTestGreeting> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext): HostTestGreeting {
+    started.countDown()
+    delay(20_000)
+    return HostTestGreeting("waited", 6)
+  }
+
+  companion object {
+    @Volatile var started = CountDownLatch(1)
+  }
+}
+
+/**
+ * Waits inside its own blocking dispatch, the way a nested tool call does: only the Job the
+ * dispatch is linked to can cancel it. Counts down [HostTestWait.started] once it is waiting.
+ */
+@Serializable
+@TrailblazeHostFunctionClass(name = "test_blocking_wait", result = HostTestGreeting::class)
+internal class HostTestBlockingWait : TrailblazeHostFunction<HostTestGreeting> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext): HostTestGreeting {
+    withContext(Dispatchers.IO) {
+      runBlocking {
+        DispatchCancellation.linked(this) {
+          // Only once the blocking wait is in place, so the cancel cannot land before it.
+          HostTestWait.started.countDown()
+          delay(20_000)
+        }
+      }
+    }
+    return HostTestGreeting("waited", 6)
+  }
 }
 
 /** A result whose serializer fails with the value in its message. */
@@ -144,6 +198,8 @@ class TrailblazeHostFunctionTest {
       "greetings/host/test_nested.host.yaml" to descriptor("test_nested", "HostTestNested"),
       "greetings/host/test_depth.host.yaml" to descriptor("test_depth", "HostTestDepth"),
       "greetings/host/test_unencodable.host.yaml" to descriptor("test_unencodable", "HostTestUnencodableResult"),
+      "greetings/host/test_wait.host.yaml" to descriptor("test_wait", "HostTestWait"),
+      "greetings/host/test_blocking_wait.host.yaml" to descriptor("test_blocking_wait", "HostTestBlockingWait"),
     ),
   )
 
@@ -181,12 +237,14 @@ class TrailblazeHostFunctionTest {
       "test_nested",
       "test_depth",
       "test_unencodable",
+      "test_wait",
+      "test_blocking_wait",
     )
     assertThat(registry.resolve("test_greet")?.trailmapId).isEqualTo("greetings")
   }
 
   @Test
-  fun `registry skips descriptors that are misplaced, mismatched, or not host functions`() {
+  fun `registry skips descriptors that are misplaced, mismatched, reserved, or not host functions`() {
     val registry = registryOf(
       mapOf(
         "greetings/tools/test_greet.host.yaml" to descriptor("test_greet", "HostTestGreet"),
@@ -194,6 +252,8 @@ class TrailblazeHostFunctionTest {
         "greetings/host/test_not_a_function.host.yaml" to descriptor("test_not_a_function", "HostTestNotAFunction"),
         "greetings/host/missing.host.yaml" to descriptor("missing", "NoSuchClass"),
         "greetings/host/test_no_serializer.host.yaml" to descriptor("test_no_serializer", "HostTestNoSerializer"),
+        // `ctx.host.os` is the host computer's OS, so a function by that name could never be called.
+        "greetings/host/os.host.yaml" to descriptor("os", "HostTestNamedOs"),
         "greetings/host/test_crash.host.yaml" to descriptor("test_crash", "HostTestCrash"),
       ),
     )
@@ -322,5 +382,105 @@ class TrailblazeHostFunctionTest {
     assertThat(result.success).isEqualTo(false)
     assertThat(result.errorMessage).isEqualTo("refused: no")
     assertThat(result.value).isNull()
+  }
+
+  /** Starts [name] as a callback of an invocation [tool] owns, in its own scope like the HTTP server's. */
+  private fun startCallback(tool: Job?, name: String): Pair<JsScriptingInvocationRegistry.Handle, Deferred<JsScriptingCallbackResult>> {
+    HostTestWait.started = CountDownLatch(1)
+    val handle = JsScriptingInvocationRegistry.register(
+      sessionId = sessionId,
+      toolRepo = TrailblazeToolRepo(TrailblazeToolSet.DynamicTrailblazeToolSet("empty", emptySet())),
+      executionContext = context,
+      job = tool,
+    )
+    val callback = CoroutineScope(Dispatchers.Default).async {
+      JsScriptingCallbackDispatcher.dispatch(
+        JsScriptingCallbackRequest(
+          sessionId = sessionId.value,
+          invocationId = handle.invocationId,
+          action = JsScriptingCallbackAction.CallHost(name, "{}"),
+        ),
+        hostFunctions = registry,
+      )
+    }
+    assertThat(HostTestWait.started.await(10, TimeUnit.SECONDS)).isEqualTo(true)
+    return handle to callback
+  }
+
+  /** Bounded well under the 20s waits, so a callback the cancel misses fails here rather than passing late. */
+  private fun awaitCancelled(callback: Deferred<*>) {
+    // Finished, not just marked: a Job still waiting on a blocked child already reads as cancelled.
+    val finished = runBlocking { withTimeoutOrNull(5_000) { callback.join(); true } }
+    assertThat(finished).isEqualTo(true)
+    assertThat(callback.isCancelled).isEqualTo(true)
+  }
+
+  @Test
+  fun `cancelling the invoking tool cancels its host call still waiting`() {
+    val tool = Job()
+    val (_, callback) = startCallback(tool, "test_wait")
+
+    tool.cancel()
+
+    awaitCancelled(callback)
+  }
+
+  @Test
+  fun `cancelling the invoking tool cancels a blocking dispatch nested in its callback`() {
+    val tool = Job()
+    val (_, callback) = startCallback(tool, "test_blocking_wait")
+
+    tool.cancel()
+
+    awaitCancelled(callback)
+  }
+
+  @Test
+  fun `a tool that returns with a callback pending finishes at once and cancels the callback`() {
+    val tool = Job()
+    val (handle, callback) = startCallback(tool, "test_wait")
+
+    // What the tool's finally does on return.
+    handle.close()
+    tool.complete()
+
+    assertThat(runBlocking { withTimeoutOrNull(5_000) { tool.join(); true } }).isEqualTo(true)
+    awaitCancelled(callback)
+  }
+
+  @Test
+  fun `closing an invocation no tool owns cancels its pending callback`() {
+    // A session finalizer's invocation has no invoking tool Job; closing it must still end its waits.
+    val (handle, callback) = startCallback(null, "test_wait")
+
+    handle.close()
+
+    awaitCancelled(callback)
+  }
+
+  @Test
+  fun `a callback that times out cancels a blocking dispatch nested in it`() {
+    HostTestWait.started = CountDownLatch(1)
+    val handle = JsScriptingInvocationRegistry.register(
+      sessionId = sessionId,
+      toolRepo = TrailblazeToolRepo(TrailblazeToolSet.DynamicTrailblazeToolSet("empty", emptySet())),
+      executionContext = context,
+      job = Job(),
+    )
+    val callback = CoroutineScope(Dispatchers.Default).async {
+      JsScriptingCallbackDispatcher.dispatch(
+        JsScriptingCallbackRequest(
+          sessionId = sessionId.value,
+          invocationId = handle.invocationId,
+          action = JsScriptingCallbackAction.CallHost("test_blocking_wait", "{}"),
+        ),
+        timeoutMs = 300,
+        hostFunctions = registry,
+      )
+    }
+
+    // Bounded well under the 20s wait, so a timeout that misses the nested wait fails here.
+    val result = runBlocking { withTimeoutOrNull(5_000) { callback.await() } } as JsScriptingCallbackResult.CallHostResult?
+    assertThat(result?.errorMessage).isEqualTo("Host function 'test_blocking_wait' timed out after 300ms")
   }
 }

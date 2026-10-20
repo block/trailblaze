@@ -12,11 +12,14 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -49,10 +52,15 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.DeviceClockSample
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.events.SessionEventsHostFunctions
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -350,6 +358,43 @@ class TeardownTest {
   }
 
   @Test
+  fun `cancelling a trail cancels the recorded tool it is waiting on`() = runBlocking<Unit> {
+    FakeTrailhead().also { trailheads["signIn"] = it }
+    val waiting = CompletableDeferred<Unit>()
+    // Waits the way a dispatched host-local tool does: in its own scope, linked to the trail.
+    stepTools["wait"] = { coroutineScope { DispatchCancellation.linked(this) { waiting.complete(Unit); awaitCancellation() } } }
+    val util = runnerUtil()
+
+    // Its own scope, so a wait the cancel never reaches fails the test instead of hanging it.
+    val trail = CoroutineScope(Dispatchers.Default).launch {
+      util.runTrail {
+        util.runPromptSuspend(listOf(trailheadStep("signIn")), useRecordedSteps = true, selfHeal = false)
+        util.runPromptSuspend(listOf(step("wait")), useRecordedSteps = true, selfHeal = false)
+      }
+    }
+    withTimeout(5_000) { waiting.await() }
+    trail.cancel()
+
+    withTimeout(5_000) { trail.join() }
+  }
+
+  @Test
+  fun `cancelling a trail cancels a tools block it is waiting on`() = runBlocking<Unit> {
+    val waiting = CompletableDeferred<Unit>()
+    stepTools["wait"] = { coroutineScope { DispatchCancellation.linked(this) { waiting.complete(Unit); awaitCancellation() } } }
+    val util = runnerUtil()
+
+    // A YAML `tools:` block: dispatched straight through, not as a recorded step.
+    val trail = CoroutineScope(Dispatchers.Default).launch {
+      util.runTrail { util.runTrailblazeTool(listOf(InputTextTrailblazeTool(text = "wait"))) }
+    }
+    withTimeout(5_000) { waiting.await() }
+    trail.cancel()
+
+    withTimeout(5_000) { trail.join() }
+  }
+
+  @Test
   fun `a passing trail whose teardown says not reusable hands on nothing, and the log says why`() {
     val signIn = FakeTrailhead(teardown = { _, _ -> result(false, "changed the device locale") })
       .also { trailheads["signIn"] = it }
@@ -516,6 +561,31 @@ class TeardownTest {
   }
 
   @Test
+  fun `a trailhead with no recorded tools still gives event queries the trail's start`() {
+    var sinceTrail: TrailblazeHostFunctionDispatcher.Outcome? = null
+    stepTools["tap"] = { ctx ->
+      FileEventSink(sessionDir).use { it.append("network", System.currentTimeMillis(), buildJsonObject { put("url", "/v1/items") }) }
+      sinceTrail = runBlocking {
+        TrailblazeHostFunctionDispatcher.call(SessionEventsHostFunctions.QUERY, """{"stream":"network","since":"trail"}""", ctx)
+      }
+      TrailblazeToolResult.Success()
+    }
+    // An event before the trail started is outside the trail's window.
+    FileEventSink(sessionDir).use { it.append("network", 1L, buildJsonObject { put("url", "/v1/old") }) }
+    val util = runnerUtil()
+
+    util.runTrailBlocking {
+      util.runPrompt(listOf(TrailheadDefinition(step = "Start signed in").toPromptStep()), useRecordedSteps = true, selfHeal = false)
+      util.runPrompt(listOf(step("tap")), useRecordedSteps = true, selfHeal = false)
+    }
+
+    val outcome = sinceTrail
+    assertTrue(outcome is TrailblazeHostFunctionDispatcher.Outcome.Success, outcome.toString())
+    val urls = outcome.value.jsonObject["events"]!!.jsonArray.map { it.jsonObject["data"]!!.jsonObject["url"]!!.jsonPrimitive.content }
+    assertEquals(listOf("/v1/items"), urls)
+  }
+
+  @Test
   fun `events query filters the trail window in Kotlin, and only inside teardown`() {
     stepTools["tap"] = { TrailblazeToolResult.Success() }
     var queried: Any? = null
@@ -554,6 +624,59 @@ class TeardownTest {
   }
 
   @Test
+  fun `a mark lasts through its trail's teardown, and the next trail in the session can't read from it`() {
+    fun query(ctx: TrailblazeToolExecutionContext) = runBlocking {
+      TrailblazeHostFunctionDispatcher.call(SessionEventsHostFunctions.QUERY, """{"stream":"network","since":"x"}""", ctx)
+    }
+    var inTeardown: TrailblazeHostFunctionDispatcher.Outcome? = null
+    FakeTrailhead(teardown = { _, _ -> if (inTeardown == null) inTeardown = query(context()); result(false, "done") }).also { trailheads["signIn"] = it }
+    var marked: TrailblazeHostFunctionDispatcher.Outcome? = null
+    stepTools["mark"] = { ctx ->
+      marked = runBlocking { TrailblazeHostFunctionDispatcher.call(SessionEventsHostFunctions.MARK, """{"name":"x"}""", ctx) }
+      TrailblazeToolResult.Success()
+    }
+    var nextTrail: TrailblazeHostFunctionDispatcher.Outcome? = null
+    stepTools["read"] = { ctx -> nextTrail = query(ctx); TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "mark")
+    runTrail(util, "read")
+
+    assertTrue(marked is TrailblazeHostFunctionDispatcher.Outcome.Success, marked.toString())
+    assertTrue(inTeardown is TrailblazeHostFunctionDispatcher.Outcome.Success, inTeardown.toString())
+    val failure = nextTrail as? TrailblazeHostFunctionDispatcher.Outcome.Failure
+    assertTrue(failure?.message?.contains("no mark named 'x'") == true, nextTrail.toString())
+  }
+
+  @Test
+  fun `events query puts device-stamped records on the host clock before applying the window`() {
+    var queried: JsonArray? = null
+    FakeTrailhead(teardown = { _, _ ->
+      queried = runBlocking {
+        (TrailblazeHostFunctionDispatcher.call(TeardownWire.HOST_FUNCTION_TRAIL_EVENTS_QUERY, """{"stream":"app"}""", context())
+          as TrailblazeHostFunctionDispatcher.Outcome.Success).value as JsonArray
+      }
+      result(false, "queried")
+    }).also { trailheads["signIn"] = it }
+    // The device clock runs an hour ahead: raw, its stamp would land after the trail ended.
+    val aheadMs = 3_600_000L
+    stepTools["tap"] = {
+      val now = System.currentTimeMillis()
+      DeviceClockSyncFile.appendSample(sessionDir, deviceId.instanceId, DeviceClockSample(now, now, now + aheadMs))
+      FileEventSink(sessionDir).use { sink ->
+        sink.append("app", now + aheadMs, buildJsonObject { put("name", "checkout") }, TrailblazeClockDomain.DEVICE)
+      }
+      TrailblazeToolResult.Success()
+    }
+
+    runTrail(runnerUtil(), "tap")
+
+    val record = queried!!.single().jsonObject
+    assertEquals("checkout", record["data"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+    assertTrue(record["timeMs"]!!.jsonPrimitive.content.toLong() < System.currentTimeMillis(), record.toString())
+  }
+
+  @Test
   fun `a trail without a capable trailhead in between drops the hand-off`() {
     val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
     stepTools["tap"] = { TrailblazeToolResult.Success() }
@@ -567,6 +690,22 @@ class TeardownTest {
     runTrail(util, "tap")
 
     assertNull(signIn.seenPreviousRun[1])
+  }
+
+  @Test
+  fun `a device holds a reusable setup only after a teardown said reusable`() {
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val otherDevice = TrailblazeDeviceId(instanceId = "emulator-5556", trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID)
+
+    runTrail(runnerUtil(), "tap")
+    assertTrue(TrailheadHandoffStore.holdsReusable(deviceId))
+    assertFalse(TrailheadHandoffStore.holdsReusable(otherDevice))
+
+    signIn.teardown = { _, _ -> result(reusable = false, reason = "left a sale open") }
+    nextSession("s-2")
+    runTrail(runnerUtil(), "tap")
+    assertFalse(TrailheadHandoffStore.holdsReusable(deviceId))
   }
 
   @Test
@@ -872,6 +1011,35 @@ class TeardownTest {
 
     assertTrue(listed!!.map { it.jsonPrimitive.content }.contains("network"), listed.toString())
     assertEquals(listOf("/v1/items"), queried!!.map { it.jsonObject["data"]!!.jsonObject["url"]!!.jsonPrimitive.content })
+  }
+
+  @Test
+  fun `teardown reads a capture's last record even when it has no closing newline`() {
+    var queried: JsonArray? = null
+    FakeTrailhead(teardown = { _, _ ->
+      runBlocking {
+        queried = (TrailblazeHostFunctionDispatcher.call(
+          TeardownWire.HOST_FUNCTION_TRAIL_EVENTS_QUERY,
+          """{"stream":"network","match":{"method":"POST"}}""",
+          context(),
+        ) as TrailblazeHostFunctionDispatcher.Outcome.Success).value as JsonArray
+      }
+      result(false, "queried")
+    }).also { trailheads["signIn"] = it }
+    stepTools["tap"] = {
+      File(sessionDir, "network.ndjson").appendText(
+        """{"timestampMs":${System.currentTimeMillis()},"method":"POST","url":"/v1/first"}""" + "\n" +
+          """{"timestampMs":${System.currentTimeMillis()},"method":"POST","url":"/v1/last"}""",
+      )
+      TrailblazeToolResult.Success()
+    }
+
+    runTrail(runnerUtil(), "tap")
+
+    assertEquals(
+      listOf("/v1/first", "/v1/last"),
+      queried!!.map { it.jsonObject["data"]!!.jsonObject["url"]!!.jsonPrimitive.content },
+    )
   }
 
   @Test

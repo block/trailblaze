@@ -19,8 +19,8 @@ import kotlin.test.assertEquals
 /**
  * A Spanish web lane (`web-browser-es`) runs a trail's `web-browser-es` leg in a browser whose
  * language is Spanish. The page below prints `navigator.language`, so each leg's
- * `web_verifyTextVisible` proves both which leg ran and what language the site saw: the English
- * leg asserts text that never appears, so selecting it fails the run.
+ * paragraph check proves both which leg ran and what language the site saw: the English leg
+ * asserts a paragraph that never appears, so selecting it fails the run.
  */
 class PlaywrightLocaleLaneTest {
 
@@ -86,10 +86,10 @@ class PlaywrightLocaleLaneTest {
             recording:
               web:
                 - web_navigate: { url: "${languagePage()}" }
-                - web_verifyTextVisible: { text: "the English leg ran" }
+                - web_verifyElementVisible: { nodeSelector: { web: { ariaRole: paragraph, ariaNameRegex: "the English leg ran" } } }
               web-browser-es:
                 - web_navigate: { url: "${languagePage()}" }
-                - web_verifyTextVisible: { text: "lang:es-US" }
+                - web_verifyElementVisible: { nodeSelector: { web: { ariaRole: paragraph, ariaNameRegex: "lang:es-US" } } }
       """.trimIndent(),
     )
 
@@ -109,10 +109,10 @@ class PlaywrightLocaleLaneTest {
             recording:
               web:
                 - web_navigate: { url: "${languagePage()}" }
-                - web_verifyTextVisible: { text: "the English leg ran" }
+                - web_verifyElementVisible: { nodeSelector: { web: { ariaRole: paragraph, ariaNameRegex: "the English leg ran" } } }
               web-browser-es:
                 - web_navigate: { url: "${languagePage()}" }
-                - web_verifyTextVisible: { text: "lang:es" }
+                - web_verifyElementVisible: { nodeSelector: { web: { ariaRole: paragraph, ariaNameRegex: "lang:es" } } }
       """.trimIndent(),
     )
 

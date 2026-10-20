@@ -567,7 +567,7 @@ abstract class BaseHostTrailblazeTest(
                     selfHeal = false,
                   )
                 is TrailYamlItem.ToolTrailItem ->
-                  trailblazeRunnerUtil.runTrailblazeTool(
+                  trailblazeRunnerUtil.runToolItem(
                     setupItem.tools.map { it.trailblazeTool }
                   )
                 is TrailYamlItem.ConfigTrailItem -> {
@@ -598,7 +598,7 @@ abstract class BaseHostTrailblazeTest(
               useRecordedSteps = true,
               selfHeal = resolveSelfHealFromEnvOrConfig(),
             )
-          is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
         }
         if (itemResult is TrailblazeToolResult.Error) {

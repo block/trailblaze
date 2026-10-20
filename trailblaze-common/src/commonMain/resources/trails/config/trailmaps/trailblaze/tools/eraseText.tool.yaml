@@ -1,14 +1,2 @@
 id: eraseText
-description: >
-  Erase characters from the end of the focused text field. To clear the whole field, use
-  clearText instead.
-parameters:
-  - name: charactersToErase
-    type: integer
-    required: false
-    description: Number of characters to erase, counted from the field's text in the view hierarchy.
-tools:
-  - mobile_maestro:
-      commands:
-        - eraseText:
-            charactersToErase: "{{params.charactersToErase}}"
+class: xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool

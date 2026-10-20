@@ -264,7 +264,7 @@ tool's behavior matches what your agent should see at the top of `toolbox`.
   it as a **trailhead** — the trail's deterministic step 0, backed by a single specialized
   launch tool per platform instead of an enumerated tap sequence. Author it as its own
   tool type (`*.trailhead.yaml`) and reference it from a trail's top-level `trailhead:`
-  block. See [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
+  block. See [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-trailheadyaml).
 
 - **Compose multiple tools.** Sibling tools call each other through
   `ctx.tools.<name>(args)` — see the

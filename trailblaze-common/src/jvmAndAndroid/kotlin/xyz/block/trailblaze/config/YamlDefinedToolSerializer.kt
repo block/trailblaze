@@ -20,11 +20,11 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *
  * Every YAML-defined tool name registers its own [YamlDefinedToolSerializer] instance in
  * `TrailblazeYaml.Default`'s `toolSerializersByName` map (and the equivalent JSON polymorphic
- * table). When a trail YAML contains `- eraseText: { charactersToErase: 3 }`, the outer
- * `TrailblazeToolYamlWrapperSerializer` resolves `"eraseText"` to the matching serializer here,
+ * table). When a trail YAML contains `- myapp_replaceText: { text: hi }`, the outer
+ * `TrailblazeToolYamlWrapperSerializer` resolves `"myapp_replaceText"` to the matching serializer here,
  * which:
  *
- * 1. Decodes the argument payload (the `{ charactersToErase: 3 }` map) into
+ * 1. Decodes the argument payload (the `{ text: hi }` map) into
  *    `Map<String, JsonElement>`.
  * 2. Constructs `YamlDefinedTrailblazeTool(config, params)` with the captured [config] and the
  *    decoded params.
@@ -65,7 +65,7 @@ class YamlDefinedToolSerializer(
           is YamlMap -> node.entries.entries.associate { (k, v) ->
             k.content to YamlJsonBridge.yamlNodeToJsonElement(v)
           }
-          // Empty YAML value (`- eraseText:`) lands as YamlNull — legitimately zero args.
+          // Empty YAML value (`- myapp_replaceText:`) lands as YamlNull — legitimately zero args.
           is com.charleskorn.kaml.YamlNull -> emptyMap()
           else -> error(
             "YAML tool '${config.id}' expects a map of params (or empty), got " +

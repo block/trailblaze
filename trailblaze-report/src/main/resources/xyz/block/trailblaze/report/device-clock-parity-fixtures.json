@@ -1,0 +1,218 @@
+{
+  "comment": [
+    "Cross-language behavioral contract for converting a device-clock stamp onto the host timeline",
+    "with a session's measured `session_device_clock.json` readings. Implemented twice: `DeviceClockSync` in",
+    "trailblaze-models logs/model/DeviceClockSync.kt (every Kotlin reader) and device-clock-sync.ts",
+    "(the run report and profiler). Consumed by DeviceClockParityFixturesTest (Kotlin) and",
+    "device-clock-sync.test.ts (TS). Change a rule in both implementations AND here, in one change.",
+    "",
+    "`tightest`: the index of the sample with the shortest round trip (first wins a tie), null when empty.",
+    "`conversions`: `hostMs` null means no track applies and the record keeps its raw stamp. A case with a",
+    "`stream` resolves its device from the stream name's `.<deviceName>` suffix instead of `deviceId`. A sample's",
+    "offset is `deviceMs - (hostBeforeMs + trunc(roundTrip / 2))`; outside the sampled range the nearest",
+    "sample's offset applies, inside it the offset is linearly interpolated and rounded half up. An offset change",
+    "past 1000 ms between adjacent samples is a clock step: between them the nearer sample (by device time, the",
+    "earlier on a tie) applies instead."
+  ],
+  "tightest": [
+    {
+      "samples": [
+        { "hostBeforeMs": 1000, "hostAfterMs": 1030, "deviceMs": 6015 },
+        { "hostBeforeMs": 2000, "hostAfterMs": 2008, "deviceMs": 7004 },
+        { "hostBeforeMs": 3000, "hostAfterMs": 3008, "deviceMs": 8004 }
+      ],
+      "index": 1
+    },
+    { "samples": [], "index": null }
+  ],
+  "conversions": [
+    {
+      "name": "one device, two samples 60s apart, drifting 101ms",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [
+              { "hostBeforeMs": 1000, "hostAfterMs": 1010, "deviceMs": 6005 },
+              { "hostBeforeMs": 61000, "hostAfterMs": 61021, "deviceMs": 66111 }
+            ]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 5000, "deviceId": null, "hostMs": 0 },
+        { "deviceMs": 6005, "deviceId": null, "hostMs": 1005 },
+        { "deviceMs": 36058, "deviceId": null, "hostMs": 31007 },
+        { "deviceMs": 66111, "deviceId": "emulator-5554", "hostMs": 61010 },
+        { "deviceMs": 70000, "deviceId": "unknown-device", "hostMs": 64899 }
+      ]
+    },
+    {
+      "name": "two sampled devices: a record must name its device",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1010, "deviceMs": 6005 }]
+          },
+          {
+            "deviceId": "emulator-5556",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1004, "deviceMs": 702 }]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 10000, "deviceId": "emulator-5556", "hostMs": 10300 },
+        { "deviceMs": 10000, "deviceId": "emulator-5554", "hostMs": 5000 },
+        { "deviceMs": 10000, "deviceId": null, "hostMs": null },
+        { "deviceMs": 10000, "deviceId": "unknown-device", "hostMs": null }
+      ]
+    },
+    {
+      "name": "a device whose reads all failed is not a track",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [],
+            "failures": [{ "atHostMs": 1000, "error": "adb: device offline" }]
+          }
+        ]
+      },
+      "cases": [{ "deviceMs": 10000, "deviceId": null, "hostMs": null }]
+    },
+    {
+      "name": "multi-device session: each stream is read on its own device's clock",
+      "sync": {
+        "startDeviceId": "emulator-5554",
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "deviceName": "seller",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1010, "deviceMs": 6005 }]
+          },
+          {
+            "deviceId": "emulator-5556",
+            "deviceName": "buyer",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1004, "deviceMs": 702 }]
+          },
+          {
+            "deviceId": "emulator-5558",
+            "deviceName": "tablet",
+            "samples": [],
+            "failures": [{ "atHostMs": 1000, "error": "adb: device offline" }]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.buyer", "hostMs": 10300 },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.seller", "hostMs": 5000 },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.tablet", "hostMs": null },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging", "hostMs": 5000 },
+        { "deviceMs": 10000, "deviceId": null, "hostMs": 5000 },
+        { "deviceMs": 10000, "deviceId": "emulator-5556", "hostMs": 10300 }
+      ]
+    },
+    {
+      "name": "multi-device session whose start device took no samples",
+      "sync": {
+        "startDeviceId": "emulator-5554",
+        "devices": [
+          { "deviceId": "emulator-5554", "deviceName": "seller", "samples": [] },
+          {
+            "deviceId": "emulator-5556",
+            "deviceName": "buyer",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1004, "deviceMs": 702 }]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 10000, "deviceId": null, "hostMs": null },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging", "hostMs": null },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.buyer", "hostMs": 10300 }
+      ]
+    },
+    {
+      "name": "device names are matched as written to file names, so `buyer display` owns `.buyer_display`",
+      "sync": {
+        "startDeviceId": "emulator-5554",
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "deviceName": "seller",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1010, "deviceMs": 6005 }]
+          },
+          {
+            "deviceId": "emulator-5556",
+            "deviceName": "buyer display",
+            "samples": [{ "hostBeforeMs": 1000, "hostAfterMs": 1004, "deviceMs": 702 }]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.buyer_display", "hostMs": 10300 },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.buyer display", "hostMs": 10300 },
+        { "deviceMs": 10000, "deviceId": null, "stream": "com.example.plugin.logging.seller", "hostMs": 5000 }
+      ]
+    },
+    {
+      "name": "many samples: the bracketing pair is found anywhere in the run",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [
+              { "hostBeforeMs": 181000, "hostAfterMs": 181010, "deviceMs": 186305 },
+              { "hostBeforeMs": 1000, "hostAfterMs": 1010, "deviceMs": 6005 },
+              { "hostBeforeMs": 121000, "hostAfterMs": 121010, "deviceMs": 126205 },
+              { "hostBeforeMs": 61000, "hostAfterMs": 61010, "deviceMs": 66105 },
+              { "hostBeforeMs": 241000, "hostAfterMs": 241010, "deviceMs": 246405 }
+            ]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 36055, "deviceId": null, "hostMs": 31005 },
+        { "deviceMs": 126205, "deviceId": null, "hostMs": 121005 },
+        { "deviceMs": 216355, "deviceId": null, "hostMs": 211005 },
+        { "deviceMs": 300000, "deviceId": null, "hostMs": 294600 }
+      ]
+    },
+    {
+      "name": "the device clock is set forward 9 minutes between samples: no interpolation across the step",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [
+              { "hostBeforeMs": 1000, "hostAfterMs": 1000, "deviceMs": 1000 },
+              { "hostBeforeMs": 61000, "hostAfterMs": 61000, "deviceMs": 601000 }
+            ]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 31000, "deviceId": null, "hostMs": 31000 },
+        { "deviceMs": 571000, "deviceId": null, "hostMs": 31000 },
+        { "deviceMs": 301000, "deviceId": null, "hostMs": 301000 }
+      ]
+    },
+    {
+      "name": "an offset change of exactly 1000 ms is still drift and interpolates",
+      "sync": {
+        "devices": [
+          {
+            "deviceId": "emulator-5554",
+            "samples": [
+              { "hostBeforeMs": 1000, "hostAfterMs": 1000, "deviceMs": 1000 },
+              { "hostBeforeMs": 61000, "hostAfterMs": 61000, "deviceMs": 62000 }
+            ]
+          }
+        ]
+      },
+      "cases": [
+        { "deviceMs": 31500, "deviceId": null, "hostMs": 31000 }
+      ]
+    }
+  ]
+}

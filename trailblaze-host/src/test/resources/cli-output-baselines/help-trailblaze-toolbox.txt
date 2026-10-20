@@ -10,15 +10,12 @@ Usage: trailblaze toolbox [-hvV] [--detail] [-d=<device>] [-n=<name>]
 Browse available tools by target app and platform
       [ROLE]              Optional role filter — show only tools tagged with
                             this role.
-                          Valid values: trailheads, shortcuts.
+                          Valid values: trailheads.
                             trailheads — tools that bring the device to a known
                             starting state (launch + sign-in, deep-link, etc.).
                             Use one at the start of every trail.
-                            shortcuts  — tools that jump between named
-                            waypoints during a trail.
-                          Omit to show everything; trailheads and shortcuts
-                            will be called out as headline sections above the
-                            toolset listing.
+                          Omit to show everything; trailheads will be called
+                            out as a headline section above the toolset listing.
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
                             Defaults to `$TRAILBLAZE_DEVICE` if set (manual
                             override; rare), otherwise this terminal's pin (set

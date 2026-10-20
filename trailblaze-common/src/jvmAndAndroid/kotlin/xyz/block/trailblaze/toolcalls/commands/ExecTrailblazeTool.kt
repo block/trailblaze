@@ -9,6 +9,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
+import xyz.block.trailblaze.util.batchArgumentProblem
+import xyz.block.trailblaze.util.hostArgv
 import java.io.File
 
 internal const val EXEC_TOOL_NAME = "exec"
@@ -22,8 +24,9 @@ internal const val EXEC_TOOL_NAME = "exec"
  *  - **`exec`** — `ProcessBuilder(argv).start()`. Each argv element becomes a literal
  *    process argument. No shell metacharacter interpretation. Templated parameter values
  *    can never be re-interpreted as `;`/`&&`/quotes/backticks/redirects, even when the
- *    value contains those characters. Default for any case where parameters are
- *    interpolated from authored input.
+ *    value contains those characters. (A Windows `.bat`/`.cmd` runs through cmd.exe, which
+ *    would re-read them, so such a call is refused instead; see [batchArgumentProblem].)
+ *    Default for any case where parameters are interpolated from authored input.
  *  - **`runCommand`** — `sh -c "<command>"`. Pipes, globs, redirects, multi-statement
  *    work as they would at a prompt, with the cost that any unsanitized parameter
  *    value can change shell semantics.
@@ -37,6 +40,11 @@ internal const val EXEC_TOOL_NAME = "exec"
  * [xyz.block.trailblaze.BaseTrailblazeAgent] short-circuits execution to the host JVM
  * instead of routing through a device / browser / cloud driver. `exec` is fundamentally
  * host-only: it forks a process inside the daemon JVM, which doesn't exist on-device.
+ *
+ * On Windows a bare command name resolves as at a command prompt (`adb` → `adb.exe`, `sdkmanager`
+ * → `sdkmanager.bat`; see [hostArgv]), so the same `argv` works on every host. A batch file runs
+ * through cmd.exe, so one whose arguments cmd.exe would reinterpret is refused
+ * ([batchArgumentProblem]).
  *
  * stdout and stderr are combined via [TrailblazeProcessBuilderUtils.createProcessBuilder]'s
  * `redirectErrorStream(true)`. Wrappers that need to distinguish the two streams will need
@@ -133,9 +141,13 @@ data class ExecTrailblazeTool(
       )
     }
     return try {
-      val processBuilder = TrailblazeProcessBuilderUtils
-        .createProcessBuilder(argv, workingDir?.let(::File))
+      val processBuilder = TrailblazeProcessBuilderUtils.createProcessBuilder(argv, workingDir?.let(::File))
       processBuilder.environment().putAll(environment)
+      val command = hostArgv(argv, processBuilder.environment())
+      batchArgumentProblem(command)?.let {
+        return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = it, command = this)
+      }
+      processBuilder.command(command)
       val (result, timedOut) = with(TrailblazeProcessBuilderUtils) {
         processBuilder.runProcessWithTimeout(timeoutSeconds)
       }

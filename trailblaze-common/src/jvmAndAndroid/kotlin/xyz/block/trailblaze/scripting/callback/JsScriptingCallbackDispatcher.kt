@@ -2,10 +2,16 @@ package xyz.block.trailblaze.scripting.callback
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
@@ -113,9 +119,17 @@ object JsScriptingCallbackDispatcher {
       }
     }
 
-    val result = when (val action = request.action) {
-      is JsScriptingCallbackAction.CallTool -> dispatchCallTool(entry, action, timeoutMs)
-      is JsScriptingCallbackAction.CallHost -> dispatchCallHost(entry, action, timeoutMs, hostFunctions)
+    // The HTTP request runs under the server's Job, not the tool call's: linking it means a cancelled
+    // tool takes its outstanding callbacks (an event wait, a nested tool) down with it. Each dispatch
+    // below also installs its timeout's Job for the blocking dispatches it makes, so a nested tool's
+    // event wait ends when the callback times out or its tool is cancelled, not when the wait gives up.
+    val result = coroutineScope {
+      DispatchCancellation.linked(this, entry.job) {
+        when (val action = request.action) {
+          is JsScriptingCallbackAction.CallTool -> dispatchCallTool(entry, action, timeoutMs)
+          is JsScriptingCallbackAction.CallHost -> dispatchCallHost(entry, action, timeoutMs, hostFunctions)
+        }
+      }
     }
     // END log — pairs with START so a tester can confirm a full round-trip happened. Result
     // summary is a one-liner; detailed error branches already log above at the point of
@@ -208,8 +222,8 @@ object JsScriptingCallbackDispatcher {
   ): JsScriptingCallbackResult.CallHostResult = try {
     // Same depth stamp as a tool callback, so a scripted tool the function dispatches registers one
     // level deeper and stays under the cap.
-    val outcome = withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1)) {
-      withTimeout(timeoutMs) {
+    val outcome = withTimeout(timeoutMs) {
+      withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1) + DispatchCancellation.element(currentCoroutineContext().job)) {
         TrailblazeHostFunctionDispatcher.call(
           action.functionName,
           action.argumentsJson,
@@ -349,9 +363,11 @@ object JsScriptingCallbackDispatcher {
       // itself at `entry.depth + 1` and the depth gate catches a runaway recursive chain
       // at the next callback, not the one after it.
       withTimeout(timeoutMs) {
-        withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1)) {
+        withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1) + DispatchCancellation.element(currentCoroutineContext().job)) {
+          // With no nested executor (e.g. Revyl) the tool runs here, outside any dispatch, so it is
+          // recorded here.
           val result = entry.executionContext.nestedToolExecutor?.invoke(tool)
-            ?: tool.execute(entry.executionContext)
+            ?: ToolCallHistory.recordExecution(entry.executionContext, tool) { tool.execute(entry.executionContext) }
           when (result) {
             is TrailblazeToolResult.Success ->
               JsScriptingCallbackResult.CallToolResult(

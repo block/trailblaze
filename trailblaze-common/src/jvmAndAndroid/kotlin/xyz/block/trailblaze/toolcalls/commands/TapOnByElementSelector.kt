@@ -20,8 +20,8 @@ import xyz.block.trailblaze.util.Console
   surfaceToLlm = false,
   // Available to scripted tools: this is the selector-resolved tap (ACTION_CLICK-vs-gesture
   // routing + animation settle) that scripted authors compose for "tap the element matching this
-  // selector". It stays hidden from the LLM (which uses the friendlier `tap` /
-  // `tapOnElementWithText`) — those two audiences are orthogonal. The earlier blanket `false` was
+  // selector". It stays hidden from the LLM (which uses the friendlier `tap`) — those two
+  // audiences are orthogonal. The earlier blanket `false` was
   // a mechanical carry-over from the single-flag `isForLlm` split (#3272), not a scripted-specific
   // decision; surfacing it matches this tool's stated "delegated to, not LLM-registered" role.
 )

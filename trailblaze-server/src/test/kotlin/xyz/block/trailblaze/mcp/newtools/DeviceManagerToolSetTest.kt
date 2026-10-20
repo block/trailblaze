@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -419,7 +420,8 @@ class DeviceManagerToolSetTest {
   }
 
   @Test
-  fun `device INFO SUMMARY uses per-device session target over daemon-wide for tool summary`() = runTest {
+  fun `device INFO SUMMARY uses per-device session target over daemon-wide for tool summary`() =
+    YamlDefinedToolFixture.registered { runTest {
     // Regression for the YAML-tool dispatch bug surfaced when `--target X` was
     // set on a bound device but the daemon-wide setting still pointed at a
     // different target (or the no-tools default sentinel). `buildAvailableToolsSummary`
@@ -449,7 +451,7 @@ class DeviceManagerToolSetTest {
         driverType: TrailblazeDriverType,
       ): Set<ToolName> =
         if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
-          setOf(ToolName("eraseText"))
+          setOf(YamlDefinedToolFixture.toolName)
         } else emptySet()
     }
     val bridge = DeviceTestBridge(
@@ -478,8 +480,8 @@ class DeviceManagerToolSetTest {
     // fix the per-device override resolves to `perdeviceapp`, the summary
     // block is emitted, and the YAML-defined tools land in it.
     assertContains(result, "Available ${perDeviceTarget.displayName} tools")
-    assertContains(result, "eraseText")
-  }
+    assertContains(result, YamlDefinedToolFixture.NAME)
+  } }
 
   /**
    * The CLI sends a session-only INFO before every command it runs to check that its saved
@@ -487,7 +489,8 @@ class DeviceManagerToolSetTest {
    * list, and building that list walks the target's tool catalog on every call.
    */
   @Test
-  fun `session-only device INFO reports the device without building the tool list`() = runTest {
+  fun `session-only device INFO reports the device without building the tool list`() =
+    YamlDefinedToolFixture.registered { runTest {
     val androidDeviceId = TrailblazeDeviceId(
       instanceId = androidDevice.instanceId,
       trailblazeDevicePlatform = androidDevice.platform,
@@ -501,7 +504,7 @@ class DeviceManagerToolSetTest {
       ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
 
       override fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
-        setOf(ToolName("eraseText"))
+        setOf(YamlDefinedToolFixture.toolName)
     }
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),
@@ -530,7 +533,7 @@ class DeviceManagerToolSetTest {
     assertContains(probe, "Platform: ${androidDevice.platform.displayName}")
     assertTrue("Available ${target.displayName} tools" !in probe, "Probe must not carry the tool list. Got:\n$probe")
     assertEquals(catalogsBefore, catalogs, "the probe must not build a tool catalog")
-  }
+  } }
 
   @Test
   fun `device INFO returns error when no device connected`() = runTest {

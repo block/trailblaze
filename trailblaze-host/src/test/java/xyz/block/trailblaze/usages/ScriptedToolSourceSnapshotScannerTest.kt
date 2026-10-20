@@ -177,6 +177,7 @@ class ScriptedToolSourceSnapshotScannerTest {
     )
     // The full operational-suffix family: none of these are scripted-tool descriptors, so none
     // may reach the decode path (which would warn: they have no `script:`) or register a tool.
+    // A leftover from before shortcuts were removed: still skipped, not decoded.
     write("demo-map/tools/edge.shortcut.yaml", "shortcut: { from: demo-a, to: demo-b }")
     write("demo-map/tools/boot.trailhead.yaml", "trailhead: { description: demo }")
     write("demo-map/tools/home.waypoint.yaml", "waypoint: { id: demo-home }")

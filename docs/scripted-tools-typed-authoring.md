@@ -548,7 +548,79 @@ of nesting. A host call counts against the same recursion cap as a tool call. Ne
 in an exception message, because the script sees it.
 
 Make something a tool only when a trail or the LLM must call it, or its calls must show up as
-steps.
+steps. `os` and `arch` are reserved: they are values on `ctx.host` (see below), so no host function
+can use either name.
+
+## Branching on the host computer via `ctx.host.os`
+
+A tool that runs on the host can read which computer that is. `ctx.host.os` is `"macos"`,
+`"windows"` or `"linux"`, and `ctx.host.arch` is `"arm64"` or `"x64"` (`null` for any other
+architecture). Both are `null` when the tool runs on an Android device, where there is no host
+computer. The SDK exports both lists as `TRAILBLAZE_HOST_OS` and `TRAILBLAZE_HOST_ARCH`, so a typo
+such as `ctx.host.os === "windwos"` fails type-checking. Use them for what
+differs between hosts, such as file paths:
+
+```ts
+const sep = ctx.host.os === "windows" ? "\\" : "/";
+```
+
+Command names don't need them. `exec` resolves a bare name the way a Windows command prompt does,
+so `["adb", "devices"]` runs `adb.exe` and `["sdkmanager", "--list"]` runs `sdkmanager.bat`,
+and the same `argv` works on every host. A bare name that isn't on `PATH` fails rather than
+running a file from the working directory. A batch file runs through cmd.exe, which would
+reinterpret `%`, `!`, `&`, `|`, `<`, `>`, `^` and quotes in its path or arguments, so `exec` refuses such a
+call; write `["cmd", "/c", ...]` when you want cmd.exe's reading. Commands also inherit the host's
+environment variables.
+
+## Reading what ran via `ctx.history`
+
+`ctx.history` is the session's record of tool calls, written as they happen. A call is in it from
+the moment it starts and has its outcome the moment it returns, so a read never misses a call
+that has already finished. A trailhead's `teardown` uses it to see what the trail did:
+
+```ts
+async teardown(args, ctx, trailRun) {
+  const calls = await ctx.history.toolCalls("trail");
+  const added = calls.filter((c) => c.name === "myapp_addItem" && c.outcome?.success);
+  for (const c of added) await deleteItem(ctx, c.args.itemId as string);
+  return { reusable: false, reason: `removed ${added.length} items` };
+}
+```
+
+- **`toolCalls(section?)`** lists the calls the trail, the AI and the trailhead made, in the order
+  they started. Each has `name`, `args`, `rawArgs`, `outcome` (`{ success, message }`, or `null`
+  while running), `startedAt` / `endedAt` (epoch ms), `device` (the device binding in a
+  multi-device session) and `calls`: the calls it made, nested the same way.
+- **`section`** is `"trailhead"` (the setup), `"trail"` (everything after it) or `"teardown"`, for
+  the current run; each starts the moment the previous one ends. A section that hasn't started has
+  no calls.
+- **`formatToolCalls(calls)`** prints them as indented text, for a log line or a report:
+
+  ```
+  ✓ myapp_addItem(itemId: "item-1")  2.2s
+    ✓ tapOnElement(text: "Add")  0.7s
+  ✗ assertVisible(text: "item-1")  1.8s  Element not found
+  ```
+
+- **`args` are what the tool received; `rawArgs` are as written.** A step written as
+  `{ id: "{{newItemId}}" }` has `args` `{ id: "item-1" }` and `rawArgs` `{ id: "{{newItemId}}" }`,
+  resolved when the call started. Sensitive values stay tokens such as `{{password}}` in both,
+  declared sensitive args are masked, and a secret a nested call received already resolved goes
+  back to its token.
+  `message` has known secret values masked, including one the call replaced while it ran, and is
+  capped in length. A tool whose result is a credential (a Kotlin tool implementing
+  `SecretResultTrailblazeTool`) succeeds with `message` `"<redacted>"`.
+- **Nesting assumes a tool runs its calls one at a time.** Of two calls a tool starts at once
+  (`Promise.all`), one can land under the other.
+- **Where it works:** `trailblaze run`, the daemon, and trails running inside an Android test APK.
+  When the host drives an Android device, a tool that runs on the device appears as one call; the
+  calls it makes inside itself are not in the host's record.
+- **Limits:** a session keeps its latest 10,000 calls, dropping the oldest finished ones first, and its latest 1,000 sections, dropping the oldest finished run first.
+  Steps replayed one at a time over MCP each run as their own run, so there `toolCalls("trail")`
+  holds only the latest step; read `toolCalls()` for the whole session.
+- **In a test**, stub the read with `client.stubHost("trailblaze.history.toolCalls", { value: [...] })`.
+  The value is the host's flat list: each call also has an `id` and the `parentId` of the call it
+  ran inside (`null` for a top-level one), which the SDK nests into `calls`.
 
 ## Worked examples
 
@@ -591,7 +663,7 @@ export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndO
 
     await ctx.tools.web_click({ ref: SELECTORS.searchSubmit });
     await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
-    await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+    await ctx.tools.web_verifyElementVisible({ ref: `heading "${expectedHeading}"` });
 
     return `Searched for "${query}" and verified result heading "${expectedHeading}".`;
   },

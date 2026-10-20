@@ -384,8 +384,10 @@ class TrailblazeProjectConfigLoaderTest {
       description: Trailmap tool
       parameters: []
       tools:
-        - tapOnElementWithText:
-            text: "{{params.label}}"
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "{{params.label}}"
       """.trimIndent(),
     )
     val file = tempFolder.writeConfig(

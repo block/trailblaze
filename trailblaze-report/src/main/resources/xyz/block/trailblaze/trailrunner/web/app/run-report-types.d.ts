@@ -386,6 +386,8 @@ interface NetworkEvent {
 interface SessionEvent {
   t: number | null;
   d: string;
+  /** `"device"` when `t` is still on the device's clock (no measured offset to convert it with). */
+  clock?: "device";
 }
 
 /** Tone accent for a formatted row or badge. */
@@ -438,6 +440,14 @@ interface FormattedRow {
 interface FormatterEntry {
   t: number | null;
   data: any;
+  /** `"device"` when `t` is still on the device's clock (no measured offset to convert it with). */
+  clock?: "device";
+  /**
+   * The device-clock stamp the line carried — the event's own emit time — before `t` was moved onto
+   * the host clock. Absent for a host-stamped line. Tells a formatter that `t` is when the event
+   * happened, not when it arrived.
+   */
+  deviceT?: number;
 }
 
 /**

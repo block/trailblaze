@@ -1527,13 +1527,13 @@ class UnifiedTrailAdapterTest {
             - step: Tap pay
               recording:
                 android-tablet:
-                  - tapOnElementWithText: {text: Pay}
+                  - tapOnElementBySelector: {nodeSelector: {androidAccessibility: {textRegex: '(?is).*\QPay\E.*'}}}
                 kiosk:
-                  - tapOnElementWithText: {text: Pay}
+                  - tapOnElementBySelector: {nodeSelector: {androidAccessibility: {textRegex: '(?is).*\QPay\E.*'}}}
             - step: Hand over
               recording:
                 kiosk:
-                  - tapOnElementWithText: {text: Done}
+                  - tapOnElementBySelector: {nodeSelector: {androidAccessibility: {textRegex: '(?is).*\QDone\E.*'}}}
           """
             .trimIndent()
         )

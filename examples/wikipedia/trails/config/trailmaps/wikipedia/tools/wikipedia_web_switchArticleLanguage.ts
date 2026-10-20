@@ -3,6 +3,7 @@ import {
   SELECTORS,
   articleUrlForLanguage,
   nonEmptyString,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 // Wikipedia accepts a wide range of language codes — including two-letter
@@ -60,7 +61,7 @@ export const wikipedia_web_switchArticleLanguage = trailblaze.tool<SwitchArticle
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.firstHeading,
     });
-    await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+    await ctx.tools.web_verifyElementVisible({ ref: articleHeadingRef(expectedHeading) });
 
     return `Switched "${title}" to ${languageCode}.wikipedia.org and verified heading "${expectedHeading}".`;
   },

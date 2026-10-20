@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.mcp.toolsets
 
 import org.junit.Test
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -16,12 +18,29 @@ import kotlin.test.assertTrue
 class ToolSetCategoryMappingTest {
 
   @Test
-  fun `resolve CORE_INTERACTION includes eraseText in yaml tool names`() {
+  fun `resolve CORE_INTERACTION includes class-backed eraseText`() {
     val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION)
     assertTrue(
-      resolved.yamlToolNames.any { it.toolName == "eraseText" },
-      "CORE_INTERACTION category should expose eraseText (YAML-defined). Got: ${resolved.yamlToolNames}",
+      EraseTextTrailblazeTool::class in resolved.toolClasses,
+      "CORE_INTERACTION category should expose eraseText. Got: ${resolved.toolClasses}",
     )
+  }
+
+  @Test
+  fun `resolve CORE_INTERACTION carries the entry's yaml tool names alongside its classes`() {
+    // No built-in toolset lists a YAML-defined tool, so a workspace overlay adds one.
+    val coreInteraction = TrailblazeToolSetCatalog.defaultEntries().single { it.id == "core_interaction" }
+    val yamlTool = ToolName("fixture_yamlTool")
+    TrailblazeToolSetCatalog.registerWorkspaceToolSets(
+      listOf(coreInteraction.copy(yamlToolNames = coreInteraction.yamlToolNames + yamlTool)),
+    )
+    try {
+      val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION)
+      assertEquals(coreInteraction.yamlToolNames + yamlTool, resolved.yamlToolNames)
+      assertEquals(coreInteraction.toolClasses, resolved.toolClasses)
+    } finally {
+      TrailblazeToolSetCatalog.registerWorkspaceToolSets(emptyList())
+    }
   }
 
   @Test

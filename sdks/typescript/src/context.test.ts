@@ -251,3 +251,32 @@ describe("fromMeta: target block", () => {
       .toBe("https://fallback.example");
   });
 });
+
+describe("fromMeta: hostPlatform block", () => {
+  function withHostPlatform(hostPlatform?: unknown): unknown {
+    const meta = envelope() as { trailblaze: Record<string, unknown> };
+    if (hostPlatform !== undefined) meta.trailblaze["hostPlatform"] = hostPlatform;
+    return meta;
+  }
+
+  test("a host envelope's hostPlatform is parsed onto ctx.hostPlatform", () => {
+    expect(fromMeta(withHostPlatform({ os: "macos", arch: "arm64" }))?.hostPlatform).toEqual({
+      os: "macos",
+      arch: "arm64",
+    });
+  });
+
+  test("absent or malformed hostPlatform leaves it undefined without dropping the envelope", () => {
+    for (const hostPlatform of [undefined, null, { os: "beos", arch: "x64" }, { arch: "x64" }]) {
+      const ctx = fromMeta(withHostPlatform(hostPlatform));
+      expect(ctx?.sessionId).toBe("session-abc");
+      expect(ctx?.hostPlatform).toBeUndefined();
+    }
+  });
+
+  test("an architecture outside the named set reads as null, keeping the OS", () => {
+    for (const arch of ["riscv64", "", null, undefined]) {
+      expect(fromMeta(withHostPlatform({ os: "linux", arch }))?.hostPlatform).toEqual({ os: "linux", arch: null });
+    }
+  });
+});

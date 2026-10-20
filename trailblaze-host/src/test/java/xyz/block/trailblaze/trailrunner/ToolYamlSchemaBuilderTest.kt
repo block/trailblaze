@@ -112,7 +112,7 @@ class ToolYamlSchemaBuilderTest {
     val props = schema["properties"]!!.jsonObject
     assertThat(props["id"]).isNotNull()
     assertThat(props["parameters"]).isNotNull()
-    assertThat(props["shortcut"]).isNotNull()
+    assertThat(props["trailhead"]).isNotNull()
     assertThat(schema["additionalProperties"]!!.jsonPrimitive.content).isEqualTo("false")
   }
 

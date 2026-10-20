@@ -189,8 +189,10 @@ class UnifiedTrailParserTest {
         - verify: The cart shows 2 items
           recording:
             android-phone:
-              - assertVisibleWithText:
-                  text: 2 items
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: 2 items
           maxRetries: 5
         - verify: The LLM checks the receipt banner
           recordable: false

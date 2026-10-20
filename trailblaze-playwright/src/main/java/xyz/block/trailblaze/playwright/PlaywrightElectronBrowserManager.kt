@@ -170,6 +170,9 @@ class PlaywrightElectronBrowserManager(
             .setTimeout(CDP_CONNECT_TIMEOUT_MS),
         )
         Console.log("Electron: connected to CDP at $cdpUrl")
+        // After connecting, not before: Playwright hands an engine registered earlier only to
+        // contexts it creates, and the app's own contexts arrive with the connection.
+        PlaywrightTextRuns.register(playwright)
 
         // Grab the first existing context and page from the Electron app
         val contexts = browser.contexts()

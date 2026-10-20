@@ -9,6 +9,7 @@
 //   bun perf-report-cli.ts <input.json> <output.html>
 import { createRequire } from "module";
 import { readFileSync, writeFileSync } from "fs";
+import type { DeviceClockSync } from "./device-clock-sync";
 
 /** The input JSON PerformanceAnalysisGenerator writes (one entry per session in the report). */
 interface PerfDriverInput {
@@ -18,6 +19,8 @@ interface PerfDriverInput {
     logs?: TrailblazeLogRecord[];
     /** The session's `trace.json` (TrailblazeTracer Complete events); absent for older sessions. */
     trace?: TrailblazeTraceEvent[];
+    /** The session's `session_device_clock.json` (measured device clock readings); absent when none. */
+    deviceClock?: DeviceClockSync | null;
   }>;
 }
 
@@ -25,7 +28,11 @@ const require = createRequire(import.meta.url);
 // The core is loaded at runtime (in main) from the sibling transpiled artifact; assert its API
 // surface here so this driver typechecks against the same contract the viewer implements.
 type PerfCore = {
-  extractPerfSession(logs: TrailblazeLogRecord[], trace?: TrailblazeTraceEvent[]): PerfSessionData | null;
+  extractPerfSession(
+    logs: TrailblazeLogRecord[],
+    trace?: TrailblazeTraceEvent[],
+    deviceClock?: DeviceClockSync | null,
+  ): PerfSessionData | null;
   buildPerfReportHtml(args: { generatedAt?: string; sessions: PerfSessionPayload[] }): string;
 };
 
@@ -39,7 +46,7 @@ function main(): void {
   const input: PerfDriverInput = JSON.parse(readFileSync(inputPath, "utf8"));
   const sessions: PerfSessionPayload[] = [];
   for (const s of input.sessions || []) {
-    const data = core.extractPerfSession(s.logs || [], s.trace || []);
+    const data = core.extractPerfSession(s.logs || [], s.trace || [], s.deviceClock || null);
     // A session with no host-clock timestamps has nothing to profile; skip it rather than
     // rendering an empty timeline.
     if (data) sessions.push({ meta: s.meta || {}, data });

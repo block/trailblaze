@@ -8,7 +8,7 @@ import { surveyApplies, type TargetCatalog } from "./scope.js";
 export interface SessionResult {
   session: SessionSummary;
   findings: Finding[];
-  /** Surveys that threw. The run continues; the failure is reported, not hidden. */
+  /** Surveys that threw or reported `ctx.error`. The run continues; the failure is reported, not hidden. */
   errors: Array<{ survey: string; feature: string; message: string }>;
   /** Surveys skipped because the session's platform, app, or target was outside their spec. */
   skipped: string[];
@@ -79,9 +79,9 @@ export function compactRecord(e: SessionRecord): SessionRecord {
  * Discovered surveys carry their export name as id. Ones built in code fall back to their
  * feature, numbered only when several unnamed surveys share one feature.
  */
-/** `{ kinds }` for a footprints survey whose footprints override the survey's kind; nothing otherwise. */
+/** `{ kinds }` for a survey whose declared `kinds` or footprints override the survey's kind; nothing otherwise. */
 function footprintKinds(spec: SurveyDefinition["spec"]): { kinds?: Record<string, string> } {
-  const kinds: Record<string, string> = {};
+  const kinds: Record<string, string> = { ...spec.kinds };
   for (const [feature, footprint] of Object.entries(spec.footprints ?? {})) if (footprint.kind) kinds[feature] = footprint.kind;
   return Object.keys(kinds).length > 0 ? { kinds } : {};
 }
@@ -108,7 +108,13 @@ function normalizeResult(result: SurveyResult, extra: FindingInput[]): FindingIn
 }
 
 /** Runs one survey over one loaded session. */
-export async function runSurvey(def: SurveyDefinition, session: SurveySession, id: string, log?: (m: string) => void): Promise<Finding[]> {
+export async function runSurvey(
+  def: SurveyDefinition,
+  session: SurveySession,
+  id: string,
+  log?: (m: string) => void,
+  onError?: (error: { survey: string; feature: string; message: string }) => void,
+): Promise<Finding[]> {
   const found: FindingInput[] = [];
   const ctx: SurveyContext = {
     found(summary, evidence, extra) {
@@ -116,6 +122,9 @@ export async function runSurvey(def: SurveyDefinition, session: SurveySession, i
     },
     log(message) {
       log?.(`[${id}] ${message}`);
+    },
+    error(message, feature) {
+      onError?.({ survey: id, feature: feature ?? def.spec.feature, message });
     },
   };
   const result = await def.handler(session, ctx);
@@ -180,7 +189,7 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
         continue;
       }
       try {
-        result.findings.push(...(await runSurvey(def, session, id, options.log)));
+        result.findings.push(...(await runSurvey(def, session, id, options.log, (e) => result.errors.push(e))));
       } catch (e) {
         result.errors.push({ survey: id, feature: def.spec.feature, message: e instanceof Error ? e.message : String(e) });
       }

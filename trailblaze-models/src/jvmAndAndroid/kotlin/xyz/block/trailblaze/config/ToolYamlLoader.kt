@@ -14,19 +14,15 @@ import kotlin.reflect.KClass
  * tool's class via reflection (for class-backed tools) or returns the parsed [ToolYamlConfig]
  * (for YAML-defined `tools:` mode tools).
  *
- * Files in a trailmap's `tools/` directory use one of three suffixes that signal the tool's
- * operational class:
+ * Tool YAMLs use one of two suffixes that signal the tool's operational class:
  *
- * - `*.tool.yaml` — regular tool. Must NOT declare a `shortcut:` or `trailhead:` block.
- * - `*.shortcut.yaml` — shortcut tool. Must declare a `shortcut:` block; must not declare
- *   `trailhead:`.
- * - `*.trailhead.yaml` — trailhead tool. Must declare a `trailhead:` block; must not
- *   declare `shortcut:`.
+ * - `*.tool.yaml` — regular tool. Must NOT declare a `trailhead:` block.
+ * - `*.trailhead.yaml` — trailhead tool. Must declare a `trailhead:` block.
  *
  * The loader enforces the suffix-content contract — files with one of these suffixes whose
  * content disagrees produce a load-time error (caught and logged via the standard
- * lenient-load path). Files whose name doesn't end with any of the three recognized
- * suffixes are skipped with a warning.
+ * lenient-load path). Files whose name doesn't end with a recognized suffix are skipped with
+ * a warning.
  *
  * The data class itself ([ToolYamlConfig]) stays loader-agnostic — it has no idea which
  * file produced it, only what the parsed content says. This keeps the validation rules
@@ -109,31 +105,30 @@ object ToolYamlLoader {
       .associate { ToolName(it.id) to it }
 
   /**
-   * Discovers all `*.shortcut.yaml` and `*.trailhead.yaml` configs — i.e. every config whose
-   * parsed content carries either a [ToolYamlConfig.shortcut] or [ToolYamlConfig.trailhead]
-   * metadata block. **Both `Mode.CLASS` and `Mode.TOOLS` bodies are returned** because the
-   * navigation-graph view cares about the edge metadata, not whether the body is implemented
-   * as Kotlin or as a YAML composition. ([discoverYamlDefinedTools] filters out class-backed
-   * configs and so silently drops class-bodied trailheads / shortcuts; this method is the
-   * graph view's loader of record.)
+   * Discovers all `*.trailhead.yaml` configs — i.e. every config whose parsed content carries a
+   * [ToolYamlConfig.trailhead] metadata block. **Both `Mode.CLASS` and `Mode.TOOLS` bodies are
+   * returned** because the navigation-graph view cares about the trailhead metadata, not whether
+   * the body is implemented as Kotlin or as a YAML composition. ([discoverYamlDefinedTools]
+   * filters out class-backed configs and so silently drops class-bodied trailheads; this method
+   * is the graph view's loader of record.)
    *
    * Returned [Map] keys are [ToolName]s; the same id never appears twice because the parser's
    * duplicate-id detection runs in [discoverAllConfigs] / [parseAllConfigs] before we reach
    * here. The order of entries is the discovery order — callers that want stable rendering
    * (e.g. the Map view) should sort downstream.
    */
-  fun discoverShortcutsAndTrailheads(
+  fun discoverTrailheads(
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Map<ToolName, ToolYamlConfig> =
     discoverAllConfigs(resourceSource)
-      .filter { it.shortcut != null || it.trailhead != null }
+      .filter { it.trailhead != null }
       .associate { ToolName(it.id) to it }
 
   private fun discoverAllConfigs(
     resourceSource: ConfigResourceSource,
   ): List<ToolYamlConfig> {
     // Single walk: tools live at `trails/config/trailmaps/<id>/tools/<name>.tool.yaml`
-    // (and shortcuts/trailheads at their sibling directories). The composite source has
+    // (and trailheads at their sibling directory). The composite source has
     // already collapsed the workspace + classpath layers at the same relPath before we
     // get here — workspace-authored tools at
     // `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml` win over
@@ -142,21 +137,20 @@ object ToolYamlLoader {
   }
 
   /**
-   * Discovers tool YAMLs bundled inside library / target trailmaps under three sibling
+   * Discovers tool YAMLs bundled inside library / target trailmaps under two sibling
    * directories, one per operational class:
    *
    * - `trails/config/trailmaps/<id>/tools/[<subdir>/...]<name>.tool.yaml`
-   * - `trails/config/trailmaps/<id>/shortcuts/[<subdir>/...]<name>.shortcut.yaml`
    * - `trails/config/trailmaps/<id>/trailheads/[<subdir>/...]<name>.trailhead.yaml`
    *
-   * Each suffix is permitted in exactly one directory. A `.shortcut.yaml` dropped under
+   * Each suffix is permitted in exactly one directory. A `.trailhead.yaml` dropped under
    * `tools/` (or vice versa) is dropped by discovery and logged at warning level so the
    * author sees a signal — misfiled YAMLs never reach [parseAllConfigs], so the in-parser
    * suffix-content contract can't fire on them.
    *
    * Subdirectories under each top-level dir are allowed at any depth so authors can
    * organize a trailmap's surface by platform, sub-flow, or any other grouping that fits
-   * the trailmap (e.g. `shortcuts/web/`, `shortcuts/android/checkout/`). This mirrors the
+   * the trailmap (e.g. `trailheads/web/`, `trailheads/android/checkout/`). This mirrors the
    * existing `<trailmap>/waypoints/<...>/<name>.waypoint.yaml` layout. The constraint is
    * **structural, not organizational**: a YAML must live somewhere under the matching
    * top-level directory for its operational class — a stray YAML elsewhere in the trailmap
@@ -176,9 +170,9 @@ object ToolYamlLoader {
    * registry.
    *
    * Map keys are the **full trailmap-relative path** with `.yaml` stripped (e.g.
-   * `<trailmap-id>/shortcuts/<name>.shortcut`). Keying by basename only would silently
-   * collapse two trailmaps that ship a same-named file (e.g. `trailmaps/a/shortcuts/login.shortcut.yaml`
-   * vs `trailmaps/b/shortcuts/login.shortcut.yaml`) into one entry before the YAML is even
+   * `<trailmap-id>/trailheads/<name>.trailhead`). Keying by basename only would silently
+   * collapse two trailmaps that ship a same-named file (e.g. `trailmaps/a/trailheads/login.trailhead.yaml`
+   * vs `trailmaps/b/trailheads/login.trailhead.yaml`) into one entry before the YAML is even
    * parsed, losing one tool from the registry without any duplicate-id warning. Keying
    * by full path keeps both files in the discovery map and lets [warnOnDuplicateIds]
    * catch the collision at the *id* level instead.
@@ -201,7 +195,7 @@ object ToolYamlLoader {
    * `:trailblaze-models` while its `tools/` directory ships in `:trailblaze-common`. Both
    * land at the same classpath path (`trails/config/trailmaps/trailblaze/`) and the
    * recursive walk above merges them transparently. Safe-to-co-contribute artifact types
-   * are the operational ones in this loader (`tools/`, `shortcuts/`, `trailheads/`) and
+   * are the operational ones in this loader (`tools/`, `trailheads/`) and
    * toolsets (handled by `ToolSetYamlLoader`). The `trailmap.yaml` manifest must stay
    * singular per id — only one owning module declares it. Two modules attempting to ship
    * `trailmaps/<id>/trailmap.yaml` would collapse to whichever jar resolves first on the
@@ -227,7 +221,7 @@ object ToolYamlLoader {
         if (segments.size < 3) return@forEach
         if (segments[1] != expectedDir) {
           // A YAML with a recognized suffix landed under the wrong sibling directory
-          // (e.g. `<trailmap>/tools/foo.shortcut.yaml`). The author almost certainly meant
+          // (e.g. `<trailmap>/tools/foo.trailhead.yaml`). The author almost certainly meant
           // it to register, so log loudly rather than dropping silently — the sibling
           // library-trailmap-trailhead branch below uses the same shape for the same
           // reason. The suffix-content contract in `parseAllConfigs` only fires for
@@ -294,7 +288,7 @@ object ToolYamlLoader {
       val expectedKind = expectedKindOrNull(name)
         ?: error(
           "Tool file '$name.yaml' does not have a recognized type suffix. Expected one of: " +
-            ".tool.yaml, .shortcut.yaml, .trailhead.yaml",
+            ".tool.yaml, .trailhead.yaml",
         )
       TrailblazeConfigYaml.instance
         .decodeFromString(ToolYamlConfig.serializer(), content)
@@ -312,7 +306,7 @@ object ToolYamlLoader {
    * consumers ([discoverYamlDefinedTools], [discoverAndLoadAll]) collapse same-id entries
    * via `.associate { ToolName(it.id) to it }` — the second occurrence silently
    * overwrites the first. Without this warning, an author who creates two files with
-   * the same `id:` (e.g. a `.tool.yaml` and a `.shortcut.yaml` they forgot to rename
+   * the same `id:` (e.g. a `.tool.yaml` and a `.trailhead.yaml` they forgot to rename
    * the id on) gets no signal that one of the two is being dropped.
    *
    * Idempotent at the data-class level: validation already ensures every config is
@@ -342,14 +336,13 @@ object ToolYamlLoader {
    */
   private fun expectedKindOrNull(strippedName: String): ToolFileKind? = when {
     strippedName.endsWith(".tool") -> ToolFileKind.TOOL
-    strippedName.endsWith(".shortcut") -> ToolFileKind.SHORTCUT
     strippedName.endsWith(".trailhead") -> ToolFileKind.TRAILHEAD
     else -> null
   }
 
   /**
    * Validates that the content of a tool YAML matches the operational class declared by
-   * its filename suffix. Catches mismatches like "a `.tool.yaml` file with a `shortcut:`
+   * its filename suffix. Catches mismatches like "a `.tool.yaml` file with a `trailhead:`
    * block" — which the data class's own [ToolYamlConfig.validate] can't detect because
    * it doesn't know what filename it came from.
    */
@@ -360,22 +353,10 @@ object ToolYamlLoader {
   ) {
     when (kind) {
       ToolFileKind.TOOL -> {
-        require(config.shortcut == null) {
-          "Tool file '$name.yaml' uses '.tool.yaml' suffix but declares a 'shortcut:' block. " +
-            "Rename the file to '*.shortcut.yaml' or remove the block."
-        }
         require(config.trailhead == null) {
           "Tool file '$name.yaml' uses '.tool.yaml' suffix but declares a 'trailhead:' block. " +
             "Rename the file to '*.trailhead.yaml' or remove the block."
         }
-      }
-      ToolFileKind.SHORTCUT -> {
-        requireNotNull(config.shortcut) {
-          "Tool file '$name.yaml' uses '.shortcut.yaml' suffix but is missing a 'shortcut:' " +
-            "block. Add the block, or rename the file to '*.tool.yaml' if it isn't a shortcut."
-        }
-        // Mutual-exclusion is enforced by ToolYamlConfig.validate() — no need to re-check
-        // for trailhead presence here.
       }
       ToolFileKind.TRAILHEAD -> {
         requireNotNull(config.trailhead) {
@@ -386,7 +367,7 @@ object ToolYamlLoader {
     }
   }
 
-  private enum class ToolFileKind { TOOL, SHORTCUT, TRAILHEAD }
+  private enum class ToolFileKind { TOOL, TRAILHEAD }
 
   @Suppress("UNCHECKED_CAST")
   private fun resolveToolClass(fqcn: String): KClass<out TrailblazeTool> {

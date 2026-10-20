@@ -32,7 +32,6 @@ import xyz.block.trailblaze.playwright.tools.PlaywrightNativeSelectOptionTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeTypeTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyElementVisibleTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyListVisibleTool
-import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyTextVisibleTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyValueTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeWaitTool
 
@@ -589,14 +588,6 @@ class PlaywrightTrailblazeAgent(
         AgentDriverAction.OtherAction(AgentActionType.WEB_ACTION)
       is PlaywrightNativeSelectOptionTool ->
         AgentDriverAction.TapPoint(x = x, y = y)
-      is PlaywrightNativeVerifyTextVisibleTool ->
-        AgentDriverAction.AssertCondition(
-          conditionDescription = "Verify text visible: ${tool.text}",
-          x = x, y = y,
-          isVisible = true,
-          textToDisplay = tool.text,
-          succeeded = true,
-        )
       is PlaywrightNativeVerifyElementVisibleTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify element visible: ${PlaywrightExecutableTool.describeTarget(tool.nodeSelector, tool.ref)}",
@@ -699,7 +690,6 @@ class PlaywrightTrailblazeAgent(
         is PlaywrightNativeVerifyElementVisibleTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeVerifyListVisibleTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeVerifyValueTool -> tool.ref to tool.nodeSelector
-        is PlaywrightNativeVerifyTextVisibleTool -> null to null
         else -> null to null
       }
       val locator = when {
@@ -712,12 +702,10 @@ class PlaywrightTrailblazeAgent(
           )
           resolved ?: return 0 to 0
         }
-        tool is PlaywrightNativeVerifyTextVisibleTool ->
-          browserManager.currentPage.getByText(tool.text)
         else -> return 0 to 0
       }
-      // boundingBox() has its own attach-wait (30s default) — bound it too, or the
-      // getByText branch stalls the overlay on absent text.
+      // boundingBox() has its own attach-wait (30s default) — bound it too, or an absent
+      // element stalls the overlay.
       val box = locator.first().boundingBox(
         Locator.BoundingBoxOptions().setTimeout(OVERLAY_CENTER_TIMEOUT_MS),
       )

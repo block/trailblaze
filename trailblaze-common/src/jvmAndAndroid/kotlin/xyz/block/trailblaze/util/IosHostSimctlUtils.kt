@@ -145,9 +145,11 @@ object IosHostSimctlUtils {
    */
   fun launchApp(deviceId: String, appId: String) {
     requireMacOs("simctl launch")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+    val output = runSimctlBlocking(
+      "launch $appId",
       listOf("xcrun", "simctl", "launch", deviceId, appId),
-    ).runProcess {}
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
     check(output.exitCode == 0) {
       "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
     }
@@ -160,9 +162,7 @@ object IosHostSimctlUtils {
    */
   fun terminateApp(deviceId: String, appId: String): Boolean {
     requireMacOs("simctl terminate")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "terminate", deviceId, appId),
-    ).runProcess {}
+    val output = runSimctlBlocking("terminate $appId", listOf("xcrun", "simctl", "terminate", deviceId, appId))
     if (output.exitCode == 0) return true
     val text = output.outputLines.joinToString("\n").trim()
     if (isNotRunningTerminateOutput(text)) return false
@@ -176,14 +176,57 @@ object IosHostSimctlUtils {
    */
   fun grantPrivacy(deviceId: String, appId: String, service: String) {
     requireMacOs("simctl privacy")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+    val output = runSimctlBlocking(
+      "privacy grant $service $appId",
       listOf("xcrun", "simctl", "privacy", deviceId, "grant", service, appId),
-    ).runProcess {}
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
     check(output.exitCode == 0) {
       "simctl privacy grant $service $appId failed (exit ${output.exitCode}): " +
         output.outputLines.joinToString("\n").trim()
     }
   }
+
+  /**
+   * `xcrun simctl keychain <deviceId> reset`: empties the simulator's keychain for every app.
+   * Deleting an app's data container leaves its keychain items behind, so a signed-in app comes
+   * back signed in without this.
+   */
+  suspend fun resetKeychain(deviceId: String) {
+    requireMacOs("simctl keychain reset")
+    val output = runSimctl("keychain reset", listOf("xcrun", "simctl", "keychain", deviceId, "reset"))
+    check(output.exitCode == 0) {
+      "simctl keychain reset failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
+    }
+  }
+
+  /**
+   * Runs [argv], killing it after [timeoutSeconds] or on cancellation: a stalled CoreSimulator
+   * otherwise hangs the step, and the session teardown behind it, indefinitely. Throws on timeout;
+   * the caller judges the exit code.
+   */
+  private suspend fun runSimctl(
+    what: String,
+    argv: List<String>,
+    timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
+  ): CommandProcessResult {
+    val (output, timedOut) = TrailblazeProcessBuilderUtils.createProcessBuilder(argv)
+      .runProcessWithTimeout(timeoutSeconds)
+    check(!timedOut) { "simctl $what did not finish within ${timeoutSeconds}s" }
+    return output
+  }
+
+  /** [runSimctl] for the blocking callers. */
+  private fun runSimctlBlocking(
+    what: String,
+    argv: List<String>,
+    timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
+  ): CommandProcessResult = runBlocking { runSimctl(what, argv, timeoutSeconds) }
+
+  private const val SIMCTL_ACTION_TIMEOUT_SECONDS = 10L
+
+  /** Launch and privacy grant can wait on a cold simulator booting its services, as on a fresh CI agent. */
+  private const val SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS = 120L
 
   /** simctl's wording for "that app is not running" varies across Xcode versions. */
   internal fun isNotRunningTerminateOutput(output: String): Boolean {

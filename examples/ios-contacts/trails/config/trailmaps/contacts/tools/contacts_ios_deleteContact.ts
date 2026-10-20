@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { LABELS, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
+import { LABELS, nonEmptyString, tapOnText, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_CONTACT_NAME = "Trailblaze Demo";
 
@@ -36,14 +36,12 @@ export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
       return `Contact "${name}" not found — nothing to delete.`;
     }
 
-    await ctx.tools.tapOnElementWithText({
-      text: LABELS.editButton,
-    });
+    await tapOnText(ctx, LABELS.editButton);
 
     // Delete Contact is at the bottom of the (long) edit form. `scrollUntilTextIsVisible`
     // is the safest way to surface it on devices with very small viewports.
     await ctx.tools.scrollUntilTextIsVisible({ text: LABELS.deleteContactRow });
-    await ctx.tools.tapOnElementWithText({ text: LABELS.deleteContactRow });
+    await tapOnText(ctx, LABELS.deleteContactRow);
 
     // The action sheet that confirms the deletion shows the same "Delete Contact"
     // string as the row that opened it — tap it again to commit. If any step in
@@ -54,7 +52,7 @@ export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
     // false-positive on the residual search input. A negative-by-absence probe
     // would be similarly unreliable on long contact lists where the row may
     // simply be off-screen rather than absent.
-    await ctx.tools.tapOnElementWithText({ text: LABELS.deleteContactRow });
+    await tapOnText(ctx, LABELS.deleteContactRow);
 
     return `Deleted contact "${name}".`;
   },

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host
 
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -12,7 +13,10 @@ import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.config.ToolNameResolver
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -59,7 +63,7 @@ class AppTargetDiscoveryTest {
       toolsets:
         - id: workspace_android_tools
           tools:
-            - tapOnElementWithText
+            - tapOnElementBySelector
       targets:
         - workspaceapp
       """.trimIndent(),
@@ -105,7 +109,7 @@ class AppTargetDiscoveryTest {
     )
     // `target.tools:` is now a list of tool *names* — each name must match the `name:`
     // field declared inside a `<trailmap>/tools/*.yaml` descriptor (auto-discovered into a
-    // trailmap-local registry). Operational tools (`*.tool.yaml`, `*.shortcut.yaml`,
+    // trailmap-local registry). Operational tools (`*.tool.yaml`,
     // `*.trailhead.yaml`) in the same directory load through their own paths.
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
@@ -385,12 +389,12 @@ class AppTargetDiscoveryTest {
       toolsets:
         - id: working_tools
           tools:
-            - tapOnElementWithText
+            - tapOnElementBySelector
         - id: broken_tools
           drivers:
             - not-a-real-driver
           tools:
-            - tapOnElementWithText
+            - tapOnElementBySelector
       targets:
         - workspaceapp
       """.trimIndent(),
@@ -511,33 +515,19 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
-  fun `workspace tool with classpath-colliding id overrides the bundled one`() {
-    // Pin the override contract documented on
-    // `TrailblazeSerializationInitializer.registerWorkspaceYamlTools`. A workspace
-    // `*.tool.yaml` at the same trailmap-scoped relPath as the framework-bundled tool —
-    // `<workspace>/trails/config/trailmaps/trailblaze/tools/eraseText.tool.yaml` vs the
-    // classpath-shipped `trails/config/trailmaps/trailblaze/tools/eraseText.tool.yaml` from
-    // `trailblaze-common` — must reach the overlay so the workspace body wins. The collision
-    // is now same-relPath (both layouts are trailmap-scoped), handled by
-    // `CompositeConfigResourceSource`'s workspace-wins layering before the loader sees it.
-    // Pre-fix the registration filter dropped workspace tools whose id already appeared on
-    // the classpath, silently discarding the override and leaving the bundled config in
-    // effect.
+  fun `workspace yaml tool named like a class-backed built-in is skipped so the resolver still builds`() {
+    // `eraseText` is class-backed. A workspace YAML tool of the same name used to reach the
+    // overlay, and every `ToolNameResolver` built afterwards threw on the class-vs-YAML
+    // collision, taking the tool catalog down with it.
     val workspace = tempFolder.newFolder("workspace")
     val toolsDir = File(workspace, "trails/config/trailmaps/trailblaze/tools").apply { mkdirs() }
     File(toolsDir, "eraseText.tool.yaml").writeText(
       """
       id: eraseText
-      description: |
-        Workspace-authored override of the bundled `eraseText` tool. The body is
-        intentionally distinct from the framework's so the test can verify which
-        version landed in the registry.
+      description: Workspace YAML tool reusing a class-backed built-in name.
       parameters: []
       tools:
-        - mobile_maestro:
-            commands:
-              - eraseText: {}
-              - eraseText: {}
+        - hideKeyboard: {}
       """.trimIndent(),
     )
     File(workspace, "trails/config/trailblaze.yaml").apply {
@@ -551,15 +541,19 @@ class AppTargetDiscoveryTest {
       },
     )
 
-    val resolved = TrailblazeSerializationInitializer.buildYamlDefinedTools()[ToolName("eraseText")]
-    assertNotNull(resolved, "eraseText must still be reachable after the workspace override registers")
-    // The workspace version's description starts with "Workspace-authored override" — the
-    // bundled framework one starts with "Erase characters". Asserting on the
-    // description is the cleanest signal of which body won the union.
-    assertTrue(
-      resolved.description.orEmpty().startsWith("Workspace-authored override"),
-      "Workspace `eraseText` must override the classpath-bundled one, but the resolved " +
-        "config's description was: '${resolved.description}'",
+    assertFalse(
+      ToolName("eraseText") in TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
+      "A workspace YAML tool must not shadow the class-backed eraseText",
+    )
+    // The workspace file sits at the bundled manifest's path, so the layered source no longer
+    // sees the bundled `class:` manifest; the built-in class must still resolve through it.
+    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(
+      resourceSource = workspaceLayeredConfigResourceSource(File(workspace, "trails/config"), "[test]"),
+    )
+    assertEquals(
+      setOf(EraseTextTrailblazeTool::class),
+      resolver.resolveAll(listOf("eraseText")),
+      "eraseText must still resolve to the built-in class",
     )
   }
 

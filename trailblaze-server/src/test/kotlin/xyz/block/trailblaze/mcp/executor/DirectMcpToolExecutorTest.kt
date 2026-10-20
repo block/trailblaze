@@ -6,6 +6,7 @@ import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -60,7 +61,7 @@ class DirectMcpToolExecutorTest {
   }
 
   @Test
-  fun `getAvailableTools returns tools from multiple categories`() {
+  fun `getAvailableTools returns tools from multiple categories`() = YamlDefinedToolFixture.inCoreInteraction {
     val executor = createExecutor(setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION))
     val tools = executor.getAvailableTools()
 
@@ -73,11 +74,11 @@ class DirectMcpToolExecutorTest {
       tools.any { it.name == "openUrl" },
       "Should include openUrl from NAVIGATION",
     )
-    // eraseText is YAML-defined and part of the CORE_INTERACTION catalog entry; it must appear in
-    // the advertised descriptor list or the LLM won't know it's available.
+    // A YAML-defined tool in the CORE_INTERACTION catalog entry must appear in the advertised
+    // descriptor list or the LLM won't know it's available.
     assertTrue(
-      tools.any { it.name == "eraseText" },
-      "Should include eraseText (YAML-defined) from CORE_INTERACTION",
+      tools.any { it.name == YamlDefinedToolFixture.NAME },
+      "Should include the YAML-defined tool from CORE_INTERACTION",
     )
   }
 
@@ -228,13 +229,12 @@ class DirectMcpToolExecutorTest {
     }
 
   @Test
-  fun `executeToolByName handles eraseText from CORE_INTERACTION category`() =
-    runTest {
-      // eraseText is a YAML-defined tool (`eraseText.tool.yaml` via `tools:` composition) that
-      // ships as part of the `core_interaction` catalog entry. This is the load-bearing
-      // regression guard for YAML-defined tool execution through DirectMcpToolExecutor: the
-      // executor must advertise `eraseText` in the CORE_INTERACTION category and route its
-      // execution through the same polymorphic tool serializer that handles class-backed tools.
+  fun `executeToolByName handles a YAML-defined tool from CORE_INTERACTION category`() =
+    YamlDefinedToolFixture.inCoreInteraction { runTest {
+      // The load-bearing regression guard for YAML-defined tool execution through
+      // DirectMcpToolExecutor: the executor must advertise a YAML-defined tool in the
+      // CORE_INTERACTION category and route its execution through the same polymorphic tool
+      // serializer that handles class-backed tools.
       val mockBridge =
         ConfigurableMockBridge().apply {
           executeToolResult = "[OK] Erased text"
@@ -246,11 +246,11 @@ class DirectMcpToolExecutorTest {
         )
       val args = buildJsonObject {}
 
-      val result = executor.executeToolByName("eraseText", args)
+      val result = executor.executeToolByName(YamlDefinedToolFixture.NAME, args)
 
       assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("eraseText", result.toolName)
-    }
+      assertEquals(YamlDefinedToolFixture.NAME, result.toolName)
+    } }
 
   @Test
   fun `executeToolByName returns ToolNotFound when tool is in unconfigured category`() =

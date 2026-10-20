@@ -32,9 +32,12 @@ import kotlinx.serialization.json.putJsonObject
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.rules.TestRule
+import org.junit.runners.model.Statement
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -94,10 +97,10 @@ import kotlin.test.fail
  *    [TrailblazeMcpServer.refreshToolsForSession] triggers) swaps the descriptor surface
  *    because the per-session name tracking covers descriptor tools too.
  *
- * `eraseText` (a global YAML-defined tool with one optional integer parameter) is the subject
- * throughout: on this driver it arrives via the always-enabled `core_interaction` catalog
- * toolset, so the target-switch test exercises the exclusion side — a target whose
- * `excluded_tools:` names it must not advertise it.
+ * [YamlDefinedToolFixture] (a YAML-defined tool with one optional integer parameter) is the
+ * subject throughout: every test adds it to the always-enabled `core_interaction` catalog toolset,
+ * so on this driver it arrives the way a global YAML-defined tool does, and the target-switch test
+ * exercises the exclusion side — a target whose `excluded_tools:` names it must not advertise it.
  */
 class TrailblazeMcpServerDescriptorToolsTest {
 
@@ -114,16 +117,23 @@ class TrailblazeMcpServerDescriptorToolsTest {
     trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
   )
 
-  private val eraseTarget = YamlToolTarget(
-    id = "erasetarget",
-    displayName = "Erase Target",
-    yamlNames = setOf(ToolName("eraseText")),
+  @get:Rule
+  val yamlToolInCoreInteraction = TestRule { base, _ ->
+    object : Statement() {
+      override fun evaluate() = YamlDefinedToolFixture.inCoreInteraction { base.evaluate() }
+    }
+  }
+
+  private val yamlTarget = YamlToolTarget(
+    id = "yamltarget",
+    displayName = "YAML Target",
+    yamlNames = setOf(YamlDefinedToolFixture.toolName),
   )
   private val excludingTarget = YamlToolTarget(
     id = "excludingtarget",
     displayName = "Excluding Target",
     yamlNames = emptySet(),
-    excludedYamlNames = setOf(ToolName("eraseText")),
+    excludedYamlNames = setOf(YamlDefinedToolFixture.toolName),
   )
 
   private fun newServer(
@@ -185,7 +195,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `a sibling's exclusion cannot strip a tool the active target's own toolsets deliver`() {
-    // `eraseText` reaches this session two ways: the sibling declares it, and the active target's
+    // The YAML tool reaches this session two ways: the sibling declares it, and the active target's
     // always-enabled `core_interaction` toolset carries it on this driver. A sibling opting out
     // speaks only for its own declaration — it must not delete a tool the active trailmap supplies,
     // or one app's config silently removes another app's tool from a shared daemon session.
@@ -193,8 +203,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
     val sibling = YamlToolTarget(
       id = "siblingapp",
       displayName = "Sibling",
-      yamlNames = setOf(ToolName("eraseText")),
-      excludedYamlNames = setOf(ToolName("eraseText")),
+      yamlNames = setOf(YamlDefinedToolFixture.toolName),
+      excludedYamlNames = setOf(YamlDefinedToolFixture.toolName),
     )
     val bridge = RecordingBridge(targets = setOf(active, sibling), currentTargetId = active.id)
     val server = newServer(bridge)
@@ -204,8 +214,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
     val result = runBlocking {
       server.executeDescriptorBackedTool(
         sessionId,
-        "eraseText",
-        buildJsonObject { put("charactersToErase", 3) },
+        YamlDefinedToolFixture.NAME,
+        buildJsonObject { put(YamlDefinedToolFixture.PARAM, 3) },
       )
     }
 
@@ -249,15 +259,15 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `valid YAML tool call dispatches through the bridge executor`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
 
     // No session context installed → no scripted runtime → the YAML-only fallback repo path.
     val result = runBlocking {
       server.executeDescriptorBackedTool(
         sessionId = "no-such-session",
-        toolName = "eraseText",
-        arguments = buildJsonObject { put("charactersToErase", 5) },
+        toolName = YamlDefinedToolFixture.NAME,
+        arguments = buildJsonObject { put(YamlDefinedToolFixture.PARAM, 5) },
       )
     }
 
@@ -269,7 +279,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   fun `a re-check that changes the device's classifiers rebuilds the runtime and refreshes tools`() {
     // The runtime was gated against `android-phone`; the device now also reports `rig`. A runtime
     // kept across that change would keep hiding rig-only tools (or keep a dropped one loaded).
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = TrailblazeMcpServer(
       logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
       mcpBridge = bridge,
@@ -291,13 +301,13 @@ class TrailblazeMcpServerDescriptorToolsTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "BuiltForPhone",
         toolClasses = emptySet(),
-        yamlToolNames = setOf(ToolName("eraseText")),
+        yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
         scriptedToolNames = emptySet(),
       ),
     )
     server.installSessionScriptToolRuntimeForTest(
       sessionId = sessionId,
-      targetId = eraseTarget.id,
+      targetId = yamlTarget.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       toolRepo = builtForPhone,
       classifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier),
@@ -319,7 +329,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test(timeout = 30_000)
   fun `a rebuild that times out keeps the old runtime and is retried`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = TrailblazeMcpServer(
       logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
       mcpBridge = bridge,
@@ -334,12 +344,12 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.installSessionContextForTest(sessionId, ctx(sessionId))
     val refreshed = CompletableDeferred<String>()
     server.onToolsRefreshedForTest = { refreshed.complete(it) }
-    val builtForPhone = eraseTextRepo()
+    val builtForPhone = yamlToolRepo()
     // The device wedges before the re-check, so the rebuild it starts can't finish.
     bridge.hangDeviceDiscovery = true
     server.installSessionScriptToolRuntimeForTest(
       sessionId = sessionId,
-      targetId = eraseTarget.id,
+      targetId = yamlTarget.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       toolRepo = builtForPhone,
       classifiers = phoneClassifiers,
@@ -363,7 +373,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test(timeout = 30_000)
   fun `a rebuild that leaves no scripted tools still refreshes the tools`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
     server.classifierRecheckGapsMsForTest = listOf(50L)
     val sessionId = "classifier-empty-rebuild-session"
@@ -372,9 +382,9 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.onToolsRefreshedForTest = { refreshed.complete(it) }
     server.installSessionScriptToolRuntimeForTest(
       sessionId = sessionId,
-      targetId = eraseTarget.id,
+      targetId = yamlTarget.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      toolRepo = eraseTextRepo(),
+      toolRepo = yamlToolRepo(),
       classifiers = phoneClassifiers,
       recheckClassifiers = true,
     )
@@ -387,7 +397,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test(timeout = 30_000)
   fun `a re-check for a device the session has left changes nothing`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val probes = AtomicInteger(0)
     val server = newServer(bridge, deviceClassifiersProvider = { probes.incrementAndGet(); rigClassifiers })
     server.classifierRecheckGapsMsForTest = listOf(50L)
@@ -396,10 +406,10 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.installSessionContextForTest(sessionId, sessionContext)
     val refreshes = AtomicInteger(0)
     server.onToolsRefreshedForTest = { refreshes.incrementAndGet() }
-    val builtForPhone = eraseTextRepo()
+    val builtForPhone = yamlToolRepo()
     server.installSessionScriptToolRuntimeForTest(
       sessionId = sessionId,
-      targetId = eraseTarget.id,
+      targetId = yamlTarget.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       toolRepo = builtForPhone,
       classifiers = phoneClassifiers,
@@ -418,7 +428,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test(timeout = 30_000)
   fun `a rebuild whose tools fail to register is retried`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
     server.classifierRecheckGapsMsForTest = listOf(50L)
     server.descriptorCollectionTimeoutMsForTest = 250
@@ -431,9 +441,9 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.onToolsRefreshedForTest = { if (refreshes.incrementAndGet() == 1) bridge.hangDeviceDiscovery = true }
     server.installSessionScriptToolRuntimeForTest(
       sessionId = sessionId,
-      targetId = eraseTarget.id,
+      targetId = yamlTarget.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      toolRepo = eraseTextRepo(),
+      toolRepo = yamlToolRepo(),
       classifiers = phoneClassifiers,
       recheckClassifiers = true,
     )
@@ -443,7 +453,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
       withTimeout(10_000) {
         while (bridge.hungDiscoveries.get() < 1) delay(10)
         bridge.hangDeviceDiscovery = false
-        while (!mcpServer.tools.containsKey("eraseText")) delay(10)
+        while (!mcpServer.tools.containsKey(YamlDefinedToolFixture.NAME)) delay(10)
       }
     }
     assertTrue(refreshes.get() >= 2, "the tools must be registered by a retry, not the failed refresh")
@@ -455,9 +465,9 @@ class TrailblazeMcpServerDescriptorToolsTest {
   @Test(timeout = 30_000)
   fun `a classifier rebuild waits for a running scripted or YAML tool call`() {
     assertClassifierRebuildWaitsForRunningCall(
-      target = eraseTarget,
-      toolName = "eraseText",
-      arguments = buildJsonObject { put("charactersToErase", 1) },
+      target = yamlTarget,
+      toolName = YamlDefinedToolFixture.NAME,
+      arguments = buildJsonObject { put(YamlDefinedToolFixture.PARAM, 1) },
     )
   }
 
@@ -473,7 +483,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   @Test(timeout = 30_000)
   fun `a classifier rebuild waits for a running session tool call`() {
     assertClassifierRebuildWaitsForRunningCall(
-      target = eraseTarget,
+      target = yamlTarget,
       toolName = "heldKoogTool",
       arguments = buildJsonObject { },
     )
@@ -482,11 +492,11 @@ class TrailblazeMcpServerDescriptorToolsTest {
   private val phoneClassifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier)
   private val rigClassifiers = listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier)
 
-  private fun eraseTextRepo() = TrailblazeToolRepo(
+  private fun yamlToolRepo() = TrailblazeToolRepo(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "BuiltForPhone",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("eraseText")),
+      yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
       scriptedToolNames = emptySet(),
     ),
   )
@@ -528,7 +538,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
       sessionId = sessionId,
       targetId = target.id,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      toolRepo = eraseTextRepo(),
+      toolRepo = yamlToolRepo(),
       classifiers = phoneClassifiers,
       recheckClassifiers = true,
     )
@@ -564,7 +574,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // Two sessions bound to two different devices. Device-bound dispatch must resolve the CALLING
     // session's device — without the per-session McpDeviceContext binding, the bridge falls back to
     // the global last-selected device and one session's call could land on the other's device.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
 
     fun installBoundSession(sessionId: String, device: TrailblazeDeviceId) {
@@ -578,13 +588,13 @@ class TrailblazeMcpServerDescriptorToolsTest {
       // this test is about which device gets bound at dispatch, not runtime construction.
       server.installSessionScriptToolRuntimeForTest(
         sessionId = sessionId,
-        targetId = eraseTarget.id,
+        targetId = yamlTarget.id,
         driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
         toolRepo = TrailblazeToolRepo(
           TrailblazeToolSet.DynamicTrailblazeToolSet(
             name = "DeviceBindingTestToolSet",
             toolClasses = emptySet(),
-            yamlToolNames = setOf(ToolName("eraseText")),
+            yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
             scriptedToolNames = emptySet(),
           ),
         ),
@@ -594,8 +604,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
     installBoundSession("session-b", androidDeviceB)
 
     runBlocking {
-      server.executeDescriptorBackedTool("session-a", "eraseText", buildJsonObject { put("charactersToErase", 1) })
-      server.executeDescriptorBackedTool("session-b", "eraseText", buildJsonObject { put("charactersToErase", 2) })
+      server.executeDescriptorBackedTool("session-a", YamlDefinedToolFixture.NAME, buildJsonObject { put(YamlDefinedToolFixture.PARAM, 1) })
+      server.executeDescriptorBackedTool("session-b", YamlDefinedToolFixture.NAME, buildJsonObject { put(YamlDefinedToolFixture.PARAM, 2) })
     }
 
     assertEquals(
@@ -607,14 +617,14 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `unknown argument key is rejected before anything reaches the device`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
 
     val exception = assertFailsWith<McpToolArgumentValidationException> {
       runBlocking {
         server.executeDescriptorBackedTool(
           sessionId = "no-such-session",
-          toolName = "eraseText",
+          toolName = YamlDefinedToolFixture.NAME,
           arguments = buildJsonObject { put("bogus", 1) },
         )
       }
@@ -632,7 +642,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `unknown tool name is rejected with a directed message`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
 
     val exception = assertFailsWith<McpToolArgumentValidationException> {
@@ -715,7 +725,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `scripted tool with no runtime available fails with a directed runtime message`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
 
     // A name that is NOT a known YAML-defined tool and has no scripted runtime for the
@@ -988,8 +998,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
   @Test
   fun `registerTools registers the target's descriptor tools and a target switch honors exclusions`() {
     val bridge = RecordingBridge(
-      targets = setOf(eraseTarget, excludingTarget),
-      currentTargetId = eraseTarget.id,
+      targets = setOf(yamlTarget, excludingTarget),
+      currentTargetId = yamlTarget.id,
     )
     val server = newServer(bridge)
     val sessionContext = ctx("descriptor-session")
@@ -998,19 +1008,19 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
     server.registerTools(mcpServer, McpSessionId("descriptor-session"), sessionContext)
 
-    val registered = mcpServer.tools["eraseText"]?.tool
+    val registered = mcpServer.tools[YamlDefinedToolFixture.NAME]?.tool
       ?: fail(
-        "eraseText must be registered as a first-class MCP tool while the bound target " +
+        "The YAML tool must be registered as a first-class MCP tool while the bound target " +
           "surfaces it. Registered: ${mcpServer.tools.keys.sorted()}",
       )
     val properties = registered.inputSchema.properties ?: fail("inputSchema.properties must be present")
     assertTrue(
-      "charactersToErase" in properties.keys,
+      YamlDefinedToolFixture.PARAM in properties.keys,
       "The YAML tool's parameter must be advertised in the MCP inputSchema. Got: ${properties.keys}",
     )
     assertFalse(
-      registered.inputSchema.required.orEmpty().contains("charactersToErase"),
-      "charactersToErase is optional in the YAML config and must not be advertised as required",
+      registered.inputSchema.required.orEmpty().contains(YamlDefinedToolFixture.PARAM),
+      "${YamlDefinedToolFixture.PARAM} is optional in the YAML config and must not be advertised as required",
     )
     // The scripted (.ts) side of the descriptor surface: openUrl arrives via the same catalog
     // toolset and must advertise its analyzer-extracted schema (a `url` property), not an
@@ -1022,16 +1032,16 @@ class TrailblazeMcpServerDescriptorToolsTest {
       "openUrl must advertise its real JSON Schema. Got: ${openUrl.inputSchema.properties?.keys}",
     )
 
-    // Target switch: the new target EXCLUDES eraseText via its `excluded_tools:` surface.
+    // Target switch: the new target EXCLUDES the YAML tool via its `excluded_tools:` surface.
     // refreshToolsForSession routes back through registerTools — the per-session tracked name
     // set must remove it, while non-excluded descriptor tools re-register.
     bridge.currentTargetId = excludingTarget.id
     server.registerTools(mcpServer, McpSessionId("descriptor-session"), sessionContext)
 
     assertFalse(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey(YamlDefinedToolFixture.NAME),
       "After switching to a target that excludes the tool, re-registration must remove " +
-        "eraseText from the MCP surface (per-session name tracking must cover descriptor tools)",
+        "the YAML tool from the MCP surface (per-session name tracking must cover descriptor tools)",
     )
     assertTrue(
       mcpServer.tools.containsKey("openUrl"),
@@ -1048,8 +1058,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // class-backed surface it already registered, and simply omit the descriptor tools until
     // a later refresh retries.
     val bridge = RecordingBridge(
-      targets = setOf(eraseTarget),
-      currentTargetId = eraseTarget.id,
+      targets = setOf(yamlTarget),
+      currentTargetId = yamlTarget.id,
       hangDeviceDiscovery = true,
     )
     val server = newServer(bridge)
@@ -1061,7 +1071,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.registerTools(mcpServer, McpSessionId("wedged-session"), sessionContext)
 
     assertFalse(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey(YamlDefinedToolFixture.NAME),
       "The wedged descriptor collection must not have produced descriptor tools",
     )
     assertTrue(
@@ -1079,7 +1089,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // registers), so the refresh path must emit through the custom SSE sender — the same
     // channel progress notifications use. This is the client-visible contract that makes a
     // mid-session target switch actually reach a connected MCP client.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("sse-session")
     val sentNotifications = mutableListOf<String>()
@@ -1100,7 +1110,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   fun `a tools refresh with no notification stream open completes without error`() {
     // Documented contract: sendToolListChangedNotification no-ops when the client has no
     // custom SSE stream open — such a client sees the new surface on its next tools/list.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("no-stream-session") // customSseNotificationSender left null
     server.installSessionContextForTest("no-stream-session", sessionContext)
@@ -1112,7 +1122,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `a closing session ignores tools refreshes`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("closing-session")
     var refreshCount = 0
@@ -1130,7 +1140,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   fun `a failing notification stream does not fail the tools refresh`() {
     // Documented contract: a sender failure (client stream torn down mid-send) is swallowed —
     // the refresh itself (re-registration) must still complete.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("failing-stream-session")
     sessionContext.customSseNotificationSender = { error("stream torn down") }
@@ -1141,7 +1151,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.refreshToolsForSession("failing-stream-session")
 
     assertTrue(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey(YamlDefinedToolFixture.NAME),
       "The refresh's re-registration must complete even when the notification send fails",
     )
   }
@@ -1152,7 +1162,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // listener — but the re-registration is the routing table for the CLI's NEXT one-shot
     // tools/call. Both halves of that contract, on one refresh: the surface updates, the
     // notification channel stays silent.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("cli-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
     val sentNotifications = mutableListOf<String>()
@@ -1164,7 +1174,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.refreshToolsForSession("cli-session")
 
     assertTrue(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey(YamlDefinedToolFixture.NAME),
       "A CLI session's refresh must re-register the tool surface — the Server's tool table " +
         "routes the CLI's next one-shot tools/call. Registered: ${mcpServer.tools.keys.sorted()}",
     )
@@ -1182,7 +1192,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // When the refresh skipped CLI sessions wholesale, a CLI session's roster could reach two
     // devices — with `device INFO` advertising "Hand the session over with switchDevice" — while
     // switchDevice itself was never registered, so the handover was unreachable.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(yamlTarget), currentTargetId = yamlTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("cli-roster-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
     server.installSessionContextForTest("cli-roster-session", sessionContext)

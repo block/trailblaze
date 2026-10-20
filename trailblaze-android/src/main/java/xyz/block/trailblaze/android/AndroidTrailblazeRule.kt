@@ -41,7 +41,9 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.SessionMetadata
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.ResolvedTarget
@@ -671,9 +673,25 @@ open class AndroidTrailblazeRule(
   protected open fun sessionTestClassName(trailConfig: TrailConfig?): String =
     trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule"
 
-  /** Test method name recorded on the session-start log. */
+  /**
+   * Test method name recorded on the session-start log. A trail [runFromAssets] runs keeps the
+   * test's own name: CI maps a failed row back to the test to retry by it.
+   */
   protected open fun sessionTestMethodName(trailConfig: TrailConfig?): String =
     trailblazeLoggingRule.description?.methodName ?: "run"
+
+  /**
+   * Subclass seam: [runFromAssets] opened [session] for its next trail. Start here whatever
+   * [beforeTestExecution] starts for the test's own session. No-op by default.
+   */
+  protected open fun onGroupedTrailSessionStarted(session: TrailblazeSession) = Unit
+
+  /**
+   * Subclass seam: [runFromAssets] is about to end [session], one per trail. Finish here whatever
+   * [afterTestExecution] finishes for the test's own session, which by then has none. No-op by
+   * default.
+   */
+  protected open fun onGroupedTrailSessionEnding(session: TrailblazeSession) = Unit
 
   protected val trailblazeYaml = createTrailblazeYaml(
     customTrailblazeToolClasses = customToolClasses?.allForSerializationTools() ?: setOf(),
@@ -933,8 +951,9 @@ open class AndroidTrailblazeRule(
           val itemResult = when (item) {
             is TrailYamlItem.PromptsTrailItem ->
               // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
-              // delegates only the unrecorded steps to the Koog [trailblazeRunner].
-              trailblazeRunnerUtil.runPrompt(
+              // delegates only the unrecorded steps to the Koog [trailblazeRunner]. Suspending, so
+              // every tool a step dispatches is cancelled with the trail.
+              trailblazeRunnerUtil.runPromptSuspend(
                 prompts = item.promptSteps,
                 useRecordedSteps = useRecordedSteps,
                 selfHeal = resolveSelfHealEnabled(),
@@ -942,12 +961,12 @@ open class AndroidTrailblazeRule(
             is TrailYamlItem.TrailheadTrailItem ->
               // The trailhead is step 0: run its single lowered step through the same path as any
               // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
-              trailblazeRunnerUtil.runPrompt(
+              trailblazeRunnerUtil.runPromptSuspend(
                 prompts = listOf(item.trailhead.toPromptStep()),
                 useRecordedSteps = true,
                 selfHeal = resolveSelfHealEnabled(),
               )
-            is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
             is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
           }
           if (itemResult is TrailblazeToolResult.Error) {
@@ -1148,8 +1167,14 @@ open class AndroidTrailblazeRule(
     }
   }
 
+  /** Whether a trail's `config.context` is in [trailblazeRunner]'s prompt, for [runFromAssets] to drop. */
+  private var systemPromptAppended = false
+
   private fun handleConfig(config: TrailConfig): TrailblazeToolResult {
-    config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+    config.context?.let {
+      trailblazeRunner.appendToSystemPrompt(it)
+      systemPromptAppended = true
+    }
     return TrailblazeToolResult.Success()
   }
 
@@ -1229,6 +1254,16 @@ open class AndroidTrailblazeRule(
     useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
     targetAppId: String? = null,
     trailSourceUrl: String? = null,
+  ) = runFromAsset(yamlAssetPath, forceStopApp, useRecordedSteps, targetAppId, trailSourceUrl, afterCleanStart = {})
+
+  /** [runFromAsset], calling [afterCleanStart] once the app has had its clean start, or kept its hand-off. */
+  private fun runFromAsset(
+    yamlAssetPath: String,
+    forceStopApp: Boolean,
+    useRecordedSteps: Boolean,
+    targetAppId: String?,
+    trailSourceUrl: String?,
+    afterCleanStart: () -> Unit,
   ) {
     val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
@@ -1261,6 +1296,7 @@ open class AndroidTrailblazeRule(
     if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess, keepForReuse) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
     }
+    afterCleanStart()
     runWithSource(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
@@ -1272,7 +1308,125 @@ open class AndroidTrailblazeRule(
     )
   }
 
+  /**
+   * Runs [yamlAssetPaths] in order in one test, each trail in a session of its own, as though each
+   * were its own test: its own start and end logs, final or failure screenshot, trace, and result
+   * row. The app process carries over from one trail to the next, so with
+   * `trailblaze.trailheadReuse` a trailhead can hand its setup on rather than repeat it.
+   *
+   * Every trail runs even after one fails, and the test then fails with each failure. An interrupt
+   * (the test's timeout) ends the trail it lands in and stops there.
+   *
+   * The trails must share a driver and a locale: the agent is built for the first trail, and
+   * nothing resets a locale a trail set. Each trail's `config.context` and turbo verdict are its
+   * own, and a failed trail hands no setup on. [trailSourceUrls] maps a path to the link its report
+   * shows for the trail's source, as [runFromAsset]'s `trailSourceUrl` does.
+   */
+  fun runFromAssets(
+    yamlAssetPaths: List<String>,
+    forceStopApp: Boolean = true,
+    useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
+    targetAppId: String? = null,
+    trailSourceUrls: Map<String, String> = emptyMap(),
+  ) {
+    require(yamlAssetPaths.isNotEmpty()) { "runFromAssets needs at least one trail" }
+    val failures = mutableListOf<Throwable>()
+    val accessibilityDriver =
+      trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    for ((index, path) in yamlAssetPaths.withIndex()) {
+      val trailName = groupedTrailNameFor(path)
+      val next = if (index > 0) startGroupedTrailSession(trailName) else null
+      val failure =
+        runCatching {
+            if (next != null) {
+              // What [beforeTestExecution] does for the first trail, minus what carries over.
+              if (systemPromptAppended) {
+                trailblazeRunner.resetSystemPrompt()
+                systemPromptAppended = false
+              }
+              if (accessibilityDriver) OnDeviceTurbo.start(scope = trailName, targetAppId = turboTargetAppId)
+            }
+            // The hook starts after the clean-start decision: a capture started on the previous
+            // trail's process would read this trail's force-stop as a crash.
+            runFromAsset(path, forceStopApp, useRecordedSteps, targetAppId, trailSourceUrls[path]) {
+              next?.let(::onGroupedTrailSessionStarted)
+            }
+            // Before the session ends, so its report row carries the verdict, as
+            // [afterTestExecution] does for a trail run alone.
+            if (accessibilityDriver) OnDeviceTurbo.requireTurboHeld(trailName)
+          }
+          .exceptionOrNull()
+      // A trail that failed before its teardown ran (an unreadable trail, say) may have stopped the
+      // app a stored hand-off describes.
+      if (failure != null) TrailheadHandoffStore.dropAll()
+      endGroupedTrailSession(failure)
+      if (failure != null) failures += failure
+      // The test's timeout: a later trail would run past its deadline, on a device the next test
+      // may already hold.
+      if (failure is InterruptedException || Thread.currentThread().isInterrupted) break
+    }
+    when (failures.size) {
+      0 -> Unit
+      1 -> throw failures.single()
+      else ->
+        throw TrailblazeException(
+          "${failures.size} of ${yamlAssetPaths.size} trails failed: " +
+            failures.joinToString("; ") { it.message ?: it::class.simpleName.orEmpty() }
+        ).apply { failures.forEach(::addSuppressed) }
+    }
+  }
+
+  /** Opens the next trail's session, named for the trail so its logs are findable by it. */
+  private fun startGroupedTrailSession(trailName: String): TrailblazeSession {
+    val description = trailblazeLoggingRule.description
+    val className = description?.className ?: "AndroidTrailblazeRule"
+    val next =
+      trailblazeLoggingRule.sessionManager.startSession(
+        sessionName = "${className}_$trailName",
+        metadata = SessionMetadata(testClassName = className, testMethodName = description?.methodName),
+      )
+    trailblazeLoggingRule.setSession(next)
+    return next
+  }
+
+  /**
+   * Ends the running trail's session as [afterTestExecution] would have, then clears it, so the
+   * test's own end neither ends it again nor overwrites its status with the whole group's.
+   */
+  private fun endGroupedTrailSession(failure: Throwable?) {
+    val current = trailblazeLoggingRule.session ?: return
+    runCatching {
+        if (failure != null) {
+          trailblazeLoggingRule.captureFailureScreenshot(current)
+        } else {
+          trailblazeLoggingRule.captureFinalScreenshot(current)
+        }
+      }
+      .onFailure { Console.log("Grouped trail screenshot failed: ${it.message}") }
+      .onFailure(::keepInterrupt)
+    runCatching { onGroupedTrailSessionEnding(current) }
+      .onFailure { Console.log("Grouped trail session cleanup failed: ${it.message}") }
+      .onFailure(::keepInterrupt)
+    try {
+      trailblazeLoggingRule.endSession(current, isSuccess = failure == null, exception = failure)
+    } finally {
+      trailblazeLoggingRule.setSession(null)
+    }
+  }
+
+  /** Re-raises an interrupt a best-effort step swallowed, so [runFromAssets] still stops. */
+  private fun keepInterrupt(failure: Throwable) {
+    if (failure is InterruptedException) Thread.currentThread().interrupt()
+  }
+
   companion object {
+    /**
+     * The name a trail's own generated test would have: the file name of a `<name>.trail.yaml`, or
+     * the directory of a `<name>/` recording directory.
+     */
+    internal fun groupedTrailNameFor(yamlAssetPath: String): String =
+      yamlAssetPath.trimEnd('/').substringAfterLast('/').removeSuffix(".trail.yaml")
+
     /**
      * A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. A
      * reusable trailhead hand-off skips the ordinary clean start: the trailhead decides what to keep.

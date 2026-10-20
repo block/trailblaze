@@ -394,7 +394,10 @@
           total: s.count || (s.events || []).length,
           truncated: !!s.truncated,
           events: (s.events || []).map(function (e) {
-            return { t: e.timeMs == null ? null : e.timeMs, d: JSON.stringify(e.data == null ? e : e.data) };
+            var event = { t: e.timeMs == null ? null : e.timeMs, d: JSON.stringify(e.data == null ? e : e.data) };
+            // Still on the device clock (nothing measured to convert with), as the static report marks it.
+            if (e.clock === 'device') event.clock = 'device';
+            return event;
           }),
         };
       });

@@ -82,7 +82,10 @@ what it may report in `features` so those are report rows too, and use
 Not every match is a feature. A finding's `kind` (defaulting to the survey's, then
 `"feature"`) says which axis the id lives on, so one run can report catalog features next to
 jobs-to-be-done or gaps a catalog has no row for; the report shows the kind wherever it is not
-`feature`.
+`feature`. A handler that reports several kinds names the declared features that are not the
+survey's kind in `kinds` (`kinds: { "sign-in": "gap" }`), so a row no session matched keeps its kind.
+A handler made of independent checks reports one that failed with `ctx.error(message, feature)`
+instead of throwing, so the report lists the error and keeps what the other checks found.
 
 ### Coverage and diagnosis
 

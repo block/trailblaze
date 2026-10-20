@@ -72,8 +72,8 @@ toolsets:                                     # trailmap-level file refs
 > **Heads up on how tools register.** Only scripted TypeScript tools are listed in the
 > manifest — by **bare export name** under `target.tools:` (or `platforms.<p>.tools:`).
 > There is no top-level `tools:` field: class-backed and pure-YAML composed tools
-> (`*.tool.yaml`, plus `*.shortcut.yaml` / `*.trailhead.yaml`) **auto-discover** from the
-> trailmap's `tools/` / `shortcuts/` / `trailheads/` directories, and waypoints
+> (`*.tool.yaml`, plus `*.trailhead.yaml`) **auto-discover** from the
+> trailmap's `tools/` / `trailheads/` directories, and waypoints
 > auto-discover from `waypoints/`. See
 > [Tool flavors](#tool-flavors-which-kind-do-i-write) below for the rubric.
 
@@ -91,9 +91,6 @@ toolsets:                                     # trailmap-level file refs
 | `waypoints` | deprecated / ignored | Waypoints auto-discover from any `*.waypoint.yaml` under `<trailmap>/waypoints/` (any depth). The field survives in the schema only so legacy manifests still parse — leave it absent. |
 | `trail_validation` | optional | `trail_validation.exempt: "<reason>"` opts this target's `.trail.yaml` recordings out of the default-fatal trail-recording type-validation phase of `trailblaze check` — findings are reported but never fail the build. Blank reason = not exempt. |
 | `trails` | reserved | First-class artifact loading deferred. |
-
-> The `routes:` field was removed in 2026-04-28 — routes were dropped as a separate
-> concept in favor of "shortcuts that invoke other shortcuts."
 
 > The legacy reserved-slot fields `use:` / `extend:` / `replace:` were removed in favour
 > of the unified `dependencies:` field. Workspace trailmaps that still declare them get a
@@ -258,26 +255,24 @@ trailmap in the OSS tree is the canonical single-platform shape and lists its to
 at `target.tools:` for that reason. The split shape above is what you reach for once a
 trailmap grows past one platform.
 
-## Tool YAML file suffixes — `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`
+## Tool YAML file suffixes — `.tool.yaml`, `.trailhead.yaml`
 
 Each operational class lives under its own trailmap subdirectory and uses a matching filename
 suffix. The loader enforces that the file's content matches what the suffix promises — a
-`.tool.yaml` file with a stray `shortcut:` block is a load-time error.
+`.tool.yaml` file with a stray `trailhead:` block is a load-time error.
 
 | Suffix              | Trailmap subdir   | Class      | Available when                       | Required block       |
 | ------------------- | ------------- | ---------- | ------------------------------------ | -------------------- |
 | `*.tool.yaml`       | `tools/`      | tool       | a toolset names it under `tools:`    | (none)               |
-| `*.shortcut.yaml`   | `shortcuts/`  | shortcut   | current waypoint matches `from`      | `shortcut:`          |
 | `*.trailhead.yaml`  | `trailheads/` | trailhead  | always (bootstrap from any state)    | `trailhead:`         |
 
 Subdirectories below each top-level dir are organizational only — the loader walks them
-recursively at any depth. A trailmap with multi-platform shortcuts can group them as
-`shortcuts/{android,ios,web}/...` (or any other grouping that fits) without changing how
+recursively at any depth. A trailmap with multi-platform trailheads can group them as
+`trailheads/{android,ios,web}/...` (or any other grouping that fits) without changing how
 discovery works.
 
-The three classes share one data class (`ToolYamlConfig`) with two optional metadata
-blocks (`shortcut`, `trailhead`); they're mutually exclusive — a tool can't be both a
-shortcut and a trailhead.
+Both classes share one data class (`ToolYamlConfig`); a trailhead is a tool with the
+optional `trailhead` metadata block populated.
 
 > **Workspace `*.tool.yaml` auto-discovery.** A workspace-authored pure-YAML composed
 > tool is discoverable by the resolver at session start (no manifest entry needed), but
@@ -290,50 +285,14 @@ shortcut and a trailhead.
 > them, but workspace files only live on the host, so the dispatcher routes them locally.
 > Authors who explicitly set `requires_host: false` keep that explicit value.
 
-### Shortcut tools
-
-A **shortcut** is a tool with a populated `shortcut: { from, to }` block — an authored
-navigation edge between two waypoints with a runtime pre/post-condition contract. Same
-file format, same registry, same agent-facing tool descriptor as any other tool; the
-framework adds a contextual descriptor filter (only surfaces shortcut tools whose `from`
-matches the current waypoint) and a pre/post-condition wrapper at execution time.
-
-```yaml
-# trailmaps/clock/shortcuts/clock_create_alarm.shortcut.yaml
-id: clock_create_alarm
-description: Create an alarm at a given time.
-parameters:
-  - name: hour
-    type: integer
-    required: true
-  - name: minute
-    type: integer
-    required: true
-shortcut:
-  from: clock/android/alarm_tab
-  to:   clock/android/alarm_saved
-tools:
-  - tapElement: { selector: { textRegex: 'Add alarm' } }
-  - inputText:  { text: '{{params.hour}}:{{params.minute}}' }
-  - tapElement: { selector: { text: 'OK' } }
-```
-
-The metadata block adds:
-
-- `from` / `to` — slash-namespaced waypoint ids the framework matches against current
-  state. Both are required; the framework refuses to invoke if `from` doesn't match at
-  call time and reports failure if the post-state doesn't match `to`.
-- `variant` — optional disambiguator when multiple shortcuts share the same `(from, to)`
-  pair. Most shortcuts never need it.
-
 ### Trailhead tools
 
 A **trailhead** is a tool with a populated `trailhead: { to }` block — a bootstrap
-primitive that takes the agent from any state to a known waypoint. Always available
-(no `from` precondition). The framework asserts the agent landed at `to` after the
-body runs, just like a shortcut's post-condition. Trailheads are the right shape for
-"launch the app and reach a logged-in screen", "force-quit and re-sign-in", and similar
-reset/genesis moves that need to work regardless of where the agent currently is.
+primitive that takes the agent from any state to a known waypoint. Always available,
+with no precondition. The framework asserts the agent landed at `to` after the body runs.
+Trailheads are the right shape for "launch the app and reach a logged-in screen",
+"force-quit and re-sign-in", and similar reset/genesis moves that need to work regardless
+of where the agent currently is.
 
 ```yaml
 # trailmaps/myapp/trailheads/myapp_launchAppSignedIn.trailhead.yaml
@@ -390,6 +349,10 @@ export const myapp_launchAppSignedIn = trailblaze.tool<{ email: string }>(
   subset objects, and `RegExp` (flags `i` and `m`; `g` is ignored and any other flag is an error).
   `events` works only inside `teardown`. In a multi-device trail a query reads the device the trail
   ended on and skips the other devices' `trailhead` records.
+- **`ctx.history`** lists every tool call of the run, with its args and outcome, split into
+  `trailhead`, `trail` and `teardown` sections. `ctx.history.toolCalls({ section })` with the
+  `trail` section's id returns what the trail did and nothing from setup. See
+  [Reading what ran via `ctx.history`](scripted-tools-typed-authoring.md#reading-what-ran-via-ctxhistory).
 - **The return value** is `{ reusable, reason, state? }`. `reason` is required and shows in the
   report. `state` is your own small JSON (16 KB cap, no secrets).
 - **`ctx.previousRun`** is `{ sessionId, reason, state?, reuse(reason, catchUp?) }`: what the
@@ -431,12 +394,50 @@ export const myapp_launchAppSignedIn = trailblaze.tool<{ email: string }>(
 and the JUnit runners. It is not called for subprocess tools or for trails run step by step over
 MCP.
 
+### Reading session events mid-run
+
+Any TypeScript tool can check what the session's event streams (`events/<stream>.ndjson`) hold
+so far, at any point in a run, and wait for a record to land. This lets a tool check app state from
+the app's own signals rather than guess it from the screen:
+
+```typescript
+await ctx.events.mark("launched");
+// ... sign in ...
+const login = await ctx.events.query("analytics", {
+  match: { event: "sign_in", properties: { result: "success" } },
+  since: "launched", // "session" (default), "trailhead", "trail", or a mark name
+  waitMs: 15_000,    // poll until a match lands, up to this long
+});
+if (!login.captured) throw new Error("no analytics capture in this session");
+```
+
+- **`query(stream, options)`** returns `{ captured, events, cursor }`. `captured: false` means the
+  stream has no file in this session, so nothing captured it; tell that apart from "captured, and
+  nothing matched". Pass `cursor` back as `after` to read only what arrives next. `newest: true`
+  returns the last matches to arrive first, read from the end of the stream. A result stops at
+  about 4 MB of record text and says `truncated: true`; an oldest-first read continues from its
+  `cursor` passed as `after`.
+- **`count(stream, options)`** returns how many records match, with no payloads.
+- Both say `complete: false`, with an `incompleteReason`, when a capture writing the session's
+  streams recorded losing data, or when the read skipped a record over 1 MB. An absence check ("no 5xx since the mark") should fail then, since
+  the record it looks for may have been dropped.
+- **`mark(name)`** names this point in every stream. A stream that appears after the mark starts
+  after it.
+- **`match`** uses the same rules as `trailRun.events.query`: strings, numbers and booleans
+  match exactly, a `RegExp` tests, a nested object is a subset match.
+- **It is cheap enough for a device with no host.** Matching runs in Kotlin over the stream's bytes.
+  A query reads only the bytes after its starting point, lines missing a matched value are skipped
+  before they are decoded, and a wait checks the file size between reads.
+
+Which streams exist depends on what the trailmap captures. Records are returned to the tool
+as captured, so don't log or return payloads that may hold secrets.
+
 ### Authoring forms
 
-The body of any of the three classes uses one of `class:` (Kotlin-backed) or `tools:`
+The body of either class uses one of `class:` (Kotlin-backed) or `tools:`
 (declarative YAML composition). The `tools:` form is the happy path — machine-readable,
 no conditionals, no loops, covers the majority case. A future `script:` mode for TS/JS
-bodies will land when shortcuts/trailheads need real code (branching, retries) the YAML
+bodies will land when trailheads need real code (branching, retries) the YAML
 form can't express.
 
 ## Discovery and precedence

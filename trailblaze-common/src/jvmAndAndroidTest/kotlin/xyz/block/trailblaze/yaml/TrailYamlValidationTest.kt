@@ -337,7 +337,7 @@ class TrailYamlValidationTest {
  *
  * **Worktree (filesystem).** The declarations the classpath can't reach, read from the git tree so
  * the gate covers the whole repo rather than one module's slice: `id:` in
- * `*.tool.yaml` / `*.shortcut.yaml` / `*.trailhead.yaml`, `name:` in scripted-tool descriptors and
+ * `*.tool.yaml` / `*.trailhead.yaml`, `name:` in scripted-tool descriptors and
  * in a target's inline `tools:` entries, `registerTool("…")` in an MCP subprocess server,
  * `@TrailblazeToolClass("…")` in Kotlin sources, and — for scripted TypeScript tools, whose names
  * are only fully knowable by running the analyzer — a deliberate SUPERSET built from two
@@ -467,8 +467,7 @@ private object ToolNameBackings {
 
             !inConfig -> Unit
 
-            name.endsWith(".tool.yaml") || name.endsWith(".shortcut.yaml") ||
-              name.endsWith(".trailhead.yaml") -> read(file)?.let { text ->
+            name.endsWith(".tool.yaml") || name.endsWith(".trailhead.yaml") -> read(file)?.let { text ->
               YAML_TOOL_ID.findAll(text).forEach { yamlToolIds.add(it.groupValues[1]) }
             }
 
@@ -502,7 +501,7 @@ private object ToolNameBackings {
           "classpath registry (class-backed / YAML-defined / scripted descriptors)",
           registryNames().filter { resolver.isKnown(it) }.toSet(),
         ),
-        Partition("worktree *.tool|shortcut|trailhead.yaml `id:`", yamlToolIds),
+        Partition("worktree *.tool|trailhead.yaml `id:`", yamlToolIds),
         Partition("worktree `name:` in scripted descriptors / target `tools:` entries", descriptorNames),
         Partition("worktree Kotlin @TrailblazeToolClass(\"…\")", annotatedNames),
         Partition("worktree MCP subprocess registerTool(\"…\")", mcpAdvertisedNames),

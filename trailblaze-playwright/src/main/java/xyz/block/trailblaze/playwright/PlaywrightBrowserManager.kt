@@ -524,6 +524,7 @@ class PlaywrightBrowserManager(
           // Ensure the Chromium browser binary is installed. This is a no-op after first install.
           PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
           playwright = Playwright.create()
+          PlaywrightTextRuns.register(playwright)
           // Resolve the user-facing viewport spec against the live Playwright registry
           // before any context is built — preset typos surface here as a clean
           // IllegalArgumentException ("Unknown Playwright device preset 'iPhne 14'…")

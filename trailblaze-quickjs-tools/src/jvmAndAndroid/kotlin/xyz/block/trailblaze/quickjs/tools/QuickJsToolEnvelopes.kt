@@ -96,6 +96,18 @@ internal data class QuickJsToolCtxEnvelope(
    * `ctx.previousRun`, which is `null` otherwise.
    */
   val previousRun: JsonObject? = null,
+  /**
+   * The computer the tool runs on (`ctx.host.os` / `ctx.host.arch`), or null on an Android device,
+   * where the device is the only computer. See [xyz.block.trailblaze.util.HostPlatform].
+   */
+  val hostPlatform: QuickJsHostPlatform? = null,
+)
+
+@Serializable
+internal data class QuickJsHostPlatform(
+  val os: String,
+  /** Null for an architecture [xyz.block.trailblaze.util.HostArch] doesn't name. */
+  val arch: String?,
 )
 
 /**

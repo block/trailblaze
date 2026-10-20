@@ -186,21 +186,43 @@ internal fun buildIosLogStreamCommand(
  * `mobilesafari`) while the real process name / image path uses the app's actual casing
  * (`MobileSafari`), so exact-case matching can silently capture nothing.
  *
+ * Every form excludes [IOS_XCTEST_SUBSYSTEM]: XCTest's accessibility queries run inside the app's
+ * own process, so an app-scoped clause matches them, and they outnumber the app's lines 30 to 1.
+ * It also keeps only the errors and faults of [IOS_NETWORK_SUBSYSTEM], Apple's networking stack
+ * in the same process, whose connection bookkeeping was most of what was left.
+ *
  * Internal (not private) purely so it can be unit-tested without spawning a process.
  */
 internal fun buildIosLogStreamPredicate(appId: String?, installed: IosAppProcess? = null): String? {
   if (appId == null) return null
-  installed?.installDir?.let { installDir ->
-    return "processImagePath CONTAINS[c] \"$installDir\" OR " +
+  val appClauses = installed?.installDir?.let { installDir ->
+    "processImagePath CONTAINS[c] \"$installDir\" OR " +
       "subsystem ==[c] \"$appId\" OR " +
       "subsystem BEGINSWITH[c] \"$appId.\""
+  } ?: run {
+    val processName = iosAppProcessName(appId, installed)
+    if (processName.isBlank()) return null
+    "process ==[c] \"$processName\" OR " +
+      "subsystem BEGINSWITH[c] \"$appId\" OR " +
+      "processImagePath CONTAINS[c] \"$processName\""
   }
-  val processName = iosAppProcessName(appId, installed)
-  if (processName.isBlank()) return null
-  return "process ==[c] \"$processName\" OR " +
-    "subsystem BEGINSWITH[c] \"$appId\" OR " +
-    "processImagePath CONTAINS[c] \"$processName\""
+  return "($appClauses) AND NOT subsystem BEGINSWITH[c] \"$IOS_XCTEST_SUBSYSTEM\" AND " +
+    "NOT (subsystem BEGINSWITH[c] \"$IOS_NETWORK_SUBSYSTEM\" AND messageType != error AND messageType != fault)"
 }
+
+/**
+ * The subsystem XCTest logs under from inside the app it drives. Every element it reads logs a
+ * fetch, a reply, and the attributes it faulted in: one iPad trail wrote 2.7 million of these lines
+ * (300 MB) to `device.log`, beside 93,000 of the app's own.
+ */
+internal const val IOS_XCTEST_SUBSYSTEM = "com.apple.dt.xctest"
+
+/**
+ * Apple's networking stack, logging every connection's state changes from inside the app: 14.6 MB
+ * of the 18.5 MB that same session kept once XCTest was gone. The app's own requests are captured
+ * separately, so only this subsystem's errors and faults (a failed TLS handshake) are worth a line.
+ */
+internal const val IOS_NETWORK_SUBSYSTEM = "com.apple.network"
 
 /** The app's process name: the executable appinfo reported, or else the last bundle-id component. */
 internal fun iosAppProcessName(appId: String, installed: IosAppProcess?): String =

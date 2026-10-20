@@ -107,7 +107,7 @@ class TrailblazeSerializationInitializerTest {
       "web_scroll", "web_hover", "web_drag", "web_pressKey",
       "web_selectOption", "web_wait", "web_snapshot",
       "web_requestDetails", "web_verifyElementVisible",
-      "web_verifyTextVisible", "web_verifyValue",
+      "web_verifyValue",
       "web_verifyListVisible", "playwright_desktop_launchGoose",
     )
     private val EXPECTED_COMPOSE_TOOLS = listOf(

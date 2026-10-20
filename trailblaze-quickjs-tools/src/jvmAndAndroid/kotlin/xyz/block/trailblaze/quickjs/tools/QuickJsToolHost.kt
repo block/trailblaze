@@ -5,12 +5,14 @@ import com.dokar.quickjs.binding.function
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -19,6 +21,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -84,6 +87,22 @@ class QuickJsToolHost internal constructor(
    * tripwire, not a formal deadlock detector.
    */
   private val hostCallThread = java.util.concurrent.atomic.AtomicReference<Thread?>(null)
+
+  /**
+   * The hosts on the call path of the call this host is running, itself last; empty when idle.
+   * Written by [callTool] while it holds [evalMutex], and published as [callPath] by the host-call
+   * binding for the nested dispatch it runs.
+   */
+  @Volatile
+  private var pathOfCurrentCall: List<QuickJsToolHost> = emptyList()
+
+  /**
+   * The Job of the tool call [evaluateMember] is running, or null when idle. A host call the tool
+   * makes blocks the engine thread in `runBlocking`; parenting that on this Job lets cancelling
+   * the tool cancel the host call (a `ctx.events` wait, say) instead of leaving it to run out.
+   */
+  @Volatile
+  private var callJob: Job? = null
 
   /** See [hostCallThread]. Shared by [callTool] and [listTools]; [caller] is just for the message. */
   private fun checkNotReentrant(caller: String) {
@@ -183,8 +202,42 @@ class QuickJsToolHost internal constructor(
     extraArg: JsonObject?,
   ): JsonObject? = run {
     checkNotReentrant("callTool")
+    // Read before the first suspension point: [callPath] is thread-scoped.
+    val pathAbove = callPath.get().orEmpty()
+    check(pathAbove.none { it === this }) { cycleMessage(name) }
     evalMutex.withLock {
+      pathOfCurrentCall = pathAbove + this
+      try {
+        evaluateMember(name, member, args, ctx, extraArg)
+      } finally {
+        pathOfCurrentCall = emptyList()
+      }
+    }
+  }
+
+  private suspend fun evaluateMember(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? =
       withContext(engineDispatcher) {
+        callJob = coroutineContext[Job]
+        try {
+          evaluateMemberOnEngine(name, member, args, ctx, extraArg)
+        } finally {
+          callJob = null
+        }
+      }
+
+  private suspend fun evaluateMemberOnEngine(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? {
         // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
         // splicing the raw JSON output into the generated source. JSON encodes the U+2028
         // (line separator) and U+2029 (paragraph separator) code points as themselves — valid
@@ -432,9 +485,7 @@ class QuickJsToolHost internal constructor(
           false,
         )
         val result = JSON.parseToJsonElement(resultJson).jsonObject
-        if (result[MEMBER_ABSENT_KEY] != null) null else result
-      }
-    }
+        return if (result[MEMBER_ABSENT_KEY] != null) null else result
   }
 
   /**
@@ -470,6 +521,25 @@ class QuickJsToolHost internal constructor(
      * it was, instead of N identical `quickjs-tool-engine` threads.
      */
     private val engineThreadSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * The hosts blocked up the call path running on this thread, set by the host-call binding for
+     * the nested dispatch it runs. A nested [callTool] on a host already on the path would wait
+     * forever on that host's [evalMutex] (a tool cycle such as A → B → A, which the same-thread
+     * [checkNotReentrant] tripwire can't see), so it fails fast instead. Thread-scoped: a path that
+     * hops threads before the nested call is not followed, and waits as it always did. Never a
+     * false positive, because only hosts actually blocked up this exact path are on it.
+     */
+    private val callPath = ThreadLocal<List<QuickJsToolHost>>()
+
+    /** True when [host] is blocked up the call path running on this thread (see [callPath]). */
+    internal fun isOnCurrentCallPath(host: QuickJsToolHost): Boolean =
+      callPath.get()?.any { it === host } == true
+
+    private fun cycleMessage(name: String): String =
+      "QuickJsToolHost.callTool('$name') targets an engine that is already waiting further up this " +
+        "call path (a tool cycle such as A → B → A), so it would wait forever. Break the cycle: run " +
+        "the shared logic as a local function in one tool instead of dispatching back up the chain."
 
     /**
      * Serializes creating and closing engines across the whole process. quickjs-kt keeps JNI state
@@ -553,16 +623,20 @@ class QuickJsToolHost internal constructor(
               // synchronous binding on its own merits -- our host calls are sequential (async
               // concurrency unused) and it avoids the async path's per-call growth on long-lived
               // engines. The reentrancy tripwire (`host.hostCallThread`/`checkNotReentrant`) guards
-              // against a host call re-entering this dispatch while one is already in flight; there
-              // is a known no-cancellation-propagation limitation on this synchronous path.
+              // against a host call re-entering this dispatch while one is already in flight, and a
+              // host call is cancelled with its tool call through [callJob].
               quickJs.function(HOST_CALL_BINDING) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_CALL_BINDING called without a tool name string")
                 val argsJson = args.getOrNull(1) as? String
                   ?: error("$HOST_CALL_BINDING called without an argsJson string")
                 host.hostCallThread.set(Thread.currentThread())
+                val outerPath = callPath.get()
+                callPath.set(host.pathOfCurrentCall)
                 try {
-                  runBlocking {
+                  // A tool this call dispatches is cancelled with this tool call, on any thread.
+                  val callJob = host.callJob
+                  runBlocking((callJob ?: EmptyCoroutineContext) + DispatchCancellation.element(callJob)) {
                     try {
                       hostBinding.callFromBundle(name, argsJson)
                     } catch (e: CancellationException) {
@@ -574,7 +648,14 @@ class QuickJsToolHost internal constructor(
                       hostCallErrorEnvelopeJson(name, e)
                     }
                   }
+                } catch (e: CancellationException) {
+                  // The tool call was cancelled: answer with an error rather than throwing through
+                  // the native boundary, and the tool's own coroutine still ends as cancelled. A
+                  // binding's own CancellationException keeps its rethrow (see above).
+                  if (host.callJob?.isCancelled != true) throw e
+                  hostCallErrorEnvelopeJson(name, e)
                 } finally {
+                  if (outerPath == null) callPath.remove() else callPath.set(outerPath)
                   host.hostCallThread.set(null)
                 }
               }
@@ -588,7 +669,7 @@ class QuickJsToolHost internal constructor(
                   ?: error("$HOST_FUNCTION_BINDING called without an argsJson string")
                 host.hostCallThread.set(Thread.currentThread())
                 try {
-                  runBlocking {
+                  runBlocking(host.callJob ?: EmptyCoroutineContext) {
                     try {
                       hostBinding.callHostFunction(name, argsJson)
                     } catch (e: CancellationException) {
@@ -599,6 +680,10 @@ class QuickJsToolHost internal constructor(
                       )
                     }
                   }
+                } catch (e: CancellationException) {
+                  // Cancelled with its tool call; see the host-call binding above.
+                  if (host.callJob?.isCancelled != true) throw e
+                  hostFunctionErrorEnvelopeJson("ctx.host.$name was cancelled")
                 } finally {
                   host.hostCallThread.set(null)
                 }

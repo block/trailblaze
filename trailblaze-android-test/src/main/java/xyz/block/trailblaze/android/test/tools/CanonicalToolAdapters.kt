@@ -76,14 +76,9 @@ internal object CanonicalToolAdapters {
     is AssertVisibleBySelectorTrailblazeTool -> CanonicalDispatch { target, context ->
       val selector = tool.nodeSelector
         ?: return@CanonicalDispatch malformed("assertVisibleBySelector has no nodeSelector", tool)
-      val visibility = AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = tool.timeoutMs)
+      tool.removedFieldError()?.let { return@CanonicalDispatch it }
+      AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
-      // `expectedText` is the canonical tool's own post-pass (re-resolve, read the matched
-      // element's text, compare under textMatchMode) and runs on the shared resolver against
-      // this driver's tree via context.screenStateProvider — so it is delegated, not mirrored:
-      // one implementation is what keeps EXACT/PREFIX/REGEX and the Zs-folding identical on
-      // every driver. No-op when expectedText is unset or the visibility check failed.
-      tool.applyExpectedTextPostPass(context, visibility)
     }
 
     is AssertNotVisibleWithTextTrailblazeTool -> CanonicalDispatch { target, context ->

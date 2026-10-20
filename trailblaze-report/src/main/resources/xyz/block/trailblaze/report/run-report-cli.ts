@@ -23,6 +23,7 @@ import {
   isSafeSessionRelativePath, resolveFormatterModule,
 } from "./run-report-events";
 import { MAX_TRACE_BYTES, parseTraceFileText } from "./run-report-trace-spans";
+import { DEVICE_CLOCK_FILE_NAME, DEVICE_CLOCK_MAX_BYTES, type DeviceClockSync, parseDeviceClockSync } from "./device-clock-sync";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
 interface DriverInput {
@@ -400,6 +401,17 @@ export function formatterContext(status: string | undefined, fullEventPayloads: 
   return { sessionPassed: !fullEventPayloads && status === "passed" };
 }
 
+/** The session's measured device clock readings (`session_device_clock.json`), or null when it took none. */
+export function readDeviceClockSync(sessionDir: string): DeviceClockSync | null {
+  try {
+    const path = join(sessionDir, DEVICE_CLOCK_FILE_NAME);
+    if (!existsSync(path) || statSync(path).size > DEVICE_CLOCK_MAX_BYTES) return null;
+    return parseDeviceClockSync(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function readEvents(
   sessionDir: string,
   formatters: EventStreamFormatter[],
@@ -408,6 +420,7 @@ function readEvents(
   try {
     const dir = join(sessionDir, "events");
     if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
+    const clockSync = readDeviceClockSync(sessionDir);
     const streams: EventStream[] = [];
     let totalChars = 0;
     for (const file of readdirSync(dir).filter((n) => n.endsWith(".ndjson")).sort()) {
@@ -417,7 +430,7 @@ function readEvents(
           console.error(`events: skipping ${file} — exceeds the ${MAX_EVENT_STREAM_BYTES / 1024 / 1024}MB per-stream cap`);
           continue;
         }
-        const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters, ctx);
+        const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters, ctx, clockSync);
         if (!stream) continue;
         totalChars += JSON.stringify(stream).length;
         if (totalChars > MAX_EVENT_STREAMS_TOTAL_CHARS) {

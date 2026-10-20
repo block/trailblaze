@@ -75,6 +75,11 @@ trailblazeAndroid {
   // (optional) restrict to specific trails within a class — e.g. a fast-PR-check subset.
   // Class not in the map → all its trails generate. Method name typos fail loudly at build time.
   // onlyMethodNames.put("LoginFlowTest", setOf("happyPath", "invalidCredentials"))
+  // (optional) run a class's trails that share a trailhead in one @Test, in order, so they share
+  // an emulator and app process — and, with the `trailblaze.trailheadReuse=true` instrumentation
+  // arg, the trailhead's setup. Each trail keeps its own session and result; the device farm sees
+  // one test per group. Groups hold at most maxTrailsPerTrailheadGroup trails (default 2).
+  // groupTrailsByTrailhead = true
 
   // (optional) pre-compile a trailmap's scripted tools too — see "Scripted-tool bundling" below.
   // trailmap {

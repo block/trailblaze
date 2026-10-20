@@ -574,16 +574,17 @@ object HostScriptedToolLauncher {
 
   /**
    * The (tool -> bundle) pairs for a [InlineToolRoute.LiveBundle] route, in the route's tool order.
-   * A binary user's JAR-shipped tools ([shippedPrecompiledBundles]) take their precompiled bundle
-   * directly; only the rest go to [bundleLive], which is not called when nothing is left. A source
-   * checkout sends every tool to [bundleLive] so an edit always takes effect.
+   * JAR-shipped tools ([shippedPrecompiledBundles]) take their precompiled bundle directly, even
+   * when an SDK override is available: their extracted tools tree need not contain external imports.
+   * Only the rest go to [bundleLive], which is not called when nothing is left. Workspace sources
+   * always bundle live so a shipped bundle cannot shadow an edit.
    */
   internal suspend fun liveBundleRoute(
     route: InlineToolRoute.LiveBundle,
     shippedBundles: (List<InlineScriptToolConfig>) -> Map<InlineScriptToolConfig, File> = { shippedPrecompiledBundles(it) },
     bundleLive: suspend (List<InlineScriptToolConfig>) -> List<Pair<InlineScriptToolConfig, File>>,
   ): List<Pair<InlineScriptToolConfig, File>> {
-    val shipped = if (route.allowPrecompiledFallback) shippedBundles(route.tools) else emptyMap()
+    val shipped = shippedBundles(route.tools)
     val liveTools = route.tools.filter { it !in shipped }
     val bundles = shipped + if (liveTools.isEmpty()) emptyList() else bundleLive(liveTools)
     return route.tools.mapNotNull { tool -> bundles[tool]?.let { tool to it } }

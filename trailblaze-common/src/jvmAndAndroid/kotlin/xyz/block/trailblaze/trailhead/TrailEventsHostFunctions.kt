@@ -10,8 +10,13 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.events.EventStreamScanner
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.events.SessionEventsDir
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
+import xyz.block.trailblaze.logs.model.DeviceClockTrack
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionException
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -46,11 +51,44 @@ object TrailEventsHostFunctions {
     val run = TrailheadRuns.current(sessionIdOf(context))
       ?.takeIf { it.phase == TrailheadPhase.TEARDOWN }
       ?: throw TrailblazeHostFunctionException("$name is only available inside a trailhead's teardown.")
-    val sessionDir = TrailheadEventLog.sessionDir(context)
+    val sessionDir = SessionEventsDir.resolve(context)
     return when (name) {
       TeardownWire.HOST_FUNCTION_TRAIL_EVENTS_LIST -> JsonArray(list(sessionDir, context).map(::JsonPrimitive))
       else -> query(sessionDir, run, args, context)
     }
+  }
+
+  /** The streams [list] reports, for the `ctx.events` host functions. */
+  internal fun listStreams(sessionDir: File?, context: TrailblazeToolExecutionContext): List<String> = list(sessionDir, context)
+
+  /** The file [stream] resolves to for the active device, or null while it doesn't exist. */
+  internal fun streamFileFor(sessionDir: File, stream: String, context: TrailblazeToolExecutionContext): File? =
+    streamFile(sessionDir, stream, context)
+
+  /** One stream line as a record: its order key, and what a match runs against. */
+  internal class ParsedRecord(val timeMs: Long, val data: JsonElement)
+
+  /**
+   * Parses one stream [line]: `data` for a [xyz.block.trailblaze.events.SessionEvent] envelope, the
+   * whole line otherwise. Null for a line that isn't a JSON object, or that names another bound
+   * device in a multi-device session.
+   */
+  /** The clock [file]'s device-stamped records are on, or null when the session measured none. */
+  internal fun clockTrackFor(sessionDir: File, file: File): DeviceClockTrack? =
+    SessionEvents.parseFileName(file.name)?.let { name -> DeviceClockSyncFile.read(sessionDir)?.trackForStream(name) }
+
+  /** [line] as a record whose time is on the host clock, moved there by [clockTrack] when device-stamped. */
+  internal fun parseRecord(
+    line: String,
+    context: TrailblazeToolExecutionContext,
+    clockTrack: DeviceClockTrack? = null,
+  ): ParsedRecord? {
+    val record = runCatching { TrailblazeJsonInstance.parseToJsonElement(line) }.getOrNull() as? JsonObject
+      ?: return null
+    val data = if (record.containsKey("data") && record.containsKey(SessionEvents.TIME_FIELD)) record["data"]!! else record
+    val bindings = context.deviceBindings?.takeIf { it.names.size > 1 }
+    if (bindings != null && isAnotherDevices(data, bindings)) return null
+    return ParsedRecord(hostTimeOf(record, clockTrack), data)
   }
 
   private fun list(sessionDir: File?, context: TrailblazeToolExecutionContext): List<String> {
@@ -109,24 +147,26 @@ object TrailEventsHostFunctions {
     val limit = ((args["limit"] as? JsonPrimitive)?.intOrNull ?: DEFAULT_LIMIT).coerceIn(1, MAX_LIMIT)
 
     val file = sessionDir?.let { streamFile(it, stream, context) } ?: return JsonArray(emptyList())
-    val bindings = context.deviceBindings?.takeIf { it.names.size > 1 }
+    // The window is on the host clock; a device-stamped record is moved onto it first, on the clock
+    // of the device whose file this is.
+    val clockTrack = clockTrackFor(sessionDir, file)
     val out = mutableListOf<JsonElement>()
-    file.useLines { lines ->
-      for (line in lines) {
-        if (out.size >= limit) break
-        if (line.isBlank()) continue
-        val record = runCatching { TrailblazeJsonInstance.parseToJsonElement(line) }.getOrNull() as? JsonObject
-          ?: continue
-        val timeMs = timeOf(record)
-        if (timeMs < fromMs || timeMs > toMs) continue
-        val data = if (record.containsKey("data") && record.containsKey(SessionEvents.TIME_FIELD)) record["data"]!! else record
-        if (bindings != null && isAnotherDevices(data, bindings)) continue
-        if (match != null && !match.matches(data)) continue
-        out += buildJsonObject {
-          put("timeMs", timeMs)
-          put("data", data)
-        }
+    // Lines without the match's literals are skipped as bytes, before any decode. A finished run's
+    // stream is read whole, with no line-size cap and including a last record with no newline.
+    val scanner = EventStreamScanner(
+      EventStreamScanner.needlesFor(args["match"] as? JsonObject),
+      maxLineBytes = Int.MAX_VALUE,
+      finishedStream = true,
+    )
+    scanner.forward(file, 0L, EventStreamScanner.Stats()) { line ->
+      val record = parseRecord(line, context, clockTrack) ?: return@forward true
+      if (record.timeMs < fromMs || record.timeMs > toMs) return@forward true
+      if (match != null && !match.matches(record.data)) return@forward true
+      out += buildJsonObject {
+        put("timeMs", record.timeMs)
+        put("data", record.data)
       }
+      out.size < limit
     }
     return JsonArray(out)
   }
@@ -137,7 +177,7 @@ object TrailEventsHostFunctions {
     // Another device's capture can lack a device field, so its file is refused by name.
     bindings?.let { ownerOf(stream, it) }?.takeIf { it != bindings.activeName }?.let { other ->
       throw TrailblazeHostFunctionException(
-        "trailRun.events.query: '$stream' is device $other's stream; a teardown reads only its own device's.",
+        "trailRun.events.query: '$stream' is device $other's stream; a query reads only its own device's.",
       )
     }
     val perDevice = bindings?.let { File(eventsDir, SessionEvents.fileName("$stream.${it.activeName}")) }
@@ -171,6 +211,17 @@ object TrailEventsHostFunctions {
     (record[SessionEvents.TIME_FIELD] as? JsonPrimitive)?.longOrNull
       ?: (record[SessionEvents.LEGACY_TIME_FIELD] as? JsonPrimitive)?.longOrNull
       ?: 0L
+
+  /**
+   * [timeOf] on the host clock: a `clock: "device"` record converted through [clockTrack], or left
+   * raw when there is no measurement to convert with, which is what every record read as before.
+   */
+  private fun hostTimeOf(record: JsonObject, clockTrack: DeviceClockTrack?): Long {
+    val timeMs = timeOf(record)
+    val clock = (record[SessionEvents.CLOCK_FIELD] as? JsonPrimitive)?.contentOrNull
+    if (clock != TrailblazeClockDomain.DEVICE.wireName) return timeMs
+    return clockTrack?.toHostMs(timeMs) ?: timeMs
+  }
 
   private fun sessionIdOf(context: TrailblazeToolExecutionContext) = context.sessionProvider.invoke().sessionId
 

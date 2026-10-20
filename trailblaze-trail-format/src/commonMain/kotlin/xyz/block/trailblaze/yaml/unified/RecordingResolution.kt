@@ -60,9 +60,9 @@ data class RecordingResolution(
    * instead of firing blind.
    *
    * A conditional NL step does NOT automatically produce one: the recorder captures the concrete
-   * path it happened to take, unguarded, and `block_runIf` is `surfaceToLlm: false`, so the agent
-   * can't choose it either. A step whose text describes a condition but whose recording has no
-   * guard has silently become unconditional.
+   * path it happened to take, unguarded, and `runIf` is `surfaceToLlm: false`, so the agent can't
+   * choose it either. A step whose text describes a condition but whose recording has no guard has
+   * silently become unconditional.
    *
    * Deliberately `any`, not `all`: a step that mixes a guard with a blind tap still has the blind
    * tap. This answers "does this step re-evaluate anything", not "is every tool in it guarded".
@@ -73,12 +73,12 @@ data class RecordingResolution(
   companion object {
     /**
      * Recorded tools that re-evaluate their condition at replay time, in either of the two shapes
-     * that exist: a **wrapper** that gates inner recorded tools (`block_runIf`), and a
-     * **self-guarding** tool that probes and no-ops when its target is absent
-     * (`block_dismissIfPresent`). Both mean the step doesn't fire blind, which is the only property
-     * [isConditionallyGuarded] and [TrailRecordingResolution.lostGuardsVersus] depend on — so
-     * limiting this to wrappers would report a device that used the self-guarding form as having
-     * lost a guard it never lost.
+     * that exist: a **wrapper** that gates inner recorded tools (`runIf`, plus `block_runIf`, the
+     * name older recordings carry), and a **self-guarding** tool that probes and no-ops when its
+     * target is absent (`block_dismissIfPresent`). Both mean the step doesn't fire blind, which is
+     * the only property [isConditionallyGuarded] and [TrailRecordingResolution.lostGuardsVersus]
+     * depend on — so limiting this to wrappers would report a device that used the self-guarding
+     * form as having lost a guard it never lost.
      *
      * **A floor, not a complete set.** Membership is by name, and this module is target-agnostic —
      * it cannot name the tools any particular target defines, so a target's own self-guarding tools

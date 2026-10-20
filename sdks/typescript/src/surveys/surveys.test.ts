@@ -4,11 +4,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { SurveySession, purposeOf, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
 import { redactUrl } from "./session.js";
+import { selectsFeature } from "./survey.js";
 
 const LOG = "xyz.block.trailblaze.logs.client.TrailblazeLog";
 const STATUS = "xyz.block.trailblaze.logs.model.SessionStatus";
@@ -369,6 +370,36 @@ describe("analytics and other streams", () => {
     expect(s.deviceLog.has({ text: "fatal signal" })).toBe(true);
   });
 
+  test("XCTest's logging inside the app is left out of an iOS device log, continuation lines too", () => {
+    const dir = join(root, "ios-xctest-chatter");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "001_TrailblazeToolLog.json"), JSON.stringify(toolLog(1_700_000_400_000, "tapOn", {})));
+    writeFileSync(join(dir, "device.log"), [
+      "Timestamp               Ty Process[PID:TID]",
+      "2026-10-15 11:44:54.364 Df Sample[7:a1] [com.apple.dt.xctest:Default] Other faulted in {",
+      '    "XC_kAXXCAttributeChildren" = ();',
+      "}: (no error)",
+      "2026-10-15 11:44:54.365 Df Sample[7:a1] [com.example.sample:payments] payment complete",
+      "    receipt sent",
+      "2026-10-15 11:44:54.366 Df Sample[7:a1] [com.apple.dt.xctest:Default] Got attributes",
+      // A dotted sub-subsystem, which the capture's prefix match leaves out too.
+      "2026-10-15 11:44:54.366 Df Sample[7:a1] [com.apple.dt.xctest.automation:Default] Snapshot",
+      // The app's own entry, quoting XCTest output in its message, stays.
+      "2026-10-15 11:44:54.367 E  Sample[7:a1] [com.example.sample:diagnostics] Previous error: [com.apple.dt.xctest:Default] query failed",
+      "    retrying",
+    ].join("\n") + "\n");
+    const lines = SurveySession.load(dir).deviceLog.all();
+    expect(lines.map((l) => l.text)).toEqual([
+      "Timestamp               Ty Process[PID:TID]",
+      "2026-10-15 11:44:54.365 Df Sample[7:a1] [com.example.sample:payments] payment complete",
+      "    receipt sent",
+      "2026-10-15 11:44:54.367 E  Sample[7:a1] [com.example.sample:diagnostics] Previous error: [com.apple.dt.xctest:Default] query failed",
+      "    retrying",
+    ]);
+    // Still the file's line numbers, so evidence points at the line that holds it.
+    expect(lines.map((l) => l.line)).toEqual([1, 5, 6, 9, 10]);
+  });
+
   test("a capture written as a repeat of an earlier screen still shows that screen, at its own time", () => {
     // The strings file collapses a screen seen again into a pointer at the step that first showed
     // it, so after A, B, A the third capture has no strings of its own.
@@ -522,11 +553,35 @@ describe("surveys and the runner", () => {
     ]);
   });
 
+  test("a handler's declared kinds keep a never-matched row on its own kind", async () => {
+    const mixed = survey({ feature: "sample.mixed", features: ["sample.seen", "sample.gap"], kinds: { "sample.gap": "gap" } }, () => undefined);
+    const report = await runSurveys({ surveys: [mixed], sessions: [sequential] });
+    expect(report.surveys[0]!.kinds).toEqual({ "sample.gap": "gap" });
+    expect(report.features.map((f) => [f.feature, f.kind])).toEqual([["sample.gap", "gap"], ["sample.seen", "feature"]]);
+  });
+
   test("a throwing survey is reported per session and does not stop the others", async () => {
     const report = await runSurveys({ surveys: [broken, crashed], sessions: [hashed] });
     const only = report.sessions[0]!;
     expect(only.errors).toEqual([expect.objectContaining({ survey: "sample.broken", message: expect.stringContaining("survey bug") })]);
     expect(only.findings.map((f) => f.feature)).toEqual(["sample.crashed"]);
+  });
+
+  test("--feature picks a survey by its own feature, a declared one, or a family above one", () => {
+    const spec = { feature: "platform.diagnosis", features: ["platform.failure.app-died", "platform.time.launch"] };
+    expect(["platform.diagnosis", "platform.failure.app-died", "platform.failure", "platform"].map((w) => selectsFeature(spec, [w]))).toEqual([true, true, true, true]);
+    // A family match is on whole segments, so `platform.fail` is not a prefix of `platform.failure`.
+    expect(["platform.fail", "platform.failure.app", "sale"].map((w) => selectsFeature(spec, [w]))).toEqual([false, false, false]);
+  });
+
+  test("ctx.error reports a failure as the session's error and keeps what the handler still found", async () => {
+    const partial = survey({ feature: "sample.partial" }, (session, ctx) => {
+      ctx.error?.("odd Message", "sample.partial.one");
+      return { summary: "The other check still ran", evidence: [session.stream("crash")[0]!] };
+    });
+    const only = (await runSurveys({ surveys: [partial], sessions: [hashed] })).sessions[0]!;
+    expect(only.errors).toEqual([{ survey: "sample.partial", feature: "sample.partial.one", message: "odd Message" }]);
+    expect(only.findings.map((f) => f.summary)).toEqual(["The other check still ran"]);
   });
 
   test("a finding with no evidence is rejected, so nothing reaches the report unproven", async () => {
@@ -697,6 +752,136 @@ describe("discovery", () => {
     const extractDir = join(root, "zips", "extracted");
     const found = await discoverSessions([join(a, "logs.zip"), join(b, "logs.zip")], { extractDir });
     expect(found.map((p) => basename(p)).sort()).toEqual(["session-a", "session-b"]);
+  });
+
+  test("a zip replaced at the same path is unpacked again, not served from the old copy", async () => {
+    // A download cache replaces a zip in place, and a reused extract directory still holds what the
+    // old one unpacked to. Reading that would put the old archive's session under the new one.
+    const dir = join(root, "zips", "replaced");
+    const zipAt = join(dir, "run.zip");
+    const extractDir = join(root, "zips", "replaced-extracted");
+    writeSequentialSession(join(dir, "old-session"));
+    expect(spawnSync("zip", ["-qr", "run.zip", "old-session"], { cwd: dir }).status).toBe(0);
+    expect((await discoverSessions([zipAt], { extractDir })).map((p) => basename(p))).toEqual(["old-session"]);
+    rmSync(zipAt);
+    writeSequentialSession(join(dir, "new-session"));
+    expect(spawnSync("zip", ["-qr", "run.zip", "new-session"], { cwd: dir }).status).toBe(0);
+    utimesSync(zipAt, new Date(), new Date(Date.now() + 60_000));
+    expect((await discoverSessions([zipAt], { extractDir })).map((p) => basename(p))).toEqual(["new-session"]);
+  });
+
+  test("an extract directory inside an input is read only through the zips it unpacks", async () => {
+    // Zips unpack early, so walking the extract directory as part of the input could read a
+    // session a failing zip only half wrote, or one an earlier run left behind for a zip now gone.
+    const input = join(root, "zips", "with-extract-inside");
+    const extractDir = join(input, "a-extracted");
+    writeSequentialSession(join(input, "src", "live-session"));
+    expect(spawnSync("zip", ["-qr", join(input, "b-run.zip"), "live-session"], { cwd: join(input, "src") }).status).toBe(0);
+    rmSync(join(input, "src"), { recursive: true });
+    writeSequentialSession(join(extractDir, "gone-zip-abc", "leftover-session"));
+    const found = await discoverSessions([input], { extractDir });
+    expect(found.map((p) => basename(p))).toEqual(["live-session"]);
+  });
+
+  test("a link into the extract directory is not a way into it", async () => {
+    // Skipping the extract directory by name alone left every link into it open: a link to a
+    // leftover from an earlier run handed that session back as though it were part of the input.
+    const input = join(root, "zips", "with-link-inside");
+    const extractDir = join(input, "a-extracted");
+    writeSequentialSession(join(input, "live-session"));
+    writeSequentialSession(join(extractDir, "gone-zip-abc", "leftover-session"));
+    symlinkSync(join(extractDir, "gone-zip-abc"), join(input, "b-alias"));
+    const found = await discoverSessions([input], { extractDir });
+    expect(found.map((p) => basename(p))).toEqual(["live-session"]);
+  });
+
+  test("an extract directory that does not exist yet is skipped once the first unzip creates it", async () => {
+    // Created by the first zip, partway through the input that contains it. Deciding the skip when
+    // the input started left it off, and the walk then read the unzipped archive unconfined,
+    // following a link the archive carried out to sessions that were never in it.
+    const input = join(root, "zips", "extract-created-late");
+    const elsewhere = join(root, "zips", "extract-created-late-elsewhere");
+    writeSequentialSession(elsewhere);
+    writeSequentialSession(join(input, "src", "box", "from-the-zip"));
+    symlinkSync(elsewhere, join(input, "src", "box", "borrowed"));
+    expect(spawnSync("zip", ["-qry", join(input, "a.zip"), "from-the-zip", "borrowed"], { cwd: join(input, "src", "box") }).status).toBe(0);
+    rmSync(join(input, "src"), { recursive: true });
+    mkdirSync(join(input, "z"));
+    const found = await discoverSessions([input], { extractDir: join(input, "z", "out") });
+    expect(found.map((p) => basename(p))).toEqual(["from-the-zip"]);
+  });
+
+  test("a zip that links into the extract directory is never unpacked", async () => {
+    // The walk skips it, so an unzip started for it early would never be awaited, and discovery
+    // would return with it still writing.
+    const input = join(root, "zips", "zip-link-inside");
+    const extractDir = join(input, "a-extracted");
+    const bin = join(root, "zips", "zip-link-inside-bin");
+    const log = join(root, "zips", "zip-link-inside.log");
+    mkdirSync(extractDir, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(extractDir, "stale.zip"), "");
+    symlinkSync(join(extractDir, "stale.zip"), join(input, "b-link.zip"));
+    writeFileSync(log, "");
+    writeFileSync(join(bin, "unzip"), `#!/bin/sh\necho "$3" >> "${log}"\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      expect(await discoverSessions([input], { extractDir })).toEqual([]);
+      expect(readFileSync(log, "utf8")).toBe("");
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  test("an extract directory the caller names, or a folder inside it, is still walked", async () => {
+    // Only an extract directory met BELOW an input is skipped. Naming it, or one of its folders,
+    // is asking for what is there.
+    const extractDir = join(root, "zips", "named-extract");
+    writeSequentialSession(join(extractDir, "here-session"));
+    writeSequentialSession(join(extractDir, "nested", "deeper-session"));
+    expect((await discoverSessions([extractDir], { extractDir })).map((p) => basename(p))).toEqual(["here-session", "deeper-session"]);
+    expect((await discoverSessions([join(extractDir, "nested")], { extractDir })).map((p) => basename(p))).toEqual(["deeper-session"]);
+  });
+
+  test("a failed discovery leaves no unzip running or waiting to start", async () => {
+    // Zips unpack ahead of the walk, a few at a time. When the walk fails, the ones still queued
+    // must not start, and the ones running must finish, before the failure reaches the caller.
+    // A stub `unzip` makes that observable: 00.zip finishes at once and fails the walk, while every
+    // other zip is still running or queued behind it.
+    const input = join(root, "zips", "failing-walk");
+    const bin = join(root, "zips", "failing-walk-bin");
+    const log = join(root, "zips", "failing-walk.log");
+    mkdirSync(input, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    for (let i = 0; i < 40; i++) writeFileSync(join(input, `${String(i).padStart(2, "0")}.zip`), "");
+    writeFileSync(log, "");
+    writeFileSync(
+      join(bin, "unzip"),
+      `#!/bin/sh\necho start >> "${log}"\ncase "$3" in */00.zip) ;; *) sleep 1 ;; esac\necho done >> "${log}"\n`,
+      { mode: 0o755 },
+    );
+    const lines = (word: string) => readFileSync(log, "utf8").split("\n").filter((l) => l === word).length;
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const failed = await discoverSessions([input], {
+        extractDir: join(root, "zips", "failing-walk-extracted"),
+        onExtract: () => {
+          throw new Error("stop here");
+        },
+      }).catch((e: Error) => e.message);
+      expect(failed).toBe("stop here");
+      // Everything that started had finished when the failure arrived...
+      const started = lines("start");
+      expect(lines("done")).toBe(started);
+      // ...and nothing queued starts afterwards.
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(lines("start")).toBe(started);
+      expect(started).toBeLessThan(40);
+    } finally {
+      process.env.PATH = path;
+    }
   });
 
   test("a zip that links out of itself does not hand over the machine's own sessions", async () => {

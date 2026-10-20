@@ -155,12 +155,32 @@ class KoogTestAgentRunnerRecoverTest {
     assertThat(status).isInstanceOf(AgentTaskStatus.Success.ObjectiveComplete::class)
   }
 
+  /** One rule runs several trails on one runner; a trail's `config.context` must not outlive it. */
+  @Test
+  fun `a reset drops the context an earlier trail appended`() {
+    val model = ScriptedModel(firstStatus = "COMPLETED")
+
+    recover(
+      DirectionStep(step = "Tap Checkout on the cart tile"),
+      recorded = listOf(TapOnByElementSelector(reason = "checkout")),
+      model = model,
+    ) { runner ->
+      runner.appendToSystemPrompt("Earlier trail: always use dark mode")
+      runner.resetSystemPrompt()
+      runner.appendToSystemPrompt("This trail: pay by card")
+    }
+
+    assertThat(model.systemPromptOnFirstRequest).contains("This trail: pay by card")
+    assertThat(model.systemPromptOnFirstRequest).doesNotContain("always use dark mode")
+  }
+
   private fun recover(
     step: DirectionStep,
     recorded: List<TrailblazeTool>,
     failedAt: Int = 0,
     model: ScriptedModel,
     driverType: TrailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    prepare: (KoogTestAgentRunner) -> Unit = {},
   ): AgentTaskStatus {
     val llmModel = TrailblazeLlmModels.GPT_4O_MINI
     val screen = TextScreenState("[a12] Button \"Checkout\"")
@@ -179,6 +199,7 @@ class KoogTestAgentRunnerRecoverTest {
       maxLlmCalls = 5,
       systemPromptTemplate = "",
     )
+    prepare(runner)
     val recording = recorded.map { TrailblazeToolYamlWrapper(name = "recorded", trailblazeTool = it) }
     return runner.recover(
       step.copy(recording = ToolRecording(recording)),
@@ -214,13 +235,18 @@ class KoogTestAgentRunnerRecoverTest {
   /** Answers the first request with [firstStatus] and every later one with FAILED. */
   private class ScriptedModel(private val firstStatus: String) {
     val advertisedOnFirstRequest = mutableListOf<String>()
+    var systemPromptOnFirstRequest = ""
     private var requests = 0
 
     fun client(provider: LLMProvider): LLMClient = object : LLMClient() {
       override fun llmProvider(): LLMProvider = provider
       override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant {
         requests++
-        if (requests == 1) advertisedOnFirstRequest += tools.map { it.name }
+        if (requests == 1) {
+          advertisedOnFirstRequest += tools.map { it.name }
+          systemPromptOnFirstRequest = prompt.messages.filterIsInstance<Message.System>().flatMap { it.parts }
+            .filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
+        }
         val status = if (requests == 1) firstStatus else "FAILED"
         return Message.Assistant(
           parts = listOf(

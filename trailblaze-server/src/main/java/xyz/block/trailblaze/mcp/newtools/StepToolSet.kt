@@ -446,7 +446,7 @@ class StepToolSet(
         // strict-replay has nothing to validate. Visual reasoning alone is not enough.
         "Verify this assertion using read-only tools only. Do not tap, swipe, or type. " +
           "You MUST call at least one assertion tool (e.g. assertVisibleBySelector, " +
-          "assertVisibleWithText, or assertWithAI) AND have it return success before marking " +
+          "assertVisibleBySelector, or assertWithAI) AND have it return success before marking " +
           "the objective complete. Visual inspection alone is NOT a valid verification — the " +
           "captured trail needs a concrete assertion tool call on record so the trail can be " +
           "replayed deterministically."
@@ -1085,7 +1085,7 @@ class StepToolSet(
    * execute under `blaze(hint=VERIFY)`. Determined by the
    * [TrailblazeToolClass.isVerification] annotation on the registered tool class, so the
    * source of truth lives next to the tool definition (e.g. `assertVisible`,
-   * `web_verifyTextVisible`) and individual targets can opt new tools in by setting the
+   * `web_verifyElementVisible`) and individual targets can opt new tools in by setting the
    * flag — no central allowlist to keep in sync.
    *
    * Scans every class-backed tool reachable from the active session:

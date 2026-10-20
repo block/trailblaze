@@ -2,18 +2,21 @@ package xyz.block.trailblaze.toolcalls
 
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.MalformedArgTokenException
+import xyz.block.trailblaze.yaml.TrailArgTokens
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -108,19 +111,73 @@ fun <R : TrailblazeToolResult> R.withAuthoredCommandIdentity(authored: Trailblaz
  * structured-payload scrub can remap tokens because it re-interpolates the authored args; an opaque
  * string a tool already baked (e.g. an error message) has no tokens left, so it is matched by value.
  * That is coarser — a very short sensitive value could match unintended substrings — but it is the
- * only handle on an opaque string, and over-masking a diagnostic is the safe failure. No-op when
- * there are no sensitive keys.
+ * only handle on an opaque string, and over-masking a diagnostic is the safe failure.
+ *
+ * An `args.` value that captured a secret ([AgentMemory.sensitiveArgNames]) is masked to its
+ * `{{args.name}}` token too. That taint outlives the memory key it came from, so the value stays
+ * masked after that key is deleted. No-op when nothing is sensitive.
  */
-fun scrubSensitiveValues(text: String, memory: AgentMemory): String {
-  if (memory.sensitiveKeys.isEmpty()) return text
-  var result = text
-  memory.sensitiveKeys.forEach { key ->
-    val value = memory.variables[key]
-    if (!value.isNullOrEmpty()) {
-      result = result.replace(value, "{{$key}}")
+fun scrubSensitiveValues(text: String, memory: AgentMemory): String =
+  scrubSensitiveValues(text, listOf(memory))
+
+/** Match all invocation candidates against the original text; never scrub generated tokens. */
+internal fun scrubSensitiveValues(text: String, memories: List<AgentMemory>): String {
+  val replacements = memories.flatMap { memory ->
+    memory.sensitiveKeys.mapNotNull { key ->
+      memory.variables[key]?.takeIf { it.isNotEmpty() }?.let { it to "{{$key}}" }
+    } + sensitiveArgTexts(memory).map { (name, value) ->
+      value to "{{${TrailArgTokens.ARGS_PREFIX}$name}}"
+    }
+  }.flatMap { (value, token) ->
+    // A secret inside a JSON string reads escaped (a quote as `\"`), so mask that form too.
+    val escaped = Json.encodeToString(String.serializer(), value).removeSurrounding("\"")
+    if (escaped == value) listOf(value to token) else listOf(value to token, escaped to token)
+  }.sortedByDescending { it.first.length }.distinctBy { it.first }.toMap()
+  if (replacements.isEmpty()) return text
+  val pattern = Regex(replacements.keys.joinToString("|") { Regex.escape(it) })
+  return pattern.replace(text) { replacements.getValue(it.value) }
+}
+
+/**
+ * Each sensitive arg's value as text, for value matching. Null and boolean args are skipped: they
+ * can't hold a secret, and masking every `true` in a payload would only hide diagnostics. Sensitive
+ * object args also retain scalar values reachable through supported dotted args paths.
+ */
+private fun sensitiveArgTexts(memory: AgentMemory): List<Pair<String, String>> {
+  if (memory.sensitiveArgNames.isEmpty()) return emptyList()
+  val args = memory.args
+  return buildList {
+    fun addObjectScalars(path: String, value: JsonObject) {
+      value.forEach { (key, child) ->
+        if (!TrailArgTokens.isValidArgName(key)) return@forEach
+        val childPath = "$path.$key"
+        when (child) {
+          is JsonObject -> addObjectScalars(childPath, child)
+          is JsonPrimitive -> {
+            if (child != JsonNull && (child.isString || child.booleanOrNull == null)) {
+              child.content.takeIf { it.isNotEmpty() }?.let { add(childPath to it) }
+            }
+          }
+          else -> Unit
+        }
+      }
+    }
+
+    memory.sensitiveArgNames.forEach { name ->
+      val value = args[name]
+      val text =
+        when (value) {
+          null,
+          JsonNull -> null
+          is JsonPrimitive ->
+            value.content.takeUnless { value.booleanOrNull != null && !value.isString }
+          else -> value.toString()
+        }
+      text?.takeIf { it.isNotEmpty() }?.let { add(name to it) }
+      // Only object paths supported by args interpolation can name a scalar replacement.
+      if (value is JsonObject) addObjectScalars(name, value)
     }
   }
-  return result
 }
 
 /**
@@ -135,18 +192,21 @@ fun scrubSensitiveValues(text: String, memory: AgentMemory): String {
  * non-string primitive whose text matches a secret (e.g. a numeric PIN) is masked as a string
  * token: the type change is visible, the secret is not.
  */
-fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement {
-  if (memory.sensitiveKeys.isEmpty()) return payload
+fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement =
+  scrubSensitivePayload(payload, listOf(memory))
+
+internal fun scrubSensitivePayload(payload: JsonElement, memories: List<AgentMemory>): JsonElement {
+  if (memories.all { it.sensitiveKeys.isEmpty() && it.sensitiveArgNames.isEmpty() }) return payload
   return when (payload) {
     is JsonObject -> JsonObject(
       payload.entries.associate { (key, value) ->
-        scrubSensitiveValues(key, memory) to scrubSensitivePayload(value, memory)
+        scrubSensitiveValues(key, memories) to scrubSensitivePayload(value, memories)
       },
     )
-    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memory) })
+    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memories) })
     is JsonPrimitive -> {
       if (payload is JsonNull) return payload
-      val scrubbed = scrubSensitiveValues(payload.content, memory)
+      val scrubbed = scrubSensitiveValues(payload.content, memories)
       when {
         scrubbed == payload.content -> payload
         else -> JsonPrimitive(scrubbed)

@@ -26,13 +26,17 @@ class RealYamlFileTest {
         - step: tap create appointment
           recording:
             android:
-              - tapOnElementWithText:
-                  text: Create appointment
+              - tapOnElementBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: '(?is).*\QCreate appointment\E.*'
         - verify: Verify total points are visible
           recording:
             android:
-              - assertVisibleWithText:
-                  text: .*total Points
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: .*total Points
     """.trimIndent()
 
     val trail = trailblazeYaml.decodeUnifiedTrail(yaml)
@@ -59,8 +63,10 @@ class RealYamlFileTest {
         - verify: Verify login is visible
           recording:
             android:
-              - assertVisibleWithText:
-                  text: Login
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Login
     """.trimIndent()
 
     val trail = trailblazeYaml.decodeUnifiedTrail(yaml)

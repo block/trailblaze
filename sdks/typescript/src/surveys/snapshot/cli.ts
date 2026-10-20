@@ -7,14 +7,13 @@
 // gzipped `<n>.json.gz` per session. A page fetches the index, then one session at a time.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { gzipSync } from "node:zlib";
 
 import { discoverSessions } from "../discover.js";
-import { SurveySession } from "../session.js";
 import { SNAPSHOT_FORMAT, type SnapshotIndex } from "./format.js";
-import { snapshotOf } from "./write.js";
+import { type SnapshotResult, type SnapshotTask, writeSnapshot } from "./worker.js";
 
 const HELP = `Usage: bun snapshot/cli.ts --out <dir> [options] <sessions-dir|zip>...
 
@@ -23,6 +22,8 @@ Options:
       --extract-dir <dir>  Where session zips are unpacked (default: a temp dir)
       --built-at <time>    Record this as when the batch was built, in ms or ISO-8601. Without it
                            the index carries no time, so the same sessions index to the same bytes.
+      --jobs <n>           Sessions written at once (default: the number of cores, at most 8).
+                           The output is the same for any value.
   -h, --help
 `;
 
@@ -52,6 +53,7 @@ export async function main(argv: string[]): Promise<number> {
       out: { type: "string" },
       "extract-dir": { type: "string" },
       "built-at": { type: "string" },
+      jobs: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -62,6 +64,11 @@ export async function main(argv: string[]): Promise<number> {
   const builtAt = values["built-at"] === undefined ? undefined : builtAtIso(values["built-at"]);
   if (builtAt instanceof Error) {
     process.stderr.write(`${builtAt.message}\n`);
+    return 1;
+  }
+  const jobs = values.jobs === undefined ? Math.min(availableParallelism(), 8) : Number(values.jobs);
+  if (!Number.isInteger(jobs) || jobs < 1) {
+    process.stderr.write(`--jobs ${values.jobs} is not a positive whole number\n`);
     return 1;
   }
   const out = resolve(values.out);
@@ -80,21 +87,61 @@ export async function main(argv: string[]): Promise<number> {
   mkdirSync(out, { recursive: true });
   const index: SnapshotIndex = { format: SNAPSHOT_FORMAT, ...(builtAt ? { builtAt } : {}), sessions: [] };
   const started = Date.now();
+  const tasks: SnapshotTask[] = dirs.map((dir, i) => ({ i, dir, out }));
+  const results: SnapshotResult[] = new Array(tasks.length);
+  let done = 0;
+  const record = (result: SnapshotResult) => {
+    results[result.i] = result;
+    if (++done % 20 === 0) process.stderr.write(`  ${done}/${dirs.length}\n`);
+  };
+  if (jobs === 1) for (const task of tasks) record(writeSnapshot(task));
+  else await inWorkers(tasks, Math.min(jobs, tasks.length), record);
   let total = 0;
-  for (const [i, dir] of dirs.entries()) {
-    const snapshot = snapshotOf(SurveySession.load(dir));
-    // Numbered rather than named by session id: an id is a trail name and can be long, and the
-    // index is what maps one to the other.
-    const file = `${i}.json.gz`;
-    const bytes = gzipSync(JSON.stringify(snapshot));
-    writeFileSync(join(out, file), bytes);
-    index.sessions.push({ file, bytes: bytes.length, summary: snapshot.summary });
-    total += bytes.length;
-    if ((i + 1) % 20 === 0) process.stderr.write(`  ${i + 1}/${dirs.length}\n`);
+  for (const result of results) {
+    if ("error" in result) throw new Error(result.error);
+    index.sessions.push({ file: result.file, bytes: result.bytes, summary: result.summary });
+    total += result.bytes;
   }
   writeFileSync(join(out, "index.json"), JSON.stringify(index));
   process.stdout.write(`${out}\n  ${dirs.length} sessions, ${(total / 1e6).toFixed(1)} MB gzipped, in ${Math.round((Date.now() - started) / 1000)} s\n`);
   return 0;
+}
+
+// Bun's Web Worker, typed here because the surveys tsconfig carries neither the DOM nor the Bun
+// types. Not `node:worker_threads`: under Bun those let the process exit while a worker is still
+// busy, so a batch ended early with a zero exit status and no index.
+declare const Worker: new (url: string) => {
+  postMessage(task: SnapshotTask): void;
+  onmessage: ((event: { data: SnapshotResult }) => void) | null;
+  onerror: ((event: { message: string }) => void) | null;
+  terminate(): void;
+};
+
+/**
+ * Writes every task's snapshot on `jobs` worker threads, handing each the next session as it
+ * finishes the last, so one large session does not hold up a fixed share of the batch.
+ */
+async function inWorkers(tasks: SnapshotTask[], jobs: number, record: (r: SnapshotResult) => void): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: jobs }, () => new Worker(new URL("./worker.ts", import.meta.url).href));
+  try {
+    await Promise.all(workers.map((worker) => new Promise<void>((resolveWorker, rejectWorker) => {
+      const feed = () => {
+        if (next < tasks.length) worker.postMessage(tasks[next++]!);
+        else resolveWorker();
+      };
+      worker.onmessage = (event) => {
+        // The first session that cannot be read fails the batch now, not after the rest are written.
+        if ("error" in event.data) return rejectWorker(new Error(event.data.error));
+        record(event.data);
+        feed();
+      };
+      worker.onerror = (event) => rejectWorker(new Error(event.message));
+      feed();
+    })));
+  } finally {
+    for (const worker of workers) worker.terminate();
+  }
 }
 
 if (import.meta.main) {

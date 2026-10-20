@@ -83,7 +83,7 @@ internal object MultiDeviceHandoverGuard {
    * Every device name this recorded call hands off to: its own when it IS a `switchDevice`, plus
    * each `switchDevice` nested in its arguments.
    *
-   * Nesting is real dispatch, not decoration. A wrapper tool records VERBATIM — `block_runIf` keeps
+   * Nesting is real dispatch, not decoration. A wrapper tool records VERBATIM — `runIf` keeps
    * its `condition.tool` predicate and its `then:` / `else:` branch actions in its own args as
    * `{ <toolName>: <args> }` — and a branch that runs dispatches the inner `switchDevice` for real,
    * where a name the session never bound fails the run. A gate that read only the top-level name
@@ -113,7 +113,7 @@ internal object MultiDeviceHandoverGuard {
 
   /**
    * Argument keys under which a recorded wrapper nests tool-calls: `then` / `else` are
-   * `block_runIf`'s branch arrays, `tools` the framework's own encoded-tool-list key, and `tool`
+   * `runIf`'s branch arrays, `tools` the framework's own encoded-tool-list key, and `tool`
    * a conditional's single `condition: { tool: {...} }` predicate.
    *
    * Closed on purpose, mirroring `TrailToolUsageScanner`'s set and for the same reason: a walk that
@@ -127,7 +127,7 @@ internal object MultiDeviceHandoverGuard {
   /**
    * Which slot a nested handover sits in, because the two have different replay semantics.
    *
-   * `block_runIf` dispatches its `condition: { tool: ... }` [PREDICATE] inside a try/catch — "a
+   * `runIf` dispatches its `condition: { tool: ... }` [PREDICATE] inside a try/catch — "a
    * throw is a `false` verdict, not an error" — so a `switchDevice` there that cannot bind does NOT
    * fail the trail and does NOT move the session: the condition is false and the else branch runs
    * on the same device. A [BRANCH] handover has no such catch: it fails the run outright when the
@@ -201,7 +201,7 @@ internal object MultiDeviceHandoverGuard {
    * given the names this trail is able to bind.
    *
    * Stricter than [containsHandover] in exactly one case, and the case matters: a PREDICATE
-   * handover naming a device that is not in [bindableNames] can only ever throw, and `block_runIf`
+   * handover naming a device that is not in [bindableNames] can only ever throw, and `runIf`
    * turns that throw into a `false` verdict on the same device. The session provably does not move,
    * so a caller that tracks the active device can keep tracking it. Treating that as a move instead
    * costs coverage rather than correctness — [SelectorDialectLint] would abandon the rest of the

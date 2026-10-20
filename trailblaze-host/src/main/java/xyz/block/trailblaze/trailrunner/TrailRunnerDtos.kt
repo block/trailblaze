@@ -508,6 +508,9 @@ data class SessionEventDto(
   // `timeMs` and trace step `ts`.
   val timeMs: Long,
   val data: JsonElement,
+  // `"device"` when [timeMs] is still on the device's clock: a device-stamped record the session
+  // measured no offset to convert with. Absent (null) means the host clock.
+  val clock: String? = null,
 )
 
 @Serializable

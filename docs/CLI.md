@@ -267,7 +267,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<ROLE>` | Optional role filter — show only tools tagged with this role. Valid values: trailheads, shortcuts.   trailheads — tools that bring the device to a known starting state (launch + sign-in, deep-link, etc.). Use one at the start of every trail.   shortcuts  — tools that jump between named waypoints during a trail. Omit to show everything; trailheads and shortcuts will be called out as headline sections above the toolset listing. | No |
+| `<ROLE>` | Optional role filter — show only tools tagged with this role. Valid values: trailheads.   trailheads — tools that bring the device to a known starting state (launch + sign-in, deep-link, etc.). Use one at the start of every trail. Omit to show everything; trailheads will be called out as a headline section above the toolset listing. | No |
 
 **Options:**
 
@@ -894,7 +894,6 @@ trailblaze waypoint segment
 trailblaze waypoint graph
 trailblaze waypoint tune
 trailblaze waypoint propose
-trailblaze waypoint shortcut
 ```
 
 **Options:**
@@ -944,7 +943,7 @@ trailblaze waypoint locate [OPTIONS]
 | `--session` | Session log directory. With --step, locates a single step; without --step, batch-locates every screen-state log in the dir and emits one TSV row per step. | - |
 | `--step` | 1-based index of the step within the session (single-step mode; selects from *_TrailblazeLlmRequestLog.json files) | - |
 | `--file` | Direct path to a *_TrailblazeLlmRequestLog.json file (alternative to --session/--step) | - |
-| `--target` | Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. Mutually exclusive with --root (--root wins if both given). | - |
+| `--target` | Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. Mutually exclusive with --root (--root wins if both given). Without it, `{{target.appId}}` selectors expand to the app ids of the target the session recorded. | - |
 | `--root` | Additional directory to scan for *.waypoint.yaml files. Overrides --target. Trailmap waypoints are always included regardless. (Convention: ./trails) | - |
 | `--rel-base` | Batch mode only: emit log paths relative to this directory. Must be an existing directory. Default: relative to the session dir's parent (yielding <session-name>/<step-filename>). | - |
 | `--log-suffix` | Batch mode only: restrict the walk to logs whose filename ends with this suffix (e.g. `_AgentDriverLog.json`). Default: every screen-state log type (`_AgentDriverLog.json`, `_TrailblazeSnapshotLog.json`, `_TrailblazeLlmRequestLog.json`). Use to pin row accounting against a specific log type when the session dir may carry multiple. | - |
@@ -1124,7 +1123,7 @@ trailblaze waypoint segment list [OPTIONS]
 
 ### `trailblaze waypoint graph`
 
-Render the waypoint navigation graph (waypoints, authored shortcuts, authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at `http://localhost:<daemon-port>/waypoints/graph` instead.
+Render the waypoint navigation graph (waypoints and authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at `http://localhost:<daemon-port>/waypoints/graph` instead.
 
 **Synopsis:**
 
@@ -1136,8 +1135,8 @@ trailblaze waypoint graph [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--target` | Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered graph to waypoints whose id starts with `<id>/` and drops shortcuts/trailheads that cross out of that scope. Also resolves --root to <workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given. | - |
-| `--platform` | Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints whose source path is under `waypoints/<platform>/...` and drops shortcuts/trailheads that cross out of that scope. Combine with --target to produce a single (target, platform) map. | - |
+| `--target` | Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered graph to waypoints whose id starts with `<id>/` and drops trailheads that land outside that scope. Also resolves --root to <workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given. | - |
+| `--platform` | Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints whose source path is under `waypoints/<platform>/...` and drops trailheads that land outside that scope. Combine with --target to produce a single (target, platform) map. | - |
 | `--root` | Filesystem directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Overrides --target's root resolution. Trailmap-bundled waypoints from the classpath are always included regardless of this flag. | - |
 | `--out`, `-o` | Output HTML file path (default: ./.trailblaze/reports/waypoint-graph.html, relative to the current directory). The default scopes the artifact to .trailblaze/reports/ — a stack-agnostic, generated-output-only subpath that consumers can gitignore without having to blanket-ignore the rest of .trailblaze/ (which may hold things they want to commit). Parent directories are created if missing; the file is overwritten if present. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1192,80 +1191,6 @@ trailblaze waypoint propose [OPTIONS]
 | `--top-n` | Maximum number of clusters to process in --aggregate mode (default: 10). | - |
 | `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_propose/proposals/. Wiped at the start of each run. | - |
 | `--idempotence-check` | Re-run after applying the proposals in-memory; fail (exit 1) if the second pass emits any new proposal. | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze waypoint shortcut`
-
-Analyze a session set for (A->B) waypoint transitions and synthesize draft shortcut YAMLs, then empirically replay each candidate on a fresh emulator before opening a PR. Subcommands: propose (offline), verify (on-device).
-
-**Synopsis:**
-
-```
-trailblaze waypoint shortcut [OPTIONS]
-trailblaze waypoint shortcut propose
-trailblaze waypoint shortcut verify
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze waypoint shortcut propose`
-
-Analyze a session set for (A->B) transitions and emit draft shortcut YAMLs. Each surviving proposal lands as a JSON+YAML pair under --out-dir, ready for the pipeline's verify + auto-PR steps.
-
-**Synopsis:**
-
-```
-trailblaze waypoint shortcut propose [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--sessions` | Directory containing one or more session subdirectories with *_AgentDriverLog.json files. Each subdirectory is one session. | - |
-| `--target` | Trailmap id. Resolves --root to <workspace>/trailmaps/<id>/waypoints/ and supplies the trailmap's app_ids for templated selector expansion. | - |
-| `--root` | Override the waypoint-root dir for waypoint + existing-shortcut discovery. (Convention: ./trails) | - |
-| `--min-support` | Minimum distinct sessions for a transition to be proposed. Default: 3. | - |
-| `--fingerprint-agreement` | Fraction of supporting sessions that must share the dominant action fingerprint (default: 0.67). Sessions disagreeing on the procedure short-circuit the proposal. | - |
-| `--top-k` | Process at most the top-K surviving proposals by hit count. The replay step is expensive enough that v1 caps weekly throughput here. Default: 5. | - |
-| `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_shortcut/proposals/. Wiped at the start of each run. | - |
-| `--idempotence-check` | Re-run after applying the surviving proposals in-memory; fail (exit 1) if any new proposal surfaces. | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze waypoint shortcut verify`
-
-Empirical replay of a proposed shortcut against a connected emulator. Generates a throwaway trail YAML and runs it via `trailblaze run`. Returns 0 if the post-condition waypoint matches, non-zero otherwise.
-
-**Synopsis:**
-
-```
-trailblaze waypoint shortcut verify [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--yaml` | Path to the shortcut YAML to verify (a `*.shortcut.yaml`). | - |
-| `--device` | Device id to run against (forwarded to `trailblaze run --device`). Defaults to $TRAILBLAZE_DEVICE. | - |
-| `--driver` | Driver to use in the generated trail config. Default: ANDROID_ONDEVICE_ACCESSIBILITY. Pick a different value when verifying an iOS shortcut (v1 ships Android-first). | - |
-| `--max-attempts` | Total attempts before declaring failure. Default: 1 (no retries). Trail-runtime exit codes are not distinguishable today between infrastructure and test-side failures (picocli SOFTWARE=1 covers both driver-init failures and post-condition mismatches), so v1 defaults to no retries. Override to 2+ only when investigating known transient infra flake; a flaky shortcut is a bad shortcut and the default policy reflects that. | - |
-| `--trail-out` | Write the generated trail YAML to <path> for debugging. Default: ./.waypoints_shortcut/verify/<shortcut-id>.trail.yaml | - |
-| `--trailblaze-bin` | Override the `trailblaze` binary used for the inner trail run. Default: ./trailblaze (so framework changes are picked up). CI sets this to the installed-distribution binary to mirror the end-user code path. | - |
-| `--timeout-seconds` | Per-attempt timeout in seconds for the inner `trailblaze run` subprocess. Default: 600 (10 min). A wedged trail run (device disconnect, ADB hung, runtime stuck on settle) is destroyed and returns exit code 124 so the outer bootstrap can move on. Without a timeout, a single stuck replay would block the rest of v1's sequential top-K loop indefinitely. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

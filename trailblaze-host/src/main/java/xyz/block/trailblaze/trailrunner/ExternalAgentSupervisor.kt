@@ -193,7 +193,7 @@ When changing what else the human should see in Trailblaze App would help, emit 
 TRAILRUNNER_UI {"version":1,"action":"navigate","route":"runs","params":{"sel":"<session id>"}}
 
 Supported actions:
-- navigate: route is one of home, prompt, create, interact, trails, tools, toolsets, waypoints, shortcuts, trailheads, runs, settings, agents. params is optional.
+- navigate: route is one of home, prompt, create, interact, trails, tools, toolsets, waypoints, trailheads, runs, settings, agents. params is optional.
 - open_session: set sessionId. Runs, active and completed alike, all live on the runs route.
 - open_trail: set trailId.
 - trail_output: set trailId and message; optional params.status and params.files. Your primary result channel - declares a trail you produced or changed without navigating away.

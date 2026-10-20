@@ -4,6 +4,7 @@ import {
   articleUrl,
   nonEmptyString,
   tryOrFalse,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 const DEFAULT_TITLE = "Wikipedia";
@@ -39,8 +40,8 @@ export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.firstHeading,
     });
-    await ctx.tools.web_verifyTextVisible({
-      text: expectedHeading,
+    await ctx.tools.web_verifyElementVisible({
+      ref: articleHeadingRef(expectedHeading),
     });
 
     if (dismissBanner) {

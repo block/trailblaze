@@ -23,6 +23,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 
@@ -30,57 +32,42 @@ import xyz.block.trailblaze.toolcalls.requiresHostInstance
  * Guards against regressing the YAML-defined tool LLM-visibility wiring. Covers:
  *
  * - `ToolYamlConfig.toTrailblazeToolDescriptor` produces the expected shape.
- * - `TrailblazeToolRepo.asToolRegistry` exposes a YAML-defined tool (`eraseText`) as a Koog
- *   tool so the LLM can select it.
- * - Dynamic-toolset switching (`setActiveToolSets`) picks up `eraseText` via the
- *   `text-editing` catalog entry's `yamlToolNames`.
+ * - `TrailblazeToolRepo.asToolRegistry` exposes a YAML-defined tool ([YamlDefinedToolFixture]) as
+ *   a Koog tool so the LLM can select it.
+ * - The always-enabled `core_interaction` toolset delivers its tools from the start.
  */
 class YamlDefinedToolLlmVisibilityTest {
 
   @Test
-  fun `toTrailblazeToolDescriptor maps eraseText YAML to the expected shape`() {
-    val config = parse(
-      """
-      id: eraseText
-      description: Erases characters from the focused field.
-      parameters:
-        - name: charactersToErase
-          type: integer
-          required: false
-          default: null
-          description: Number of characters to erase.
-      tools:
-        - mobile_maestro:
-            commands:
-              - eraseText:
-                  charactersToErase: "{{params.charactersToErase}}"
-      """.trimIndent(),
-    )
-
-    val descriptor = config.toTrailblazeToolDescriptor()
-    assertThat(descriptor.name).isEqualTo("eraseText")
+  fun `toTrailblazeToolDescriptor maps a YAML-defined tool to the expected shape`() {
+    val descriptor = YamlDefinedToolFixture.config.toTrailblazeToolDescriptor()
+    assertThat(descriptor.name).isEqualTo(YamlDefinedToolFixture.NAME)
     assertThat(descriptor.description).isNotNull()
-    assertThat(descriptor.description!!).contains("Erases characters")
-    assertThat(descriptor.requiredParameters).hasSize(0)
+    assertThat(descriptor.description!!).contains("Types text into the focused field")
+    assertThat(descriptor.requiredParameters).hasSize(1)
+    val required = descriptor.requiredParameters.single()
+    assertThat(required.name).isEqualTo("text")
+    assertThat(required.type).isEqualTo("string")
+    assertThat(required.description).isEqualTo("Text to type.")
     assertThat(descriptor.optionalParameters).hasSize(1)
-    val param = descriptor.optionalParameters.single()
-    assertThat(param.name).isEqualTo("charactersToErase")
-    assertThat(param.type).isEqualTo("integer")
-    assertThat(param.description).isEqualTo("Number of characters to erase.")
+    val optional = descriptor.optionalParameters.single()
+    assertThat(optional.name).isEqualTo("clearFirst")
+    assertThat(optional.type).isEqualTo("boolean")
+    assertThat(optional.description).isEqualTo("Empty the field before typing.")
   }
 
   @Test
-  fun `asToolRegistry exposes eraseText when yamlToolNames is populated`() {
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "set-of-mark",
-        toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
-        yamlToolNames = setOf(ToolName("eraseText")),
-      ),
-    )
-    val registry = repo.asToolRegistry(::createContext)
-    val toolNames = registry.tools.map { it.descriptor.name }.toSet()
-    assertThat(toolNames).contains("eraseText")
+  fun `asToolRegistry exposes a YAML-defined tool when yamlToolNames is populated`() {
+    val toolNames = YamlDefinedToolFixture.registered {
+      TrailblazeToolRepo(
+        trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+          name = "set-of-mark",
+          toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
+          yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
+        ),
+      ).asToolRegistry(::createContext).tools.map { it.descriptor.name }.toSet()
+    }
+    assertThat(toolNames).contains(YamlDefinedToolFixture.NAME)
   }
 
   @Test
@@ -202,7 +189,7 @@ class YamlDefinedToolLlmVisibilityTest {
   }
 
   @Test
-  fun `eraseText and hideKeyboard come through core_interaction (alwaysEnabled)`() {
+  fun `eraseText and hideKeyboard come through core_interaction (alwaysEnabled) as class-backed tools`() {
     val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     val repo = TrailblazeToolRepo(
@@ -214,8 +201,11 @@ class YamlDefinedToolLlmVisibilityTest {
       toolSetCatalog = catalog,
     )
 
-    // core_interaction is alwaysEnabled; eraseText (YAML-defined) and hideKeyboard
-    // (class-backed) both sit in that toolset and should be present from the start.
+    // core_interaction is alwaysEnabled; eraseText and hideKeyboard are both class-backed tools in
+    // that toolset and should be present from the start.
+    assertThat(coreTools.toolClasses).contains(EraseTextTrailblazeTool::class)
+    assertThat(coreTools.toolClasses).contains(HideKeyboardTrailblazeTool::class)
+    assertThat(coreTools.yamlToolNames).containsNone(ToolName("eraseText"))
     val tools = repo.asToolRegistry(::createContext).tools.map { it.descriptor.name }.toSet()
     assertThat(tools).contains("eraseText")
     assertThat(tools).contains("hideKeyboard")

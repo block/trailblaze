@@ -2,8 +2,11 @@ package xyz.block.trailblaze
 
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordLogged
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -68,6 +71,8 @@ fun TrailblazeAgentContext.logToolExecution(
    * [TrailblazeLog.TrailblazeToolLog.rawTrailblazeTool].
    */
   rawTool: TrailblazeTool? = null,
+  // Invocation-local pre-call values, used only for logging after a nested tool mutates memory.
+  sensitiveMemoryBeforeExecution: AgentMemory? = null,
 ) {
   // If the tool stamped an override (e.g. TapOnPointTrailblazeTool upgrading to
   // TapOnTrailblazeTool), take the recorded instance AND toolName from the override together:
@@ -96,21 +101,36 @@ fun TrailblazeAgentContext.logToolExecution(
   // The authored form may be a raw-args wrapper that doesn't itself implement
   // [SensitiveArgsTrailblazeTool], so its payload is additionally masked with the EXECUTED
   // instance's declared sensitive args (`toLogPayload()` only self-redacts).
-  val rawPayload = if (recordedToolOverride == null) {
-    rawTool?.toLogPayload()?.withExecutedToolSecretsRedacted(tool)
-  } else {
-    null
-  }
+  val sensitiveLogMemories = listOfNotNull(memory, sensitiveMemoryBeforeExecution)
+  val rawPayload =
+    if (recordedToolOverride == null) {
+        rawTool?.toLogPayload()?.withExecutedToolSecretsRedacted(tool)
+      } else {
+        null
+      }
+      ?.let { payload ->
+        sensitiveMemoryBeforeExecution?.let {
+          payload.withSensitiveMemoryValuesScrubbed(sensitiveLogMemories)
+        } ?: payload
+      }
   // Value masking runs AGAIN after resolution. The raw payload holds the authored `{{token}}`; if
   // that token names ordinary (non-sensitive) memory, resolution writes the real value into the
   // resolved payload — after the masking above already ran and found nothing. The executed
   // instance knows the resolved value, so masking with it here is what keeps a credential that
   // arrived via memory out of the persisted log.
-  val resolvedPayload = if (rawPayload != null) {
-    buildLogSafeResolvedPayload(rawPayload, memory).withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
-  } else {
-    recordedTool.toLogPayload()
-  }
+  val resolvedPayload =
+    if (rawPayload != null) {
+      buildLogSafeResolvedPayload(rawPayload, memory)
+        .withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
+    } else {
+      val payload = recordedTool.toLogPayload()
+      // Nested arguments may already be resolved; use both snapshots in one scrub.
+      if (context.nestedDispatchDepth.get() > 0 || sensitiveMemoryBeforeExecution != null) {
+        payload.withSensitiveMemoryValuesScrubbed(sensitiveLogMemories)
+      } else {
+        payload
+      }
+    }
   val toolLog =
     TrailblazeLog.TrailblazeToolLog(
       trailblazeTool = resolvedPayload,
@@ -121,9 +141,14 @@ fun TrailblazeAgentContext.logToolExecution(
       // logged before that (each driver's `executeTool` logs then returns), so a resolved
       // rememberSensitive value a tool spliced into its error message would otherwise land in the
       // persisted session log. The args payload is already scrubbed via `buildLogSafeResolvedPayload`.
-      exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage?.let { scrubSensitiveValues(it, memory) },
-      errorPayload = (result as? TrailblazeToolResult.Error.ExceptionThrown)?.structuredPayload
-        ?.let { scrubSensitivePayload(it, memory) },
+      exceptionMessage =
+        (result as? TrailblazeToolResult.Error)?.errorMessage?.let { message ->
+          scrubSensitiveValues(message, sensitiveLogMemories)
+        },
+      errorPayload =
+        (result as? TrailblazeToolResult.Error.ExceptionThrown)?.structuredPayload?.let { payload ->
+          scrubSensitivePayload(payload, sensitiveLogMemories)
+        },
       successful = result.isSuccess(),
       durationMs =
         Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),
@@ -151,6 +176,25 @@ fun TrailblazeAgentContext.logToolExecution(
   val session = sessionProvider.invoke()
   trailblazeLogger.log(session, toolLog)
   ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_UPLOADED)
+  // A call the agent's dispatch started is already in the history; this adds the ones logged
+  // without one (an `objectiveStatus`, a driver with its own tool loop).
+  ToolCallHistory.recordLogged(
+    sessionId = session.sessionId,
+    tool = tool,
+    toolName = toolLog.toolName,
+    args = resolvedPayload.raw,
+    rawArgs = (rawPayload ?: resolvedPayload).raw,
+    device = toolLog.deviceName,
+    startedAt = timeBeforeExecution.toEpochMilliseconds(),
+    result = result,
+    memories = sensitiveLogMemories,
+  )
+}
+
+/** This payload with every resolved sensitive memory value replaced by its `{{key}}` token. */
+private fun OtherTrailblazeTool.withSensitiveMemoryValuesScrubbed(memories: List<AgentMemory>): OtherTrailblazeTool {
+  val scrubbed = scrubSensitivePayload(raw, memories)
+  return if (scrubbed == raw) this else OtherTrailblazeTool(toolName = toolName, raw = scrubbed as JsonObject)
 }
 
 /**
@@ -170,7 +214,7 @@ private fun TrailblazeTool.sensitiveValuesOrEmpty(): Collection<String> =
  * literal values alike. Both kinds, because they close different holes: a name blanks a whole
  * field, a value scrubs one element out of a structured field and leaves the rest legible.
  */
-private fun OtherTrailblazeTool.withExecutedToolSecretsRedacted(executed: TrailblazeTool): OtherTrailblazeTool =
+internal fun OtherTrailblazeTool.withExecutedToolSecretsRedacted(executed: TrailblazeTool): OtherTrailblazeTool =
   withSensitiveArgsRedacted(executed.sensitiveArgNamesOrEmpty())
     .withSensitiveValuesRedacted(executed.sensitiveValuesOrEmpty())
 
@@ -264,4 +308,17 @@ fun TrailblazeAgentContext.logToolExecution(
   ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_BUILT)
   trailblazeLogger.log(session, toolLog)
   ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_UPLOADED)
+  // A call the agent's dispatch started is already in the history; this adds the ones logged
+  // without one (an `objectiveStatus`, a driver with its own tool loop).
+  ToolCallHistory.recordLogged(
+    sessionId = session.sessionId,
+    tool = tool,
+    toolName = toolLog.toolName,
+    args = resolvedPayload.raw,
+    rawArgs = (rawPayload ?: resolvedPayload).raw,
+    device = toolLog.deviceName,
+    startedAt = timeBeforeExecution.toEpochMilliseconds(),
+    result = result,
+    memories = listOf(memory),
+  )
 }

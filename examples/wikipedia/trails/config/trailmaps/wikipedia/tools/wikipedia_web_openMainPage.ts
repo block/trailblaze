@@ -23,10 +23,10 @@ export const wikipedia_web_openMainPage = trailblaze.tool<OpenMainPageArgs>(
       url: WIKIPEDIA_MAIN_PAGE,
     });
 
-    // The phrase "Welcome to Wikipedia" appears in the main page's introductory
-    // header — a stable visible-text anchor that the verify tool can match.
-    await ctx.tools.web_verifyTextVisible({
-      text: "Welcome to Wikipedia",
+    // "Welcome to Wikipedia" is the main page's introductory heading — a stable
+    // anchor that only the main page has.
+    await ctx.tools.web_verifyElementVisible({
+      ref: 'heading "Welcome to Wikipedia"',
     });
 
     // Build the "did we handle the banner?" suffix by INSPECTING the dismiss

@@ -22,6 +22,11 @@ export {
   fromMeta,
   type TrailblazeContext,
   type TrailblazeDevice,
+  TRAILBLAZE_HOST_ARCH,
+  TRAILBLAZE_HOST_OS,
+  type TrailblazeHostArch,
+  type TrailblazeHostOs,
+  type TrailblazeHostPlatform,
   type TrailblazeLogger,
   type TrailblazeLogLevel,
   type TrailblazeMemory,
@@ -32,6 +37,17 @@ export type {
   TrailblazeSessionCleanupContext,
   TrailblazeSessionResources,
 } from "./session-resources.js";
+export type {
+  SessionEvents,
+  SessionEventsCountResult,
+  SessionEventsMark,
+  SessionEventsQueryOptions,
+  SessionEventsQueryResult,
+  SessionEventsScan,
+  SessionEventsSince,
+} from "./session-events.js";
+export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
 export type {
   EventMatch,
   EventMatchValue,
@@ -54,7 +70,7 @@ export type {
   TrailblazeToolEntry,
   TrailblazeToolMap,
 } from "./client.js";
-export type { EmptyInput, ToolContext, TypedToolDefinition } from "./tool.js";
+export type { EmptyInput, ToolContext, TrailblazeHost, TypedToolDefinition } from "./tool.js";
 export { ToolError } from "./tool-error.js";
 export {
   captureViewHierarchy,
@@ -84,7 +100,7 @@ export {
 } from "./generated/selectors.js";
 
 // Side-effect import — pulls in the vendored built-in-tool bindings so authors get
-// autocomplete / type-checking on framework tools (`tapOnElementWithText`, `inputText`,
+// autocomplete / type-checking on framework tools (`tapOnElementBySelector`, `inputText`,
 // etc.) the moment they import anything from `@trailblaze/scripting`. The imported file is
 // pure declaration merging on `TrailblazeToolMap`; no runtime values are added.
 import "./built-in-tools.js";

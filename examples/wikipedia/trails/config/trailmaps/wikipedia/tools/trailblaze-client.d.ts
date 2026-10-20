@@ -736,19 +736,6 @@ Default is 'DOWN'. */
     };
 
     /**
-     * Verify that specific text is visible on the current page.
-     * This is a test assertion — it will fail the test if the text is not found.
-     */
-    web_verifyTextVisible: {
-      args: {
-        /** The text content to verify is visible on the page. */
-        text: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
      * Verify the value of an element on the page. Supports checking:
      * - TEXT: the text content of any element
      * - VALUE: the input value of a form field (input, textarea, select)

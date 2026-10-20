@@ -1,9 +1,9 @@
 ---
 name: trailblaze
 description: >
-  Use when working with Trailblaze or its CLI to author, debug, run, or test
-  `.trail.yaml` UI trails, trailmaps, waypoints, or typed scripted tools; or to
-  drive iOS, Android, or web apps in natural language.
+  Use Trailblaze or its CLI to author, debug, run, or test `.trail.yaml` trails,
+  trailmaps, waypoints, and typed scripted tools; or drive iOS, Android, or web
+  apps in natural language.
 ---
 
 # Trailblaze

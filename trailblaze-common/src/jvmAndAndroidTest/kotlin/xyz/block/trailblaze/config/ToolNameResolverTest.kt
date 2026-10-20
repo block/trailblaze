@@ -53,7 +53,7 @@ class ToolNameResolverTest {
       """.trimIndent(),
     )
     // Trailmap manifest so the loader recognizes this as a real trailmap (and won't drop
-    // any of its tools under the library-trailmap-trailhead guard for shortcuts/trailheads
+    // any of its tools under the library-trailmap-trailhead guard for trailheads
     // — irrelevant here since this is a tool, but matches production layout).
     File(tempRoot, "trailmaps/workspaceFakeTrailmap/trailmap.yaml").writeText(
       "id: workspaceFakeTrailmap\n",

@@ -33,6 +33,7 @@ import {
 export { defineTypedTool, formatAjvErrors, TypedToolValidationError } from "./tool-core.js";
 export type {
   ToolContext,
+  TrailblazeHost,
   EmptyInput,
   TypedToolDefinition,
   TrailblazeTypedToolSpec,

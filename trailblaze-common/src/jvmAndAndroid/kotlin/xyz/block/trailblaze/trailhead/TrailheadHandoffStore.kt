@@ -118,6 +118,15 @@ object TrailheadHandoffStore {
     return toolNames.any { entries[Slot(device, it)]?.result?.reusable == true }
   }
 
+  /**
+   * Whether [deviceId] holds any reusable setup. For a pre-trail force-stop that runs before the
+   * trail is read; the runner's own check, [holdsReusableFor], still decides once it is.
+   */
+  fun holdsReusable(deviceId: TrailblazeDeviceId): Boolean {
+    val device = keyOf(deviceId)
+    return entries.any { (slot, handoff) -> slot.deviceId == device && handoff.result.reusable }
+  }
+
   /** The tools a trail's trailhead steps name, top-level and lowered alike. */
   internal fun trailheadToolNames(trailItems: List<TrailYamlItem>): Set<String> = trailItems.flatMap { item ->
     when (item) {

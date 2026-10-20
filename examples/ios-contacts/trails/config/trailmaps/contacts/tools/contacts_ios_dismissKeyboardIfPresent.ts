@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { LABELS, textIsVisible, tryOrFalse } from "./contacts_ios_shared";
+import { LABELS, tapOnText, textIsVisible, tryOrFalse } from "./contacts_ios_shared";
 
 /**
  * Dismiss the iOS keyboard by tapping Cancel, which also exits search; does
@@ -22,7 +22,7 @@ export const contacts_ios_dismissKeyboardIfPresent = trailblaze.tool(
     }
 
     const dismissed = await tryOrFalse(() =>
-      ctx.tools.tapOnElementWithText({ text: LABELS.searchCancel }),
+      tapOnText(ctx, LABELS.searchCancel),
     );
     return dismissed
       ? "Dismissed iOS keyboard via Cancel chip."

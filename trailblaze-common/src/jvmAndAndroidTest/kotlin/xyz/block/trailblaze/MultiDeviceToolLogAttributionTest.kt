@@ -28,7 +28,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * saying it correctly after `switchDevice` hands the session over.
  *
  * Before this, a reader had only the screenshot's dimensions to go on — no help at all when both
- * bound devices share a resolution, which the X2 pair very nearly does.
+ * bound devices share a resolution, as a matched dual-display pair very nearly does.
  */
 class MultiDeviceToolLogAttributionTest {
 

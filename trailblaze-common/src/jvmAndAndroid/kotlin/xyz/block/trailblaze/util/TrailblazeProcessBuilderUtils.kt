@@ -93,7 +93,7 @@ object TrailblazeProcessBuilderUtils {
    *
    *  - **Cooperative cancellation.** `process.waitFor()` is wrapped in [runInterruptible],
    *    so coroutine cancellation (agent abort, driver disconnect, session shutdown)
-   *    translates into thread interruption and the subprocess gets [Process.destroyForcibly]
+   *    translates into thread interruption and the subprocess and its children are killed
    *    in the `finally`. The simple extension blocks indefinitely on `waitFor()` and
    *    leaves a hung subprocess running.
    *  - **Optional wall-clock timeout.** When [timeoutSeconds] is non-null, [Process.waitFor]
@@ -146,7 +146,7 @@ object TrailblazeProcessBuilderUtils {
         }
       }
       if (!finished) {
-        process.destroyForcibly()
+        process.destroyTreeForcibly()
       }
       // The reader exits on its own once the subprocess closes stdout (normal exit or
       // forced kill). Joining guarantees [outputLines] is fully populated before read.
@@ -156,7 +156,7 @@ object TrailblazeProcessBuilderUtils {
         exitCode = if (finished) process.exitValue() else -1,
       ) to !finished
     } finally {
-      if (process.isAlive) process.destroyForcibly()
+      if (process.isAlive) process.destroyTreeForcibly()
     }
   }
 

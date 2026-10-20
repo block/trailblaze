@@ -36,7 +36,7 @@ internal object PlaywrightReplayTree {
     fun locate(node: TrailblazeNode): TrailblazeNode {
       val detail = node.driverDetail as? DriverNodeDetail.Web
       if (detail?.ariaRole == "text" && detail.ariaName != null) {
-        val target = normalize(PlaywrightTrailblazeNodeMapper.yamlScalar(detail.ariaName!!))
+        val target = normalize(detail.ariaName!!)
         val match = findRun(texts, cursor, target, node.bounds)
         if (match != null) {
           cursor = match.second + 1

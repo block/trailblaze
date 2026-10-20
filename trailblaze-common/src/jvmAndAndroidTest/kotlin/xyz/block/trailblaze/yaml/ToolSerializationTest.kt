@@ -5,14 +5,18 @@ import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
+import kotlinx.serialization.json.JsonPrimitive
 import maestro.SwipeDirection
 import org.junit.Test
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
+import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.toolcalls.commands.AssertMatchCountTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
@@ -24,7 +28,7 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCo
 import xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
@@ -50,8 +54,11 @@ class ToolSerializationTest {
   private val androidClassifier = listOf(TrailblazeDeviceClassifier("android"))
 
   /** Decode a unified doc and return the single recorded step's tool wrappers. */
-  private fun decodeRecordedTools(yaml: String): List<TrailblazeToolYamlWrapper> =
-    trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier)
+  private fun decodeRecordedTools(
+    yaml: String,
+    decoder: TrailblazeYaml = trailblazeYaml,
+  ): List<TrailblazeToolYamlWrapper> =
+    decoder.decodeTrail(yaml, deviceClassifiers = androidClassifier)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools
 
@@ -268,10 +275,7 @@ trail:
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
     assertThat(wrapper.name).isEqualTo("eraseText")
-    // eraseText is now a YAML-defined (`tools:` mode) tool — decodes to
-    // YamlDefinedTrailblazeTool with an empty caller-params map.
-    assertThat(wrapper.trailblazeTool)
-      .isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
+    assertThat(wrapper.trailblazeTool).isEqualTo(EraseTextTrailblazeTool(charactersToErase = null))
   }
 
   @Test
@@ -290,28 +294,30 @@ trail:
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
     assertThat(wrapper.name).isEqualTo("eraseText")
-    val tool = wrapper.trailblazeTool as xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
-    assertThat(tool.params.containsKey("charactersToErase")).isEqualTo(true)
+    assertThat(wrapper.trailblazeTool).isEqualTo(EraseTextTrailblazeTool(charactersToErase = 10))
   }
 
   @Test
   fun deserializeYamlDefinedTool() {
-    // `eraseText` is a YAML-defined tool (see trailmaps/trailblaze/tools/eraseText.tool.yaml).
-    // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
+    // A YAML-defined (`tools:` mode) tool deserializes as a YamlDefinedTrailblazeTool rather than
+    // a KClass-backed data object.
     val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - eraseText: {}
+        - ${YamlDefinedToolFixture.NAME}:
+            text: hello
     """.trimIndent()
 
-    val tools = decodeRecordedTools(yaml)
+    val tools = YamlDefinedToolFixture.registered { decodeRecordedTools(yaml, decoder = createTrailblazeYaml()) }
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
-    assertThat(wrapper.name).isEqualTo("eraseText")
-    assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
+    assertThat(wrapper.name).isEqualTo(YamlDefinedToolFixture.NAME)
+    val tool = wrapper.trailblazeTool as YamlDefinedTrailblazeTool
+    assertThat(tool.config.id).isEqualTo(YamlDefinedToolFixture.NAME)
+    assertThat(tool.params["text"]).isEqualTo(JsonPrimitive("hello"))
   }
 
   @Test
@@ -874,29 +880,24 @@ trail:
   }
 
   @Test
-  fun deserializeTapOnElementWithTextTool() {
+  fun deserializeTapOnElementBySelectorWithNodeSelector() {
     val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - tapOnElementWithText:
-            text: Sign Out
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: '(?is).*\QSign Out\E.*'
     """.trimIndent()
 
     val tools = decodeRecordedTools(yaml)
     assertThat(tools.size).isEqualTo(1)
-    TrailblazeToolYamlWrapper(
-      name = "tapOnElementWithText",
-      trailblazeTool = TapOnElementWithTextTrailblazeTool(
-        text = "Sign Out",
-        index = 0,
-        id = null,
-        enabled = null,
-        selected = null,
-      ),
-    )
+    val tool = tools[0].trailblazeTool as TapOnByElementSelector
+    val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.textRegex).isEqualTo("(?is).*\\QSign Out\\E.*")
   }
 
   @Test
@@ -940,7 +941,7 @@ trail:
     val tools = decodeRecordedTools(yaml)
     assertThat(tools.size).isEqualTo(1)
     TrailblazeToolYamlWrapper(
-      name = "tapOnElementWithText",
+      name = "longPressOnElementWithText",
       trailblazeTool = LongPressOnElementWithTextTrailblazeTool(
         text = "Sign Out",
         index = null,

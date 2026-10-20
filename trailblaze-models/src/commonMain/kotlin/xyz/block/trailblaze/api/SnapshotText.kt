@@ -7,7 +7,7 @@ package xyz.block.trailblaze.api
  * backslash written as its escape (`\n`, `\r`, `\t`, `\\`) and every other character as it is.
  * Those escapes read the same in a JSON string, so an agent copying a quoted label into a tool
  * argument writes the element's real text: `"Name: Jane Doe\nEmail:"` in the snapshot becomes a
- * two-line `expectedText`, and an exact text check compares the text it was shown.
+ * two-line argument, and an exact text check compares the text it was shown.
  *
  * This is not full JSON-string escaping: a `"` inside a label prints as it is, as it always has,
  * so labels and the checks that compare against them are unchanged for every other character.

@@ -28,7 +28,7 @@ import java.nio.file.Path
  * optional `_meta`, and an `inputSchema` map of property → `{ type, description?, enum?,
  * required? }` — and indexes each by its declared `name:` (single-tool shape) or by each
  * entry's `name:` (multi-tool shape). Operational tool YAMLs (`.tool.yaml`,
- * `.shortcut.yaml`, `.trailhead.yaml`, `.waypoint.yaml`) in the same directory are
+ * `.trailhead.yaml`, `.waypoint.yaml`) in the same directory are
  * skipped during scripted-tool discovery. The bundler does the minimum JSON-Schema → TS
  * translation needed to cover the schema vocabulary actually used in the codebase
  * (`string`, `number`/`integer`, `boolean`, `enum`, `array`, `object`). Anything outside
@@ -338,8 +338,7 @@ class TrailblazeTrailmapBundler(
    * Collects scripted-tool entries owned by a single trailmap.
    *
    * Discovery model: walk `<trailmapDir>/tools/` for `*.yaml` files (direct children only),
-   * skipping operational tool YAMLs (`*.tool.yaml`, `*.shortcut.yaml`, `*.trailhead.yaml`,
-   * `*.waypoint.yaml`). Each remaining descriptor declares either a single tool name
+   * skipping operational tool YAMLs (`*.tool.yaml`, `*.trailhead.yaml`, `*.waypoint.yaml`). Each remaining descriptor declares either a single tool name
    * (`name:` at the top level) or N tool names (one per entry under `tools:`). Build a
    * trailmap-local registry keyed by tool name, with duplicate-name detection naming both
    * contributing files.
@@ -761,9 +760,10 @@ class TrailblazeTrailmapBundler(
      */
     private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
       ".tool.yaml",
-      ".shortcut.yaml",
       ".trailhead.yaml",
       ".waypoint.yaml",
+      // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+      ".shortcut.yaml",
     )
 
     /**

@@ -139,6 +139,21 @@ class DeviceRosterSessionTest {
   }
 
   @Test
+  fun `a cast member is named by its roster name, a device outside a cast by none`() {
+    val manager = manager()
+    manager.setDeviceRoster("mcp-1", listOf(member("seller", seller), member("buyer", buyer)))
+    assertEquals("buyer", manager.castMemberName(buyer))
+    assertNull(manager.castMemberName(kitchen))
+  }
+
+  @Test
+  fun `a cast of one keeps the unsuffixed streams single-device readers look for`() {
+    val manager = manager()
+    manager.setDeviceRoster("mcp-1", listOf(member("seller", seller)))
+    assertNull(manager.castMemberName(seller))
+  }
+
+  @Test
   fun `every device of the cast is recorded into the shared session`() {
     val manager = manager()
     manager.setDeviceRoster("mcp-1", listOf(member("seller", seller), member("buyer", buyer)))

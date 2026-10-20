@@ -42,8 +42,8 @@ object ScriptedToolSourceSnapshotScanner {
 
   private const val SCRIPTED_TOOLS_DIR = "tools"
 
-  // The loader's list, referenced directly: an operational `.shortcut.yaml`/`.trailhead.yaml`/
-  // `.waypoint.yaml` under `tools/` must not reach the descriptor decode path here either.
+  // The loader's list, referenced directly: an operational `.trailhead.yaml`/`.waypoint.yaml`
+  // under `tools/` must not reach the descriptor decode path here either.
   private val OPERATIONAL_TOOL_YAML_SUFFIXES = TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES
 
   /** The loader's typed-binding shape: `export const <name> = trailblaze.tool<...>(...)`. */

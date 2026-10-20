@@ -388,6 +388,7 @@ internal fun Route.sessionRoutes(deps: TrailRunnerDeps) {
                 receivedAt = java.time.Instant.ofEpochMilli(e.timeMs).toString(),
                 timeMs = e.timeMs,
                 data = e.data,
+                clock = e.clock?.wireName,
               )
             },
         )

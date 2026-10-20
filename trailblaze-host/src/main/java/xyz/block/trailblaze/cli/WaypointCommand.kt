@@ -3,7 +3,6 @@ package xyz.block.trailblaze.cli
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import xyz.block.trailblaze.cli.propose.WaypointProposeCommand
-import xyz.block.trailblaze.cli.shortcut.WaypointShortcutCommand
 import xyz.block.trailblaze.cli.tune.WaypointTuneCommand
 import java.util.concurrent.Callable
 
@@ -33,9 +32,8 @@ import java.util.concurrent.Callable
     // and emitting the observed transitions between matched waypoints. Lives under
     // `waypoint` rather than as a top-level peer because its inputs (waypoints) and
     // its outputs (transitions between waypoints) are both inside the waypoint world.
-    // Future shortcut/route commands per the 2026-04-28 devlog will sit alongside.
     SegmentCommand::class,
-    // Renders the navigation graph (waypoints + authored shortcuts + trailheads) as a
+    // Renders the navigation graph (waypoints + trailheads) as a
     // standalone HTML page suitable for emailing/Slacking. Same data that backs the
     // daemon's live `/waypoints/graph` browser view.
     WaypointGraphCommand::class,
@@ -47,10 +45,6 @@ import java.util.concurrent.Callable
     // fingerprints (one PR per cluster in the trailblaze-waypoints-propose pipeline).
     // See docs/internal/devlog/2026-05-19-waypoint-pack-detection.md.
     WaypointProposeCommand::class,
-    // Shortcut loop — synthesize draft *.shortcut.yaml files from observed (A->B)
-    // waypoint transitions and empirically replay each one before opening a PR.
-    // See docs/internal/devlog/2026-05-19-waypoint-pack-shortcuts.md.
-    WaypointShortcutCommand::class,
   ],
 )
 class WaypointCommand : Callable<Int> {

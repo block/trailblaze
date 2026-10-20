@@ -41,8 +41,10 @@ class LoopCommandTest {
       - step: Open the menu
         recording:
           android-phone:
-            - tapOnElementWithText:
-                text: Menu
+            - tapOnElementBySelector:
+                nodeSelector:
+                  androidAccessibility:
+                    textRegex: '(?is).*\QMenu\E.*'
       - verify: The menu is open
   """.trimIndent()
 
@@ -138,13 +140,13 @@ class LoopCommandTest {
       DirectionStep("Launch signed in", isTrailhead = true) to null,
       DirectionStep("Open the menu") to null,
       VerificationStep("The menu is open") to null,
-      DirectionStep("Open the menu") to "Recording failed at tapOnElementWithText: no Menu",
+      DirectionStep("Open the menu") to "Recording failed at tapOnElementBySelector: no Menu",
     )
 
     assertEquals(
       LoopCommand.SessionProgress(
         completedSteps = 2,
-        failure = "at \"Open the menu\": Recording failed at tapOnElementWithText: no Menu",
+        failure = "at \"Open the menu\": Recording failed at tapOnElementBySelector: no Menu",
       ),
       LoopCommand.readProgress(session),
     )
@@ -199,7 +201,7 @@ class LoopCommandTest {
   fun `a step that self-healed is not reported as the failure`() {
     val session = sessionDir(
       DirectionStep("Launch signed in", isTrailhead = true) to null,
-      DirectionStep("Open the menu") to "Recording failed at tapOnElementWithText: no Menu",
+      DirectionStep("Open the menu") to "Recording failed at tapOnElementBySelector: no Menu",
       DirectionStep("Open the menu") to null,
       VerificationStep("The menu is open") to "The menu is closed",
     )
@@ -214,7 +216,7 @@ class LoopCommandTest {
   fun `a session that failed after its healed steps passed names no step`() {
     val session = sessionDir(
       DirectionStep("Launch signed in", isTrailhead = true) to null,
-      DirectionStep("Open the menu") to "Recording failed at tapOnElementWithText: no Menu",
+      DirectionStep("Open the menu") to "Recording failed at tapOnElementBySelector: no Menu",
       DirectionStep("Open the menu") to null,
       VerificationStep("The menu is open") to null,
     )

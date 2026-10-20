@@ -2,6 +2,7 @@ package xyz.block.trailblaze.waypoint
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -17,7 +18,17 @@ import java.io.File
 
 object SessionLogScreenState {
 
-  fun loadStep(jsonFile: File): ScreenState {
+  /**
+   * Loads one screen-state log. [sessionDevice] is the device the session recorded at start
+   * (see [readSessionContext]); it supplies the platform when the log itself carries none, which
+   * is the case for every `AgentDriverLog` / `TrailblazeSnapshotLog`. Without it an iOS session's
+   * screens would be matched as ANDROID.
+   *
+   * Only the platform, not the classifiers: a custom hardware classifier registered without an
+   * `android` parent would skip every `android:` block for hardware that runs the same Android
+   * app, which those blocks match today.
+   */
+  fun loadStep(jsonFile: File, sessionDevice: TrailblazeDeviceInfo? = null): ScreenState {
     require(jsonFile.exists()) { "Session log file not found: $jsonFile" }
     val raw = jsonFile.readText()
     val parsed = TrailblazeJson.defaultWithoutToolsInstance
@@ -25,6 +36,8 @@ object SessionLogScreenState {
     val screenshotPath = parsed.screenshotFile?.let { File(jsonFile.parentFile, it) }
     val screenshotBytes = screenshotPath?.takeIf { it.exists() }?.readBytes()
     val platform = parsed.trailblazeDevicePlatform
+      ?: parsed.trailblazeDeviceInfo?.platform
+      ?: sessionDevice?.platform
       ?: TrailblazeDevicePlatform.ANDROID
     // Surface the example's device classifier so the waypoint matcher resolves the right
     // classifier block (e.g. an `android-tablet`-labelled example, or an iOS example, validates
@@ -54,6 +67,70 @@ object SessionLogScreenState {
     return parsed.driverMigrationTreeNode?.let { MigrationScreenState.wrap(base, it) }
       ?: base
   }
+
+  /** What a session recorded about itself at start: the target, the app under test, and the device. */
+  data class SessionContext(
+    /** The trail's `target:` id, e.g. `clock`. Its trailmap declares every app id the target can run as. */
+    val targetId: String? = null,
+    /**
+     * The app id installed when the session started, e.g. `com.example.app`. Null for web, and when
+     * the app wasn't installed yet at start.
+     */
+    val appId: String?,
+    /** The start device. Null for a multi-device session, whose captures may come from any device. */
+    val deviceInfo: TrailblazeDeviceInfo?,
+  )
+
+  /**
+   * Reads the [SessionContext] from the session's start log (the `TrailblazeSessionStatusChangeLog`
+   * whose status carries `trailConfig.target` / `trailblazeDeviceInfo` / `targetAppInfo`). Returns null when the directory
+   * has no such log, e.g. a hand-assembled fixture. Unreadable logs are skipped, not fatal.
+   *
+   * In a multi-device session the start device is only one of the screens a capture can come
+   * from (after a `switchDevice` handover it is another device entirely), so [SessionContext.deviceInfo]
+   * is null there rather than wrong for half the run. A session is multi-device when any tool log
+   * names its device; single-device sessions have no bindings and never do.
+   */
+  fun readSessionContext(sessionDir: File): SessionContext? {
+    val statusLogs = sessionDir.listFiles { f -> f.name.endsWith("_TrailblazeSessionStatusChangeLog.json") }
+      ?.sortedWith(compareBy({ readTimestamp(it) ?: "" }, { it.name }))
+      .orEmpty()
+    for (log in statusLogs) {
+      val status = try {
+        Json.parseToJsonElement(log.readText()).jsonObject["sessionStatus"] as? JsonObject
+      } catch (_: Exception) {
+        null
+      } ?: continue
+      val appId = ((status["targetAppInfo"] as? JsonObject)?.get("appId") as? JsonPrimitive)?.contentOrNull
+      val targetId = ((status["trailConfig"] as? JsonObject)?.get("target") as? JsonPrimitive)?.contentOrNull
+      val deviceInfo = status["trailblazeDeviceInfo"]?.let {
+        try {
+          TrailblazeJson.defaultWithoutToolsInstance.decodeFromJsonElement(TrailblazeDeviceInfo.serializer(), it)
+        } catch (_: Exception) {
+          null
+        }
+      }
+      if (targetId != null || appId != null || deviceInfo != null) {
+        return SessionContext(
+          targetId = targetId,
+          appId = appId,
+          deviceInfo = deviceInfo?.takeUnless { isMultiDevice(sessionDir) },
+        )
+      }
+    }
+    return null
+  }
+
+  private fun isMultiDevice(sessionDir: File): Boolean =
+    sessionDir.listFiles { f -> f.name.endsWith("_TrailblazeToolLog.json") }.orEmpty().any { log ->
+      // Top-level key only: a tool's own args or result can carry a `deviceName` too.
+      try {
+        val name = (Json.parseToJsonElement(log.readText()).jsonObject["deviceName"] as? JsonPrimitive)?.contentOrNull
+        !name.isNullOrEmpty()
+      } catch (_: Exception) {
+        false
+      }
+    }
 
   fun listLlmRequestLogs(sessionDir: File): List<File> {
     require(sessionDir.isDirectory) { "Not a session directory: $sessionDir" }

@@ -5,6 +5,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.config.AppTargetYamlLoader
 import xyz.block.trailblaze.config.ToolNameResolver
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -169,39 +170,40 @@ class CustomTrailblazeToolsTest {
   // -- YAML tool name symmetry (this PR's focus): first-class YAML-defined tools --
   //
   // `CustomTrailblazeTools` now carries YAML tool names alongside class-backed tools.
-  // Rule authors who reference YAML-defined tools (e.g. `compose_click`, `eraseText`) can
+  // Rule authors who reference YAML-defined tools (e.g. `compose_click`) can
   // add them to the initial surface directly, without going through a full toolset-id
   // indirection. These tests pin that the YAML fields flow through the same way class
   // fields do.
 
   @Test
   fun `initialToolRepoYamlToolNames default includes driver-compatible YAML tools`() {
-    // Playwright ONLY gets driver-agnostic toolsets (meta, memory) at the alwaysEnabled level,
-    // but driver-compatible YAML tools should still flow from the full catalog scan. On
-    // Android, core_interaction contributes YAML-defined tools like `eraseText`.
-    val androidTools = CustomTrailblazeTools(
-      registeredAppSpecificLlmTools = emptySet(),
-      config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-    )
-    val androidYamlNames = androidTools.initialToolRepoYamlToolNames.map { it.toolName }.toSet()
+    // Driver-compatible YAML tools flow from the full catalog scan, the same way class-backed
+    // tools do.
+    val androidYamlNames = YamlDefinedToolFixture.inToolSet(setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)) {
+      CustomTrailblazeTools(
+        registeredAppSpecificLlmTools = emptySet(),
+        config = TrailblazeConfig.DEFAULT,
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      ).initialToolRepoYamlToolNames
+    }
     assertTrue(
-      "eraseText" in androidYamlNames,
-      "core_interaction YAML-defined 'eraseText' should appear for Android",
+      YamlDefinedToolFixture.toolName in androidYamlNames,
+      "A YAML-defined tool from an Android-compatible toolset should appear for Android",
     )
   }
 
   @Test
   fun `initialToolRepoYamlToolNames default drops mobile-only YAML tools for Playwright`() {
-    val playwrightTools = CustomTrailblazeTools(
-      registeredAppSpecificLlmTools = emptySet(),
-      config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-    )
-    val playwrightYamlNames = playwrightTools.initialToolRepoYamlToolNames.map { it.toolName }.toSet()
+    val playwrightYamlNames = YamlDefinedToolFixture.inToolSet(setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)) {
+      CustomTrailblazeTools(
+        registeredAppSpecificLlmTools = emptySet(),
+        config = TrailblazeConfig.DEFAULT,
+        driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      ).initialToolRepoYamlToolNames
+    }
     assertFalse(
-      "eraseText" in playwrightYamlNames,
-      "core_interaction's 'eraseText' is mobile-only and must not appear on Playwright",
+      YamlDefinedToolFixture.toolName in playwrightYamlNames,
+      "A YAML-defined tool from a mobile-only toolset must not appear on Playwright",
     )
   }
 
@@ -227,16 +229,16 @@ class CustomTrailblazeToolsTest {
     // CustomTrailblazeTools, and the resulting TrailblazeToolRepo advertises it as a
     // descriptor. If the extension drops `customYamlToolNames` when forwarding to
     // withDynamicToolSets, this test fails.
-    val tools = CustomTrailblazeTools(
-      registeredAppSpecificLlmTools = emptySet(),
-      registeredAppSpecificYamlToolNames = setOf(ToolName("eraseText")),
-      config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-    )
-    val repo = tools.toTrailblazeToolRepo()
-    val descriptorNames = repo.getCurrentToolDescriptors().map { it.name }.toSet()
+    val descriptorNames = YamlDefinedToolFixture.registered {
+      CustomTrailblazeTools(
+        registeredAppSpecificLlmTools = emptySet(),
+        registeredAppSpecificYamlToolNames = setOf(YamlDefinedToolFixture.toolName),
+        config = TrailblazeConfig.DEFAULT,
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      ).toTrailblazeToolRepo().getCurrentToolDescriptors().map { it.name }.toSet()
+    }
     assertTrue(
-      "eraseText" in descriptorNames,
+      YamlDefinedToolFixture.NAME in descriptorNames,
       "Custom YAML tool name must reach the tool descriptor registry",
     )
   }

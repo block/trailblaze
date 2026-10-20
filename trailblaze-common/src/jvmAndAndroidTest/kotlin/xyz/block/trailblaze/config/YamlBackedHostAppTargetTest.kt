@@ -20,7 +20,9 @@ import kotlin.test.assertTrue
 
 class YamlBackedHostAppTargetTest {
 
-  private val resolver = ToolNameResolver.fromBuiltInAndCustomTools()
+  private val resolver = YamlDefinedToolFixture.registered { ToolNameResolver.fromBuiltInAndCustomTools() }
+
+  private val yamlTool = YamlDefinedToolFixture.NAME
 
   @Test
   fun `minimal app target with no tools or app ids`() {
@@ -297,7 +299,7 @@ class YamlBackedHostAppTargetTest {
   @Test
   fun `excluded YAML-defined tools route to the YAML exclusion bucket`() {
     // Mirrors the inclusion side: a target YAML can list a YAML-defined tool name
-    // (e.g. `eraseText`) under `excluded_tools` and the resolver classifies it into
+    // under `excluded_tools` and the resolver classifies it into
     // the YAML-name bucket instead of throwing it away as an unknown class.
     val target = AppTargetYamlLoader.loadFromYaml(
       """
@@ -305,7 +307,7 @@ class YamlBackedHostAppTargetTest {
       display_name: Test
       platforms:
         android:
-          excluded_tools: [eraseText, swipe]
+          excluded_tools: [$yamlTool, swipe]
       """.trimIndent(),
       toolNameResolver = resolver,
     )
@@ -317,8 +319,8 @@ class YamlBackedHostAppTargetTest {
     )
     assertTrue(
       target.getExcludedYamlToolNamesForDriver(androidDriver)
-        .any { it.toolName == "eraseText" },
-      "YAML-defined eraseText should land in the YAML exclusion bucket. Got: ${target.getExcludedYamlToolNamesForDriver(androidDriver)}",
+        .any { it.toolName == yamlTool },
+      "YAML-defined $yamlTool should land in the YAML exclusion bucket. Got: ${target.getExcludedYamlToolNamesForDriver(androidDriver)}",
     )
     assertTrue(target.getExcludedYamlToolNamesForDriver(TrailblazeDriverType.IOS_HOST).isEmpty())
   }
@@ -369,21 +371,21 @@ class YamlBackedHostAppTargetTest {
       display_name: Test
       platforms:
         android:
-          excluded_tools: [tap, eraseText, openUrl]
+          excluded_tools: [tap, $yamlTool, openUrl]
       """.trimIndent(),
       toolNameResolver = resolver,
     )
     val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
     val surface = target.getExcludedToolSurfaceForDriver(android)
 
-    // tap is class-backed, eraseText is YAML-defined, openUrl is scripted — each in its own bucket.
+    // tap is class-backed, the fixture is YAML-defined, openUrl is scripted — each in its own bucket.
     assertTrue(TapTrailblazeTool::class in surface.toolClasses, "tap -> class bucket")
-    assertTrue(surface.yamlToolNames.any { it.toolName == "eraseText" }, "eraseText -> YAML bucket")
+    assertTrue(surface.yamlToolNames.any { it.toolName == yamlTool }, "$yamlTool -> YAML bucket")
     assertTrue(surface.scriptedToolNames.any { it.toolName == "openUrl" }, "openUrl -> scripted bucket")
     // allToolNames is the union across all three partitions.
     val allNames = surface.allToolNames.map { it.toolName }.toSet()
     assertTrue(
-      setOf("tap", "eraseText", "openUrl").all { it in allNames },
+      setOf("tap", yamlTool, "openUrl").all { it in allNames },
       "allToolNames must union every backing. Got: $allNames",
     )
   }

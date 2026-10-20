@@ -18,7 +18,17 @@
 import type { ErrorObject, ValidateFunction } from "ajv/dist/2020.js";
 
 import type { TrailblazeClient, TrailblazeHostMethods, TrailblazeToolMethods } from "./client.js";
-import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
+import { parseHostPlatform } from "./context.js";
+import type {
+  TrailblazeContext,
+  TrailblazeDevice,
+  TrailblazeHostArch,
+  TrailblazeHostOs,
+  TrailblazeHostPlatform,
+  TrailblazeTarget,
+} from "./context.js";
+import { createSessionEvents, type SessionEvents } from "./session-events.js";
+import { createToolHistory, type ToolHistory } from "./history.js";
 import type { TrailblazeSessionResources } from "./session-resources.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
 import {
@@ -34,6 +44,31 @@ import {
 } from "./trailhead.js";
 
 /**
+ * `ctx.host`: the Kotlin host functions, plus the computer the tool runs on. `os` and `arch` are
+ * `null` when the tool runs on an Android device, where the device is the only computer.
+ * `tools.exec` already finds a bare Windows command name (`adb` → `adb.exe`), so they're for what
+ * else differs between hosts, such as paths.
+ */
+export type TrailblazeHost = TrailblazeHostMethods & {
+  readonly os: TrailblazeHostOs | null;
+  readonly arch: TrailblazeHostArch | null;
+};
+
+/** Adds `os` and `arch` to a host-function namespace; every other name still calls a function. */
+function hostWithPlatform(
+  host: TrailblazeHostMethods | undefined,
+  platform: TrailblazeHostPlatform | null,
+): TrailblazeHost {
+  return new Proxy((host ?? {}) as TrailblazeHostMethods, {
+    get(target, prop, receiver) {
+      if (prop === "os") return platform?.os ?? null;
+      if (prop === "arch") return platform?.arch ?? null;
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as TrailblazeHost;
+}
+
+/**
  * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring surface.
  * Exposes the cross-tool primitives a typed handler can reach: [tools], [memory], [target].
  *
@@ -46,9 +81,10 @@ export interface ToolContext {
   /**
    * Call Kotlin host functions — `host.<name>(args)` — for plumbing that isn't a tool (credential
    * lookups, provisioning calls). Unlike `tools`, a host call isn't logged as a step and keeps the
-   * cached screen. See `TrailblazeHostFunctionMap`.
+   * cached screen. See `TrailblazeHostFunctionMap`. Also says which computer the tool runs on:
+   * `host.os` and `host.arch`.
    */
-  host: TrailblazeHostMethods;
+  host: TrailblazeHost;
   /**
    * Per-invocation memory surface. Reads see the host snapshot + this invocation's writes;
    * writes are flushed back to the host on a successful return via the result envelope's
@@ -82,6 +118,13 @@ export interface ToolContext {
   previousRun: PreviousRun | null;
   /** `note(...)` works in any tool and tells the trailhead's `teardown` what to clean up. */
   trailhead: TrailheadContext;
+  /** This session's event streams as they stand: query, count, wait for a record, or mark a point. */
+  events: SessionEvents;
+  /**
+   * Every tool call and section of this session so far, recorded by the framework as they ran,
+   * so complete when read. A `teardown` reads the trail section's calls to choose its cleanups.
+   */
+  history: ToolHistory;
 }
 
 /**
@@ -384,13 +427,15 @@ export function defineTypedTool<TInput, TResult>(
     const trailhead = createTrailheadRecorder(legacyCtx?.previousRun);
     const toolContext: ToolContext = {
       tools: client.tools,
-      host: client.host,
+      host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
       memory,
       device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,
       session: legacyCtx?.session,
       previousRun: trailhead.previousRun,
       trailhead: trailhead.context,
+      events: createSessionEvents(client.host),
+      history: createToolHistory(client.host),
     };
     let out: TResult;
     try {
@@ -435,13 +480,15 @@ export function defineTypedTool<TInput, TResult>(
       // recorder whose report is discarded.
       const toolContext: ToolContext = {
         tools: client.tools,
-        host: client.host,
+        host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
         memory,
         device: normalizeDevice(legacyCtx?.device),
         target: legacyCtx?.target,
         session: legacyCtx?.session,
         previousRun: null,
         trailhead: createTrailheadRecorder(undefined).context,
+        events: createSessionEvents(client.host),
+        history: createToolHistory(client.host),
       };
       const result = await teardown(
         validatedArgs as TInput,

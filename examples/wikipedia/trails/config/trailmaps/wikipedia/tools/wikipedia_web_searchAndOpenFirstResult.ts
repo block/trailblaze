@@ -5,6 +5,7 @@ import {
   ensureOn,
   isWikipediaHostname,
   nonEmptyString,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 export interface SearchAndOpenFirstResultArgs {
@@ -55,15 +56,14 @@ export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndO
     await ctx.tools.web_click({
       ref: SELECTORS.searchSubmit,
     });
-    // Anchor the assertion to the article header element; the text check
-    // afterwards confirms the article matches what the caller asked for.
-    // Without the element-visible check, the text assertion could pass on
-    // Wikipedia's search-results page (the query appears in result snippets).
+    // The article header element proves an article opened rather than the
+    // search-results page; the heading check confirms it is the one the caller
+    // asked for.
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.firstHeading,
     });
-    await ctx.tools.web_verifyTextVisible({
-      text: expectedHeading,
+    await ctx.tools.web_verifyElementVisible({
+      ref: articleHeadingRef(expectedHeading),
     });
 
     return `Searched for "${query}" and verified result heading "${expectedHeading}".`;

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.network
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
  * One captured network exchange phase. NDJSON-friendly — each emitted line in
@@ -37,6 +38,12 @@ data class NetworkEvent(
   val requestBodyRef: BodyRef? = null,
   val responseBodyRef: BodyRef? = null,
   val source: Source,
+  /**
+   * Which clock stamped [timestampMs]: [TrailblazeClockDomain.DEVICE] when the device supplied the
+   * time (the app's own request or emit timestamp), null (omitted) for the host's. Same
+   * convention as a session event's `clock` — see `SessionEvents`.
+   */
+  val clock: TrailblazeClockDomain? = null,
 )
 
 /** Placeholder value substituted for sensitive header values; see [NetworkEvent.requestHeaders]. */

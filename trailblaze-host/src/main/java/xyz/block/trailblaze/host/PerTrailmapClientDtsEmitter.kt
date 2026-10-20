@@ -260,7 +260,7 @@ object PerTrailmapClientDtsEmitter {
    *
    * **Class-backed tools are fully typed** — [resolveKotlinToolDescriptorsForTrailmap] resolves
    * them through [TrailblazeToolSetCatalog] via classpath reflection. These are the bulk of what
-   * recorded trails actually call (`tapOnElementWithText`, …). **Scripted (`.ts`) tools carry the
+   * recorded trails actually call (`tapOnElementBySelector`, …). **Scripted (`.ts`) tools carry the
    * baked target's schema** but are NOT re-run through the analyzer here (no on-disk `.ts` in a
    * JAR), so any residual gap between the baked schema and a precise typed shape reads as a
    * finding to curate rather than a silent gap — a surfaced finding beats a silent hole.
@@ -566,7 +566,7 @@ object PerTrailmapClientDtsEmitter {
    *     Sourcing from the recordable registry — the same set replay decodes against — means the
    *     surface can't silently miss a recordable tool.
    *  3. **YAML-defined (`tools:` mode) recordable tools** ([TrailblazeSerializationInitializer.buildYamlDefinedTools],
-   *     e.g. `eraseText`) — no Kotlin class, so params come straight from the config.
+   *     a `tools:` composition) — no Kotlin class, so params come straight from the config.
    *
    * **Selector args re-injected.** [selectorParamsForTs] recovers the `TrailblazeNodeSelector` /
    * legacy `selector` params that [toScriptedToolDescriptor] strips (they overflow Koog's lowering),

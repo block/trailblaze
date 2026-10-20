@@ -62,6 +62,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -1201,7 +1203,8 @@ class TrailblazeMcpServer(
       sessionDirProvider = logsRepo::getSessionDir,
     )
     val result = try {
-      tool.execute(context)
+      // Run here, outside any agent's dispatch, so recorded here.
+      ToolCallHistory.recordExecution(context, tool) { tool.execute(context) }
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {
@@ -2758,7 +2761,7 @@ class TrailblazeMcpServer(
           },
           // resourceSourceProvider intentionally omitted — its default
           // `platformConfigResourceSource()` is workspace-aware, so workspace-authored
-          // `*.trailhead.yaml` / `*.shortcut.yaml` files surface in role lists with no
+          // `*.trailhead.yaml` files surface in role lists with no
           // explicit wiring. The workspace dir is resolved through `WorkspaceConfigDirHolder`,
           // installed by `TrailblazeWorkspaceConfigBootstrap` at CLI startup — same
           // `TrailblazeWorkspaceConfigResolver.resolve(...)` that `AppTargetDiscovery` uses.

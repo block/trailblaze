@@ -25,7 +25,7 @@ import java.util.concurrent.Callable
 /**
  * Suggest selectors for a specific element ref captured in a session log.
  *
- * The hard part of authoring any selector by hand — for a `*.waypoint.yaml`, a shortcut, an
+ * The hard part of authoring any selector by hand — for a `*.waypoint.yaml`, a trailhead, an
  * ad-hoc `tool tap --selector`, wherever a [TrailblazeNodeSelector] is accepted — is translating
  * "this thing on the screen" into "the right selector YAML." `./trailblaze snapshot --all` shows
  * every element with a short ref like `[a812]` next to its label, but the ref-to-selector
@@ -46,7 +46,7 @@ import java.util.concurrent.Callable
  * **whole menu**: every strategy that computes a selector resolving to the target, each with
  * its strategy name and how many nodes it currently matches. The author reads the menu and
  * uses whichever candidate fits — pasted into a waypoint's `required:`/`forbidden:` list, a
- * shortcut, or any other selector-accepting spot.
+ * trailhead, or any other selector-accepting spot.
  *
  * ## Why the whole menu, not just "the best"
  *
@@ -569,7 +569,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
    * Prints just the [TrailblazeNodeSelector] body — no `WaypointCondition` wrapper
    * (`description:` / `selector:` keys). The command's output is a menu of selectors for the
    * author to use however they need — pasted into a waypoint's `required:`/`forbidden:` list,
-   * a shortcut, an ad-hoc CLI `tool tap --selector`, or anywhere else a
+   * a trailhead, an ad-hoc CLI `tool tap --selector`, or anywhere else a
    * [TrailblazeNodeSelector] is accepted — so it prints the reusable core, not a shape tied to
    * one specific consumer.
    *

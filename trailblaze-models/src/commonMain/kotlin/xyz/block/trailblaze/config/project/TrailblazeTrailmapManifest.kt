@@ -84,17 +84,14 @@ import xyz.block.trailblaze.config.PlatformConfig
  * | [waypoints] | Fully wired — surfaced via `TrailblazeResolvedConfig.waypoints` and the `trailblaze waypoint` CLI. |
  * | [trails] | **Reserved schema slot; runtime loading deferred.** |
  *
- * **No top-level `tools:` field.** Operational tool YAMLs (`*.tool.yaml`, `*.shortcut.yaml`,
- * `*.trailhead.yaml`, `*.waypoint.yaml`) are auto-discovered from `<trailmap>/tools/` (and
+ * **No top-level `tools:` field.** Operational tool YAMLs (`*.tool.yaml`, `*.trailhead.yaml`,
+ * `*.waypoint.yaml`) are auto-discovered from `<trailmap>/tools/` (and
  * `<trailmap>/waypoints/` for the waypoint flavor) by directory walk. Scripted-tool descriptors
  * (`*.yaml` files in `<trailmap>/tools/` whose name doesn't carry one of those operational
  * suffixes) are also auto-discovered into a per-trailmap name-keyed registry. Authoring is
  * "drop a YAML file in `tools/`, it ships with the trailmap" — the manifest doesn't enumerate the
  * tool files themselves. The `target.tools:` list still appears, but as a per-target list of
  * scripted-tool *names* selecting which discovered tools this target exposes — names, not paths.
- *
- * The previous `routes:` reserved slot was removed in 2026-04-28 — routes were dropped as a
- * separate concept in favor of "shortcuts that invoke other shortcuts."
  */
 @Serializable
 data class TrailblazeTrailmapManifest(
@@ -245,9 +242,9 @@ data class TrailValidationConfig(
  * - [tools] holds **tool names**, not inline tool definitions. Each name is resolved by
  *   the trailmap loader against the per-trailmap scripted-tool registry — built by auto-
  *   discovering every `.yaml` file under the trailmap's `tools/` directory that isn't an
- *   operational descriptor (suffixes `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`,
- *   `.waypoint.yaml`) and indexing each [TrailmapScriptedToolFile] by its declared `name:`
- *   (single-tool shape) or by each entry's `name:` (multi-tool shape). The resolved
+ *   operational descriptor (suffixes `.tool.yaml`, `.trailhead.yaml`, `.waypoint.yaml`) and
+ *   indexing each [TrailmapScriptedToolFile] by its declared `name:` (single-tool shape) or
+ *   by each entry's `name:` (multi-tool shape). The resolved
  *   descriptor is then translated into the runtime [InlineScriptToolConfig] shape. This
  *   keeps every scripted tool in its own file under `<trailmap>/tools/<tool-name>.yaml` and
  *   lets the manifest reference each one by its stable tool name rather than its

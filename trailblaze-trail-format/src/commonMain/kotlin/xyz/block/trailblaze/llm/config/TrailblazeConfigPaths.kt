@@ -9,7 +9,7 @@ package xyz.block.trailblaze.llm.config
  * [CompositeConfigResourceSource] with workspace winning on collision.
  * - `trails/config/trailblaze.yaml` — project-level defaults
  * - `trails/config/providers/{provider_id}.yaml` — LLM provider definitions
- * - `trails/config/trailmaps/<id>/...` — trailmap-scoped tools, toolsets, shortcuts
+ * - `trails/config/trailmaps/<id>/...` — trailmap-scoped tools, toolsets, trailheads
  *
  * On desktop, the user-level config lives at `~/.trailblaze/trailblaze.yaml`.
  *
@@ -112,12 +112,11 @@ object TrailblazeConfigPaths {
    * Both the classpath-bundled discovery path (`ToolYamlLoader.discoverTrailmapBundledToolContents`
    * in `trailblaze-models`) and the workspace filesystem-trailmap discovery path
    * (`TrailblazeProjectConfigLoader.resolveTrailmapSiblings` in `trailblaze-common`) read this
-   * list. Adding a fourth operational class is a single edit here — both loaders pick it up.
+   * list. Adding another operational class is a single edit here — both loaders pick it up.
    */
   val TRAILMAP_TOOL_LAYOUT: List<TrailmapToolLayoutEntry> =
     listOf(
       TrailmapToolLayoutEntry(dir = "tools", suffix = ".tool.yaml"),
-      TrailmapToolLayoutEntry(dir = "shortcuts", suffix = ".shortcut.yaml"),
       TrailmapToolLayoutEntry(dir = "trailheads", suffix = ".trailhead.yaml"),
     )
 

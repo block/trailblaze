@@ -17,7 +17,13 @@ const ev = require("./run-report-events.ts") as {
   resolveFormatterModule: (mod: unknown) => EventStreamFormatter | null;
   formatterForStream: (formatters: EventStreamFormatter[], name: string) => EventStreamFormatter | null;
   formatRows: (formatter: EventStreamFormatter, entries: FormatterEntry[], ctx?: FormatterContext) => FormattedRow[] | null;
-  buildEventStream: (file: string, lines: string[], formatters?: EventStreamFormatter[], ctx?: FormatterContext) => EventStream | null;
+  buildEventStream: (
+    file: string,
+    lines: string[],
+    formatters?: EventStreamFormatter[],
+    ctx?: FormatterContext,
+    clockSync?: unknown,
+  ) => EventStream | null;
   attachmentRefOf: (value: unknown) => AttachmentRef | null;
   findAttachmentRefs: (value: unknown) => AttachmentRef[];
   collectStreamAttachmentRefs: (streams: EventStream[] | null | undefined) => AttachmentRef[];
@@ -72,7 +78,7 @@ const respLine = (requestId: string, t: number, statusCode: number) =>
 describe("cross-language parity fixtures", () => {
   const fixtures = require("./session-events-parity-fixtures.json") as {
     fileNames: Array<{ file: string; name: string | null }>;
-    lines: Array<{ line: string; t: number | null; payload: unknown | null }>;
+    lines: Array<{ line: string; t: number | null; payload: unknown | null; clock?: "device" }>;
     attachments: Array<{ value: unknown; refs: AttachmentRef[] }>;
     safePaths: Array<{ path: string; safe: boolean }>;
   };
@@ -92,6 +98,7 @@ describe("cross-language parity fixtures", () => {
       }
       expect(e!.t).toBe(c.t);
       expect(e!.data).toEqual(c.payload);
+      expect(e!.clock ?? null).toBe(c.clock ?? null);
     }
   });
 
@@ -426,5 +433,44 @@ describe("buildEventStream without a formatter (generic shape)", () => {
     const stream = ev.buildEventStream("s.ndjson", ["", "not json", '{"timeMs":2,"data":{"ok":1}}'], [])!;
     expect(stream.events).toEqual([{ t: 2, d: '{"ok":1}' }]);
     expect(ev.buildEventStream("notes.txt", ['{"timeMs":1}'], [])).toBeNull();
+  });
+});
+
+describe("buildEventStream with device clock readings", () => {
+  // Device 5000ms ahead of the host, measured once.
+  const sync = { devices: [{ deviceId: "emulator-5554", samples: [{ hostBeforeMs: 1000, hostAfterMs: 1010, deviceMs: 6005 }] }] };
+  const lines = [
+    '{"timeMs":6100,"data":{"buffered":1},"clock":"device"}',
+    '{"timeMs":1200,"data":{"live":1}}',
+  ];
+
+  test("moves device-clock records onto the host timeline", () => {
+    const stream = ev.buildEventStream("app-events.ndjson", lines, [], undefined, sync)!;
+    expect(stream.events).toEqual([
+      { t: 1100, d: '{"buffered":1}' },
+      { t: 1200, d: '{"live":1}' },
+    ]);
+  });
+
+  test("keeps the raw stamp when the session measured nothing", () => {
+    const stream = ev.buildEventStream("app-events.ndjson", lines, [])!;
+    expect(stream.events.map((e) => e.t)).toEqual([6100, 1200]);
+  });
+
+  test("a formatter sees host times and no device marker on converted entries", () => {
+    let seen: FormatterEntry[] = [];
+    const observing: EventStreamFormatter = {
+      id: "observing",
+      streams: ["app-events"],
+      format(entries) {
+        seen = entries;
+        return [];
+      },
+    };
+    ev.buildEventStream("app-events.ndjson", lines, [observing], undefined, sync);
+    expect(seen.map((e) => [e.t, e.clock ?? null])).toEqual([
+      [1100, null],
+      [1200, null],
+    ]);
   });
 });

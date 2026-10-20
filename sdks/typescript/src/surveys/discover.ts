@@ -1,9 +1,9 @@
 // Finds sessions on disk (directories or artifact zips) and surveys in source files.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -63,6 +63,32 @@ export async function discoverSessions(inputs: ReadonlyArray<string>, options: D
     }
   };
 
+  // The input being walked, and whether it lies inside the extract directory. Decided once the
+  // directory exists rather than when the input starts: it is created by the first unzip, partway
+  // through an input that may contain it.
+  let currentInput = "";
+  let currentInputInside: boolean | undefined;
+  /** Whether `path`, met below an input the caller named, leads into the extract directory. */
+  const intoExtractDir = (path: string): boolean => {
+    if (extractDir === undefined || !existsSync(extractDir)) return false;
+    currentInputInside ??= inside(extractDir, currentInput);
+    return !currentInputInside && inside(extractDir, path);
+  };
+
+  const unpacking = new Map<string, Promise<string | undefined>>();
+  const limit = limiter(Math.max(1, Math.min(availableParallelism(), 8)));
+  // Set when discovery fails, so the unzips still queued never start.
+  let stopped = false;
+  const unpack = (zip: string): Promise<string | undefined> => {
+    let out = unpacking.get(zip);
+    if (out === undefined) {
+      const dir = ensureExtractDir();
+      out = limit(() => (stopped ? Promise.resolve(undefined) : extractZip(zip, dir, options.log)));
+      unpacking.set(zip, out);
+    }
+    return out;
+  };
+
   // `confineTo` is set for everything below an unpacked archive. A zip can carry symlinks and
   // `unzip` recreates them, so a link named `logs` pointing at the agent's own log directory would
   // otherwise be walked as though the archive had contained those sessions — and their contents
@@ -77,10 +103,19 @@ export async function discoverSessions(inputs: ReadonlyArray<string>, options: D
       options.log?.(`skipping ${path}: it leads outside the archive it came from`);
       return;
     }
+    // The extract directory is reached only through the zips it unpacks. Met while walking an input
+    // that contains it, it holds archives still being unpacked (they start early, below) and the
+    // leftovers of earlier runs: walking it would accept a half-written session from a zip that then
+    // fails to unpack, or a session whose zip is gone. Anything that resolves into it is skipped, so
+    // a link pointing inside it is skipped too. A caller who names the extract directory, or a folder
+    // inside it, gets it walked.
+    if (confineTo === undefined && depth > 0 && intoExtractDir(path)) {
+      return;
+    }
     const stat = statSync(path);
     if (stat.isFile()) {
       if (extname(path).toLowerCase() === ".zip") {
-        const out = await extractZip(path, ensureExtractDir(), options.log);
+        const out = await unpack(path);
         if (out) {
           options.onExtract?.(out);
           await walk(out, depth + 1, out);
@@ -94,33 +129,82 @@ export async function discoverSessions(inputs: ReadonlyArray<string>, options: D
       return;
     }
     if (depth >= MAX_DEPTH) return;
-    for (const name of readdirSync(path).sort()) {
-      if (SKIP_DIRS.has(name)) continue;
-      await walk(join(path, name), depth + 1, confineTo);
+    const children = readdirSync(path).sort().filter((name) => !SKIP_DIRS.has(name)).map((name) => join(path, name));
+    // A directory of zips is the ordinary input — a week of sessions — and unpacking them one after
+    // another was minutes of a build. They start together, a few at a time, and are still walked in
+    // name order, so the sessions come back in the same order as before.
+    for (const child of children) {
+      if (extname(child).toLowerCase() !== ".zip" || (confineTo !== undefined && !inside(confineTo, child))) continue;
+      // The walk skips it, so it would never be awaited.
+      if (confineTo === undefined && intoExtractDir(child)) continue;
+      if (statSync(child, { throwIfNoEntry: false })?.isFile()) unpack(child);
     }
+    for (const child of children) await walk(child, depth + 1, confineTo);
   };
 
-  for (const input of inputs) await walk(resolve(input), 0);
+  try {
+    for (const input of inputs) {
+      currentInput = resolve(input);
+      currentInputInside = undefined;
+      await walk(currentInput, 0);
+    }
+  } catch (error) {
+    // Zips unpack ahead of the walk. A failure must not leave them writing into the extract
+    // directory after the caller has been told discovery is over.
+    stopped = true;
+    await Promise.allSettled(unpacking.values());
+    throw error;
+  }
+  // Every unzip started was awaited by the walk that reached it. This makes sure of it: nothing may
+  // still be writing into the extract directory once the caller has the sessions.
+  await Promise.allSettled(unpacking.values());
   return found;
 }
 
 async function extractZip(zipPath: string, extractDir: string, log?: (m: string) => void): Promise<string | undefined> {
   // Two builds both upload `logs.zip`; keying the target on the name alone would hand the second
-  // zip the first one's extracted sessions. The source path disambiguates.
-  const tag = createHash("sha1").update(resolve(zipPath)).digest("hex").slice(0, 10);
+  // zip the first one's extracted sessions. The source path disambiguates. Its size and modification
+  // time do the same over time: a zip replaced at the same path is a different archive, and reusing
+  // the old one's unpacked copy would hand back sessions it no longer holds.
+  const { size, mtimeMs } = statSync(zipPath);
+  const tag = createHash("sha1").update(`${resolve(zipPath)}\0${size}\0${mtimeMs}`).digest("hex").slice(0, 10);
   const target = join(extractDir, `${basename(zipPath, ".zip")}-${tag}`);
   if (existsSync(target) && readdirSync(target).length > 0) return target;
   mkdirSync(target, { recursive: true });
-  const proc = spawnSync("unzip", ["-q", "-o", zipPath, "-d", target], { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
+  const proc = await new Promise<{ error?: Error; status: number | null; stderr: string }>((done) => {
+    let stderr = "";
+    const child = spawn("unzip", ["-q", "-o", zipPath, "-d", target], { stdio: ["ignore", "ignore", "pipe"] });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", (error) => done({ error, status: null, stderr }));
+    child.on("close", (status) => done({ status, stderr }));
+  });
   if (proc.error) {
     log?.(`unzip could not be run for ${zipPath}: ${proc.error.message}`);
     return undefined;
   }
   if (proc.status !== 0) {
-    log?.(`unzip failed for ${zipPath} (exit ${proc.status}): ${(proc.stderr ?? "").trim()}`);
+    log?.(`unzip failed for ${zipPath} (exit ${proc.status}): ${proc.stderr.trim()}`);
     return undefined;
   }
   return target;
+}
+
+/** Runs at most `n` of the tasks it is handed at once, in the order they were handed over. */
+function limiter(n: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let running = 0;
+  const queue: Array<() => void> = [];
+  return (task) =>
+    new Promise((resolveTask, rejectTask) => {
+      const start = () => {
+        running++;
+        task().then(resolveTask, rejectTask).finally(() => {
+          running--;
+          queue.shift()?.();
+        });
+      };
+      if (running < n) start();
+      else queue.push(start);
+    });
 }
 
 export interface LoadedSurvey {

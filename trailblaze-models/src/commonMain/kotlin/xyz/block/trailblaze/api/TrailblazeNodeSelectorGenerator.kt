@@ -297,6 +297,39 @@ object TrailblazeNodeSelectorGenerator {
     return computeIndexSelector(root, target)
   }
 
+  /**
+   * [selector] narrowed to also require exactly the text of the one element it matches in [root],
+   * for a recorded assertion.
+   *
+   * The minimizer keeps only the fields uniqueness needs, so an element with a unique resource ID
+   * records the ID alone, and its text patterns tolerate changing numbers ("iPhone 17" matches
+   * "iPhone 18"). An assertion recorded either way passes when the element shows something else.
+   * An assertion claims what the element shows, so its exact text goes in.
+   *
+   * Returns [selector] unchanged when it does not match exactly one element, when that element
+   * shows no text (or is a password field), or when the narrowed selector would stop resolving to
+   * that element alone.
+   */
+  fun withMatchedElementText(root: TrailblazeNode, selector: TrailblazeNodeSelector): TrailblazeNodeSelector {
+    val target = (TrailblazeNodeSelectorResolver.resolve(root, selector) as? TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch)
+      ?.node ?: return selector
+    val narrowed = selector.withTextOf(target.driverDetail) ?: return selector
+    if (narrowed.index == null) return if (isUniqueMatch(root, target, narrowed)) narrowed else selector
+    // An index counts among every match of the selector, so the text changes which position the
+    // element is in: none is needed when the text alone tells it apart, otherwise count again.
+    val unindexed = narrowed.copy(index = null)
+    val reindexed = when (val result = TrailblazeNodeSelectorResolver.resolve(root, unindexed)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> unindexed
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
+        result.nodes.indexOfFirst { it.nodeId == target.nodeId }.takeIf { it >= 0 }?.let { unindexed.copy(index = it) }
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
+    }
+    return reindexed?.takeIf { isUniqueMatch(root, target, it) } ?: selector
+  }
+
+  /** Whether [node] shows text that [withMatchedElementText] would record. */
+  fun showsText(node: TrailblazeNode): Boolean = TrailblazeNodeSelector().withTextOf(node.driverDetail) != null
+
   // ---------------------------------------------------------------------------
   // Coordinate-based API: tap (x, y) → node → selector → verify
   // ---------------------------------------------------------------------------

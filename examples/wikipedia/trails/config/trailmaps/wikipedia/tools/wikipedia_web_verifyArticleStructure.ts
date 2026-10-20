@@ -2,6 +2,7 @@ import { selectors, trailblaze } from "@trailblaze/scripting";
 import {
   SELECTORS,
   elementIsVisible,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 // Number of scroll steps before giving up on References. Articles taller than
@@ -58,7 +59,7 @@ export interface VerifyArticleStructureArgs {
 //   3. Optional References section — present on most full-length articles.
 // The References scan uses the fast `elementIsVisible` probe (a
 // snapshot-cached `findSelectorMatches` over the captured ARIA tree) rather than
-// `web_verifyTextVisible` so each iteration of the scroll-and-check loop costs
+// `web_verifyElementVisible` so each iteration of the scroll-and-check loop costs
 // ~milliseconds instead of the ~5 s default Playwright assertion timeout. The
 // loop scrolls *first* and verifies *second* so the final scroll's
 // freshly-rendered content gets checked before the throw.
@@ -74,7 +75,7 @@ export const wikipedia_web_verifyArticleStructure = trailblaze.tool<VerifyArticl
       ref: SELECTORS.firstHeading,
     });
     if (expectedHeading.length > 0) {
-      await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+      await ctx.tools.web_verifyElementVisible({ ref: articleHeadingRef(expectedHeading) });
     }
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.articleBody,

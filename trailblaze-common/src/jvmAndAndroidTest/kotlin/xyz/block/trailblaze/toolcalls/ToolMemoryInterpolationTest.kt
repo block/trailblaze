@@ -45,6 +45,32 @@ import xyz.block.trailblaze.yaml.MalformedArgTokenException
  */
 class ToolMemoryInterpolationTest {
 
+  @Test
+  fun `retained object args mask supported nested scalars and preserve whole object masking`() {
+    val memory = AgentMemory()
+    val secret = "FAKE_TEST_ONLY_OBJECT_SCALAR"
+    memory.rememberSensitive("source", secret)
+    val credentials = buildJsonObject {
+      put(
+        "nested",
+        buildJsonObject {
+          put("pin", secret)
+          put("count", 87654321)
+        },
+      )
+      put("enabled", true)
+      put("nothing", kotlinx.serialization.json.JsonNull)
+    }
+    memory.seedArgs(mapOf("credentials" to credentials))
+    memory.delete("source")
+
+    assertThat(scrubSensitiveValues(secret, memory)).isEqualTo("{{args.credentials.nested.pin}}")
+    assertThat(scrubSensitiveValues("87654321", memory))
+      .isEqualTo("{{args.credentials.nested.count}}")
+    assertThat(scrubSensitiveValues(credentials.toString(), memory)).isEqualTo("{{args.credentials}}")
+    assertThat(scrubSensitiveValues("true null", memory)).isEqualTo("true null")
+  }
+
   private val memory = AgentMemory().apply {
     remember("user", "sam")
     remember("domain", "example.com")

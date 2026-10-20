@@ -1,5 +1,5 @@
 import { trailblaze, type TrailblazeNodeSelector } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
+import { ensureContactsRoot, nonEmptyString, tapOnText, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_QUERY = "John";
 
@@ -60,7 +60,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     // gesture scrolls it into view; once visible, the input is tappable by its
     // "Search" accessibility label and accepts text.
     await ctx.tools.swipe({ direction: "DOWN" });
-    await ctx.tools.tapOnElementWithText({ text: "Search" });
+    await tapOnText(ctx, "Search");
     await ctx.tools.inputText({ text: query });
 
     if (!openFirstResult) {
@@ -93,7 +93,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     // Tap the result ROW via its accessibility label, scoped to the results list — never via
     // a bare text match.
     //
-    // 1. LABEL, not text. A bare `tapOnElementWithText(rowText)` matches any node whose
+    // 1. LABEL, not text. A bare text selector matches any node whose
     //    text / hintText / accessibilityText contains `rowText` — and on the host
     //    (Maestro/XCUITest) tree a text field's `text` attribute is its typed VALUE, so when
     //    `query == rowText` (e.g. `contacts_ios_openContact` passing the same full name to
@@ -110,7 +110,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     //    would only match labels that equal (or, with a trailing `.*`, start with) it —
     //    breaking substring queries like a last name (`rowText: "Appleseed"` must still match
     //    the "John Appleseed" row) and labels that append detail text after the name. The
-    //    surrounding `.*` restores the old `tapOnElementWithText` CONTAINS contract.
+    //    surrounding `.*` preserves the retired text tap's CONTAINS contract.
     //
     // 3. SCOPED to the results list. Contains-matching on the label is necessary but not
     //    sufficient: the search field's own label ("Search") contains plenty of substrings a

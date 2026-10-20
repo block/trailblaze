@@ -477,7 +477,7 @@ object TrailblazeCompiler {
       .mapNotNull { (relPath, content) ->
         // relPath shape: `<trailmap-id>/<operationalDir>/[<subdir>/...]<name><suffix>`.
         // Require segments[1] == operationalDir so we don't pick up sibling dirs from the
-        // recursive walk (e.g. when listing toolsets, skip tools/shortcuts/trailheads, and
+        // recursive walk (e.g. when listing toolsets, skip tools/trailheads, and
         // the trailmap manifest itself which lives one level up).
         val segments = relPath.split('/')
         if (segments.size < 3 || segments[1] != operationalDir) return@mapNotNull null

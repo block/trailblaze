@@ -28,7 +28,7 @@
 // WHY THIS FILE EXISTS (beyond the mobile smoke):
 //
 //   After Phase B (PR #3175) and Phase D (PR #3181), web tools (`web_navigate`, `web_click`,
-//   `web_verifyTextVisible`, etc.) no longer live in the SDK's hand-vendored
+//   `web_verifyElementVisible`, etc.) no longer live in the SDK's hand-vendored
 //   `built-in-tools.ts`. They flow into the per-trailmap `client.d.ts` automatically from the
 //   daemon's tool registry. That auto-emit path had no curated regression test — if a daemon
 //   tool descriptor's name/arg schema drifts, codegen silently emits a different shape, and
@@ -77,9 +77,8 @@ void client.tools.web_scroll({ direction: "DOWN", amount: 300 });
 void client.tools.web_selectOption({ values: ["support"], ref: "combobox \"Category\"" });
 void client.tools.web_pressKey({ key: "Enter" });
 
-// Verification: element / text / value (including the ATTRIBUTE arm).
+// Verification: element / value (including the ATTRIBUTE arm).
 void client.tools.web_verifyElementVisible({ ref: "button \"Submit\"" });
-void client.tools.web_verifyTextVisible({ text: "Submitted!" });
 void client.tools.web_verifyValue({ expected: "user@example.com", ref: "e5" });
 void client.tools.web_verifyValue({
   expected: "https://example.com/icon.png",
@@ -121,9 +120,6 @@ void client.tools.web_navigate({ action: "FETCH" });
 
 // @ts-expect-error missing required `text` on web_type
 void client.tools.web_type({ ref: "e1" });
-
-// @ts-expect-error missing required `text` on web_verifyTextVisible
-void client.tools.web_verifyTextVisible({});
 
 // @ts-expect-error missing required `expected` on web_verifyValue
 void client.tools.web_verifyValue({ ref: "e1" });

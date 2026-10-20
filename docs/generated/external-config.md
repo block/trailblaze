@@ -58,7 +58,7 @@ your-workspace/
     └── login.trail.yaml
 ```
 
-The binary auto-discovers `trails/config/targets` and every `trails/config/trailmaps/<id>/{tools,toolsets,shortcuts,trailheads}/` tree. `trailmaps:` entries in `trails/config/trailblaze.yaml` pull trailmap manifests through the same loader path. `mcp/` is just a convention for the JS/TS files you reference from trailmap or target YAML. `providers/` remains the reserved location for provider YAMLs; today provider loading still comes from the `llm:` block in `trails/config/trailblaze.yaml` plus built-in classpath metadata.
+The binary auto-discovers `trails/config/targets` and every `trails/config/trailmaps/<id>/{tools,toolsets,trailheads}/` tree. `trailmaps:` entries in `trails/config/trailblaze.yaml` pull trailmap manifests through the same loader path. `mcp/` is just a convention for the JS/TS files you reference from trailmap or target YAML. `providers/` remains the reserved location for provider YAMLs; today provider loading still comes from the `llm:` block in `trails/config/trailblaze.yaml` plus built-in classpath metadata.
 
 ## Trailmap Discovery Sources
 
@@ -184,9 +184,9 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
 | `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
-| `ios_primitives` | Yes | `ios-axe`, `ios-host` | 2 |
+| `ios_primitives` | Yes | `ios-axe`, `ios-host` | 4 |
 | `memory` | No | `all drivers` | 9 |
-| `meta` | Yes | `all drivers` | 1 |
+| `meta` | Yes | `all drivers` | 2 |
 | `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
 | `multi_device` | No | `all drivers` | 1 |
 | `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 4 |
@@ -196,7 +196,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `verification` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 3 |
 | `web_core` | No | `playwright-electron`, `playwright-native` | 17 |
 | `web_framework` | Yes | `playwright-electron`, `playwright-native` | 5 |
-| `web_verification` | No | `playwright-electron`, `playwright-native` | 7 |
+| `web_verification` | No | `playwright-electron`, `playwright-native` | 6 |
 
 ## Authoring Tools
 
@@ -218,17 +218,20 @@ This works from both bundled classpath config and the filesystem overlay, as lon
 ### YAML-Defined Composition
 
 ```yaml
-id: eraseTextSafely
-description: "Erases characters from the focused field."
+id: eraseThenType
+description: "Erases characters from the focused field, then types new text."
 parameters:
   - name: charactersToErase
     type: integer
     required: false
+  - name: text
+    type: string
+    required: true
 tools:
-  - mobile_maestro:
-      commands:
-        - eraseText:
-            charactersToErase: "{{params.charactersToErase}}"
+  - eraseText:
+      charactersToErase: "{{params.charactersToErase}}"
+  - inputText:
+      text: "{{params.text}}"
 ```
 
 This authoring mode is part of the tool schema today, but new filesystem contributions of this kind are not yet wired into the binary's global tool resolver.

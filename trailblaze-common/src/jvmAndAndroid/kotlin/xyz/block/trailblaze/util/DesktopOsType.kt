@@ -4,10 +4,14 @@ package xyz.block.trailblaze.util
  * Represents the operating system type for the desktop application.
  * Used for platform-specific behavior throughout the app.
  */
-enum class DesktopOsType(val displayName: String) {
-  MAC_OS("macOS"),
-  WINDOWS("Windows"),
-  LINUX("Linux"),
+enum class DesktopOsType(
+  val displayName: String,
+  /** What scripted tools read as `ctx.host.os`. */
+  val hostOsName: String,
+) {
+  MAC_OS("macOS", "macos"),
+  WINDOWS("Windows", "windows"),
+  LINUX("Linux", "linux"),
   ;
 
   companion object {

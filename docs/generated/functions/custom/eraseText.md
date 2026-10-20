@@ -8,8 +8,8 @@ Erase characters from the end of the focused text field. To clear the whole fiel
 
 ## Source
 
-- Kind: YAML-defined
-- Tool id: `eraseText`
+- Kind: class-backed
+- Class: `xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool`
 
 ## Contract
 
@@ -21,7 +21,7 @@ Erase characters from the end of the focused text field. To clear the whole fiel
 
 ### Optional parameters
 
-- `charactersToErase` — `integer`
+- `charactersToErase` — `Integer`
   Number of characters to erase, counted from the field's text in the view hierarchy.
 
 ## Output

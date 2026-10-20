@@ -206,7 +206,7 @@ class ToolCommandTest {
   fun `workspaceHasToolDefinitions returns true when a per-trailmap toolset yaml exists`() {
     // Toolsets are authored at `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml`
     // (note: no `.toolset.yaml` discriminator — toolset YAMLs are plain `<id>.yaml`). A
-    // workspace that ships only toolsets — no class-backed tools, no shortcuts/trailheads —
+    // workspace that ships only toolsets — no class-backed tools, no trailheads —
     // must still disable the fast-path so dispatch defers to the daemon. Without this case,
     // the false-rejection envelope kicks in for any tool name that's only reachable via a
     // workspace-defined toolset.
@@ -228,33 +228,25 @@ class ToolCommandTest {
   }
 
   @Test
-  fun `workspaceHasToolDefinitions returns false when only shortcut and trailhead YAMLs exist`() {
-    // Inverse contract: a workspace shipping ONLY shortcuts/trailheads (no `.tool.yaml`
-    // and no toolset YAMLs) must NOT disable the fast-path. Shortcuts and trailheads are
-    // navigation operations referencing existing tool names — they don't register new
-    // dispatch surfaces by themselves. Including them in the detection would false-detect
-    // any workspace shipping waypoint navigation primitives (e.g. a `calendar` trailmap
-    // with a `shortcuts/` directory), regressing the OOBE typo-detection case for those
-    // users.
-    val workspaceRoot = tempFolder.newFolder("workspace-trailmap-shortcut-only").toPath()
+  fun `workspaceHasToolDefinitions returns false when only trailhead YAMLs exist`() {
+    // Inverse contract: a workspace shipping ONLY trailheads (no `.tool.yaml` and no toolset
+    // YAMLs) must NOT disable the fast-path. Trailheads are setup operations referencing
+    // existing tool names — they don't register new dispatch surfaces by themselves. Including
+    // them in the detection would false-detect any workspace shipping trailheads, regressing
+    // the OOBE typo-detection case for those users.
+    val workspaceRoot = tempFolder.newFolder("workspace-trailmap-trailhead-only").toPath()
     val configDir = workspaceRoot.resolve("trails/config")
-    val shortcutsDir = configDir.resolve("trailmaps/myflow/shortcuts")
     val trailheadsDir = configDir.resolve("trailmaps/myflow/trailheads")
-    java.nio.file.Files.createDirectories(shortcutsDir)
     java.nio.file.Files.createDirectories(trailheadsDir)
     java.nio.file.Files.writeString(configDir.resolve("trailblaze.yaml"), "")
-    java.nio.file.Files.writeString(
-      shortcutsDir.resolve("flow_hop.shortcut.yaml"),
-      "id: flow_hop\ndescription: hop\nshortcut:\n  from: a\n  to: b\ntools:\n  - tap: { selector: ok }\n",
-    )
     java.nio.file.Files.writeString(
       trailheadsDir.resolve("flow_start.trailhead.yaml"),
       "id: flow_start\ndescription: start\ntrailhead:\n  to: a\ntools:\n  - tap: { selector: ok }\n",
     )
     assertFalse(
       workspaceHasToolDefinitions(workspaceRoot),
-      "Shortcut-/trailhead-only workspaces must keep the fast-path enabled. " +
-        "If this regresses, every workspace shipping waypoint navigation primitives loses " +
+      "Trailhead-only workspaces must keep the fast-path enabled. " +
+        "If this regresses, every workspace shipping trailheads loses " +
         "OOBE typo detection.",
     )
   }

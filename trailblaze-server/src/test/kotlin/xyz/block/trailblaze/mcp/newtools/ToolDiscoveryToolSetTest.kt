@@ -72,24 +72,25 @@ class ToolDiscoveryToolSetTest {
 
   private val json = Json { ignoreUnknownKeys = true }
 
-  // The shipped LLM-visible YAML-only tools are too few for tests that include one and exclude
-  // another, so register a fixture through the workspace overlay for the duration of each test.
+  // No built-in tool is YAML-defined, so tests that include one and exclude another register two
+  // fixtures through the workspace overlay for the duration of each test.
   @Before
-  fun registerFixtureYamlTool() {
-    val config = TrailblazeConfigYaml.instance.decodeFromString(
-      ToolYamlConfig.serializer(),
-      """
-      id: $FIXTURE_YAML_TOOL
-      description: LLM-visible YAML-defined fixture tool.
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
-      """.trimIndent(),
-    ).also { it.validate() }
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(mapOf(ToolName(FIXTURE_YAML_TOOL) to config))
+  fun registerFixtureYamlTools() {
+    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(
+      listOf(FIXTURE_YAML_TOOL, SECOND_FIXTURE_YAML_TOOL).associate { ToolName(it) to fixtureYamlToolConfig(it) },
+    )
   }
+
+  private fun fixtureYamlToolConfig(id: String): ToolYamlConfig = TrailblazeConfigYaml.instance.decodeFromString(
+    ToolYamlConfig.serializer(),
+    """
+    id: $id
+    description: LLM-visible YAML-defined fixture tool.
+    parameters: []
+    tools:
+      - hideKeyboard: {}
+    """.trimIndent(),
+  ).also { it.validate() }
 
   @After
   fun resetWorkspaceYamlTools() {
@@ -1268,8 +1269,8 @@ class ToolDiscoveryToolSetTest {
    * recognizes it as the platform-tools source (was renamed from `"none"` → `"default"`).
    *
    * Mirrors the production YAML-backed target (`default.yaml`) where the toolsets reference some
-   * tools by class binding (e.g. `hideKeyboard`) and others by name only (e.g. `eraseText`
-   * in `core_interaction.yaml`).
+   * tools by class binding (e.g. `hideKeyboard`) and others by name only (a trailmap's
+   * YAML-defined tools).
    */
   private class MixedNoneTarget(
     private val classTools: Set<KClass<out TrailblazeTool>>,
@@ -1294,12 +1295,12 @@ class ToolDiscoveryToolSetTest {
     // Regression guard: when the default target is loaded from YAML (`default.yaml`,
     // formerly `none.yaml`), its single tool group exposes BOTH class-backed and YAML-defined
     // tools. Before the fix, buildPlatformToolsets only iterated `group.toolClasses` and
-    // silently dropped name-only entries like `eraseText` and `fixtureYamlTool` — even though a class
+    // silently dropped name-only entries like `fixtureYamlTool` — even though a class
     // tool in the same group (`hideKeyboard` here) made `groups.isNotEmpty()` true and bypassed the
     // working DISCOVERABLE_CATEGORIES fallback.
     val defaultTarget = MixedNoneTarget(
       classTools = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
-      yamlNames = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName("eraseText")),
+      yamlNames = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName(SECOND_FIXTURE_YAML_TOOL)),
     )
     val toolSet = createToolSet(allTargets = setOf(defaultTarget))
 
@@ -1319,7 +1320,7 @@ class ToolDiscoveryToolSetTest {
     val tools = defaultGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
     assertContains(tools, "hideKeyboard", "Class-backed hideKeyboard should still appear in default listing. Got: $tools")
     assertContains(tools, FIXTURE_YAML_TOOL, "YAML-defined fixtureYamlTool should appear in default listing. Got: $tools")
-    assertContains(tools, "eraseText", "YAML-defined eraseText should appear in default listing. Got: $tools")
+    assertContains(tools, SECOND_FIXTURE_YAML_TOOL, "YAML-defined secondFixtureYamlTool should appear in default listing. Got: $tools")
   }
 
   /** Test target masquerading as the default target that excludes a YAML-defined tool. */
@@ -1336,7 +1337,7 @@ class ToolDiscoveryToolSetTest {
 
     override fun getCustomYamlToolNamesForDriver(
       driverType: TrailblazeDriverType,
-    ): Set<ToolName> = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName("eraseText"))
+    ): Set<ToolName> = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName(SECOND_FIXTURE_YAML_TOOL))
 
     override fun getExcludedYamlToolNamesForDriver(
       driverType: TrailblazeDriverType,
@@ -1369,7 +1370,7 @@ class ToolDiscoveryToolSetTest {
       FIXTURE_YAML_TOOL !in tools,
       "Excluded YAML-defined fixtureYamlTool must NOT appear in default listing. Got: $tools",
     )
-    assertContains(tools, "eraseText", "Non-excluded YAML tool eraseText should still appear. Got: $tools")
+    assertContains(tools, SECOND_FIXTURE_YAML_TOOL, "Non-excluded YAML tool secondFixtureYamlTool should still appear. Got: $tools")
     assertContains(tools, "hideKeyboard", "Non-excluded class tool hideKeyboard should still appear. Got: $tools")
   }
 
@@ -1476,24 +1477,29 @@ class ToolDiscoveryToolSetTest {
   }
 
   @Test
-  fun `INDEX mode includes YAML-defined eraseText under core_interaction`() = runTest {
+  fun `INDEX mode includes a YAML-defined tool under core_interaction`() = runTest {
     // Regression guard: ToolDiscoveryToolSet.getToolDescriptorsForCategory must union
     // class-backed AND YAML-defined tool names per category. Before the fix, a category
-    // advertised only its class-backed tools and silently dropped YAML-defined ones like
-    // eraseText, hiding them from LLM discovery.
-    val toolSet = createToolSet()
-
-    val result = toolSet.toolbox(detail = false)
-    val obj = json.parseToJsonElement(result).jsonObject
-
-    val platformToolsets = obj["platformToolsets"]!!.jsonArray
-    val coreTools = platformToolsets.first {
-      it.jsonObject["name"]!!.jsonPrimitive.content == "core_interaction"
-    }.jsonObject["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
-    assertTrue(
-      "eraseText" in coreTools,
-      "core_interaction category should include eraseText (YAML-defined). Got: $coreTools",
+    // advertised only its class-backed tools and silently dropped YAML-defined ones, hiding them
+    // from LLM discovery. No built-in toolset lists a YAML-defined tool, so a workspace overlay
+    // adds the fixture to `core_interaction`.
+    val coreInteraction = TrailblazeToolSetCatalog.defaultEntries().single { it.id == "core_interaction" }
+    TrailblazeToolSetCatalog.registerWorkspaceToolSets(
+      listOf(coreInteraction.copy(yamlToolNames = coreInteraction.yamlToolNames + ToolName(FIXTURE_YAML_TOOL))),
     )
+    try {
+      val result = createToolSet().toolbox(detail = false)
+      val obj = json.parseToJsonElement(result).jsonObject
+
+      val platformToolsets = obj["platformToolsets"]!!.jsonArray
+      val coreTools = platformToolsets.first {
+        it.jsonObject["name"]!!.jsonPrimitive.content == "core_interaction"
+      }.jsonObject["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+      assertContains(coreTools, FIXTURE_YAML_TOOL, "core_interaction must include its YAML-defined tool. Got: $coreTools")
+      assertContains(coreTools, "hideKeyboard", "core_interaction must keep its class-backed tools. Got: $coreTools")
+    } finally {
+      TrailblazeToolSetCatalog.registerWorkspaceToolSets(emptyList())
+    }
   }
 
   @Test
@@ -2289,7 +2295,7 @@ class ToolDiscoveryToolSetTest {
   // iterated only `getCustomToolsForDriver` (class-only) and silently dropped YAML-defined
   // target tools from search, name lookup, and the target-mode no-device flat listing —
   // mirror of the bug the index-mode fix solved. Uses registered YAML tool names
-  // (`fixtureYamlTool`, `eraseText`) since `buildDescriptorsForYamlDefined` skips unknown names.
+  // (`fixtureYamlTool`, `secondFixtureYamlTool`) since `buildDescriptorsForYamlDefined` skips unknown names.
 
   /** Test target that exposes real YAML-registered tool names (no class binding). */
   private class YamlToolTarget : TrailblazeHostAppTarget(
@@ -2394,7 +2400,7 @@ class ToolDiscoveryToolSetTest {
 
     override fun getCustomYamlToolNamesForDriver(
       driverType: TrailblazeDriverType,
-    ): Set<ToolName> = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName("eraseText"))
+    ): Set<ToolName> = setOf(ToolName(FIXTURE_YAML_TOOL), ToolName(SECOND_FIXTURE_YAML_TOOL))
 
     override fun getExcludedYamlToolNamesForDriver(
       driverType: TrailblazeDriverType,
@@ -2418,7 +2424,7 @@ class ToolDiscoveryToolSetTest {
     val tools = toolGroups.flatMap {
       it.jsonObject["tools"]!!.jsonArray.map { name -> name.jsonPrimitive.content }
     }
-    assertContains(tools, "eraseText", "Non-excluded YAML tool must remain. Got: $tools")
+    assertContains(tools, SECOND_FIXTURE_YAML_TOOL, "Non-excluded YAML tool must remain. Got: $tools")
     assertTrue(
       FIXTURE_YAML_TOOL !in tools,
       "Excluded YAML tool must NOT appear in target listing. Got: $tools",
@@ -2440,7 +2446,7 @@ class ToolDiscoveryToolSetTest {
     }.jsonObject
     val toolNames = androidEntry["tools"]!!.jsonArray
       .map { it.jsonObject["name"]!!.jsonPrimitive.content }
-    assertContains(toolNames, "eraseText", "Non-excluded YAML tool must remain. Got: $toolNames")
+    assertContains(toolNames, SECOND_FIXTURE_YAML_TOOL, "Non-excluded YAML tool must remain. Got: $toolNames")
     assertTrue(
       FIXTURE_YAML_TOOL !in toolNames,
       "Excluded YAML tool must NOT appear in no-device target listing. Got: $toolNames",
@@ -2466,7 +2472,7 @@ class ToolDiscoveryToolSetTest {
       it.jsonObject["tools"]?.jsonArray.orEmpty().map { name -> name.jsonPrimitive.content }
     }
     assertContains(
-      tools, "eraseText",
+      tools, SECOND_FIXTURE_YAML_TOOL,
       "Non-excluded YAML tool must remain in targetToolsets. Got: $tools",
     )
     assertTrue(
@@ -2475,12 +2481,12 @@ class ToolDiscoveryToolSetTest {
     )
   }
 
-  // -- Role grouping (trailheadTools / shortcutTools) -------------------------
+  // -- Role grouping (trailheadTools) ---------------------------------------
 
   /**
    * Stub source returning a trailmap-scoped map of `<key> -> <yaml-content>` for the
-   * recursive trailmap walk that backs every `.tool.yaml` / `.shortcut.yaml` /
-   * `.trailhead.yaml` discovery. Input keys are the filename minus the `.yaml` suffix —
+   * recursive trailmap walk that backs every `.tool.yaml` / `.trailhead.yaml`
+   * discovery. Input keys are the filename minus the `.yaml` suffix —
    * `tap.trailhead` becomes a `<stub-trailmap>/trailheads/tap.trailhead.yaml` entry served
    * to `discoverAndLoadRecursive(TRAILMAPS_DIR, ".trailhead.yaml")`. The YAML content's
    * `id:` is the authoritative tool identifier used by the intersection guard.
@@ -2497,7 +2503,6 @@ class ToolDiscoveryToolSetTest {
     """.trimIndent()
     fun dirForKey(key: String): String? = when {
       key.endsWith(".tool") -> "tools"
-      key.endsWith(".shortcut") -> "shortcuts"
       key.endsWith(".trailhead") -> "trailheads"
       else -> null
     }
@@ -2508,8 +2513,8 @@ class ToolDiscoveryToolSetTest {
         if (directoryPath != TrailblazeConfigPaths.TRAILMAPS_DIR) return emptyMap()
         return when (suffix) {
           "/trailmap.yaml" -> mapOf("$trailmapId/trailmap.yaml" to trailmapManifest)
-          ".tool.yaml", ".shortcut.yaml", ".trailhead.yaml" -> {
-            val targetKind = suffix.removePrefix(".").removeSuffix(".yaml") // tool / shortcut / trailhead
+          ".tool.yaml", ".trailhead.yaml" -> {
+            val targetKind = suffix.removePrefix(".").removeSuffix(".yaml") // tool / trailhead
             entries.filterKeys { it.endsWith(".$targetKind") }
               .mapKeys { (key, _) -> "$trailmapId/${dirForKey(key)}/$key.yaml" }
           }
@@ -2520,8 +2525,8 @@ class ToolDiscoveryToolSetTest {
   }
 
   @Test
-  fun `INDEX mode trailheadTools and shortcutTools intersect with in-scope toolset names`() = runTest {
-    // The intersection guard is the load-bearing invariant called out in computeRoleNames' kdoc:
+  fun `INDEX mode trailheadTools intersect with in-scope toolset names`() = runTest {
+    // The intersection guard is the load-bearing invariant called out in computeTrailheadNames' kdoc:
     // role lists must never surface a tool that won't resolve when the user drills in via
     // `toolbox --name <id>`. Without this test, a refactor that drops the `it.id in inScopeNames`
     // filter would silently break the CLI's role-grouped view (names listed that lead nowhere).
@@ -2549,16 +2554,6 @@ class ToolDiscoveryToolSetTest {
           tools:
             - tap: { selector: "ok" }
           """.trimIndent(),
-        "tap.shortcut" to
-          """
-          id: tapShortcut_NotInAnyToolset
-          description: A shortcut whose id is not in any toolset.
-          shortcut:
-            from: testapp/android/a
-            to: testapp/android/b
-          tools:
-            - tap: { selector: "ok" }
-          """.trimIndent(),
       ),
     )
 
@@ -2573,10 +2568,9 @@ class ToolDiscoveryToolSetTest {
     val result = toolSet.toolbox()
     val obj = json.parseToJsonElement(result).jsonObject
 
-    // Both fields default to emptyList() with encodeDefaults = false, so the JSON omits them when
-    // they're empty. Use safe-access defaults so the assertions read naturally either way.
+    // The field defaults to emptyList() with encodeDefaults = false, so the JSON omits it when
+    // it's empty. Use a safe-access default so the assertions read naturally either way.
     val trailheadTools = obj["trailheadTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
-    val shortcutTools = obj["shortcutTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
 
     assertContains(
       trailheadTools, "tap",
@@ -2585,10 +2579,6 @@ class ToolDiscoveryToolSetTest {
     assertFalse(
       "ghostTool_NotInAnyToolset" in trailheadTools,
       "out-of-scope trailhead must be filtered — intersection guard prevents the CLI from naming tools that won't resolve via `--name <id>`. Got: $trailheadTools",
-    )
-    assertFalse(
-      "tapShortcut_NotInAnyToolset" in shortcutTools,
-      "out-of-scope shortcut must be filtered for the same reason. Got: $shortcutTools",
     )
   }
 
@@ -2637,7 +2627,7 @@ class ToolDiscoveryToolSetTest {
     assertEquals(
       trailheadTools.sorted(),
       trailheadTools,
-      "trailheadTools must be sorted — pinning the `.sorted()` contract from computeRoleNames",
+      "trailheadTools must be sorted — pinning the `.sorted()` contract from computeTrailheadNames",
     )
   }
 
@@ -2724,8 +2714,8 @@ class ToolDiscoveryToolSetTest {
   fun `TARGET mode surfaces a trailhead declared inline in a scripted tool's spec, no yaml sidecar`() = runTest {
     // No stub *.trailhead.yaml exists for this tool anywhere — trailhead-ness comes entirely from
     // InlineScriptToolConfig.trailhead, the TS-spec-authored path AnalyzerScriptedToolEnrichment
-    // populates from `TrailblazeTypedToolSpec.trailhead`. Pins that computeRoleNames' scripted-tool
-    // union works even when the YAML-side index (discoverShortcutsAndTrailheads) is empty.
+    // populates from `TrailblazeTypedToolSpec.trailhead`. Pins that computeTrailheadNames' scripted-tool
+    // union works even when the YAML-side index (discoverTrailheads) is empty.
     val toolSet = ToolDiscoveryToolSet(
       sessionContext = null,
       allTargetAppsProvider = { setOf(scriptedTrailheadTarget) },
@@ -2894,7 +2884,7 @@ class ToolDiscoveryToolSetTest {
       group.jsonObject["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
     }
 
-    assertContains(tools, "eraseText", "Expected the default target's other tools. Got: $tools")
+    assertContains(tools, SECOND_FIXTURE_YAML_TOOL, "Expected the default target's other tools. Got: $tools")
     assertFalse(FIXTURE_YAML_TOOL in tools, "The default target excludes fixtureYamlTool. Got: $tools")
   }
 
@@ -3016,5 +3006,6 @@ class ToolDiscoveryToolSetTest {
 
   private companion object {
     const val FIXTURE_YAML_TOOL = "fixtureYamlTool"
+    const val SECOND_FIXTURE_YAML_TOOL = "secondFixtureYamlTool"
   }
 }

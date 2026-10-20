@@ -40,7 +40,7 @@ void client.tools.tapOnPoint({ x: 10, y: 20, longPress: true });
 // Trailmap-scripted tool generated into `.trailblaze/tools.d.ts`.
 void client.tools.playwrightSample_web_openFixtureAndVerifyText({
   relativePath: "fixtures/text-snippet.html",
-  text: "expected on page",
+  heading: "Expected heading",
 });
 
 // === Regression coverage: each `@ts-expect-error` MUST stay errored. ===
@@ -61,7 +61,7 @@ void client.tools.inputText({});
 void client.tools.pressKey({ keyCode: "NOPE" });
 
 // @ts-expect-error wrong-keyed args on a trailmap-scripted tool via tools.* namespace (single-line: `@ts-expect-error` only covers the next line)
-void client.tools.playwrightSample_web_openFixtureAndVerifyText({ releativePath: "typo", text: "y" });
+void client.tools.playwrightSample_web_openFixtureAndVerifyText({ releativePath: "typo", heading: "y" });
 
 // @ts-expect-error tool name not in TrailblazeToolMap — `client.tools.X` only exposes augmented entries
 void client.tools.dynamicallyDispatchedTool({ foo: "bar" });

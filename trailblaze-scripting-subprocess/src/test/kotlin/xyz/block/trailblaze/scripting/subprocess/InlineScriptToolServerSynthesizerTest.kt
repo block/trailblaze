@@ -873,9 +873,9 @@ class InlineScriptToolServerSynthesizerTest {
                 formVisible.set(url.contains("#form"))
                 callbackSuccess("navigated")
               }
-              "web_verifyTextVisible" -> {
+              "web_verifyElementVisible" -> {
                 if (formVisible.get()) callbackSuccess("visible")
-                else callbackFailure("Assertion failed: text is not visible")
+                else callbackFailure("Assertion failed: element is not visible")
               }
               "web_click" -> {
                 if (args["ref"]?.jsonPrimitive?.content == "css=a[href='#form']") {
@@ -964,9 +964,9 @@ class InlineScriptToolServerSynthesizerTest {
         assertThat(synchronized(requestedTools) { requestedTools.toList() }).isEqualTo(
           listOf(
             "web_navigate",
-            "web_verifyTextVisible",
+            "web_verifyElementVisible",
             "web_click",
-            "web_verifyTextVisible",
+            "web_verifyElementVisible",
           ),
         )
 
@@ -992,7 +992,7 @@ class InlineScriptToolServerSynthesizerTest {
         assertThat(synchronized(requestedTools) { requestedTools.toList() }).isEqualTo(
           listOf(
             "web_navigate",
-            "web_verifyTextVisible",
+            "web_verifyElementVisible",
           ),
         )
       } finally {

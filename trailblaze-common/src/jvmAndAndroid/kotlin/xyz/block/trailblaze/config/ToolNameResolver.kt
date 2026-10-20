@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.config
 
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -170,15 +171,28 @@ class ToolNameResolver(
      * tools provided by app target companions. Also includes YAML-defined (`tools:` mode)
      * tools so toolset YAMLs can list them by bare name without authors having to know
      * which backing a tool uses.
+     *
+     * The bundled class-backed tools are read first and [resourceSource] layered over them, so a
+     * workspace file at a bundled manifest's path can swap in another class but never hides the
+     * built-in class behind a YAML body that discovery refuses to register.
      */
     fun fromBuiltInAndCustomTools(
       customToolClasses: Map<ToolName, KClass<out TrailblazeTool>> = emptyMap(),
       resourceSource: ConfigResourceSource = platformConfigResourceSource(),
     ): ToolNameResolver = ToolNameResolver(
-      knownTools = ToolYamlLoader.discoverAndLoadAll(resourceSource) + customToolClasses,
+      knownTools = bundledClassBackedTools(resourceSource) +
+        ToolYamlLoader.discoverAndLoadAll(resourceSource) +
+        customToolClasses,
       knownYamlToolNames = TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
       knownScriptedToolNames = ScriptedToolNameDiscoverer.discoverAllNames(resourceSource),
     )
+
+    private fun bundledClassBackedTools(
+      resourceSource: ConfigResourceSource,
+    ): Map<ToolName, KClass<out TrailblazeTool>> {
+      val bundled = bundledConfigResourceSource()
+      return if (bundled === resourceSource) emptyMap() else ToolYamlLoader.discoverAndLoadAll(bundled)
+    }
 
     /**
      * Creates a resolver from an explicit set of tool classes.

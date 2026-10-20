@@ -96,6 +96,27 @@ def test_build_event_response_fields():
     _check("response headers present", e["responseHeaders"]["Set-Cookie"] == m.REDACTED_VALUE)
 
 
+def test_lost_write_marks_capture_incomplete():
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as session_dir:
+        with open(os.path.join(session_dir, "bodies"), "w") as fh:
+            fh.write("a file where the bodies folder goes")
+        sink = m._Sink("s1", session_dir)
+        import contextlib
+        import io
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            sink.write({"id": "abc"}, [("bodies/res_abc.bin", b"payload")])
+        _check("the loss is reported on the output stream too", m.CAPTURE_INCOMPLETE_LINE_PREFIX + "proxy network capture" in stderr.getvalue())
+        marker = os.path.join(session_dir, m.CAPTURE_INCOMPLETE_MARKER)
+        _check("a lost event writes the incomplete marker", os.path.isfile(marker))
+        with open(marker, encoding="utf-8") as fh:
+            _check("the marker names the proxy capture", fh.read().startswith("proxy network capture: a write failed"))
+
+
 if __name__ == "__main__":
     test_redaction()
     test_body_inline_small_text()
@@ -105,4 +126,5 @@ if __name__ == "__main__":
     test_empty_body()
     test_build_event_omits_nulls()
     test_build_event_response_fields()
+    test_lost_write_marks_capture_incomplete()
     print("\nAll mitmproxy_netcapture mapping tests passed.")

@@ -248,6 +248,11 @@ export interface SurveySpec {
    * report rows even when no session matched; `footprints` keys declare themselves.
    */
   features?: ReadonlyArray<string>;
+  /**
+   * The kind of a declared feature whose findings are not the survey's `kind`, for a handler that
+   * reports several kinds. Keeps a never-matched row on its own kind; `footprints` declare theirs.
+   */
+  kinds?: Readonly<Record<string, string>>;
   /** What the feature is, for readers of the report. */
   description?: string;
   /** Only run on sessions whose platform is listed. Unset runs everywhere. */

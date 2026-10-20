@@ -50,6 +50,7 @@ import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import java.io.File
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 
 /**
  * Base test class for Playwright-based Electron desktop app testing.
@@ -168,6 +169,12 @@ class BasePlaywrightElectronTest(
     // (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS). Without this the
     // repo's driverType is null and verify scoping no-ops.
     driverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+    // The catalog and scope tell a session that launches scripted tools (the CLI and daemon path,
+    // via `HostScriptedToolLauncher`) which framework scripted tools these toolsets deliver,
+    // always-enabled ones such as `runIf` included. Without them none register, and a recorded step
+    // naming a framework scripted tool fails as an unknown tool.
+    toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(),
+    toolSetIds = WebToolSetIds.ALL,
   )
 
   /**
@@ -199,6 +206,7 @@ class BasePlaywrightElectronTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       maxLlmCalls = maxLlmCalls,
       systemPromptTemplate = PLAYWRIGHT_ELECTRON_SYSTEM_PROMPT,
+      alwaysShownTools = appTarget?.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_ELECTRON).orEmpty(),
     )
   }
 
@@ -270,7 +278,7 @@ class BasePlaywrightElectronTest(
               selfHeal = config.selfHeal,
               onStepProgress = onStepProgress,
             )
-          is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
         }
         if (itemResult is TrailblazeToolResult.Error) {
@@ -446,6 +454,25 @@ class BasePlaywrightElectronTest(
     }
   }
 
+  /** The session and pump [registerEventsWaitPump] registered, so [close] can remove it. */
+  private var eventsWaitPump: Pair<String, (Long) -> Unit>? = null
+
+  /** Set by [close] under the same lock, so a capture start still in flight cannot add a pump after it. */
+  private var closing = false
+
+  /**
+   * Lets a `ctx.events` wait keep this browser delivering requests to the capture: Playwright for
+   * Java dispatches events only while it is called, and the trail loop is off its thread.
+   */
+  @Synchronized
+  private fun registerEventsWaitPump(sessionId: String) {
+    if (closing || eventsWaitPump?.first == sessionId) return
+    eventsWaitPump?.let { (old, pump) -> SessionEventsWaitPump.unregister(old, pump) }
+    val pump: (Long) -> Unit = { ms -> browserManager.onPlaywrightThread { browserManager.currentPage.waitForTimeout(ms.toDouble()) } }
+    SessionEventsWaitPump.register(sessionId, pump)
+    eventsWaitPump = sessionId to pump
+  }
+
   /**
    * See [BasePlaywrightNativeTest.ensureWebNetworkCaptureStarted] — same
    * contract, applied to the Electron CDP-managed BrowserContext so trails
@@ -468,6 +495,9 @@ class BasePlaywrightElectronTest(
           sessionDir = sessionDir,
           tracker = playwrightAgent.inflightRequestTracker,
         )
+        // With the start, on the one thread: a dispatch for another session can't start its
+        // capture between the two and then lose its pump to this one.
+        registerEventsWaitPump(session.sessionId.value)
       }
     } catch (e: Exception) {
       Console.log("Auto-start of web network capture failed: ${e.message}")
@@ -505,6 +535,11 @@ class BasePlaywrightElectronTest(
     runCatching { webStreamScreenshots.close() }
     // Bridged like the matching starts: `currentPage.context()` touches Page objects, and
     // close() runs on the JUnit thread.
+    synchronized(this) {
+      closing = true
+      eventsWaitPump?.let { (sessionId, pump) -> SessionEventsWaitPump.unregister(sessionId, pump) }
+      eventsWaitPump = null
+    }
     runCatching { browserManager.onPlaywrightThread { WebNetworkCapture.stop(browserManager.currentPage.context()) } }
     runCatching { browserManager.onPlaywrightThread { WebConsoleCapture.stop(browserManager.currentPage.context()) } }
     // Stop + mux the session video before the browser (and its screencast feed) tears down.

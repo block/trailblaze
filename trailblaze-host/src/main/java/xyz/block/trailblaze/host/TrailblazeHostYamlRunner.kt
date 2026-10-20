@@ -222,6 +222,26 @@ object TrailblazeHostYamlRunner {
     onProgressMessage = onProgressMessage,
   )
 
+  private fun endCancelledSession(
+    loggingRule: HostTrailblazeLoggingRule,
+    session: TrailblazeSession,
+    deviceLabel: String,
+    cancellation: Throwable,
+  ) {
+    try {
+      loggingRule.endSession(
+        session,
+        SessionStatus.Ended.Cancelled(
+          durationMs = session.calculateDuration(),
+          cancellationMessage = cancellation.message,
+        ),
+      )
+    } catch (sessionEndFailure: Throwable) {
+      if (sessionEndFailure !== cancellation) cancellation.addSuppressed(sessionEndFailure)
+      Console.log("Ending the cancelled session also failed for $deviceLabel: ${sessionEndFailure.message}")
+    }
+  }
+
   /**
    * Common session lifecycle wrapper for trail execution.
    *
@@ -271,6 +291,7 @@ object TrailblazeHostYamlRunner {
       executionFailure = e
       Console.log("🚫 Session cancelled for $deviceLabel")
       onProgressMessage("Test session cancelled")
+      if (sendSessionEndLog) endCancelledSession(loggingRule, session, deviceLabel, e)
       // Re-throw so DesktopYamlRunner.runYaml sees the cancel rather than a
       // silent null return that the outer layer would interpret as Success.
       // TrailblazeSessionCancelledException extends Exception (not
@@ -281,6 +302,11 @@ object TrailblazeHostYamlRunner {
       executionFailure = e
       Console.log("🚫 Coroutine cancelled for $deviceLabel: ${e.message}")
       onProgressMessage("Test execution cancelled")
+      // A cancelled job (the CLI's Ctrl-C reaches the daemon as a run cancel) otherwise leaves the
+      // session with only its Started log, and it reads as in progress forever. Trail Runner's Stop
+      // writes Cancelled before it cancels; LogsRepo keeps the first Ended, so this can't overwrite
+      // that or a Succeeded that already landed.
+      if (sendSessionEndLog) endCancelledSession(loggingRule, session, deviceLabel, e)
       throw e
     } catch (t: Throwable) {
       executionFailure = t
@@ -668,9 +694,9 @@ object TrailblazeHostYamlRunner {
       multiDeviceSession?.companions.orEmpty().mapValues { (_, companion) ->
         when (companion) {
           is CompanionDeviceConnection.AndroidRpc -> {
-            // This device's own reference — see the launch device's. A companion on an X2 pair is
-            // the display most likely to be rotated mid-trail, and sharing one reference across the
-            // pair would report whichever device captured last.
+            // This device's own reference — see the launch device's. A companion on a dual-display
+            // pair is the display most likely to be rotated mid-trail, and sharing one reference
+            // across the pair would report whichever device captured last.
             val companionProfile = AtomicReference(queryDeviceProfile(companion.rpcClient))
             val companionClassifiers = companionProfile.get().classifiers.ifEmpty {
               HostProbedDeviceClassifiers.forDevice(companion.trailblazeDeviceId)
@@ -1162,7 +1188,7 @@ object TrailblazeHostYamlRunner {
                 selfHeal = runYamlRequest.config.selfHeal,
               )
             is TrailYamlItem.ToolTrailItem ->
-              runnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+              runnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
             is TrailYamlItem.ConfigTrailItem ->
               item.config.context?.let { runner.appendToSystemPrompt(it) }
           }

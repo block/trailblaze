@@ -124,7 +124,7 @@ data class YamlDefinedTrailblazeTool(
       when {
         // Treat an explicit JSON null the same as an omitted parameter: fall through to the
         // declared default behavior. This ensures optional parameters with DropIfOmitted
-        // semantics (e.g. eraseText.charactersToErase) work correctly when the LLM passes
+        // semantics (e.g. an optional count a YAML tool forwards to an inner tool) work correctly when the LLM passes
         // null rather than omitting the field.
         caller != null && caller != JsonNull -> out[p.name] = caller
         p.required -> error(

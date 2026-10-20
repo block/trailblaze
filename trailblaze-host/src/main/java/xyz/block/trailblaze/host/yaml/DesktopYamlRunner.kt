@@ -909,7 +909,10 @@ class DesktopYamlRunner(
                   SessionCaptureCoordinator.BoundDevice(
                     name = binding.name,
                     deviceId = binding.deviceId,
-                    appId = binding.targetAppIds.firstOrNull(),
+                    // Resolved against what the device has, as `appIdForCapture` is: a buyer
+                    // display runs the target's last declared id, and crashes are attributed by
+                    // package.
+                    appId = { trailblazeDeviceManager.resolveCaptureAppId(binding.deviceId, binding.target, binding.targetAppIds) },
                   )
                 },
               )

@@ -114,7 +114,7 @@ export interface TrailblazeCallToolResult {
  * Open type map of `tool name → { args; result }`. Empty by default; augmented by:
  *
  *  - The vendored `built-in-tools.d.ts` shipped with this SDK (well-known framework tools
- *    like `tapOnElementWithText`, `inputText`).
+ *    like `tapOnElementBySelector`, `inputText`).
  *  - Per-trailmap `.d.ts` files emitted by the framework's `WorkspaceClientDtsGenerator`
  *    (one entry per scripted tool declared in the trailmap's resolved target manifest).
  *

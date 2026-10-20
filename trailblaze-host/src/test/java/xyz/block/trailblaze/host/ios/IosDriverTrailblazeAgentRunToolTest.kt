@@ -11,6 +11,7 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -97,8 +98,12 @@ class IosDriverTrailblazeAgentRunToolTest {
     val result = runBlocking {
       agent.runTool(
         tool = OtherTrailblazeTool(
-          toolName = "assertVisibleWithText",
-          raw = buildJsonObject { put("text", "Welcome") },
+          toolName = "assertVisibleBySelector",
+          raw = buildJsonObject {
+            putJsonObject("nodeSelector") {
+              putJsonObject("iosMaestro") { put("textRegex", "Welcome") }
+            }
+          },
         ),
         context = buildContext(agent),
       )
@@ -182,8 +187,12 @@ class IosDriverTrailblazeAgentRunToolTest {
     val result = runBlocking {
       agent.runTool(
         tool = OtherTrailblazeTool(
-          toolName = "assertVisibleWithText",
-          raw = buildJsonObject { put("text", "Welcome") },
+          toolName = "assertVisibleBySelector",
+          raw = buildJsonObject {
+            putJsonObject("nodeSelector") {
+              putJsonObject("iosMaestro") { put("textRegex", "Welcome") }
+            }
+          },
         ),
         context = buildContext(agent),
       )

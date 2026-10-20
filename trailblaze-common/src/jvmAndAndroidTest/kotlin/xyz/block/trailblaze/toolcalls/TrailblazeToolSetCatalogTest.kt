@@ -1,8 +1,8 @@
 package xyz.block.trailblaze.toolcalls
 
 import org.junit.Test
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Contract tests for [TrailblazeToolSetCatalog.entryYamlToolNames].
@@ -16,12 +16,11 @@ import kotlin.test.assertTrue
 class TrailblazeToolSetCatalogTest {
 
   @Test
-  fun `entryYamlToolNames returns eraseText for core_interaction`() {
-    val yamlNames = TrailblazeToolSetCatalog.entryYamlToolNames("core_interaction")
-    assertTrue(
-      yamlNames.any { it.toolName == "eraseText" },
-      "core_interaction catalog entry should expose eraseText (YAML-defined). Got: $yamlNames",
-    )
+  fun `entryYamlToolNames returns the YAML-defined tools a catalog entry delivers`() {
+    val yamlNames = YamlDefinedToolFixture.inToolSet(compatibleDriverTypes = emptySet()) {
+      TrailblazeToolSetCatalog.entryYamlToolNames(YamlDefinedToolFixture.TOOLSET_ID)
+    }
+    assertEquals(setOf(YamlDefinedToolFixture.toolName), yamlNames)
   }
 
   @Test

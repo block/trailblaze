@@ -27,7 +27,7 @@ There are three flavors of custom tool. Pick by what kind of body you need to wr
    Auto-discovered; reference it by name from a toolset. Use for thin wrappers like
    "press back twice" or "open the search URL for `<topic>`" — the cases where adding a
    TypeScript handler would be more ceremony than the wrapper deserves. See
-   [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
+   [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-trailheadyaml).
 
 3. **Kotlin-backed tool** (`@TrailblazeToolClass`-annotated class + `*.tool.yaml` in
    `class:` mode) — advanced / host-side state only. Use when you need to read host-side
@@ -74,6 +74,50 @@ There are three flavors of custom tool. Pick by what kind of body you need to wr
 If you're not sure which flavor fits, default to the scripted TypeScript path. Falling
 back to pure-YAML or Kotlin is straightforward once you've hit a case where the typed
 authoring surface doesn't reach.
+
+## Branching in a recorded trail: `runIf`
+
+A recording replays a fixed list of tool calls, so a step like "dismiss the welcome popup if it
+appears" would replay as an unconditional tap, which fails on runs where the popup doesn't show.
+Wrap such steps in `runIf`. It is recorded as written and re-checks its condition on every replay:
+
+```yaml
+- step: Dismiss the welcome popup if it appears
+  recording:
+    android-phone:
+      - runIf:
+          condition:
+            selector:
+              androidAccessibility:
+                textRegex: Not now
+          then:
+            - tapOnElementBySelector:
+                nodeSelector:
+                  androidAccessibility:
+                    textRegex: Not now
+```
+
+- `condition` is either `{ selector: ... }`, which is true when the selector matches something on
+  screen, or `{ tool: { <toolName>: <args> } }`, which is true when that tool call succeeds.
+  Conditions are pass or fail, not values: whatever the tool returns is ignored. A tool that runs
+  and fails makes the condition false. A tool that cannot run at all (an unknown name, a misspelled
+  argument) fails the step instead, so a typo never reads as "no".
+- `negate: true` flips the condition.
+- `then` runs when the condition is true and `else`, which is optional, when it is false. Both
+  take a list of tool calls in the same shape as a recording, and either can contain another `runIf`.
+- The whole `runIf` is checked before anything runs, branches not taken included. An unknown key
+  (`els:`), a malformed condition, or a `runIf` nested more than two deep fails the step up front.
+
+Use `runIf` for one-off conditionals, so a check that only one trail needs doesn't become a tool
+in the shared catalog. Nesting a `runIf` inside another's branch is allowed, two deep. Once the
+same branch appears in a second trail, write a [scripted tool](scripted-tools-typed-authoring.md)
+instead: it can be named, tested, and reused. `runIf` has no `else if` or `switch`.
+
+`runIf` is available on every target for Android, iOS and web sessions. It is not available on
+Compose or Revyl sessions, and a `selector` condition needs a view hierarchy, so drivers that only
+capture screenshots must use a `tool` condition. The agent never sees `runIf`, so it is missing from
+`trailblaze toolbox` and you write it into recordings yourself. Scripted tools can call it too,
+via `ctx.tools.runIf(...)`.
 
 ## Browsing the live tool catalog
 

@@ -126,7 +126,7 @@ class DocsGeneratorTest {
   @Test
   fun `createPageForYamlDefinedTool emits a YAML-flavored doc with id, description, and parameters`() {
     // The YAML-defined render path is hit when a framework tool is composed in
-    // `tools:` mode (no Kotlin class) — e.g. `trails/config/tools/eraseText.tool.yaml`.
+    // `tools:` mode (no Kotlin class), e.g. a trailmap's `tools/<name>.tool.yaml` composing other tools.
     // Surface gate, idempotency, and class-backed rendering already have coverage; this
     // case pins the YAML branch so a future regression in `ToolDetail.YamlDefined`
     // serialization doesn't only surface via the integration `:docs:generator:run`.

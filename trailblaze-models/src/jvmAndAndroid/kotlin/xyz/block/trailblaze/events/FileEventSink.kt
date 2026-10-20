@@ -6,9 +6,14 @@ import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.util.Console
 
-/** Producer-neutral [SessionEvents] persistence shared by optional integrations. */
+/**
+ * Producer-neutral [SessionEvents] persistence shared by optional integrations. A record the
+ * best-effort writers ([append], [appendRaw]) drop is reported to [SessionCaptureHealth], so a live
+ * read of the session doesn't call what is left complete.
+ */
 class FileEventSink(
   private val sessionDir: File,
   private val logLabel: String = sessionDir.name,
@@ -20,21 +25,36 @@ class FileEventSink(
   private var closed = false
   private var closeFailure: Throwable? = null
 
-  fun append(name: String, timeMs: Long, data: JsonElement) {
-    appendRaw(name, JSON.encodeToString(SessionEvent.serializer(), SessionEvent(timeMs, data)))
+  /** [clock] names the clock that stamped [timeMs]; null is the host's (see [SessionEvent.clock]). */
+  fun append(name: String, timeMs: Long, data: JsonElement, clock: TrailblazeClockDomain? = null) {
+    appendRaw(name, JSON.encodeToString(SessionEvent.serializer(), SessionEvent(timeMs, data, clock)))
   }
 
-  /** Propagates persistence failures when partial evidence would be misleading. */
-  fun appendChecked(name: String, timeMs: Long, data: JsonElement) {
-    val line = JSON.encodeToString(SessionEvent.serializer(), SessionEvent(timeMs, data))
-    require(line.indexOf('\n') < 0 && line.indexOf('\r') < 0)
-    synchronized(writeLock) {
-      check(!closed) { "Event sink for '$logLabel' is closed" }
-      val fileName = SessionEvents.fileName(name)
-      val writer = writers[fileName] ?: openWriterOrThrow(fileName).also { writers[fileName] = it }
-      writer.append(line)
-      writer.append('\n')
-      writer.flush()
+  /**
+   * Propagates persistence failures when partial evidence would be misleading. The loss is also
+   * recorded in [SessionCaptureHealth], so a caller that swallows the exception still leaves the
+   * session's capture marked incomplete.
+   */
+  fun appendChecked(
+    name: String,
+    timeMs: Long,
+    data: JsonElement,
+    clock: TrailblazeClockDomain? = null,
+  ) {
+    try {
+      val line = JSON.encodeToString(SessionEvent.serializer(), SessionEvent(timeMs, data, clock))
+      require(line.indexOf('\n') < 0 && line.indexOf('\r') < 0)
+      synchronized(writeLock) {
+        check(!closed) { "Event sink for '$logLabel' is closed" }
+        val fileName = SessionEvents.fileName(name)
+        val writer = writers[fileName] ?: openWriterOrThrow(fileName).also { writers[fileName] = it }
+        writer.append(line)
+        writer.append('\n')
+        writer.flush()
+      }
+    } catch (e: Throwable) {
+      recordLoss(name, "a $name record could not be written (${e.message ?: e::class.simpleName})")
+      throw e
     }
   }
 
@@ -42,20 +62,29 @@ class FileEventSink(
   fun appendRaw(name: String, jsonLine: String) {
     if (jsonLine.indexOf('\n') >= 0 || jsonLine.indexOf('\r') >= 0) {
       Console.error("[events] $logLabel: dropping line with embedded newline for $name")
+      recordLoss(name, "a $name record with an embedded newline was dropped")
       return
     }
     synchronized(writeLock) {
       if (closed) return
       val fileName = SessionEvents.fileName(name)
       val writer =
-        writers[fileName] ?: openWriter(fileName)?.also { writers[fileName] = it } ?: return
+        writers[fileName] ?: openWriter(fileName)?.also { writers[fileName] = it }
+          ?: return recordLoss(name, "$fileName could not be opened")
       runCatching {
           writer.append(jsonLine)
           writer.append('\n')
           writer.flush()
         }
-        .onFailure { Console.error("[events] $logLabel: write failed for $fileName: ${it.message}") }
+        .onFailure {
+          Console.error("[events] $logLabel: write failed for $fileName: ${it.message}")
+          recordLoss(name, "a write to $fileName failed")
+        }
     }
+  }
+
+  private fun recordLoss(stream: String, what: String) {
+    SessionCaptureHealth.markIncomplete(sessionDir, "$logLabel: $what", stream)
   }
 
   private fun openWriter(fileName: String): BufferedWriter? =

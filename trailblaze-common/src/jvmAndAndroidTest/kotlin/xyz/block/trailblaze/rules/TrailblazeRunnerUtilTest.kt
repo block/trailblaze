@@ -1,9 +1,16 @@
 package xyz.block.trailblaze.rules
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -24,6 +31,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ToolBatchScope
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -160,6 +168,87 @@ class TrailblazeRunnerUtilTest {
     val (recoveredStep, failure) = runner.recoverCalls.single()
     assertEquals(step, recoveredStep)
     assertEquals("tapLogin", failure.failedTool.name)
+  }
+
+  @Test
+  fun `cancelling a trail cancels a wait its self-heal dispatched on another thread`() = runBlocking {
+    val waiting = CompletableDeferred<Unit>()
+    // Shaped like the Koog runner: the blocking entry opens its own runBlocking, and the healing
+    // agent's tool runs off the trail's thread, waiting the way a `ctx.events` wait does.
+    val runner = object : TestAgentRunner by FakeTestAgentRunner() {
+      override fun recover(promptStep: PromptStep, recordingResult: PromptRecordingResult.Failure): AgentTaskStatus =
+        runBlocking { recoverSuspend(promptStep, recordingResult) }
+
+      override suspend fun recoverSuspend(
+        promptStep: PromptStep,
+        recordingResult: PromptRecordingResult.Failure,
+      ): AgentTaskStatus = withContext(Dispatchers.IO) {
+        coroutineScope {
+          DispatchCancellation.linked(this) {
+            waiting.complete(Unit)
+            awaitCancellation()
+          }
+        }
+      }
+    }
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { _ -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "selector broke") },
+      trailblazeRunner = runner,
+    )
+
+    // Outside this test's scope, so a wait that outlives the trail fails the check below instead of
+    // hanging the test.
+    val trail = CoroutineScope(Dispatchers.Default).launch {
+      util.runTrail {
+        util.runPromptSuspend(
+          prompts = listOf(recordedStep("Tap login", tool("tapLogin"))),
+          useRecordedSteps = true,
+          selfHeal = true,
+        )
+      }
+    }
+    waiting.await()
+    trail.cancel()
+
+    assertTrue(withTimeoutOrNull(5_000) { trail.join(); true } == true, "the self-heal wait outlived its trail")
+  }
+
+  @Test
+  fun `cancelling a trail cancels a wait an unrecorded step dispatched on another thread`() = runBlocking {
+    val waiting = CompletableDeferred<Unit>()
+    // Shaped like the Koog runner: the blocking entry opens its own runBlocking, and the agent's
+    // tool runs off the trail's thread, waiting the way a `ctx.events` wait does.
+    val runner = object : TestAgentRunner by FakeTestAgentRunner() {
+      override fun run(prompt: PromptStep, stepStatus: PromptStepStatus): AgentTaskStatus =
+        runBlocking { runSuspend(prompt, stepStatus) }
+
+      override suspend fun runSuspend(prompt: PromptStep, stepStatus: PromptStepStatus): AgentTaskStatus =
+        withContext(Dispatchers.IO) {
+          coroutineScope {
+            DispatchCancellation.linked(this) {
+              waiting.complete(Unit)
+              awaitCancellation()
+            }
+          }
+        }
+    }
+    val util = TrailblazeRunnerUtil(runTrailblazeTool = { _ -> TrailblazeToolResult.Success() }, trailblazeRunner = runner)
+
+    // Outside this test's scope, so a wait that outlives the trail fails the check below instead of
+    // hanging the test.
+    val trail = CoroutineScope(Dispatchers.Default).launch {
+      util.runTrail {
+        util.runPromptSuspend(
+          prompts = listOf(DirectionStep(step = "Tap login")),
+          useRecordedSteps = true,
+          selfHeal = false,
+        )
+      }
+    }
+    waiting.await()
+    trail.cancel()
+
+    assertTrue(withTimeoutOrNull(5_000) { trail.join(); true } == true, "the step's wait outlived its trail")
   }
 
   @Test

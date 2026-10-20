@@ -886,13 +886,12 @@ object TrailblazeProjectConfigLoader {
       ?.let { config -> if (rewrittenPlatforms != null) config.copy(platforms = rewrittenPlatforms) else config }
     val resolvedToolsets = discoverTrailmapToolsets(loadedManifest)
 
-    // Operational tool YAMLs auto-discovered from three sibling directories, one per
+    // Operational tool YAMLs auto-discovered from two sibling directories, one per
     // operational class:
     //   - `<trailmap>/tools/**.tool.yaml`
-    //   - `<trailmap>/shortcuts/**.shortcut.yaml`
     //   - `<trailmap>/trailheads/**.trailhead.yaml`
     // Each dir is walked recursively at any depth — subdirs are organizational only
-    // (e.g. `shortcuts/web/`, `trailheads/android/`), matching the existing
+    // (e.g. `tools/web/`, `trailheads/android/`), matching the existing
     // `<trailmap>/waypoints/` convention. Library-trailmap contract: a trailmap with no `target:`
     // block cannot ship trailhead tools (a trailhead bootstraps to a known waypoint).
     // Enforced here because the trailhead block lives inside the tool YAML, not the
@@ -1156,9 +1155,10 @@ object TrailblazeProjectConfigLoader {
    */
   val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
     ".tool.yaml",
-    ".shortcut.yaml",
     ".trailhead.yaml",
     ".waypoint.yaml",
+    // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+    ".shortcut.yaml",
   )
 
   /**
@@ -1996,7 +1996,7 @@ class ClasspathScriptedToolUnavailableException(message: String, cause: Throwabl
  *   trailmaps (those without a `target:` block).
  * @property toolsets Toolset YAML configs declared via the trailmap manifest's `toolsets:` list.
  * @property tools Operational tool YAMLs auto-discovered under the trailmap's `tools/` /
- *   `shortcuts/` / `trailheads/` directories. These are the pure-YAML composed tools
+ *   `trailheads/` directories. These are the pure-YAML composed tools
  *   (`.tool.yaml`), not the scripted tools listed under `target.tools:` (those live on
  *   [target] via `AppTargetYamlConfig.tools`).
  * @property waypoints Waypoints auto-discovered under the trailmap's `waypoints/` directory.

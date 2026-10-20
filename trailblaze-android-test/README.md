@@ -208,7 +208,7 @@ starts *on the screen under test*, and (3) the app typically fakes the network. 
 attacks a fourth cost — cross-process IPC and the settle floor — which is real but bounded.
 It does not attack the other three, so it should not be expected to close the whole gap to a
 hand-written Espresso test. "Start on the screen under test" is separately winnable via
-trailheads / shortcuts / deep-links, and on a real trail that is probably the larger term.
+trailheads / deep-links, and on a real trail that is probably the larger term.
 
 **Open question for the benchmark: is the virtual clock actually in play here?** The driver
 deliberately takes the app's *existing* `AndroidComposeTestRule` rather than creating one,

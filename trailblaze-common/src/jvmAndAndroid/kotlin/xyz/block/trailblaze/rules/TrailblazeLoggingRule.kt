@@ -444,7 +444,9 @@ abstract class TrailblazeLoggingRule(
       // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
       // use — so this path is equally protected from an export that throws, and a run that ends
       // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
-      exportTracesBeforeEnd(session?.sessionId ?: SessionId("unknown"))
+      // No session when a caller ended its own (a grouped test ends one per trail): nothing to
+      // export, and exporting under a made-up id would file this test's spans under no run.
+      session?.sessionId?.let(::exportTracesBeforeEnd)
 
       // End session if it exists
       session?.let { currentSession ->

@@ -534,7 +534,7 @@ class AndroidTestTrailblazeRule(
                 selfHeal = false,
               )
             is TrailYamlItem.ToolTrailItem ->
-              runToolsSnapshotted(item.tools.map { it.trailblazeTool })
+              runnerUtil.runToolItem { runToolsSnapshotted(item.tools.map { it.trailblazeTool }) }
             // Nothing to do: the fields this driver reads off `config:` (skip, driver, memory) were
             // all consumed above, and `context:` is an LLM system-prompt hint with no LLM to hint.
             is TrailYamlItem.ConfigTrailItem -> TrailblazeToolResult.Success()

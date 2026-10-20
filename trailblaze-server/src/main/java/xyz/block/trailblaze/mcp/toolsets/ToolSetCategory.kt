@@ -190,7 +190,7 @@ object ToolSetCategoryMapping {
 
   /**
    * Gets the YAML-defined tool names for a category. Parallel to [getToolClasses] for the
-   * `tools:` composition case — e.g. `core_interaction` includes `eraseText` (no Kotlin class).
+   * `tools:` composition case — e.g. a toolset that lists a `tools:`-composed YAML tool (no Kotlin class).
    *
    * Routes through [TrailblazeToolSetCatalog.entryYamlToolNames] so MCP sees the same
    * YAML-defined surface as other catalog consumers. [ToolSetCategory.ALL] returns every

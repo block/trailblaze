@@ -823,7 +823,7 @@ class TrailblazeToolRepo(
   // always DISPATCHABLE on a verify step. It MUST use the same driver-scoped entry selection as
   // [verifyStepToolDescriptors] (the advertised surface): otherwise a driver-specific class-backed
   // verify tool could be advertised but not registered, stranding the agent under
-  // `ToolChoice.Required`. The driver-specific YAML verify tools (`web_verifyTextVisible`, …) have
+  // `ToolChoice.Required`. The driver-specific YAML verify tools (`web_verifyElementVisible`, …) have
   // no backing KClass, so they still reach the registry as dynamic registrations (`advertisedDynamic`).
   private val verifyTools: Set<KClass<out TrailblazeTool>> by lazy {
     verificationToolsetEntries().flatMap { it.toolClasses }.toSet() +

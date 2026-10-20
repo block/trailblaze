@@ -34,7 +34,7 @@ class TrailTscValidatorTest {
   fun `generateGenFile emits one tool-call statement per line and maps each line back to its call`() {
     val calls = listOf(
       TrailTscValidator.RecordedCall("web_navigate", """{"url":"https://example.com"}""", 1, "Open site"),
-      TrailTscValidator.RecordedCall("web_verifyTextVisible", """{"text":"Welcome"}""", 2, "Verify banner"),
+      TrailTscValidator.RecordedCall("web_verifyElementVisible", """{"ref":"heading \"Welcome\""}""", 2, "Verify banner"),
     )
     val gen = TrailTscValidator.generateGenFile("trails/demo.trail.yaml", calls)
     val lines = gen.source.lines()
@@ -127,12 +127,12 @@ class TrailTscValidatorTest {
   @Test
   fun `remap keys a diagnostic back to the trail and step via the line table`() {
     val table = mapOf(
-      5 to TrailTscValidator.RecordedCall("web_verifyTextVisible", """{"txt":"x"}""", 3, "Verify banner"),
+      5 to TrailTscValidator.RecordedCall("web_verifyElementVisible", """{"rf":"x"}""", 3, "Verify banner"),
     )
     val metas = mapOf("login.trail.gen.ts" to TrailTscValidator.GenFileMeta("trails/login.trail.yaml", table))
     val tsc =
       "/abs/path/login.trail.gen.ts(5,40): error TS2561: Object literal may only specify known " +
-        "properties, but 'txt' does not exist in type '{ text: string; }'."
+        "properties, but 'rf' does not exist in type '{ ref?: string; reasoning?: string; }'."
 
     val findings = TrailTscValidator.remap(tsc, metas)
 
@@ -140,9 +140,9 @@ class TrailTscValidatorTest {
     val f = findings.single()
     assertEquals("trails/login.trail.yaml", f.trailRelPath)
     assertEquals(3, f.stepIndex)
-    assertEquals("web_verifyTextVisible", f.toolName)
+    assertEquals("web_verifyElementVisible", f.toolName)
     assertEquals("TS2561", f.tsCode)
-    assertTrue(f.message.contains("'txt' does not exist"), "message preserved: ${f.message}")
+    assertTrue(f.message.contains("'rf' does not exist"), "message preserved: ${f.message}")
   }
 
   @Test

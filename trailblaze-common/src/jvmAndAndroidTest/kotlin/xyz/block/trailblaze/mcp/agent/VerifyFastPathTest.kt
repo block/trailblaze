@@ -166,8 +166,8 @@ class VerifyFastPathTest {
     val result = tryVerifyFastPath("Verify \"Items\" and \"Settings\" are visible", Mode.STRICT, agent)
     assertThat(result).isNotNull().isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(agent.ran).containsExactly(
-      AssertVisibleTrailblazeTool(ref = "a12", expectedText = "Items", reasoning = "verify fast path"),
-      AssertVisibleTrailblazeTool(ref = "b34", expectedText = "Settings", reasoning = "verify fast path"),
+      AssertVisibleTrailblazeTool(ref = "a12", reasoning = "verify fast path"),
+      AssertVisibleTrailblazeTool(ref = "b34", reasoning = "verify fast path"),
     )
   }
 

@@ -12,6 +12,7 @@ import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.events.FileEventSink
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.events.SessionEvents
 import xyz.block.trailblaze.util.Console
 
@@ -99,6 +100,10 @@ class MemoryCapture(
    */
   @Volatile private var toolInFlight = false
   private var sink: FileEventSink? = null
+  private var sessionDir: File? = null
+
+  /** Writes this capture's loss marker; at most one per session, see [recordLoss]. */
+  @Volatile private var markerWriter: Thread? = null
   private var deviceId: String? = null
   private var appId: String? = null
   private var lastEmitted: MemorySnapshot? = null
@@ -154,6 +159,7 @@ class MemoryCapture(
       pending.clear()
       toolInFlight = false
       stopped = false
+      this.sessionDir = sessionDir
       sink = FileEventSink(sessionDir, logLabel = "memory-capture")
     }
     val mode = buildString {
@@ -220,6 +226,7 @@ class MemoryCapture(
   private fun noteSampleFailure(what: String, cause: Throwable) {
     if (stopped) return
     val failures = lock.withLock { ++failureCount }
+    noteGap("a reading failed")
     if (failures <= FAILURE_LOG_FIRST || failures % FAILURE_LOG_EVERY == 0) {
       Console.log("[memory-capture] $what failed (#$failures): ${cause.message}")
     }
@@ -237,12 +244,23 @@ class MemoryCapture(
       unreadableCount++
       ++consecutiveUnreadable
     }
+    noteGap("a reading came back with nothing")
     if (run == UNREADABLE_RUN_TO_REPORT) {
       Console.log(
         "[memory-capture] $run readings in a row came back with nothing for ${appId ?: "the app"} on " +
           "${deviceId ?: "the device"} — the app may not be running, or the device is not answering",
       )
     }
+  }
+
+  /**
+   * A reading missing after one has landed is a hole in the stream, so a live query must not call it
+   * complete. Before the first reading a miss is ordinary (the app may not be running yet), and an
+   * empty stream already says nothing was read.
+   */
+  private fun noteGap(what: String) {
+    val dir = lock.withLock { sessionDir.takeIf { sampledCount > 0 } } ?: return
+    recordLoss(dir, what)
   }
 
   override fun onToolCall(phase: ToolCallPhase, toolName: String, traceId: String?) {
@@ -260,16 +278,36 @@ class MemoryCapture(
       toolInFlight = phase == ToolCallPhase.BEFORE
       return
     }
-    lock.withLock {
+    val droppedFrom = lock.withLock {
       if (sink == null) return
       // Only once the queue is full — a device that has stopped answering — is anything dropped,
       // and it is the oldest, so what survives is the part of the run closest to now.
+      var dropped = false
       if (pending.size >= MAX_PENDING_REQUESTS) {
         pending.removeFirst()
         coalescedCount++
+        dropped = true
       }
       pending.addLast(Request(reason, toolName, traceId, clock()))
       wakeUp.signal()
+      sessionDir.takeIf { dropped }
+    }
+    // A dropped boundary is a tool with no reading, so a mid-session query must not read the memory
+    // stream as complete.
+    if (droppedFrom != null) {
+      recordLoss(droppedFrom, "a tool-boundary reading was dropped (queue full)")
+    }
+  }
+
+  /**
+   * Held in memory at once, so this process's queries see the loss; the marker file is written on a
+   * thread of its own, because the caller can be the tool's and the disk may be what is stalling.
+   */
+  private fun recordLoss(dir: File, what: String) {
+    val reason = "memory-capture: $what"
+    if (!SessionCaptureHealth.markIncompleteInMemory(dir, reason, STREAM_NAME)) return
+    markerWriter = thread(name = "memory-capture-health", isDaemon = true) {
+      SessionCaptureHealth.writeMarker(dir, reason, STREAM_NAME)
     }
   }
 
@@ -336,6 +374,8 @@ class MemoryCapture(
           "${SessionEvents.DIR_NAME}/${SessionEvents.fileName(STREAM_NAME)}",
       )
     }
+    // Briefly, so a loss marker lands with the session's files when the disk is answering.
+    markerWriter?.let { runCatching { it.join(STOP_JOIN_TIMEOUT_MS) } }
     // The output is an events stream, discovered through `events/` like every other producer's —
     // not a capture artifact with its own bookends in capture_metadata.json.
     return null
@@ -412,6 +452,9 @@ class MemoryCapture(
         if (!ceilingLogged) {
           ceilingLogged = true
           Console.log("[memory-capture] reached $maxEvents events; only the final sample will be written")
+          sessionDir?.let {
+            recordLoss(it, "reached the $maxEvents-event ceiling; later changes were not written")
+          }
         }
         return null
       }

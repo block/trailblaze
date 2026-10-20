@@ -433,8 +433,7 @@ sealed interface DriverNodeDetail {
      * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
      * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
      * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
-     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
-     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     * matching and turn a single match into an ambiguous one.
      */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
@@ -673,8 +672,7 @@ sealed interface DriverNodeDetail {
      * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
      * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
      * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
-     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
-     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     * matching and turn a single match into an ambiguous one.
      */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
@@ -759,8 +757,7 @@ sealed interface DriverNodeDetail {
      * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
      * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
      * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
-     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
-     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     * matching and turn a single match into an ambiguous one.
      */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -914,8 +911,7 @@ sealed interface DriverNodeDetail {
      * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
      * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
      * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
-     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
-     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     * matching and turn a single match into an ambiguous one.
      */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -1196,8 +1192,7 @@ sealed interface DriverNodeDetail {
      * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
      * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
      * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
-     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
-     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     * matching and turn a single match into an ambiguous one.
      */
     fun resolveText(): String? = editableText ?: text ?: contentDescription
 

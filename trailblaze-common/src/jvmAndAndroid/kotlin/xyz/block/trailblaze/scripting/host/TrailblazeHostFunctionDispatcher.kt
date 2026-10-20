@@ -9,9 +9,11 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.history.ToolCallHistoryHostFunctions
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.events.SessionEventsHostFunctions
 import xyz.block.trailblaze.trailhead.TrailEventsHostFunctions
 import xyz.block.trailblaze.util.Console
 
@@ -61,7 +63,12 @@ object TrailblazeHostFunctionDispatcher {
     context: TrailblazeToolExecutionContext,
     registry: TrailblazeHostFunctionRegistry,
   ): Outcome {
-    if (TrailEventsHostFunctions.handles(name)) return callFramework(name, argsJson, context)
+    if (TrailEventsHostFunctions.handles(name) ||
+      SessionEventsHostFunctions.handles(name) ||
+      ToolCallHistoryHostFunctions.handles(name)
+    ) {
+      return callFramework(name, argsJson, context)
+    }
     val entry = registry.resolve(name)
       ?: return Outcome.Failure(
         "No host function named '$name'. Registered: ${registry.all.keys.joinToString().ifEmpty { "(none)" }}.",
@@ -110,15 +117,27 @@ object TrailblazeHostFunctionDispatcher {
     }
   }
 
-  /** Framework host functions ([TrailEventsHostFunctions]) — answered before any trailmap's. */
-  private fun callFramework(name: String, argsJson: String, context: TrailblazeToolExecutionContext): Outcome {
+  /**
+   * Framework host functions ([TrailEventsHostFunctions], [SessionEventsHostFunctions],
+   * [ToolCallHistoryHostFunctions]) — answered before any trailmap's.
+   */
+  private suspend fun callFramework(name: String, argsJson: String, context: TrailblazeToolExecutionContext): Outcome {
     val args = try {
       strictJson.parseToJsonElement(argsJson.ifBlank { "{}" }) as? JsonObject
     } catch (_: SerializationException) {
       null
     } ?: return Outcome.Failure("Host function '$name' takes an object of arguments.")
     return try {
-      Outcome.Success(TrailEventsHostFunctions.call(name, args, context))
+      val value = if (SessionEventsHostFunctions.handles(name)) {
+        SessionEventsHostFunctions.call(name, args, context)
+      } else if (ToolCallHistoryHostFunctions.handles(name)) {
+        ToolCallHistoryHostFunctions.call(name, args, context)
+      } else {
+        TrailEventsHostFunctions.call(name, args, context)
+      }
+      Outcome.Success(value)
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: TrailblazeHostFunctionException) {
       Outcome.Failure(e.message.orEmpty())
     } catch (e: Exception) {

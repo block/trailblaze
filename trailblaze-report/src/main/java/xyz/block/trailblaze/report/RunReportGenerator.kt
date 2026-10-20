@@ -223,6 +223,7 @@ class RunReportGenerator(
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
       copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
       copyResource(TRACE_SPANS_RESOURCE, File(workDir, "run-report-trace-spans.ts"))
+      copyResource(DEVICE_CLOCK_RESOURCE, File(workDir, "device-clock-sync.ts"))
       // The Kotlin/JS selector engine for the UI Inspector's suggestions. OPTIONAL by design: the
       // resource is only in the JAR when :trailblaze-selector-engine-js's bundle task ran at build
       // time, and an older/bundle-less JAR must keep producing reports — the driver embeds it (once
@@ -433,6 +434,8 @@ class RunReportGenerator(
 
     /** The driver's `trace.json` slimmer, a sibling module it imports like the two above. */
     private const val TRACE_SPANS_RESOURCE = "xyz/block/trailblaze/report/run-report-trace-spans.ts"
+    /** Imported by run-report-events.ts and the driver: device-clock records onto the host timeline. */
+    private const val DEVICE_CLOCK_RESOURCE = "xyz/block/trailblaze/report/device-clock-sync.ts"
 
     /**
      * The Kotlin/JS selector engine (built by `:trailblaze-selector-engine-js:bundleSelectorEngine`,

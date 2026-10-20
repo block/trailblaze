@@ -422,7 +422,7 @@ class RevylHostDriverDescriptor(
                   selfHeal = runYamlRequest.config.selfHeal,
                 )
               is TrailYamlItem.ToolTrailItem ->
-                trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+                trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
               is TrailYamlItem.ConfigTrailItem ->
                 item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
             }

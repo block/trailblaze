@@ -311,10 +311,9 @@ class TrailblazeSessionManager(
     private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
     /**
-     * Random number generator for unique session ID suffixes.
-     * Seeded with 0 for deterministic behavior in tests.
+     * Do not seed this generator: separate test processes must not replay the same random sequence.
      */
-    private val random = Random(0)
+    private val random = Random.Default
 
     /**
      * Generates a session ID with timestamp and random suffix.

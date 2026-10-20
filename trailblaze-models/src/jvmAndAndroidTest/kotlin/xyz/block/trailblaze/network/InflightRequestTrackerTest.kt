@@ -59,11 +59,11 @@ class InflightRequestTrackerTest {
   @Test
   fun `inflightMatching returns ids of urls matching the regex snapshot`() {
     val tracker = InflightRequestTracker()
-    tracker.onRequestStart("req-1", "https://api.example.com/cdp/track")
+    tracker.onRequestStart("req-1", "https://api.example.com/analytics/track")
     tracker.onRequestStart("req-2", "https://cdn.example.com/asset.png")
-    tracker.onRequestStart("req-3", "https://api.example.com/metron/event")
+    tracker.onRequestStart("req-3", "https://api.example.com/metrics/event")
 
-    val analytics = tracker.inflightMatching(Regex("(cdp|metron)"))
+    val analytics = tracker.inflightMatching(Regex("(analytics|metrics)"))
     assertEquals(setOf("req-1", "req-3"), analytics.toSet())
 
     val cdn = tracker.inflightMatching(Regex("cdn\\."))

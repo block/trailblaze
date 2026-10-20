@@ -22,133 +22,126 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
- * End-to-end: trail YAML containing `- eraseText:` (a `tools:` mode tool) decodes through the
- * polymorphic registry into a [YamlDefinedTrailblazeTool] and its expansion produces a
- * [MaestroTrailblazeTool] with the expected Maestro commands. This exercises the full
- * serializer-registration + interpolation + decode path that was wired up to let a YAML-defined
- * tool replace a Kotlin class 1:1.
+ * End-to-end: trail YAML containing a `tools:` mode tool ([YamlDefinedToolFixture]) decodes through
+ * the polymorphic registry into a [YamlDefinedTrailblazeTool], and its expansion produces the
+ * class-backed tools it composes. This exercises the full serializer-registration + interpolation +
+ * decode path that lets a YAML-defined tool stand in for a Kotlin class.
  */
 class YamlDefinedTrailblazeToolTest {
 
   /** The recorded step's tool wrappers, decoded from a unified doc for the android classifier. */
   private fun decodeRecordedTools(yaml: String) =
-    TrailblazeYaml.Default.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    createTrailblazeYaml().decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools
 
   @Test
-  fun `trail YAML eraseText decodes to YamlDefinedTrailblazeTool and expands with charactersToErase`() {
-    val yaml = """
+  fun `trail YAML for a YAML-defined tool decodes to YamlDefinedTrailblazeTool and expands into its composed tools`() =
+    YamlDefinedToolFixture.registered {
+      val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - eraseText:
-            charactersToErase: 3
-    """.trimIndent()
+        - ${YamlDefinedToolFixture.NAME}:
+            text: hello
+            clearFirst: true
+      """.trimIndent()
 
-    val tools = decodeRecordedTools(yaml)
-    assertThat(tools).hasSize(1)
-    val decoded = tools[0].trailblazeTool
-    assertThat(decoded).isInstanceOf(YamlDefinedTrailblazeTool::class)
+      val tools = decodeRecordedTools(yaml)
+      assertThat(tools).hasSize(1)
+      val decoded = tools[0].trailblazeTool
+      assertThat(decoded).isInstanceOf(YamlDefinedTrailblazeTool::class)
 
-    val yamlDefined = decoded as YamlDefinedTrailblazeTool
-    assertThat(yamlDefined.config.id).isEqualTo("eraseText")
-    assertThat(yamlDefined.params["charactersToErase"]).isEqualTo(JsonPrimitive(3))
+      val yamlDefined = decoded as YamlDefinedTrailblazeTool
+      assertThat(yamlDefined.config.id).isEqualTo(YamlDefinedToolFixture.NAME)
+      assertThat(yamlDefined.params["text"]).isEqualTo(JsonPrimitive("hello"))
+      assertThat(yamlDefined.params["clearFirst"]).isEqualTo(JsonPrimitive(true))
 
-    val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
-    assertThat(expanded).hasSize(1)
-    val maestro = expanded[0]
-    assertThat(maestro).isInstanceOf(MaestroTrailblazeTool::class)
-    // MaestroTrailblazeTool.yaml holds the Maestro-canonical YAML commands list (stored in
-    // JSON flow style by the serializer). Substring checks are stable against both forms.
-    val yamlText = (maestro as MaestroTrailblazeTool).yaml
-    assertThat(yamlText).contains("eraseText")
-    assertThat(yamlText).contains("charactersToErase")
-    assertThat(yamlText).contains("3")
-  }
+      assertThat(yamlDefined.toExecutableTrailblazeTools(createContext())).isEqualTo(
+        listOf(
+          InputTextTrailblazeTool(text = "hello", hideKeyboardAfter = false, clearFirst = true),
+          HideKeyboardTrailblazeTool,
+        ),
+      )
+    }
 
   @Test
-  fun `eraseText with no caller args drops the key so Maestro erases all`() {
-    // Regression test: previously 'default: null' produced 'charactersToErase: null' in the
-    // Maestro YAML, which Maestro silently ignores (no-op). The fix removes 'default: null'
-    // so the parameter uses DropIfOmitted — the key is absent from the command, which is
-    // what triggers Maestro's erase-all behavior.
-    val yaml = """
+  fun `an omitted optional param drops its key so the composed tool keeps its own default`() =
+    YamlDefinedToolFixture.registered {
+      // Regression test: 'default: null' used to emit 'clearFirst: null' into the composed tool,
+      // overriding its own default. A parameter with no declared default uses DropIfOmitted — the
+      // key is absent from the expansion, so `inputText` falls back to `clearFirst = false`.
+      val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - eraseText: {}
-    """.trimIndent()
+        - ${YamlDefinedToolFixture.NAME}:
+            text: hello
+      """.trimIndent()
 
-    val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
+      val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
 
-    val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
-    val yamlText = (expanded[0] as MaestroTrailblazeTool).yaml
-    assertThat(yamlText).contains("eraseText")
-    // The key must be absent — not 'charactersToErase: null' which Maestro treats as a no-op.
-    assertThat(yamlText).transform("should not contain charactersToErase") {
-      !it.contains("charactersToErase")
-    }.isEqualTo(true)
-  }
+      assertThat(yamlDefined.toExecutableTrailblazeTools(createContext()).first())
+        .isEqualTo(InputTextTrailblazeTool(text = "hello", hideKeyboardAfter = false, clearFirst = false))
+    }
 
   @Test
-  fun `eraseText with explicit null from LLM drops the key — JsonNull treated as omitted`() {
-    // Regression test: when the LLM passes null for an optional param, JsonNull is a
-    // non-null Kotlin object. Previously 'caller != null' was true for JsonNull, so it
-    // bypassed DropIfOmitted and produced 'key: null' in YAML (no-op in Maestro).
-    // The fix treats JsonNull the same as a missing parameter.
-    val yaml = """
+  fun `an explicit null from the LLM drops the key — JsonNull treated as omitted`() =
+    YamlDefinedToolFixture.registered {
+      // Regression test: when the LLM passes null for an optional param, JsonNull is a
+      // non-null Kotlin object. Previously 'caller != null' was true for JsonNull, so it
+      // bypassed DropIfOmitted and emitted 'key: null' into the composed tool.
+      // The fix treats JsonNull the same as a missing parameter.
+      val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - eraseText:
-            charactersToErase: null
-    """.trimIndent()
+        - ${YamlDefinedToolFixture.NAME}:
+            text: hello
+            clearFirst: null
+      """.trimIndent()
 
-    val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
-    // The LLM passed null, which should resolve to DropIfOmitted (same as absent).
-    assertThat(yamlDefined.params.containsKey("charactersToErase")).isEqualTo(true)
+      val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
+      assertThat(yamlDefined.params.containsKey("clearFirst")).isEqualTo(true)
 
-    val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
-    val yamlText = (expanded[0] as MaestroTrailblazeTool).yaml
-    assertThat(yamlText).contains("eraseText")
-    assertThat(yamlText).transform("should not contain charactersToErase") {
-      !it.contains("charactersToErase")
-    }.isEqualTo(true)
-  }
+      assertThat(yamlDefined.toExecutableTrailblazeTools(createContext()).first())
+        .isEqualTo(InputTextTrailblazeTool(text = "hello", hideKeyboardAfter = false, clearFirst = false))
+    }
 
   @Test
-  fun `trail YAML with scalar args instead of a map rejects with a clear error`() {
-    // Regression guard: `- eraseText: 3` is a YAML scalar, not a map of params.
-    // Previously the deserializer silently coerced unknown
-    // shapes into an empty params map, so this would execute with declared defaults and
-    // mask the author's mistake. After switching the serializer's declared descriptor to
-    // a map shape, kaml's own validator rejects the scalar before the custom deserialize
-    // path even runs — that's the safer layering.
-    val yaml = """
+  fun `trail YAML with scalar args instead of a map rejects with a clear error`() =
+    YamlDefinedToolFixture.registered {
+      // Regression guard: `- <tool>: 3` is a YAML scalar, not a map of params.
+      // Previously the deserializer silently coerced unknown
+      // shapes into an empty params map, so this would execute with declared defaults and
+      // mask the author's mistake. After switching the serializer's declared descriptor to
+      // a map shape, kaml's own validator rejects the scalar before the custom deserialize
+      // path even runs — that's the safer layering.
+      val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - eraseText: 3
-    """.trimIndent()
+        - ${YamlDefinedToolFixture.NAME}: 3
+      """.trimIndent()
 
-    assertFailure {
-      TrailblazeYaml.Default.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
-    }.transform { it.message ?: "" }.contains("Expected a map")
-  }
+      assertFailure { decodeRecordedTools(yaml) }
+        .transform { it.message ?: "" }.contains("Expected a map")
+    }
 
   @Test
   fun `required param missing from caller throws`() {

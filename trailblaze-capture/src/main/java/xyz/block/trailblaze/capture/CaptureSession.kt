@@ -18,11 +18,24 @@ class CaptureSession internal constructor(
   private val streams: List<CaptureStream>,
   private val options: CaptureOptions,
   private val platform: TrailblazeDevicePlatform?,
+  /**
+   * Builds the [DeviceClockSampler] for a started session; null takes no clock readings.
+   * [fromOptions] supplies one for Android.
+   */
+  private val clockSamplerFactory: ((sessionDir: File, deviceId: String) -> DeviceClockSampler)? =
+    null,
 ) {
 
   constructor(streams: List<CaptureStream>, options: CaptureOptions) : this(streams, options, null)
 
+  /**
+   * Measures the device clock against the host's for the life of an Android capture, so readers can
+   * put device-stamped records on the host timeline. See [DeviceClockSampler].
+   */
+  private var clockSampler: DeviceClockSampler? = null
+
   fun startAll(sessionDir: File, deviceId: String, appId: String?) {
+    clockSampler = clockSamplerFactory?.invoke(sessionDir, deviceId)?.also { it.start() }
     for (stream in streams) {
       try {
         Console.log("Starting ${stream.type} capture...")
@@ -79,7 +92,7 @@ class CaptureSession internal constructor(
           if (
             artifact.type == xyz.block.trailblaze.capture.model.CaptureType.LOGCAT &&
             stream is AppScopedCaptureStream &&
-            stream.isAppScoped
+            (stream.isAppScoped || stream.appProcessName != null)
           ) {
             appScopedDeviceLog = artifact
             appProcessName = stream.appProcessName
@@ -92,6 +105,9 @@ class CaptureSession internal constructor(
         Console.log("Failed to stop ${stream.type} capture: ${e.message}")
       }
     }
+    // After the streams, so the final clock read never holds up finalizing a recording.
+    clockSampler?.stop()
+    clockSampler = null
     // Write metadata for timeline integration
     if (artifacts.isNotEmpty()) {
       if (writeMetadata) {
@@ -136,11 +152,17 @@ class CaptureSession internal constructor(
      *   own device, `video-<name>` ([CaptureFilenames.companionVideoBasename]) for a companion
      *   device recorded into the same session directory. Honoured by the Android, iOS (simctl) and
      *   web screencast recorders; an [iosVideoStreamOverride] names its own file.
+     * @param deviceLogFilename The Android logcat this session writes: `device.log`, or
+     *   `device-<name>.log` ([CaptureFilenames.companionDeviceLog]) for a companion.
      * @param webPlaywrightFallback whether a web recorder that finds no live screencast for its
      *   browser falls back to Playwright's own recorder. Pass false for a browser already in use —
      *   a companion of a multi-device session: that recorder is a context-creation option, so it
      *   would rebuild the context mid-run. Without it the recorder follows the browser's screencast
      *   instead, however late the browser comes up.
+     * @param sampleDeviceClock whether the session measures an Android device's clock into
+     *   `session_device_clock.json` ([DeviceClockSampler]). Pass false for a companion recording,
+     *   whose device the session coordinator already samples whether or not it records video. When
+     *   true, an Android session is returned even with every stream off, to take those readings.
      */
     fun fromOptions(
       options: CaptureOptions,
@@ -148,9 +170,16 @@ class CaptureSession internal constructor(
       iosVideoStreamOverride: CaptureStream? = null,
       androidMemoryProbeOverride: xyz.block.trailblaze.capture.memory.MemoryProbe? = null,
       videoBasename: String = CaptureFilenames.VIDEO_BASENAME,
+      deviceLogFilename: String = CaptureFilenames.DEVICE_LOG,
       webPlaywrightFallback: Boolean = true,
+      sampleDeviceClock: Boolean = true,
     ): CaptureSession? {
-      if (!options.hasAnyCaptureEnabled) return null
+      val clockSamplerFactory: ((File, String) -> DeviceClockSampler)? =
+        if (sampleDeviceClock && platform == TrailblazeDevicePlatform.ANDROID) {
+          { dir, deviceId -> DeviceClockSampler(dir, deviceId) }
+        } else {
+          null
+        }
       val streams = mutableListOf<CaptureStream>()
       if (options.captureVideo) {
         when (platform) {
@@ -177,7 +206,7 @@ class CaptureSession internal constructor(
         }
       }
       if (options.captureLogcat && platform == TrailblazeDevicePlatform.ANDROID) {
-        streams.add(xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture())
+        streams.add(xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture(filename = deviceLogFilename))
       }
       if (options.captureIosLogs && platform == TrailblazeDevicePlatform.IOS) {
         streams.add(xyz.block.trailblaze.capture.logcat.IosLogCapture())
@@ -208,8 +237,10 @@ class CaptureSession internal constructor(
           else -> Unit
         }
       }
-      if (streams.isEmpty()) return null
-      return CaptureSession(streams, options, platform)
+      // An Android session with every stream off still measures its clock: app events are stamped
+      // on the device clock whether or not anything is recorded, and need it to reach the host's.
+      if (streams.isEmpty() && clockSamplerFactory == null) return null
+      return CaptureSession(streams, options, platform, clockSamplerFactory)
     }
   }
 }

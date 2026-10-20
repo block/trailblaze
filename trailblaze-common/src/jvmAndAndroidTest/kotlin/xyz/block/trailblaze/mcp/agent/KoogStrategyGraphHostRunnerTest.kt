@@ -215,7 +215,7 @@ class KoogStrategyGraphHostRunnerTest {
    * be exercised PER driver. Each driver builds its verify surface from a different verification
    * toolset, scoped by `compatibleDriverTypes` (the YAML `drivers:` list):
    *  - `verification` — generic, Android on-device + iOS host (`assertVisible`).
-   *  - `web_verification` — Playwright drivers only (`assertEquals` standing in for `web_verifyTextVisible`).
+   *  - `web_verification` — Playwright drivers only (`assertEquals` standing in for `web_verifyElementVisible`).
    *  - `revyl_verification` — Revyl drivers only (`assertNotVisibleWithText` standing in for `revyl_assert`).
    *  - `compose_verification` — Compose only (reuses `assertVisible`; only the roll-out gate is asserted for Compose).
    * Plus always-on `core` (objectiveStatus) and a non-verification `typing` toolset whose tool must
@@ -603,13 +603,13 @@ class KoogStrategyGraphHostRunnerTest {
     val instrumentation = KoogRunInstrumentation()
 
     val text = runBlocking {
-      describeToolDispatch("tapOnElementWithText", instrumentation) {
+      describeToolDispatch("tapOnElementBySelector", instrumentation) {
         TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "no such element")
       }
     }
 
     assertThat(instrumentation.recoveredToolFailureCount).isEqualTo(1)
-    assertThat(instrumentation.lastRecoveredToolFailure!!.toolName).isEqualTo("tapOnElementWithText")
+    assertThat(instrumentation.lastRecoveredToolFailure!!.toolName).isEqualTo("tapOnElementBySelector")
     assertThat(instrumentation.lastRecoveredToolFailure!!.summary).isEqualTo("no such element")
     // Still handed back as an ordinary result, so the caller appends the fresh screen to it.
     assertThat(text).contains("no such element")
@@ -620,7 +620,7 @@ class KoogStrategyGraphHostRunnerTest {
     val instrumentation = KoogRunInstrumentation()
 
     val text = runBlocking {
-      describeToolDispatch("tapOnElementWithText", instrumentation) {
+      describeToolDispatch("tapOnElementBySelector", instrumentation) {
         throw IllegalStateException("stale ref [42]")
       }
     }
@@ -635,7 +635,7 @@ class KoogStrategyGraphHostRunnerTest {
     val instrumentation = KoogRunInstrumentation()
 
     runBlocking {
-      describeToolDispatch("tapOnElementWithText", instrumentation) {
+      describeToolDispatch("tapOnElementBySelector", instrumentation) {
         TrailblazeToolResult.Success(message = "tapped")
       }
     }
@@ -679,7 +679,7 @@ class KoogStrategyGraphHostRunnerTest {
 
     assertFailsWith<CancellationException> {
       runBlocking {
-        describeToolDispatch("tapOnElementWithText", instrumentation) { throw CancellationException("cancelled") }
+        describeToolDispatch("tapOnElementBySelector", instrumentation) { throw CancellationException("cancelled") }
       }
     }
 

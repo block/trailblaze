@@ -6,6 +6,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
 import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -123,6 +124,7 @@ class SubprocessTrailblazeTool(
           toolRepo = it.toolRepo,
           executionContext = toolExecutionContext,
           depth = parentDepth,
+          job = currentCoroutineContext()[Job],
         )
       }
 

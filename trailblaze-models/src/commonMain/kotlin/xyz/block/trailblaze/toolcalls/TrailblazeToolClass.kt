@@ -37,7 +37,7 @@ import kotlin.reflect.KClass
  *   registered with that name". A host-only tool should declare BOTH: this flag for the machine
  *   requirement, the marker for the dispatch.
  * @property isVerification Whether this tool is read-only and self-validates a condition (e.g.,
- *   `assertVisible`, `web_verifyTextVisible`). Verification tools never mutate the device, and
+ *   `assertVisible`, `web_verifyElementVisible`). Verification tools never mutate the device, and
  *   their successful execution is the assertion verdict. Used by `blaze(hint=VERIFY)` to decide
  *   whether the LLM-recommended tool may be executed: only verification tools are allowed,
  *   anything else short-circuits to a failed assertion (its success would be unrelated to whether

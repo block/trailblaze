@@ -16,6 +16,13 @@ export interface SurveyContext {
   found(summary: string, evidence: ReadonlyArray<SessionRecord>, extra?: Omit<FindingInput, "summary" | "evidence">): void;
   /** Diagnostic output; the runner forwards it to its own log, never into the report. */
   log(message: string): void;
+  /**
+   * Report a failure as the session's error without throwing, so the findings the handler still
+   * returns are kept: for a survey made of independent checks, one of which failed. `feature` names
+   * the check (default: the survey's own). Optional only so a context built by hand in a test needs
+   * no stub; the runner always provides it.
+   */
+  error?(message: string, feature?: string): void;
 }
 
 export type SurveyResult = FindingInput | ReadonlyArray<FindingInput> | undefined | null | false | void;
@@ -192,6 +199,14 @@ export const DIAGNOSIS_KINDS: ReadonlySet<string> = new Set(["diagnosis", "signa
 
 /** Which purpose a finding (or a survey, by its default kind) serves. */
 export const purposeOf = (kind: string | undefined): SurveyPurpose => (kind !== undefined && DIAGNOSIS_KINDS.has(kind) ? "diagnosis" : "coverage");
+
+/**
+ * Whether `--feature <id>` picks this survey: its own feature or a declared one, or any of them
+ * under `id` as a family (`platform.failure` picks the survey reporting `platform.failure.app-died`).
+ */
+export function selectsFeature(spec: SurveySpec, wanted: ReadonlyArray<string>): boolean {
+  return [spec.feature, ...surveyFeatures(spec)].some((f) => wanted.some((w) => f === w || f.startsWith(`${w}.`)));
+}
 
 /** The feature ids a survey declares it can report: its `footprints` keys, else `features`, else `feature`. */
 export function surveyFeatures(spec: SurveySpec): string[] {

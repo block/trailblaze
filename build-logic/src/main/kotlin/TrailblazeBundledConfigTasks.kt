@@ -773,9 +773,10 @@ internal class TrailmapTargetGenerator(
      */
     private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
       ".tool.yaml",
-      ".shortcut.yaml",
       ".trailhead.yaml",
       ".waypoint.yaml",
+      // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+      ".shortcut.yaml",
     )
   }
 

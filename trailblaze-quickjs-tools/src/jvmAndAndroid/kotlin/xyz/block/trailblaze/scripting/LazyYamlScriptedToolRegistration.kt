@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
@@ -117,7 +119,8 @@ class LazyYamlScriptedToolRegistration private constructor(
         // itself executing the tool rather than going through agent.runTrailblazeTools).
         binding.activeContext = context
         val result = try {
-          args.execute(context)
+          // The model calls this directly, not through an agent's dispatch, so record it here.
+          ToolCallHistory.recordExecution(context, args) { args.execute(context) }
         } finally {
           binding.activeContext = null
         }

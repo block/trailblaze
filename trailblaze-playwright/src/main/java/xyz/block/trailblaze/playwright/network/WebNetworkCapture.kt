@@ -4,6 +4,7 @@ import com.microsoft.playwright.BrowserContext
 import com.microsoft.playwright.Request
 import com.microsoft.playwright.Response
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.events.SessionEvents
 import xyz.block.trailblaze.network.BodyRef
 import xyz.block.trailblaze.network.InflightRequestTracker
@@ -98,6 +99,9 @@ class WebNetworkCapture private constructor(
   private val queuedCount: AtomicInteger = AtomicInteger(0)
   private var drainer: Thread? = null
 
+  /** Writes this capture's loss marker; at most one per session, see [recordLoss]. */
+  @Volatile private var markerWriter: Thread? = null
+
   private data class RequestState(val id: String, val startMs: Long)
 
   /**
@@ -188,6 +192,8 @@ class WebNetworkCapture private constructor(
       requestStarts.values.forEach { tracker.onRequestEnd(it.id) }
     }
     requestStarts.clear()
+    // Briefly, so a loss marker lands with the session's files when the disk is answering.
+    markerWriter?.let { runCatching { it.join(DRAIN_JOIN_TIMEOUT_MS) } }
     summarizeDrops()?.let { Console.log(it) }
   }
 
@@ -233,6 +239,7 @@ class WebNetworkCapture private constructor(
     val bodyBytes = runCatching { extractRequestBodyBytes(request) }
       .onFailure {
         droppedRequestBodies.incrementAndGet()
+        recordLoss("a request body could not be read")
         logSwallowed("readRequestBody", it)
       }
       .getOrNull()
@@ -337,6 +344,7 @@ class WebNetworkCapture private constructor(
     if (queuedCount.incrementAndGet() > MAX_QUEUED_EVENTS) {
       queuedCount.decrementAndGet()
       droppedEnqueues.incrementAndGet()
+      recordLoss("queue overflow")
       return
     }
     queue.add(pending)
@@ -385,6 +393,7 @@ class WebNetworkCapture private constructor(
     while (queue.poll() != null) {
       queuedCount.decrementAndGet()
       droppedWrites.incrementAndGet()
+      recordLoss("events left unwritten at stop")
     }
   }
 
@@ -409,6 +418,7 @@ class WebNetworkCapture private constructor(
         buffered++
       }.onFailure {
         droppedWrites.incrementAndGet()
+        recordLoss("a write failed")
         logSwallowed("writeEvent", it)
       }
     }
@@ -426,7 +436,24 @@ class WebNetworkCapture private constructor(
     if (batch.buffered == 0) return
     runCatching { w.flush() }.onFailure {
       droppedWrites.addAndGet(batch.buffered)
+      recordLoss("a write failed")
       logSwallowed(where, it)
+    }
+  }
+
+  /**
+   * Tells `ctx.events` readers this capture's network stream lost records. Held in memory at once,
+   * so this process's queries see the loss; only the first loss writes the marker file, on a thread
+   * of its own, because the caller can be Playwright's and the disk that just dropped an event can
+   * stall it.
+   */
+  private fun recordLoss(what: String) {
+    val reason = "web network capture: $what"
+    val stream = SessionEvents.parseFileName(ndjsonFile.name)
+    if (!SessionCaptureHealth.markIncompleteInMemory(sessionDir, reason, stream)) return
+    markerWriter = Thread({ SessionCaptureHealth.writeMarker(sessionDir, reason, stream) }, "web-network-capture-health").apply {
+      isDaemon = true
+      start()
     }
   }
 
@@ -448,6 +475,7 @@ class WebNetworkCapture private constructor(
       }
         .onFailure {
           droppedRequestBodies.incrementAndGet()
+          recordLoss("a request body could not be stored")
           logSwallowed("persistRequestBody", it)
         }
         .getOrNull()
@@ -462,10 +490,13 @@ class WebNetworkCapture private constructor(
    * roundtrip). Null for empty/absent bodies.
    */
   internal fun extractRequestBodyBytes(request: Request): ByteArray? {
-    val bytes: ByteArray = runCatching { request.postDataBuffer() }.getOrNull()
-      ?: runCatching { request.postData()?.toByteArray(Charsets.UTF_8) }.getOrNull()
-      ?: return null
-    return bytes.takeIf { it.isNotEmpty() }
+    val buffer = runCatching { request.postDataBuffer() }
+    buffer.getOrNull()?.let { return it.takeIf(ByteArray::isNotEmpty) }
+    val text = runCatching { request.postData()?.toByteArray(Charsets.UTF_8) }
+    // Both accessors failing means a body may have been lost, not that there was none: throw, so
+    // the caller counts it and event queries report the capture incomplete.
+    if (buffer.isFailure && text.isFailure) throw text.exceptionOrNull()!!
+    return text.getOrNull()?.takeIf { it.isNotEmpty() }
   }
 
   /**

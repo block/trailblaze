@@ -53,6 +53,7 @@ class PlaywrightToolRefResolutionTest {
     PlaywrightExecutableTool.elementResolutionTimeoutMs = 100.0
 
     playwright = Playwright.create()
+    PlaywrightTextRuns.register(playwright)
     browser = playwright.chromium().launch(
       BrowserType.LaunchOptions().setHeadless(true),
     )
@@ -1054,6 +1055,770 @@ class PlaywrightToolRefResolutionTest {
     assertTrue(
       elapsedMs < 2_000,
       "A 300ms override must bound the wait even with a 5000ms global timeout; took ${elapsedMs}ms.",
+    )
+  }
+
+  /**
+   * A selector recorded from a paragraph must replay. A paragraph has no accessible name, so the
+   * name the snapshot gives it is its text, and `getByRole(paragraph, name)` alone finds nothing.
+   * The text here also contains `: `, which Playwright's snapshot quotes as YAML — the recorded
+   * name must be the text on the page, not the quoted scalar.
+   */
+  @Test
+  fun `a selector recorded from a paragraph replays against its text`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>Current value: <span>0</span></p>
+        <p>Total: <span>10</span></p>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "paragraph" && it.ariaName?.contains("Current") == true }
+    assertEquals("Current value: 0", selector.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals(1, locator.count())
+    assertEquals("Current value: 0", locator.first().textContent())
+
+    page.locator("span").first().evaluate("e => e.textContent = '9'")
+    assertEquals(0, locator.count(), "A paragraph with different text must not match.")
+  }
+
+  /** The snapshot's bare `text:` node has no role at all; its selector replays by visible text. */
+  @Test
+  fun `a selector recorded from bare text replays against that text`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div>Sale attributed to: ${"$"}alex <a href="#">Details</a></div>
+        <div>Other</div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName?.contains("attributed") == true }
+
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals(1, locator.count())
+
+    val pattern = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = ".*[$]alex")),
+    )
+    assertEquals(1, assertNotNull(pattern).count(), "A pattern matches the run of text.")
+
+    page.locator("div").first().evaluate("e => e.firstChild.textContent = 'Sale attributed to: ${"$"}sam '")
+    assertEquals(0, locator.count(), "Different text must not match.")
+    assertEquals(0, pattern.count(), "Different text must not match.")
+  }
+
+  /**
+   * A list of plain divs snapshots as one run of text, its cells joined by spaces the page does
+   * not have. The selector recorded from it still has to find the row.
+   */
+  @Test
+  fun `a selector recorded from a flattened row replays against that row`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <h1>Transactions</h1>
+        <div><div>Custom Amount</div><div>Main Location</div><div>${"$"}25.00</div></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName?.contains("Main Location") == true }
+    assertEquals("Custom Amount Main Location \$25.00", selector.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals(1, locator.count())
+
+    val pattern = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = ".*Main Location [$]25\\.00.*")),
+    )
+    assertEquals(1, assertNotNull(pattern).count(), "A pattern matches across the joined cells.")
+
+    page.locator("div div").nth(2).evaluate("e => e.textContent = '${"$"}30.00'")
+    assertEquals(0, locator.count(), "Different text must not match.")
+    assertEquals(0, pattern.count(), "Different text must not match.")
+  }
+
+  /**
+   * Text matching is for elements without an accessible name. A button labelled "Close" that
+   * shows "Save" must not answer to a selector for a button named "Save".
+   */
+  @Test
+  fun `a named control is not matched by the text inside it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body><button aria-label="Close">Save</button></body></html>
+      """.trimIndent(),
+    )
+
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "button", ariaNameRegex = "Save")),
+    )
+
+    assertEquals(0, assertNotNull(locator).count())
+  }
+
+  /** The snapshot collapses the page's whitespace; a selector recorded from it still replays. */
+  @Test
+  fun `a selector recorded from text the page spaces out replays against it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>
+          Current   value:
+          <span>0</span>
+        </p>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "paragraph" }
+    assertEquals("Current value: 0", selector.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals(1, locator.count())
+
+    page.locator("span").evaluate("e => e.textContent = '9'")
+    assertEquals(0, locator.count(), "A paragraph with different text must not match.")
+  }
+
+  /** Hidden text is not in the snapshot, so it neither breaks a match nor makes one. */
+  @Test
+  fun `hidden text neither breaks nor makes a text match`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p id="shown">Visible <span style="display:none">hidden</span>text</p>
+        <p id="count">Count: <span style="display:none">0</span></p>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "paragraph" && it.ariaName?.startsWith("Visible") == true }
+    assertEquals("Visible text", selector.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    val shown = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals("shown", shown.first().getAttribute("id"))
+    assertEquals(1, shown.count())
+
+    val hiddenValue = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "paragraph", ariaNameRegex = "Count: 0")),
+    )
+    assertEquals(0, assertNotNull(hiddenValue).count(), "A value the page hides must not match.")
+  }
+
+  /** A bare text run matches in full: a longer run that begins with it is different text. */
+  @Test
+  fun `a bare text selector does not match a longer run`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body><div>Sale attributed to: ${"$"}alex <a href="#">Details</a></div></body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName?.contains("attributed") == true }
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals(1, locator.count())
+
+    page.locator("div").evaluate("e => e.firstChild.textContent = 'Sale attributed to: ${"$"}alexander '")
+    assertEquals(0, locator.count(), "A run that only starts with the recorded text must not match.")
+  }
+
+  /** A hidden copy of a run is not a match, so it cannot be the element replay acts on. */
+  @Test
+  fun `a hidden copy of a text run is skipped`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="hidden" style="display:none">Terms apply <a href="#">a</a></div>
+        <div id="shown">Terms apply <a href="#">b</a></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Terms apply")),
+    )
+
+    assertEquals(1, assertNotNull(locator).count())
+    assertEquals("shown", locator.first().getAttribute("id"))
+  }
+
+  /** A text selector matches text runs only; a control showing the same words is not one. */
+  @Test
+  fun `a text selector does not resolve to a control with the same words`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body><button>Terms apply</button></body></html>
+      """.trimIndent(),
+    )
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Terms apply")),
+    )
+
+    assertEquals(0, assertNotNull(locator).count())
+  }
+
+  /**
+   * `$5.00` is a valid regex that can never match, because its bare `$` ends the input. Like
+   * every other name match, text matching falls back to equality with the recorded value.
+   */
+  @Test
+  fun `a recorded price replays as text without escaping`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>${"$"}5.00</p>
+        <div>${"$"}7.00 <a href="#">Edit</a></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    fun count(role: String, name: String) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = role, ariaNameRegex = name)),
+      ),
+    ).count()
+
+    assertEquals(1, count("paragraph", "${"$"}5.00"))
+    assertEquals(1, count("text", "${"$"}7.00"))
+    assertEquals(0, count("paragraph", "${"$"}6.00"))
+  }
+
+  /** The recorded pattern is used as written; a quantified space stays a valid pattern. */
+  @Test
+  fun `a pattern quantifying a space resolves`() {
+    page.setContent("<!DOCTYPE html><html><body><p>Sign in</p></body></html>")
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "paragraph", ariaNameRegex = "Sign *in")),
+    )
+
+    assertEquals(1, assertNotNull(locator).count())
+  }
+
+  /** The spaces the snapshot prints are part of the text: removing or moving one is a change. */
+  @Test
+  fun `a selector does not match text whose word or cell boundaries moved`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>Log in</p>
+        <h1>Totals</h1>
+        <div><div id="a">1</div><div id="b">23</div></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val words = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, recordSelector { it.ariaRole == "paragraph" }))
+    val cells = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, recordSelector { it.ariaRole == "text" }))
+    assertEquals(1, words.count())
+    assertEquals(1, cells.count())
+
+    page.locator("p").evaluate("e => e.textContent = 'Login'")
+    page.evaluate("() => { document.getElementById('a').textContent = '12'; document.getElementById('b').textContent = '3' }")
+    assertEquals(0, words.count(), "Text that lost a space must not match.")
+    assertEquals(0, cells.count(), "Cells whose boundary moved must not match.")
+  }
+
+  /**
+   * An occurrence index counts text runs as the snapshot printed them. Two runs in one element
+   * both resolve to that element, so the third run is still index 2.
+   */
+  @Test
+  fun `each occurrence of a text run is counted`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="first">Terms apply <a href="#">a</a> Terms apply <a href="#">b</a></div>
+        <div id="second">Terms apply <a href="#">c</a></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    fun nth(index: Int) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Terms apply", nthIndex = index)),
+      ),
+    )
+
+    assertEquals("first", nth(0).getAttribute("id"))
+    assertEquals("first", nth(1).getAttribute("id"))
+    assertEquals("second", nth(2).getAttribute("id"))
+    assertEquals(0, nth(3).count())
+  }
+
+  /** A text run that renders after the wait starts is found: the match is re-run as it polls. */
+  @Test
+  fun `a text selector waits for text that renders late`() {
+    PlaywrightExecutableTool.elementResolutionTimeoutMs = PRODUCTION_RESOLUTION_BUDGET_MS
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body><h1>Loading</h1><div id="slot"></div>
+      <script>setTimeout(() => { document.getElementById('slot').innerHTML = 'Ready now <a href="#">Go</a>' }, 200)</script>
+      </body></html>
+      """.trimIndent(),
+    )
+    val locator = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Ready now")),
+      ),
+    )
+
+    locator.first().waitFor(Locator.WaitForOptions().setTimeout(PRODUCTION_RESOLUTION_BUDGET_MS))
+    assertEquals("slot", locator.first().getAttribute("id"))
+  }
+
+  /** The snapshot prints a frame as a node of its own, so text on either side is two runs. */
+  @Test
+  fun `a frame separates the text runs around it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="row">Before <iframe srcdoc="<p>inside</p>"></iframe> After <a href="#">Go</a></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName == "Before" }
+    val before = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+    assertEquals("row", before.first().getAttribute("id"))
+    assertEquals(1, before.count())
+
+    val joined = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Before After")),
+    )
+    assertEquals(0, assertNotNull(joined).count(), "Runs a frame separates must not join into one.")
+  }
+
+  /** Text a component renders straight into its shadow root resolves to that component. */
+  @Test
+  fun `a text run in a shadow root resolves to its host`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="host"></div><a href="#">Go</a>
+        <script>document.getElementById('host').attachShadow({ mode: 'open' }).textContent = 'Ready now'</script>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName == "Ready now" }
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+
+    assertEquals("host", locator.first().getAttribute("id"))
+  }
+
+  /** A run made only of CSS-generated text resolves to the element that generates it. */
+  @Test
+  fun `a text run of generated content resolves to the element generating it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><head><style>#badge::before { content: "Fresh" }</style></head><body>
+        <span id="badge"></span><a href="#">Go</a>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName == "Fresh" }
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+
+    assertEquals("badge", locator.first().getAttribute("id"))
+  }
+
+  /**
+   * The snapshot has no node for an inline generic around a single text node, nor for an empty
+   * generic: their text joins the text around them.
+   */
+  @Test
+  fun `text joins across a generic the snapshot leaves out`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>Total: <span role="generic">10</span></p>
+        <div id="row">New prefix <span role="generic"></span>Total <a href="#">Go</a></div>
+      </body></html>
+      """.trimIndent(),
+    )
+    val paragraph = recordSelector { it.ariaRole == "paragraph" }
+    assertEquals("Total: 10", paragraph.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    assertEquals(1, assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, paragraph)).count())
+
+    val run = recordSelector { it.ariaRole == "text" && it.ariaName?.contains("Total") == true }
+    assertEquals("New prefix Total", run.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, run))
+    assertEquals("row", locator.first().getAttribute("id"))
+    assertEquals(1, locator.count())
+  }
+
+  /** A run of a component's own text and the text slotted into it resolves inside the component. */
+  @Test
+  fun `a text run across a slot resolves to the element showing it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="host">world</div>
+        <script>document.getElementById('host').attachShadow({ mode: 'open' }).innerHTML = '<div id="inner">Hello <slot></slot> <a href="#">Go</a></div>'</script>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName == "Hello world" }
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+
+    assertEquals("inner", locator.first().getAttribute("id"))
+  }
+
+  /**
+   * Generated content prints only when it is all strings: an image or a counter voids the whole
+   * value, and an image with alternative text prints that text.
+   */
+  @Test
+  fun `generated images print only their alternative text`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><head><style>
+        #icon::before { content: url("icon.svg") }
+        #alt::before { content: url("icon.svg") / "New: " }
+        #step::before { content: "Step " counter(list-item) }
+      </style></head><body>
+        <p id="icon">Ready</p>
+        <p id="step">One</p>
+        <p id="alt">Later</p>
+      </body></html>
+      """.trimIndent(),
+    )
+    val icon = recordSelector { it.ariaRole == "paragraph" && it.ariaName?.contains("Ready") == true }
+    assertEquals("Ready", icon.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    assertEquals("icon", assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, icon)).first().getAttribute("id"))
+
+    val alt = recordSelector { it.ariaRole == "paragraph" && it.ariaName?.contains("Later") == true }
+    assertEquals("New: Later", alt.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    assertEquals("alt", assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, alt)).first().getAttribute("id"))
+
+    val step = recordSelector { it.ariaRole == "paragraph" && it.ariaName?.contains("One") == true }
+    assertEquals("One", step.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    assertEquals("step", assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, step)).first().getAttribute("id"))
+  }
+
+  /** An aria-hidden wrapper hides what it holds even when it draws no box of its own. */
+  @Test
+  fun `text inside an aria-hidden display-contents wrapper is hidden`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body><p>Count: <span style="display:contents" aria-hidden="true"><b>0</b></span></p></body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "paragraph" }
+    assertEquals("Count:", selector.web?.ariaNameRegex?.let { PlaywrightAriaSnapshot.literalAriaName(it) })
+    assertEquals(1, assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector)).count())
+
+    val hiddenValue = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "paragraph", ariaNameRegex = "Count: 0")),
+    )
+    assertEquals(0, assertNotNull(hiddenValue).count(), "A value the page hides must not match.")
+  }
+
+  /**
+   * A link's `/url` and a text field's `/placeholder` print beside its text, so text that differs
+   * from the name prints as a run of its own. Text that repeats the name prints nothing.
+   */
+  @Test
+  fun `text printed beside a link or field property is a run`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <a id="close" href="#" aria-label="Close dialog">X</a>
+        <a href="#">Y</a>
+        <input id="search" aria-label="Search" placeholder="Type here" value="shoes">
+      </body></html>
+      """.trimIndent(),
+    )
+    val link = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, recordSelector { it.ariaRole == "text" && it.ariaName == "X" }))
+    assertEquals("close", link.first().getAttribute("id"))
+    assertEquals(1, link.count())
+
+    val field = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, recordSelector { it.ariaRole == "text" && it.ariaName == "shoes" }))
+    assertEquals("search", field.first().getAttribute("id"))
+
+    val named = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Y")),
+    )
+    assertEquals(0, assertNotNull(named).count(), "Text that is the link's name is not printed as a run.")
+  }
+
+  /**
+   * A label's hidden descendants are not part of the name, so a link or field whose shown label
+   * repeats its text prints no separate run.
+   */
+  @Test
+  fun `hidden label text does not make a run of a link or field`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <a href="#" aria-labelledby="close-label">Close</a>
+        <span id="close-label">Close<span style="display:none"> dialog</span></span>
+        <label>Search<span style="display:none"> products</span> <input placeholder="Search" value="shoes"></label>
+      </body></html>
+      """.trimIndent(),
+    )
+    val yaml = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml
+    val printed = yaml.lines().map { it.trim() }
+    assertFalse("- text: Close" in printed || "- text: shoes" in printed, "Playwright prints no such run:\n$yaml")
+    fun count(name: String) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = name)),
+      ),
+    ).count()
+
+    assertEquals(0, count("Close"))
+    assertEquals(0, count("shoes"))
+  }
+
+  /**
+   * A label names a link the way Playwright reads it: line breaks and alt text as shown, text
+   * from shadow roots and slots, an aria-label in place of the content it labels, and a dropdown
+   * as its chosen option. Each link here is named exactly its text, so none of them prints a
+   * text run.
+   */
+  @Test
+  fun `label text is read as Playwright names from it`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <a href="#" aria-labelledby="br">Close dialog</a>
+        <a href="#" aria-labelledby="alt">Next page</a>
+        <a href="#" aria-labelledby="shadow">Save draft</a>
+        <a href="#" aria-labelledby="slot">Send message</a>
+        <a href="#" aria-labelledby="named">Delete</a>
+        <a href="#" aria-labelledby="inner">Open menu</a>
+        <a href="#" aria-labelledby="dropdown">Size Large</a>
+        <p>Labels: <span id="br">Close<br>dialog</span></p>
+        <p>Labels: <span id="alt">Next <img alt="page" src="data:,"></span></p>
+        <p>Labels: <span id="shadow">Save <span id="shadow-host"></span></span></p>
+        <p>Labels: <span id="slot"><span id="slot-host">message</span></span></p>
+        <p>Labels: <span id="named" aria-label="Delete">Remove item</span></p>
+        <p>Labels: <span id="inner">Open <span aria-label="menu">=</span></span></p>
+        <div>Labels: <span id="dropdown">Size <span role="listbox"><span role="option" aria-selected="true">Large</span> <span role="option">Small</span></span></span></div>
+        <script>
+          document.getElementById('shadow-host').attachShadow({ mode: 'open' }).innerHTML = 'draft';
+          document.getElementById('slot-host').attachShadow({ mode: 'open' }).innerHTML = 'Send <slot></slot>';
+        </script>
+      </body></html>
+      """.trimIndent(),
+    )
+    val names = listOf("Close dialog", "Next page", "Save draft", "Send message", "Delete", "Open menu", "Size Large")
+    val yaml = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml
+    val printed = yaml.lines().map { it.trim() }
+    for (name in names) {
+      assertTrue("- link \"$name\":" in printed, "Playwright names the link \"$name\":\n$yaml")
+      assertFalse("- text: $name" in printed, "Playwright prints no run \"$name\":\n$yaml")
+    }
+    fun count(name: String) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = name)),
+      ),
+    ).count()
+
+    assertEquals(names.map { it to 0 }, names.map { it to count(it) })
+  }
+
+  /**
+   * Fields take Playwright's input roles: a search field is a searchbox, which prints no
+   * placeholder, so its value is its content rather than a run; a password field is a textbox,
+   * which splits the text around it. An SVG in a label names the field by its title.
+   */
+  @Test
+  fun `fields take the roles and label names Playwright gives them`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <input type="search" aria-label="Search" placeholder="Type here" value="shoes">
+        <label><svg width="10" height="10"><title>Find</title></svg> <input placeholder="Find" value="boots"></label>
+        <p>Password <input type="password"> required</p>
+      </body></html>
+      """.trimIndent(),
+    )
+    val yaml = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml
+    val printed = yaml.lines().map { it.trim() }
+    assertTrue("- searchbox \"Search\": shoes" in printed, yaml)
+    assertTrue("- textbox \"Find\": boots" in printed, yaml)
+    assertTrue("- text: Password" in printed && "- text: required" in printed, yaml)
+    fun count(name: String) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = name)),
+      ),
+    ).count()
+
+    assertEquals(
+      listOf("shoes" to 0, "boots" to 0, "Password" to 1, "required" to 1, "Password required" to 0),
+      listOf("shoes", "boots", "Password", "required", "Password required").map { it to count(it) },
+    )
+  }
+
+  /**
+   * A link named from its content reads that content as Playwright does: an aria-label inside
+   * stands in for the text it labels, so the text itself prints as a run.
+   */
+  @Test
+  fun `text inside a link named from an inner aria-label is a run`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <a id="close" href="#"><span aria-label="Close dialog">X</span></a>
+        <a href="#"><span>Plain</span></a>
+      </body></html>
+      """.trimIndent(),
+    )
+    val printed = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml.lines().map { it.trim() }
+    assertTrue("- link \"Close dialog\":" in printed && "- text: X" in printed, printed.joinToString("\n"))
+    assertFalse("- text: Plain" in printed, printed.joinToString("\n"))
+    fun locate(name: String) = assertNotNull(
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+        page,
+        TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = name)),
+      ),
+    )
+
+    assertEquals(1, locate("X").count())
+    assertEquals("close", locate("X").first().evaluate("e => e.closest('a').id"))
+    assertEquals(0, locate("Plain").count())
+  }
+
+  /** aria-labelledby inside a shadow root names its link from that shadow root. */
+  @Test
+  fun `a link labelled inside a shadow root keeps its text run`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <div id="host"></div>
+        <script>document.getElementById('host').attachShadow({ mode: 'open' }).innerHTML = '<span id="l">Close dialog</span><a id="x" href="#" aria-labelledby="l">X</a>'</script>
+      </body></html>
+      """.trimIndent(),
+    )
+    val selector = recordSelector { it.ariaRole == "text" && it.ariaName == "X" }
+    val locator = assertNotNull(PlaywrightExecutableTool.nodeSelectorToReadinessLocator(page, selector))
+
+    assertEquals("x", locator.first().getAttribute("id"))
+  }
+
+  /** The engine runs in a world of its own: page scripts replacing globals cannot fake a match. */
+  @Test
+  fun `a page replacing globals cannot make absent text match`() {
+    page.setContent("<!DOCTYPE html><html><body><p>Present</p><a href=\"#\">Go</a></body></html>")
+    page.evaluate("() => { JSON.parse = () => ({ probe: true }) }")
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "text", ariaNameRegex = "Absent")),
+    )
+
+    assertEquals(0, assertNotNull(locator).count())
+  }
+
+  /**
+   * A Playwright that never registered the engine still resolves selectors, by accessible name
+   * alone, rather than failing every lookup on an unknown engine.
+   */
+  @Test
+  fun `a Playwright without the engine resolves by accessible name`() {
+    val bare = Playwright.create()
+    try {
+      val bareBrowser = bare.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
+      val barePage = bareBrowser.newPage()
+      barePage.setContent("<!DOCTYPE html><html><body><p>Current value: 0</p><button>Save</button></body></html>")
+
+      assertFalse(PlaywrightTextRuns.isRegistered(barePage))
+      fun count(role: String, name: String) = assertNotNull(
+        PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+          barePage,
+          TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = role, ariaNameRegex = name)),
+        ),
+      ).count()
+      assertEquals(1, count("button", "Save"))
+      assertEquals(0, count("paragraph", "Current value: 0"))
+    } finally {
+      bare.close()
+    }
+    assertTrue(PlaywrightTextRuns.isRegistered(page))
+  }
+
+  /** A context looked up before the engine was registered gets text matching once it is. */
+  @Test
+  fun `registering the engine after a lookup turns text matching on`() {
+    val late = Playwright.create()
+    try {
+      val latePage = late.chromium().launch(BrowserType.LaunchOptions().setHeadless(true)).newPage()
+      latePage.setContent("<!DOCTYPE html><html><body><p>Current value: 0</p></body></html>")
+      assertFalse(PlaywrightTextRuns.isRegistered(latePage))
+
+      PlaywrightTextRuns.register(late)
+
+      assertTrue(PlaywrightTextRuns.isRegistered(latePage))
+      assertEquals(
+        1,
+        assertNotNull(
+          PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+            latePage,
+            TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaRole = "paragraph", ariaNameRegex = "Current value: 0")),
+          ),
+        ).count(),
+      )
+    } finally {
+      late.close()
+    }
+  }
+
+  /**
+   * Captures [page] as the recorder does and returns the role + name selector the generator
+   * records for the first node [predicate] accepts.
+   */
+  private fun recordSelector(
+    predicate: (xyz.block.trailblaze.api.DriverNodeDetail.Web) -> Boolean,
+  ): TrailblazeNodeSelector {
+    val yaml = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml
+    val root = assertNotNull(PlaywrightTrailblazeNodeMapper.mapAriaSnapshotToTrailblazeNode(yaml))
+    fun find(node: xyz.block.trailblaze.api.TrailblazeNode): xyz.block.trailblaze.api.DriverNodeDetail.Web? {
+      val detail = node.driverDetail as? xyz.block.trailblaze.api.DriverNodeDetail.Web
+      if (detail != null && predicate(detail)) return detail
+      return node.children.firstNotNullOfOrNull(::find)
+    }
+    val detail = assertNotNull(find(root), "No captured node matched in:\n$yaml")
+    return TrailblazeNodeSelector(
+      web = DriverNodeMatch.Web(
+        ariaRole = detail.ariaRole,
+        ariaNameRegex = escapeForSelector(assertNotNull(detail.ariaName)),
+      ),
     )
   }
 }

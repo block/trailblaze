@@ -18,6 +18,7 @@ import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
 import xyz.block.trailblaze.config.project.workspaceRootFromConfigDir
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -257,8 +258,8 @@ object AppTargetDiscovery {
    * executor (`TrailblazeToolRepo.toolCallToTrailblazeTool`).
    *
    * **Classpath/workspace separation.** The composite resource source walks both layers,
-   * so `ToolYamlLoader.discoverYamlDefinedTools(source)` surfaces classpath-bundled tools
-   * (`eraseText`) alongside workspace files. Pure classpath entries get
+   * so `ToolYamlLoader.discoverYamlDefinedTools(source)` surfaces classpath-bundled YAML tools
+   * alongside workspace files. Pure classpath entries get
    * filtered out via the `classpathConfigs[k] == v` equality check — they already live
    * in the serialization initializer's classpath cache, and registering them as workspace
    * overlay entries would force-flip their `requires_host` flag, silently changing their
@@ -271,6 +272,11 @@ object AppTargetDiscovery {
    * equality filter distinguishes "pure classpath" (configs match exactly, drop) from
    * "workspace override of a classpath id" (configs differ, keep). Pinned by
    * `workspace tool with classpath-colliding id overrides the bundled one`.
+   *
+   * **Class-backed ids are not overridable.** A name binds to one backing, so a workspace YAML
+   * tool named like a class-backed built-in (`eraseText`, `tapOnElementBySelector`) would make
+   * every [ToolNameResolver] built afterwards throw on the collision. It is skipped with an
+   * error instead (thrown when [failFast]), so the built-in stays and the catalog still builds.
    *
    * **Re-discovery soundness.** On a hypothetical second `discover()` call in the same
    * JVM, the classpath snapshot is stable (`getClasspathYamlDefinedTools` reads the
@@ -297,7 +303,7 @@ object AppTargetDiscovery {
     }
     // Filter out configs that came from the classpath unchanged. `allDiscovered` was
     // walked from a composite resource source (classpath + workspace filesystem), so
-    // classpath-bundled `*.tool.yaml` files (`eraseText`, etc.) show up
+    // classpath-bundled `*.tool.yaml` files show up
     // alongside any workspace-authored ones. If we registered the full set, the
     // `requires_host = null → true` mutation below would flip THEIR host-vs-device
     // dispatch flag too — silently routing classpath tools through the host-expansion
@@ -314,7 +320,17 @@ object AppTargetDiscovery {
     // contract (pinned by `workspace tool with classpath-colliding id overrides the
     // bundled one`) while leaving non-overridden classpath tools untouched.
     val classpathConfigs = TrailblazeSerializationInitializer.getClasspathYamlDefinedTools()
-    val workspaceOnly = allDiscovered.filterNot { (k, v) -> classpathConfigs[k] == v }
+    val classBackedNames = ToolYamlLoader.discoverAndLoadAll(bundledConfigResourceSource()).keys
+    val shadowsClass = allDiscovered.keys.intersect(classBackedNames)
+    if (shadowsClass.isNotEmpty()) {
+      val message = "$logPrefix Workspace YAML tool(s) ${shadowsClass.map { it.toolName }.sorted()} " +
+        "reuse the name of a class-backed built-in tool and are not registered. Rename them."
+      if (failFast) error(message)
+      Console.error(message)
+    }
+    val workspaceOnly = allDiscovered
+      .filterKeys { it !in shadowsClass }
+      .filterNot { (k, v) -> classpathConfigs[k] == v }
     // Force `requires_host = true` on workspace YAML configs whose author left it null.
     // Workspace `*.tool.yaml` files live only on the host filesystem — the device's
     // classpath doesn't have them, so RPC dispatch would fail with "Unknown tool 'X' is

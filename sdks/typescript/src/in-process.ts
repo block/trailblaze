@@ -21,6 +21,7 @@ import {
   defineTypedTool,
   type EmptyInput,
   type ToolContext,
+  type TrailblazeHost,
   type TrailblazeTypedToolSpec,
   type TrailheadSpec,
   type TypedToolDefinition,
@@ -42,14 +43,21 @@ export { z } from "zod";
 export { ToolError } from "./tool-error.js";
 export {
   fromMeta,
+  TRAILBLAZE_HOST_ARCH,
+  TRAILBLAZE_HOST_OS,
   type TrailblazeContext,
   type TrailblazeDevice,
+  type TrailblazeHostArch,
+  type TrailblazeHostOs,
+  type TrailblazeHostPlatform,
   type TrailblazeLogger,
   type TrailblazeLogLevel,
   type TrailblazeMemory,
   type TrailblazeTarget,
 } from "./context.js";
 export type { TrailblazeSessionCleanup, TrailblazeSessionResources } from "./session-resources.js";
+export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
 export type {
   EventMatch,
   EventMatchValue,
@@ -183,6 +191,7 @@ export const trailblaze = {
 // surface (`ToolContext`, `EmptyInput`, `TypedToolDefinition`, `TrailblazeTypedToolSpec`).
 export type {
   ToolContext,
+  TrailblazeHost,
   EmptyInput,
   TypedToolDefinition,
   TrailblazeTypedToolSpec,

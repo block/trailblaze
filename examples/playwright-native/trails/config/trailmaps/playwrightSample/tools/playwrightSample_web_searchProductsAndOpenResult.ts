@@ -14,7 +14,7 @@ export interface SearchProductsAndOpenResultArgs {
   query?: string;
   /** data-id of the result to click after searching. */
   resultId?: string;
-  /** Visible text to assert on the result's detail view. */
+  /** Subtitle the result's detail view must show. */
   expectedDetailText?: string;
 }
 
@@ -46,7 +46,9 @@ export const playwrightSample_web_searchProductsAndOpenResult = trailblaze.tool<
     await ctx.tools.web_click({
       ref: `css=[data-id='${resultId}']`,
     });
-    await ctx.tools.web_verifyTextVisible({ text: expectedDetailText });
+    await ctx.tools.web_verifyElementVisible({
+      ref: `css=#detail-subtitle:text-is(${JSON.stringify(expectedDetailText)})`,
+    });
 
     return `Searched for "${query}", opened result ${resultId}, and verified "${expectedDetailText}".`;
   },

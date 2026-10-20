@@ -214,7 +214,9 @@ object PlaywrightTrailblazeNodeMapper {
       return AriaLineParsed(
         role = role,
         ariaRole = ariaRoleFromString(role),
-        name = match.groupValues[2],
+        // Playwright quotes the value when plain YAML would misread it (`paragraph: "Total: 10"`);
+        // left quoted, the name is text the page never shows, and a selector built on it can't replay.
+        name = yamlScalar(match.groupValues[2]),
         headingLevel = headingLevel,
         attributes = attributes,
       )

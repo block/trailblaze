@@ -256,6 +256,7 @@ class QuickJsTrailblazeTool(
       target = target,
       memory = nonSensitiveMemory,
       previousRun = previousRun,
+      hostPlatform = hostPlatformOrNull(),
     )
     // The host expects the ctx as a JsonObject (it embeds it inline as a JS literal),
     // so encode-to-element rather than encode-to-string — saves a parse-back trip.

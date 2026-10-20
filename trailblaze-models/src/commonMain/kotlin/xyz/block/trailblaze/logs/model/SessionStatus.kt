@@ -50,7 +50,7 @@ sealed interface SessionStatus {
     val targetAppInfo: TrailblazeTargetAppInfo? = null,
     /**
      * The multi-device configuration this session selected and bound (a `config.devices:`
-     * configuration entry's name, e.g. `x2`), or null for a single-device run. A configuration
+     * configuration entry's name, e.g. `pair`), or null for a single-device run. A configuration
      * session's recording legs are keyed by this name, matched exactly — never by the launch
      * device's classifier chain — so the save path reads it from here to key the merge.
      */

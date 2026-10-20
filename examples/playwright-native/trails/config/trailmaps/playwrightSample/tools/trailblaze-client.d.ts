@@ -258,14 +258,14 @@ NOTE:
     };
 
     /**
-     * Open the Playwright sample page and verify visible text.
+     * Open the Playwright sample page and verify its heading.
      */
     playwrightSample_web_openFixtureAndVerifyText: {
       args: {
         /** Sample-app fixture path (relative to repo root). */
         relativePath?: string;
-        /** Visible text to assert on the loaded page. */
-        text?: string;
+        /** Heading to assert on the loaded page. */
+        heading?: string;
       };
       result: string;
     };
@@ -792,19 +792,6 @@ Default is 'DOWN'. */
         items: unknown[];
         /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), or CSS selector with css= prefix (e.g., 'css=#my-list'). */
         ref?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Verify that specific text is visible on the current page.
-     * This is a test assertion — it will fail the test if the text is not found.
-     */
-    web_verifyTextVisible: {
-      args: {
-        /** The text content to verify is visible on the page. */
-        text: string;
         reasoning?: string;
       };
       result: string;

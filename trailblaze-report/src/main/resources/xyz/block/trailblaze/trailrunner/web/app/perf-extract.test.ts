@@ -381,6 +381,19 @@ describe('clock domains', () => {
     expect(data.t1).toBe(1_000);
   });
 
+  test("a measured device clock reading wins over the offset the logs imply", () => {
+    // The logs imply the device runs 1s behind (an upper bound inflated by upload latency); the
+    // session measured it 30s ahead. Only the measurement puts the span back inside the run.
+    const measured = { devices: [{ deviceId: 'emulator-5554', samples: [{ hostBeforeMs: T0, hostAfterMs: T0, deviceMs: T0 + 30_000 }] }] };
+    const logs = [sessionAnchor(0), toolLog('outer', 0, 10_000), anchoredDeviceToolLog('inner', 1_000, 100, 1_000)];
+    const trace = [traceEvent('a11y-capture', 33_000, 500, { clock: 'device' })];
+    const data = extractPerfSession(logs, trace, measured)!;
+    expect(data.spans.find((sp) => sp.name === 'a11y-capture')!.s).toBe(3_000);
+    expect(data.t1).toBe(10_000);
+    const fromLogs = extractPerfSession(logs, trace)!;
+    expect(fromLogs.spans.find((sp) => sp.name === 'a11y-capture')!.s).toBe(34_000);
+  });
+
   test('an anchored device-clock tool log is shifted onto the host timeline before it nests', () => {
     // The device's clock runs 1s behind the host's, so the raw stamp of a tool that really ran at
     // +3000 reads +2000 — outside the host tool that contained it, which read it as a sibling.

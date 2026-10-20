@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { discoverSessions, loadSurveys, type LoadedSurvey } from "./discover.js";
 import { renderMarkdown, renderSummaryLines } from "./report.js";
 import { runSurveys } from "./runner.js";
-import { surveyFeatures } from "./survey.js";
+import { selectsFeature } from "./survey.js";
 import { loadTargetCatalog, sessionMatchesTarget, type TargetCatalog } from "./targets.js";
 import type { SessionSummary } from "./types.js";
 import { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
@@ -108,7 +108,7 @@ async function main(argv: string[]): Promise<number> {
   // A survey scoped to another target would only report every session as skipped.
   if (values.target?.length) surveys = surveys.filter((c) => !c.spec.targets || c.spec.targets.some((t) => values.target!.includes(t)));
   // A catalog survey's own `feature` is a family name; `--feature refunds` must find the survey that reports it.
-  if (values.feature?.length) surveys = surveys.filter((c) => [c.spec.feature, ...surveyFeatures(c.spec)].some((f) => values.feature!.includes(f)));
+  if (values.feature?.length) surveys = surveys.filter((c) => selectsFeature(c.spec, values.feature!));
   if (values.tag?.length) surveys = surveys.filter((c) => c.spec.tags?.some((t) => values.tag!.includes(t)));
   if (surveys.length === 0) {
     process.stderr.write(`No surveys found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);

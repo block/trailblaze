@@ -47,7 +47,7 @@ import type { TrailblazeContext, TrailblazeClient } from "@trailblaze/scripting"
  *
  * Hover over `client.tools.` — autocomplete shows both:
  *   1. Vendored built-ins from `@trailblaze/scripting` (e.g. `inputText`,
- *      `tapOnElementWithText`).
+ *      `tapOnElementBySelector`).
  *   2. This trailmap's scripted tools plus the Kotlin tools resolved through its
  *      `tool_sets:`, written to `.trailblaze/client.d.ts` by `trailblaze
  *      compile`. (`./gradlew bundleTrailblazeTrailmap` writes the sibling
@@ -124,7 +124,7 @@ export async function exampleHello(
   //   // — `tsc` errors immediately.
   //   const verified = await client.tools.playwrightSample_web_openFixtureAndVerifyText({
   //     relativePath: "fixtures/text-snippet.html",
-  //     text: args.greeting,
+  //     heading: args.greeting,
   //   });
   //   console.error("[exampleHello] verified:", verified.textContent);
 

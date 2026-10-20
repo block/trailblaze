@@ -788,17 +788,39 @@ function loadScreenTextFile(dir: string): ScreenText[] {
   return out;
 }
 
+/**
+ * An iOS `log stream` entry's first line: `2026-10-15 11:44:54.364 Df Proc[1:2] [subsystem:category] …`.
+ * A message with newlines in it continues on lines without that prefix.
+ */
+const IOS_LOG_ENTRY = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ /;
+/**
+ * XCTest's own logging from inside the app it drives, which an app-scoped iOS capture recorded until
+ * the capture learned to leave it out: 2.7 million lines in one iPad session against 93,000 of the
+ * app's, enough to stall a batch for minutes per session. It is the test harness reading the
+ * screen, never the app, so no survey loses anything by its absence. Matched in the header's
+ * subsystem field only, by the same prefix the capture excludes: an app message that quotes XCTest
+ * output is still the app's.
+ */
+const IOS_XCTEST_ENTRY = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \S+ [^[]*\[\d+:[0-9a-f]+\] \[com\.apple\.dt\.xctest[.:]/i;
+
 function loadDeviceLog(dir: string): { file?: string; lines: DeviceLogLine[] } {
   for (const name of DEVICE_LOG_FILES) {
     const path = join(dir, name);
     if (!existsSync(path)) continue;
-    const lines = readLines(path).map<DeviceLogLine>((text, i) => ({
-      kind: "device-log",
-      text,
-      file: name,
-      line: i + 1,
-      summary: text.length > 160 ? text.slice(0, 160) + "…" : text,
-    }));
+    const lines: DeviceLogLine[] = [];
+    let inXcTestEntry = false;
+    readLines(path).forEach((text, i) => {
+      if (IOS_LOG_ENTRY.test(text)) inXcTestEntry = IOS_XCTEST_ENTRY.test(text);
+      if (inXcTestEntry) return;
+      lines.push({
+        kind: "device-log",
+        text,
+        file: name,
+        // The file's own line number, so a finding still points at the right line after the skip.
+        line: i + 1,
+        summary: text.length > 160 ? text.slice(0, 160) + "…" : text,
+      });
+    });
     return { file: name, lines };
   }
   return { lines: [] };

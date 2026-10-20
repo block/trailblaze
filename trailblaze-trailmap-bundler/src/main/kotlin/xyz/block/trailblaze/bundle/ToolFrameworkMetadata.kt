@@ -16,7 +16,7 @@ package xyz.block.trailblaze.bundle
  * `TrailblazeLog` that lets the KMP recording generator dedup without JVM reflection.
  * None of those are touched by scripted-tool authors. The semantic content ("this is a
  * read-only assertion") is already conveyed by the tool names themselves
- * (`assertVisible`, `assertEquals`, `web_verifyTextVisible`, …) — a TS author reading
+ * (`assertVisible`, `assertEquals`, `web_verifyElementVisible`, …) — a TS author reading
  * `client.tools.assertVisible(...)` doesn't need a tag to know it's an assertion.
  * Surfacing it as `.d.ts` JSDoc would advertise framework plumbing as if it were a
  * contract authors should code against — informational noise without an authorial use case.

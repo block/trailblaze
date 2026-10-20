@@ -257,6 +257,98 @@ class SessionLogScreenStateTest {
   }
 
   // ==========================================================================
+  // readSessionContext + the session-device fallback
+  // ==========================================================================
+
+  @Test
+  fun `readSessionContext returns the app id and device a session recorded at start`() {
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "001_TrailblazeSessionStatusChangeLog.json", startedStatusLog(appId = "com.example.app", device = ipad))
+    // A later status log (the end-of-session one) carries neither; it must not mask the start.
+    writeLog(
+      sessionDir,
+      "099_TrailblazeSessionStatusChangeLog.json",
+      """{"sessionStatus":{"class":"Ended.Succeeded","durationMs":1},"timestamp":"2026-05-08T10:09:00Z"}""",
+    )
+
+    val context = SessionLogScreenState.readSessionContext(sessionDir)
+
+    assertEquals("com.example.app", context?.appId)
+    assertEquals(TrailblazeDevicePlatform.IOS, context?.deviceInfo?.platform)
+    assertEquals(ipad.classifiers, context?.deviceInfo?.classifiers)
+  }
+
+  @Test
+  fun `readSessionContext drops the start device for a multi-device session`() {
+    // After a handover, captures come from another device; the start device would be wrong for them.
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "001_TrailblazeSessionStatusChangeLog.json", startedStatusLog(appId = "com.example.app", device = ipad))
+    writeLog(sessionDir, "002_TrailblazeToolLog.json", """{"toolName":"tap","deviceName":"buyer","timestamp":"2026-05-08T10:01:00Z"}""")
+
+    val context = SessionLogScreenState.readSessionContext(sessionDir)
+
+    assertEquals("com.example.app", context?.appId)
+    assertNull(context?.deviceInfo)
+  }
+
+  @Test
+  fun `readSessionContext keeps the start device when only a tool's own args name a device`() {
+    // Only the log's top-level `deviceName` marks a multi-device session; a tool can take one as an argument.
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "001_TrailblazeSessionStatusChangeLog.json", startedStatusLog(appId = "com.example.app", device = ipad))
+    writeLog(
+      sessionDir,
+      "002_TrailblazeToolLog.json",
+      """{"toolName":"pickDevice","trailblazeTool":{"deviceName":"buyer"},"timestamp":"2026-05-08T10:01:00Z"}""",
+    )
+
+    val context = SessionLogScreenState.readSessionContext(sessionDir)
+
+    assertEquals(TrailblazeDevicePlatform.IOS, context?.deviceInfo?.platform)
+  }
+
+  @Test
+  fun `readSessionContext returns null when the session has no start log`() {
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "001_AgentDriverLog.json", """{"timestamp":"2026-05-08T10:00:00Z"}""")
+
+    assertNull(SessionLogScreenState.readSessionContext(sessionDir))
+  }
+
+  @Test
+  fun `loadStep takes only the platform from the session device when the log has none`() {
+    // Driver logs carry no device fields. Without the session's device, an iOS screen
+    // was loaded as ANDROID and never resolved a waypoint's `ios:` block.
+    val log = writeLog(newTempDir(), "001_AgentDriverLog.json", """{"deviceWidth":2360,"deviceHeight":1640}""")
+
+    val withoutSession = SessionLogScreenState.loadStep(log)
+    val withSession = SessionLogScreenState.loadStep(log, sessionDevice = ipad)
+
+    assertEquals(TrailblazeDevicePlatform.ANDROID, withoutSession.trailblazeDevicePlatform)
+    assertEquals(TrailblazeDevicePlatform.IOS, withSession.trailblazeDevicePlatform)
+    // Classifiers stay unset: a custom hardware classifier without an `android` parent would
+    // hide the `android:` blocks that match those screens today.
+    assertEquals(emptyList(), withSession.deviceClassifiers)
+  }
+
+  private val ipad = TrailblazeDeviceInfo(
+    trailblazeDeviceId = TrailblazeDeviceId("SIM-1", TrailblazeDevicePlatform.IOS),
+    trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+    widthPixels = 2360,
+    heightPixels = 1640,
+    classifiers = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("ipad")),
+  )
+
+  /** Shaped like a real `Started` status log: the fields this reader needs plus unrelated ones. */
+  private fun startedStatusLog(appId: String, device: TrailblazeDeviceInfo): String {
+    val deviceJson = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(TrailblazeDeviceInfo.serializer(), device)
+    return """{"class":"xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeSessionStatusChangeLog",""" +
+      """"sessionStatus":{"class":"Started","trailFilePath":"trail.yaml","hasRecordedSteps":true,""" +
+      """"trailblazeDeviceInfo":$deviceJson,"targetAppInfo":{"appId":"$appId","versionName":"1.0"}},""" +
+      """"session":"s1","timestamp":"2026-05-08T10:00:00Z"}"""
+  }
+
+  // ==========================================================================
   // Test infrastructure.
   // ==========================================================================
 

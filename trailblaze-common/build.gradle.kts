@@ -624,6 +624,7 @@ tasks.register<BundleFrameworkScriptedToolsTask>("bundleFrameworkScriptedTools")
     exclude("**/*.d.ts", "**/*.test.ts", "**/.trailblaze-wrapper-*")
   }
   inputSources.from(frameworkToolSources)
+  inputs.files(frameworkTrailmapsRoot.asFileTree.matching { include("*/lib/*.ts") })
   outputBundles.from(
     provider {
       frameworkToolSources.files.flatMap { source ->

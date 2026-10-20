@@ -28,6 +28,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsResponse as ComposeExecuteToolsResponse
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
@@ -598,6 +599,36 @@ class TrailblazeMcpBridgeImplTest {
         fallback = fallback,
       )
     }
+  }
+
+  @Test
+  fun `a Compose tool that fails inside a successful RPC response is reported as failed`() {
+    val body = TrailblazeJsonInstance.encodeToString(
+      ComposeExecuteToolsResponse(
+        results = listOf(
+          TrailblazeToolResult.Success(message = "tapped"),
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "no node matched"),
+        ),
+      ),
+    )
+
+    val result = TrailblazeMcpBridgeImpl.composeRpcToolResult(body)
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertEquals("no node matched", result.errorMessage)
+  }
+
+  @Test
+  fun `a Compose tool that succeeds keeps the response body as its message`() {
+    val body = TrailblazeJsonInstance.encodeToString(
+      ComposeExecuteToolsResponse(results = listOf(TrailblazeToolResult.Success(message = "tapped"))),
+    )
+
+    assertEquals(TrailblazeToolResult.Success(message = body), TrailblazeMcpBridgeImpl.composeRpcToolResult(body))
+    assertEquals(
+      TrailblazeToolResult.Success(message = "not json"),
+      TrailblazeMcpBridgeImpl.composeRpcToolResult("not json"),
+    )
   }
 
   @Test

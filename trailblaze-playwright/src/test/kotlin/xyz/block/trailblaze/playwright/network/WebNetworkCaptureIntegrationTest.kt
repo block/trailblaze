@@ -110,7 +110,7 @@ class WebNetworkCaptureIntegrationTest {
     WebNetworkCapture.start(ctx.proxy, "s", dir)
     val req = PlaywrightTestProxies.fakeRequest(
       method = "POST",
-      url = "https://api.example.com/cdp/track",
+      url = "https://api.example.com/analytics/track",
       headers = mapOf("content-type" to "application/json"),
       postBody = "{\"signal\":\"save\"}".toByteArray(),
     )

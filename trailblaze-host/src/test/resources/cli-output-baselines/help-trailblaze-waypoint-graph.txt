@@ -7,9 +7,8 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint graph [-hV] [-o=<out>] [--platform=<id>]
                                  [--root=<path>] [--target=<id>]
-Render the waypoint navigation graph (waypoints, authored shortcuts, authored
-trailheads) as a single self-contained HTML file. The output bakes in
-screenshots
+Render the waypoint navigation graph (waypoints and authored trailheads) as a
+single self-contained HTML file. The output bakes in screenshots
 as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it
 in any
 browser, share it via email/Slack/zip, no Trailblaze install required on the
@@ -30,10 +29,9 @@ For a live, refresh-on-edit view from the running daemon, point your browser at
                           the file is overwritten if present.
       --platform=<id>   Platform to scope the graph to (`android`, `ios`, or
                           `web`). Filters waypoints whose source path is under
-                          `waypoints/<platform>/...` and drops
-                          shortcuts/trailheads that cross out of that scope.
-                          Combine with --target to produce a single (target,
-                          platform) map.
+                          `waypoints/<platform>/...` and drops trailheads that
+                          land outside that scope. Combine with --target to
+                          produce a single (target, platform) map.
       --root=<path>     Filesystem directory to scan for *.waypoint.yaml files
                           (default: ./trails, resolved against the current
                           working directory). Overrides --target's root
@@ -41,9 +39,8 @@ For a live, refresh-on-edit view from the running daemon, point your browser at
                           classpath are always included regardless of this flag.
       --target=<id>     Trailmap id to scope the graph to (e.g. `myapp`,
                           `clock`). Filters the rendered graph to waypoints
-                          whose id starts with `<id>/` and drops
-                          shortcuts/trailheads that cross out of that scope.
-                          Also resolves --root to
+                          whose id starts with `<id>/` and drops trailheads
+                          that land outside that scope. Also resolves --root to
                           <workspace>/trailmaps/<id>/waypoints/ when no
                           explicit --root is given.
   -V, --version         Print version information and exit.

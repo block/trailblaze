@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
@@ -854,14 +855,14 @@ class ResolvedTargetReportEmitterTest {
     // `yamlToolNames`. A YAML-defined tool added directly via `platforms.<p>.tools:` (which
     // the runtime resolver accepts via `ToolNameResolver.resolveYamlNameOrNull`) was left
     // un-linkified in the matrix and never got a sidecar — the report would name the tool
-    // but offer no detail page, even though the YAML config is right there. `eraseText` is
-    // a real framework YAML-defined tool (see trails/config/tools/eraseText.tool.yaml)
-    // that ships in `core_interaction` only on mobile; if a target adds it to a web
-    // platform's `tools:` directly (rare but legal), the sidecar must still be emitted.
+    // but offer no detail page, even though the YAML config is right there. The fixture is in
+    // no toolset, so a target adding it to a platform's `tools:` directly must still get the
+    // sidecar.
+    val name = YamlDefinedToolFixture.NAME
     val platforms = mapOf(
       "web" to PlatformConfig(
         appIds = listOf("com.example.yaml-direct"),
-        tools = listOf("eraseText"),
+        tools = listOf(name),
         drivers = listOf("playwright-native"),
       ),
     )
@@ -878,24 +879,26 @@ class ResolvedTargetReportEmitterTest {
     )
 
     val outDir = newDir("out")
-    ResolvedTargetReportEmitter.emit(
-      resolvedTargets = listOf(trailmap.target!!),
-      resolvedTrailmaps = listOf(trailmap),
-      outputDir = outDir,
-    )
+    YamlDefinedToolFixture.inWorkspace(newDir("workspace-config")) {
+      ResolvedTargetReportEmitter.emit(
+        resolvedTargets = listOf(trailmap.target!!),
+        resolvedTrailmaps = listOf(trailmap),
+        outputDir = outDir,
+      )
+    }
     val report = File(outDir, "yamldirect.report.md").readText()
 
     // The `tools:` addition row must be linkified — not the bare backtick form that signals
     // "no metadata available."
-    assertTrue("expected linkified eraseText cell, got:\n$report") {
-      report.contains("[`eraseText`](yamldirect/tools/eraseText.md) (individual `tools:` addition)")
+    assertTrue("expected linkified $name cell, got:\n$report") {
+      report.contains("[`$name`](yamldirect/tools/$name.md) (individual `tools:` addition)")
     }
     // And the sidecar file itself must exist with the YAML-defined source metadata.
-    val sidecar = File(outDir, "yamldirect/tools/eraseText.md")
+    val sidecar = File(outDir, "yamldirect/tools/$name.md")
     assertTrue("expected sidecar for direct YAML addition at $sidecar") { sidecar.exists() }
     val sidecarText = sidecar.readText()
     assertTrue("sidecar should declare YAML-defined source, got:\n$sidecarText") {
-      sidecarText.contains("- Kind: YAML-defined") && sidecarText.contains("- Tool id: `eraseText`")
+      sidecarText.contains("- Kind: YAML-defined") && sidecarText.contains("- Tool id: `$name`")
     }
   }
 

@@ -282,7 +282,6 @@ public final class xyz/block/trailblaze/recordings/TrailRecordings {
 
 public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field ASSERT_NOT_VISIBLE_WITH_TEXT Ljava/lang/String;
-	public static final field ASSERT_VISIBLE_WITH_TEXT Ljava/lang/String;
 	public static final field ASSERT_WITH_AI Ljava/lang/String;
 	public static final field ERASE_TEXT Ljava/lang/String;
 	public static final field GO_HOME Ljava/lang/String;

@@ -155,8 +155,8 @@ export async function myTarget_web_myTool(
     action: "GOTO",
     url: args.relativePath ?? "./sample-app/index.html",
   });
-  await client.tools.web_verifyTextVisible({
-    text: "Trailblaze Test Fixture",
+  await client.tools.web_verifyElementVisible({
+    ref: 'heading "Trailblaze Test Fixture"',
   });
 
   return "Opened the page and verified the heading.";
@@ -193,11 +193,11 @@ probe pattern: try a deterministic verification, then fall back when that inner 
 ```ts
 export async function playwrightSample_web_openFormIfNeeded(args, ctx, client) {
   try {
-    await client.tools.web_verifyTextVisible({ text: "Contact Form" });
+    await client.tools.web_verifyElementVisible({ ref: 'heading "Contact Form"' });
     return "The form section was already visible.";
   } catch {
     await client.tools.web_click({ ref: "css=a[href='#form']" });
-    await client.tools.web_verifyTextVisible({ text: "Contact Form" });
+    await client.tools.web_verifyElementVisible({ ref: 'heading "Contact Form"' });
     return "Opened the form section.";
   }
 }

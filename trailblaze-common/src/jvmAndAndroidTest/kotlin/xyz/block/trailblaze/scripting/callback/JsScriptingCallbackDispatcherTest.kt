@@ -23,6 +23,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.history.HistoryToolCallOutcome
+import xyz.block.trailblaze.history.ToolCallHistory
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -279,6 +281,39 @@ class CallbackDispatcherTest {
       assertThat(observedDepths).isInstanceOf(List::class).isEqualTo(listOf(4))
     } finally {
       handle.close()
+    }
+  }
+
+  @Test
+  fun `a tool run with no nested executor is recorded in the session's history, failure included`() = runBlocking {
+    val failingTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "button missing")
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("failingTool")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Always fails.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = failingTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("no-nested-executor-history")
+    ToolCallHistory.clear()
+    val handle = register(sessionId = sessionId, repo = repo)
+    try {
+      JsScriptingCallbackDispatcher.dispatch(buildCallToolRequest(sessionId.value, handle.invocationId, "failingTool"))
+      assertThat(ToolCallHistory.toolCalls(sessionId).map { it.outcome })
+        .isEqualTo(listOf(HistoryToolCallOutcome(success = false, message = "button missing")))
+    } finally {
+      handle.close()
+      ToolCallHistory.clear()
     }
   }
 

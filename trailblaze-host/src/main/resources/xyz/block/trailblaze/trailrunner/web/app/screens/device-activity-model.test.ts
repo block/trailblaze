@@ -77,8 +77,8 @@ describe("a verify that fails", () => {
   test("is failed, with the AI's reason as its note", () => {
     const a = fold([
       start(1, verifyStep),
-      llm(2, "web_verifyTextVisible"),
-      tool(3, "web_verifyTextVisible", { text: "documentation" }),
+      llm(2, "web_verifyElementVisible"),
+      tool(3, "web_verifyElementVisible", { ref: 'heading "Log in"' }),
       complete(4, verifyStep, false, "No login form or login fields are present."),
     ]);
     expect(a.items[0]).toMatchObject({ stepKind: "verify", text: "The page shows a login form", state: "failed", note: "No login form or login fields are present." });
@@ -168,9 +168,9 @@ describe("prompts and run errors", () => {
   });
 
   test("a run failure reads as the tool's own reason", () => {
-    const daemon = "Trail run failed: Failed to run recording for prompt step (step 1 of 1): prompt: Run web_verifyTextVisible " +
-      "recorded tools: web_verifyTextVisible failed tool: web_verifyTextVisible failure: Assertion failed: text 'zzz' is not visible on the page.";
-    expect(M.runErrorSummary(daemon)).toBe("Assertion failed: text 'zzz' is not visible on the page.");
+    const daemon = "Trail run failed: Failed to run recording for prompt step (step 1 of 1): prompt: Run web_verifyElementVisible " +
+      "recorded tools: web_verifyElementVisible failed tool: web_verifyElementVisible failure: Assertion failed: element 'zzz' is not visible on the page.";
+    expect(M.runErrorSummary(daemon)).toBe("Assertion failed: element 'zzz' is not visible on the page.");
     expect(M.runErrorSummary('Trail run failed: Failed to successfully run prompt with AI (step 1 of 1) {\n "class": "x"\n}'))
       .toBe("The step failed. The activity below says why.");
     expect(M.runErrorSummary("Trail run failed: Device not connected")).toBe("Device not connected");
@@ -180,7 +180,7 @@ describe("prompts and run errors", () => {
 describe("session headings", () => {
   const t = Date.UTC(2026, 9, 7, 15, 55);
   test("a device's live session is named by when it began, not its first run", () => {
-    expect(M.sessionLabel("2026_10_07_11_55_18_recording_6405", "Run web_verifyTextVisible", "Run web_verifyTextVisible", t))
+    expect(M.sessionLabel("2026_10_07_11_55_18_recording_6405", "Run web_verifyElementVisible", "Run web_verifyElementVisible", t))
       .toMatch(/^Live session · started /);
   });
   test("a trail run keeps its title, and a runner's class:method name does not count as one", () => {

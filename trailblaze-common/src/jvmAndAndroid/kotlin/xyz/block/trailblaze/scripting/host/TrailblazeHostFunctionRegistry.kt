@@ -80,6 +80,9 @@ class TrailblazeHostFunctionRegistry(private val resourceSource: ConfigResourceS
   @OptIn(InternalSerializationApi::class)
   private fun load(trailmapId: String, content: String): Entry {
     val descriptor = TrailblazeConfigYaml.instance.decodeFromString(Descriptor.serializer(), content)
+    require(descriptor.id !in RESERVED_NAMES) {
+      "'${descriptor.id}' is reserved: scripts read ctx.host.${descriptor.id} as the host computer's ${descriptor.id}"
+    }
     val clazz = Class.forName(descriptor.className)
     require(TrailblazeHostFunction::class.java.isAssignableFrom(clazz)) {
       "${descriptor.className} does not implement TrailblazeHostFunction"
@@ -113,6 +116,9 @@ class TrailblazeHostFunctionRegistry(private val resourceSource: ConfigResourceS
   companion object {
     const val HOST_DIR = "host"
     const val DESCRIPTOR_SUFFIX = ".host.yaml"
+
+    /** `ctx.host` fields that are values, not functions, so no host function can take the name. */
+    val RESERVED_NAMES = setOf("os", "arch")
 
     /** The classpath (JVM) or asset (Android) registry; discovered once per process. */
     val bundled: TrailblazeHostFunctionRegistry by lazy {

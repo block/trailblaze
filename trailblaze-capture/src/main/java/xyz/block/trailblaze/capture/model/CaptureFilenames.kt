@@ -53,6 +53,21 @@ object CaptureFilenames {
     "$VIDEO_BASENAME-${deviceName.replace(UNSAFE_FILENAME_CHARS, "_").ifEmpty { "device" }}"
 
   /**
+   * A companion device's logcat, named after its recording: `device-buyer.log` beside
+   * `video-buyer.webm`, `-2` suffix included. The start device keeps the plain [DEVICE_LOG], the
+   * only file `LogcatParser.findDeviceLogFile` returns.
+   */
+  fun companionDeviceLog(companionVideoBasename: String): String =
+    "$DEVICE_LOG_BASENAME${companionVideoBasename.removePrefix(VIDEO_BASENAME)}$DEVICE_LOG_EXTENSION"
+
+  /** Whether [fileName] is [DEVICE_LOG] or a [companionDeviceLog]: a logcat still being appended to. */
+  fun isDeviceLog(fileName: String): Boolean =
+    fileName == DEVICE_LOG || (fileName.startsWith("$DEVICE_LOG_BASENAME-") && fileName.endsWith(DEVICE_LOG_EXTENSION))
+
+  private const val DEVICE_LOG_BASENAME = "device"
+  private const val DEVICE_LOG_EXTENSION = ".log"
+
+  /**
    * The scratch directory a frame-sampling recorder keeps its frames in until it muxes them —
    * [prefix] for the start device's recording, suffixed with [videoBasename] for a companion's, so
    * two recordings in one session directory never share (or clean up) each other's frames.

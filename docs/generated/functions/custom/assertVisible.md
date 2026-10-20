@@ -4,7 +4,7 @@
 
 # `assertVisible`
 
-Assert an element is visible by its snapshot ref (e.g. y778 from [y778] "Network & internet"). Checks the current snapshot only; it does not wait for an element to appear. Set `expectedText` to also check its text when verifying a specific value.
+Assert an element is visible by its snapshot ref (e.g. y778 from [y778] "Network & internet"). Checks the current snapshot only; it does not wait for an element to appear. The element's text is checked too, so assert the element that shows the value you are verifying, and not one whose text changes from run to run (a timestamp, an order number): replay would fail on it, so assert a stable label beside it instead.
 
 ## Source
 
@@ -26,8 +26,6 @@ Assert an element is visible by its snapshot ref (e.g. y778 from [y778] "Network
 
 ### Optional parameters
 
-- `expectedText` — `String`
-  The element's exact rendered text (trimmed, case-sensitive), e.g. "Charge $5.00". Don't pin text that changes run to run (counts, timestamps). Omit to check presence only.
 - `reasoning` — `String`
 
 ## Output

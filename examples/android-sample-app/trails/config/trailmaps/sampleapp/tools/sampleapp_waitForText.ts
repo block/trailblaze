@@ -7,17 +7,16 @@
 // say, a sign-in screen to render after a cold start before it interacts with it — distilled here
 // against the Loading demo screen so it's easy to see in isolation.
 //
-// It composes the framework's `findSelectorMatches`/`maestro` primitives, uses zero Node APIs, and
+// It composes the framework's `findSelectorMatches`/`assertVisibleBySelector` tools, uses zero Node APIs, and
 // so runs unchanged on the in-process (QuickJS) path — see `runtime: inProcess` semantics in the
 // README.
 
 import { trailblaze, type ToolContext } from "@trailblaze/scripting";
 
 // The on-device accessibility driver exposes the selector-native `findSelectorMatches` wait; the
-// in-process `android-test` driver has no such wait and instead lowers a Maestro `extendedWaitUntil`
-// onto its own backends. A driver-aware wait has to branch here — an `androidAccessibility`
-// selector isn't valid on the Maestro branch. The fallback is scoped to those two: a driver that
-// carries neither (`revyl-android` accepts only its own tool shape) rejects the Maestro call.
+// in-process `android-test` driver has no such wait and instead runs `assertVisibleBySelector`, whose
+// timeout makes it a wait too. A driver that carries neither (`revyl-android` accepts only its own
+// tool shape) rejects the call.
 const ACCESSIBILITY_DRIVER_TYPE = "android-ondevice-accessibility";
 
 // Generous default so a slow screen (the "Slow (6s)" chip on the Loading demo, plus any animation
@@ -60,36 +59,23 @@ export const sampleapp_waitForText = trailblaze.tool<WaitForTextInput>(
 /**
  * On the accessibility driver, use the selector-native `findSelectorMatches` wait (non-throwing — an
  * empty result means "never appeared", which we turn into a clear error). On any other Android
- * driver, let Maestro perform the `extendedWaitUntil` against its own hierarchy.
+ * driver, `assertVisibleBySelector` waits up to `timeoutMs` and throws if the text never appears.
  *
- * Both branches match on the SAME anchored, regex-escaped value: Maestro's `text` selector is
- * regex-backed too, so feeding it the raw input would let metacharacters in arbitrary text (e.g.
- * `Total: $5.00 (USD)`) match the wrong node — or a different node that merely contains the text —
- * only on the Maestro branch. Escaping + anchoring keeps the two drivers in lockstep.
+ * Both branches match on the same anchored, regex-escaped selector, so metacharacters in arbitrary
+ * text (e.g. `Total: $5.00 (USD)`) are matched literally and never match a node that merely
+ * contains the text.
  */
 async function waitUntilTextShown(ctx: ToolContext, text: string, timeoutMs: number): Promise<void> {
-  const anchored = anchoredTextRegex(text);
+  const nodeSelector = { androidAccessibility: { textRegex: anchoredTextRegex(text) } };
   if (usesAccessibilityDriver(ctx)) {
-    const [matches] = await ctx.tools.findSelectorMatches({
-      selectors: [{ androidAccessibility: { textRegex: anchored } }],
-      timeoutMs,
-    });
+    const [matches] = await ctx.tools.findSelectorMatches({ selectors: [nodeSelector], timeoutMs });
     if (matches.length === 0) {
       throw timeoutError(text, timeoutMs);
     }
     return;
   }
 
-  await ctx.tools.mobile_maestro({
-    commands: [
-      {
-        extendedWaitUntil: {
-          visible: { text: anchored },
-          timeout: timeoutMs,
-        },
-      },
-    ],
-  });
+  await ctx.tools.assertVisibleBySelector({ nodeSelector, timeoutMs });
 }
 
 function usesAccessibilityDriver(ctx: ToolContext): boolean {

@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.AgentMemory
@@ -26,6 +27,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSp
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
+import xyz.block.trailblaze.util.HostPlatform
 import kotlin.test.Test
 
 class TrailblazeContextEnvelopeTest {
@@ -154,6 +156,30 @@ class TrailblazeContextEnvelopeTest {
     for (envelope in listOf(web, onDevice)) {
       assertThat(envelope["device"]!!.jsonObject.keys).doesNotContain("trailblazePort")
     }
+  }
+
+  @Test fun `meta envelope carries the host computer's platform, and none from an on-device runtime`() {
+    val host = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+    )
+    val hostPlatform = host["hostPlatform"]!!.jsonObject
+    assertThat(hostPlatform["os"]!!.jsonPrimitive.content).isEqualTo(HostPlatform.current().os.hostOsName)
+    assertThat(hostPlatform["arch"]!!.jsonPrimitive.contentOrNull).isEqualTo(HostPlatform.current().arch?.hostArchName)
+
+    // On a device there is no host computer to describe; the JVM there reports the device's own OS.
+    val onDevice = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = null,
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+      runtime = TrailblazeContextEnvelope.RUNTIME_ONDEVICE,
+    )
+    assertThat(onDevice.keys).doesNotContain("hostPlatform")
   }
 
   @Test fun `meta key is literal trailblaze`() {

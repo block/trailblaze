@@ -150,7 +150,7 @@ class ExternalConfigDocsGenerator(
         appendLine()
         appendLine(
           "The binary auto-discovers `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/targets` and " +
-            "every `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/<id>/{tools,toolsets,shortcuts,trailheads}/` " +
+            "every `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/<id>/{tools,toolsets,trailheads}/` " +
             "tree. `trailmaps:` entries in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` pull " +
             "trailmap manifests through the same loader path. `mcp/` is just a convention for the " +
             "JS/TS files you reference from trailmap or target YAML. `providers/` remains the " +
@@ -344,17 +344,20 @@ class ExternalConfigDocsGenerator(
         appendLine("### YAML-Defined Composition")
         appendLine()
         appendLine("```yaml")
-        appendLine("id: eraseTextSafely")
-        appendLine("description: \"Erases characters from the focused field.\"")
+        appendLine("id: eraseThenType")
+        appendLine("description: \"Erases characters from the focused field, then types new text.\"")
         appendLine("parameters:")
         appendLine("  - name: charactersToErase")
         appendLine("    type: integer")
         appendLine("    required: false")
+        appendLine("  - name: text")
+        appendLine("    type: string")
+        appendLine("    required: true")
         appendLine("tools:")
-        appendLine("  - mobile_maestro:")
-        appendLine("      commands:")
-        appendLine("        - eraseText:")
-        appendLine("            charactersToErase: \"{{params.charactersToErase}}\"")
+        appendLine("  - eraseText:")
+        appendLine("      charactersToErase: \"{{params.charactersToErase}}\"")
+        appendLine("  - inputText:")
+        appendLine("      text: \"{{params.text}}\"")
         appendLine("```")
         appendLine()
         appendLine(

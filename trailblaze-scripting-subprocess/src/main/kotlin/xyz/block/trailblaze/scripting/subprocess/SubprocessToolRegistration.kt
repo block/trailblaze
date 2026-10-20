@@ -7,6 +7,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
@@ -136,7 +138,8 @@ class SubprocessToolRegistration(
       descriptor = descriptor,
       executeTool = { args: SubprocessTrailblazeTool ->
         val context = trailblazeToolContextProvider()
-        val result = args.execute(context)
+        // The model calls this directly, not through an agent's dispatch, so record it here.
+        val result = ToolCallHistory.recordExecution(context, args) { args.execute(context) }
         "Executed subprocess tool: ${registered.advertisedName.toolName} — result: $result"
       },
     )

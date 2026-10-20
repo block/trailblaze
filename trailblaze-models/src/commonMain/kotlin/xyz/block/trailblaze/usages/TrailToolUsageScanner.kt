@@ -160,7 +160,7 @@ object TrailToolUsageScanner {
   /**
    * Argument keys under which a conditional wrapper records nested tool-calls, each holding an
    * ARRAY of single-key `{ <toolName>: <args> }` objects. `then`/`else` are the branch lists of
-   * the recorded-conditional contract (`block_runIf`-style: the wrapper records verbatim and
+   * the recorded-conditional contract (`runIf`-style: the wrapper records verbatim and
    * re-dispatches its branches at replay, so the inner calls exist ONLY inside these arguments);
    * `tools` is the framework's own encoded-tool-list key, kept for wrappers that nest a plain
    * list. Restricted to these known keys rather than harvesting every single-key-object array,
@@ -177,7 +177,7 @@ object TrailToolUsageScanner {
    * arguments.
    *
    * Nesting is real usage, not an edge case to ignore: a recorded conditional wrapper
-   * (`block_runIf`-style) carries its predicate under `condition: { tool: {...} }` and its branch
+   * (`runIf`-style) carries its predicate under `condition: { tool: {...} }` and its branch
    * actions under `then:` / `else:` arrays, and on a host without the wrapper's class those inner
    * calls ride along as raw JSON inside an [OtherTrailblazeTool]. A scan that stopped at wrapper
    * names would report a tool used only as a guard's predicate or branch action as unused — which

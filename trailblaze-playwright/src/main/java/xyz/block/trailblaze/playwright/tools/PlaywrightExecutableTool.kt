@@ -148,6 +148,11 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       }
       val ariaName = web.ariaNameRegex?.takeIf { it.isNotBlank() }
       val ariaRole = web.ariaRole
+      if (ariaRole == "text" && ariaName != null) {
+        // The occurrence index counts text runs, and one element can hold several, so it is
+        // applied while matching rather than with nth().
+        return PlaywrightAriaSnapshot.resolveTextRun(page, ariaName, web.nthIndex)
+      }
       if (ariaRole != null && ariaName != null) {
         // Not a quoted string descriptor: that route forces an exact match and would read a
         // real pattern such as `Save.*` as a literal name.

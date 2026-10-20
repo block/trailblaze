@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.rules
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -12,14 +13,19 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.events.SessionEventMarks
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.exception.TrailheadException
+import xyz.block.trailblaze.history.HistorySection
+import xyz.block.trailblaze.history.HistorySectionKind
+import xyz.block.trailblaze.history.ToolCallHistory
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.trailhead.TeardownTrailblazeTool
@@ -105,10 +111,10 @@ class TrailblazeRunnerUtil(
    */
   suspend fun <T> runTrail(block: suspend () -> T): T {
     var outcome = TrailOutcome.PASSED
-    trailheadRun = null
-    inTrail = true
+    startTrail()
     try {
-      return block()
+      // Every tool the trail dispatches (recorded, a `tools:` block, the agent's) is cancelled with it.
+      return withContext(DispatchCancellation.element(currentCoroutineContext()[Job])) { block() }
     } catch (e: Throwable) {
       outcome = trailOutcomeOf(e)
       throw e
@@ -120,8 +126,7 @@ class TrailblazeRunnerUtil(
   /** [runTrail] for runners whose item loop isn't suspending. */
   fun <T> runTrailBlocking(block: () -> T): T {
     var outcome = TrailOutcome.PASSED
-    trailheadRun = null
-    inTrail = true
+    startTrail()
     try {
       return block()
     } catch (e: Throwable) {
@@ -137,19 +142,51 @@ class TrailblazeRunnerUtil(
   @Volatile private var trailheadRun: xyz.block.trailblaze.trailhead.TrailheadRun? = null
   @Volatile private var inTrail = false
 
+  // The `ctx.history` section this trail is in: its trailhead, then the trail. Teardown's section
+  // is opened and closed by [finishTrail]. Sections are kept only inside [runTrail], all inside
+  // [runSection], so a script reads this run's sections and not an earlier run's.
+  @Volatile private var historySection: HistorySection? = null
+  @Volatile private var runSection: HistorySection? = null
+
+  // When the last trailhead returned. The trail section opens at that instant, but only once a
+  // trail step arrives, so another device's trailhead in a later [runPrompt] call joins the setup.
+  @Volatile private var trailStartMs: Long? = null
+
+  private fun startTrail() {
+    trailheadRun = null
+    historySection = null
+    trailStartMs = null
+    inTrail = true
+    val session = try { sessionProvider?.invoke() } catch (_: Exception) { null }
+    runSection = session?.let { ToolCallHistory.openSection(it.sessionId, HistorySectionKind.RUN, HistorySectionKind.RUN) }
+  }
+
   /** [finishTrail] never replaces the trail's own return value or exception. */
   private suspend fun finishTrailBestEffort(outcome: TrailOutcome) {
     try {
       finishTrail(outcome)
     } catch (e: Exception) {
       Console.error("[Teardown] finishing the trail failed: ${e::class.simpleName}: ${e.message}")
+    } finally {
+      val run = runSection
+      runSection = null
+      val session = try { sessionProvider?.invoke() } catch (_: Exception) { null }
+      if (run != null && session != null) ToolCallHistory.closeSection(session.sessionId, run.id)
+      // After teardown, which may still query from them. The next trail starts with none.
+      session?.let { SessionEventMarks.clear(it.sessionId) }
     }
   }
 
   private suspend fun finishTrail(outcome: TrailOutcome) {
+    // A trailhead with no trail steps after it still leaves an (empty) trail section.
+    trailStartMs?.let { enterHistorySection(HistorySectionKind.TRAIL, HistorySectionKind.TRAIL, it) }
+    trailStartMs = null
     inTrail = false
     trailheadRun = null
     val session = try { sessionProvider?.invoke() } catch (_: Exception) { null }
+    val trailEndMs = System.currentTimeMillis()
+    historySection?.let { section -> session?.let { ToolCallHistory.closeSection(it.sessionId, section.id, trailEndMs) } }
+    historySection = null
     val run = session?.let { TrailheadRuns.current(it.sessionId) }
     if (run == null || run.invocations.isEmpty()) {
       // No teardown follows this trail, so nothing replaces what an earlier one handed on, yet it
@@ -157,9 +194,16 @@ class TrailblazeRunnerUtil(
       TrailheadHandoffStore.dropAll()
     }
     run ?: return
+    var teardownSection: HistorySection? = null
     try {
-      run.markTrailEnd()
+      run.markTrailEnd(trailEndMs)
       if (run.invocations.isEmpty()) return
+      teardownSection = ToolCallHistory.openSection(
+        sessionId = session.sessionId,
+        kind = HistorySectionKind.TEARDOWN,
+        name = run.invocations.joinToString { it.tool.trailheadToolName },
+        startedAt = trailEndMs,
+      )
       if (outcome == TrailOutcome.FAILED || outcome == TrailOutcome.SETUP_FAILED) captureFailureBeforeTeardown(session)
       withContext(NonCancellable) {
         val step = DirectionStep(step = TeardownWire.OBJECTIVE_STEP, recordable = false, isTeardown = true)
@@ -181,6 +225,7 @@ class TrailblazeRunnerUtil(
         }
       }
     } finally {
+      teardownSection?.let { ToolCallHistory.closeSection(session.sessionId, it.id) }
       TrailheadRuns.close(run)
     }
   }
@@ -214,19 +259,54 @@ class TrailblazeRunnerUtil(
 
   /**
    * Opens this trail's [xyz.block.trailblaze.trailhead.TrailheadRun] as its trailhead step starts,
-   * so the trailhead tools it names receive `previous` and `teardown` can follow them.
+   * so the trailhead tools it names receive `previous` and `teardown` can follow them. A trailhead
+   * with no recorded tools still opens one: it names no tools, so nothing gets a hand-off or a
+   * teardown, but its start and the trail's start are still known to event queries.
    */
   private fun openTrailheadRun(prompt: PromptStep) {
     val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
     val toolNames = prompt.recording?.tools?.map { it.name }?.toSet().orEmpty()
-    if (toolNames.isEmpty()) return
     val run = TrailheadRuns.open(session.sessionId, toolNames, trailheadReuse, sameTrail = trailheadRun)
     if (inTrail) trailheadRun = run
   }
 
-  private fun markTrailStarted() {
+  private fun markTrailStarted(timeMs: Long) {
     val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
-    TrailheadRuns.current(session.sessionId)?.markTrailStart()
+    TrailheadRuns.current(session.sessionId)?.markTrailStart(timeMs)
+  }
+
+  /**
+   * Moves this trail's `ctx.history` section to [kind] at [atMs]: the open section ends and the
+   * next starts at the same instant, so no moment of the trail falls between two sections.
+   */
+  private fun enterHistorySection(kind: String, name: String, atMs: Long = System.currentTimeMillis()) {
+    if (!inTrail) return
+    val current = historySection
+    if (current?.kind == kind) return
+    val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
+    current?.let { ToolCallHistory.closeSection(session.sessionId, it.id, atMs) }
+    historySection = ToolCallHistory.openSection(session.sessionId, kind, name, atMs)
+  }
+
+  private fun trailheadSectionName(prompt: PromptStep): String =
+    prompt.recording?.tools?.joinToString { it.name }?.ifBlank { null } ?: HistorySectionKind.TRAILHEAD
+
+  /**
+   * Runs a trail's bare `tools:` item. Use this rather than [runTrailblazeTool] for one, so its
+   * calls land in the trail's `ctx.history` section like a prompt step's do.
+   */
+  fun runToolItem(tools: List<TrailblazeTool>): TrailblazeToolResult = runToolItem { runTrailblazeTool(tools) }
+
+  /** [runToolItem] for a runner that runs the item's tools its own way. */
+  fun <T> runToolItem(run: () -> T): T {
+    enterTrailSection()
+    return run()
+  }
+
+  /** Into the trail section, opened at the instant the last trailhead returned if there was one. */
+  private fun enterTrailSection() {
+    enterHistorySection(HistorySectionKind.TRAIL, HistorySectionKind.TRAIL, trailStartMs ?: System.currentTimeMillis())
+    trailStartMs = null
   }
 
   fun runPrompt(
@@ -269,12 +349,23 @@ class TrailblazeRunnerUtil(
       val stepLabel = "step ${index + 1} of ${prompts.size}"
       val isTrailhead = prompt.isTrailheadStep()
       if (isTrailhead) openTrailheadRun(prompt)
+      if (isTrailhead) {
+        trailStartMs = null
+        enterHistorySection(HistorySectionKind.TRAILHEAD, trailheadSectionName(prompt))
+      } else {
+        enterTrailSection()
+      }
       if (useRecordedSteps && prompt.canPromptStepUseRecording()) {
         runRecordedPrompt(prompt, selfHeal, stepLabel, index)
       } else {
         runAiPrompt(prompt, stepLabel)
       }
-      if (isTrailhead) markTrailStarted()
+      if (isTrailhead) {
+        val returnedAt = System.currentTimeMillis()
+        markTrailStarted(returnedAt)
+        // The trail starts as the trailhead returns; its section opens with the first trail step.
+        if (inTrail) trailStartMs = returnedAt
+      }
     }
     return TrailblazeToolResult.Success()
   }
@@ -344,7 +435,8 @@ class TrailblazeRunnerUtil(
           )
         }
         markSelfHealUsed(prompt, recordingResult, stepIndex)
-        val status = trailblazeRunner.recover(prompt, recordingResult)
+        // Suspending, so the healing agent's tools are cancelled with the trail.
+        val status = trailblazeRunner.recoverSuspend(prompt, recordingResult)
         throwIfTerminalFailure(prompt, status, stepLabel)
       }
     }

@@ -7,6 +7,42 @@ import kotlin.test.assertNull
 
 class GitTrailSourceUrlTest {
   @Test
+  fun configuredRepositoryIdentitySurvivesTransportRewrite() {
+    val root = Files.createTempDirectory("trail-source-rewrite").toFile()
+    fun git(vararg args: String): String {
+      val process = ProcessBuilder("git", "-C", root.path, *args).redirectErrorStream(true).start()
+      val output = process.inputStream.bufferedReader().readText()
+      check(process.waitFor() == 0) { output }
+      return output.trim()
+    }
+    try {
+      git("init")
+      git("remote", "add", "origin", "git@github.com:example/trails.git")
+      git("config", "--local", "url.https://transport.invalid/.insteadOf", "git@github.com:example/")
+      assertEquals("https://transport.invalid/trails.git", git("remote", "get-url", "origin"))
+      val file = root.resolve("cases/trail.yaml")
+      file.parentFile.mkdirs()
+      val yaml = "trail: []\n"
+      file.writeText(yaml)
+      git("add", "cases/trail.yaml")
+      git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
+      val sha = git("rev-parse", "HEAD")
+      val env =
+        mapOf(
+          "TRAIL_FILES" to "cases/trail.yaml",
+          "TRAIL_SOURCE_REPO" to "https://github.com/example/trails.git",
+          "TRAIL_SOURCE_REF" to sha,
+        )
+      assertEquals(
+        "https://github.com/example/trails/blob/$sha/cases/trail.yaml",
+        GitTrailSourceUrl.capture(file, yaml, env::get),
+      )
+    } finally {
+      root.deleteRecursively()
+    }
+  }
+
+  @Test
   fun committedSourceUsesItsOwnRepositoryAndRevisionAndRejectsEdits() {
     val root = Files.createTempDirectory("trail-source").toFile()
     fun git(vararg args: String): String {

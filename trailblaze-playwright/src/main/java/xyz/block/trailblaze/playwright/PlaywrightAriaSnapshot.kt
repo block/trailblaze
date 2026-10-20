@@ -194,14 +194,28 @@ object PlaywrightAriaSnapshot {
    *    the bare `$` is an end-of-input anchor, so nothing can follow it. The shared matcher falls
    *    back to equality for exactly this, which is what lets a price be recorded without escaping.
    */
-  fun resolveRoleAndName(page: Page, role: String, ariaNameRegex: String): Locator {
+  fun resolveRoleAndName(page: Page, role: String, ariaNameRegex: String): Locator =
+    resolveRoleAndName(page, role, ariaNameRegex, textRunIndex = null)
+
+  /**
+   * A `text` selector's [occurrence] of its run, counted over runs in snapshot order.
+   *
+   * One element can hold several runs with the same text, and Playwright resolves a locator to
+   * each element once, so `nth()` on the matches would count elements and skip past the run the
+   * recorder indexed. The engine applies the index while it still sees every run.
+   */
+  fun resolveTextRun(page: Page, ariaNameRegex: String, occurrence: Int?): Locator =
+    resolveRoleAndName(page, "text", ariaNameRegex, textRunIndex = occurrence)
+
+  private fun resolveRoleAndName(page: Page, role: String, ariaNameRegex: String, textRunIndex: Int?): Locator {
     val ariaRole = ariaRoleFromString(role)
     val exactName = { name: String ->
       page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
     }
     val literal = literalAriaName(ariaNameRegex)
     if (literal != null) {
-      return exactName(literal)
+      val byName = exactName(literal)
+      return byPrintedText(page, role, ariaRole, jsRegexLiteral(literal), 0, literal, byName, textRunIndex)
     }
     // Never a `\Q...\E` value here — [literalAriaName] claims those. It matters: Playwright
     // hands the pattern to a JS RegExp, which has no `\Q` support and would misread it.
@@ -216,8 +230,45 @@ object PlaywrightAriaSnapshot {
     // predicate is. The tiered ladder's objection to or() does not apply: those tiers express a
     // PREFERENCE between identifiers, and unioning them would lose it — these two are one
     // identifier's two spellings, and either match is equally correct.
-    return anchored.or(exactName(ariaNameRegex))
+    val byName = anchored.or(exactName(ariaNameRegex))
+    return byPrintedText(page, role, ariaRole, translated.source, translated.flags, ariaNameRegex, byName, textRunIndex)
   }
+
+  /**
+   * [byName] widened to the nodes a snapshot prints by their text rather than an accessible name.
+   *
+   * A snapshot prints `paragraph: Some text` for an unnamed element whose content is one run of
+   * text, and bare `text: Some text` for a run beside other nodes. A paragraph has no accessible
+   * name and a text run no role, so `getByRole(role, name)` finds neither, and a selector recorded
+   * from one would fail replay. [PlaywrightTextRuns] matches them on the text the snapshot printed.
+   *
+   * For a role, only elements the snapshot prints without a name qualify — a button named by its
+   * `aria-label` still matches on that label alone. A text run is matched on the run alone: a
+   * named control holding the same words is not a text run.
+   *
+   * Without the engine registered, [byName] is returned unchanged.
+   */
+  private fun byPrintedText(
+    page: Page,
+    role: String,
+    ariaRole: AriaRole,
+    source: String,
+    flags: Int,
+    recorded: String,
+    byName: Locator,
+    textRunIndex: Int?,
+  ): Locator {
+    if (!PlaywrightTextRuns.isRegistered(page)) return textRunIndex?.let { byName.nth(it) } ?: byName
+    if (role == "text") return PlaywrightTextRuns.runs(page, source, flags, recorded, textRunIndex)
+    val unnamed = page.getByRole(ariaRole, Page.GetByRoleOptions().setName(UNPRINTED_NAME_PATTERN))
+    return byName.or(unnamed.and(PlaywrightTextRuns.content(page, source, flags, recorded)))
+  }
+
+  /** [value] as a pattern matching it literally, in syntax a JavaScript `RegExp` also reads. */
+  private fun jsRegexLiteral(value: String): String =
+    value.replace(JS_REGEX_METACHARACTER) { "\\" + it.value }
+
+  private val JS_REGEX_METACHARACTER = Regex("""[\\^$.|?*+()\[\]{}/]""")
 
   /** A pattern split into the source Playwright can forward and the flags it can translate. */
   internal class TranslatedAriaPattern(val source: String, val flags: Int)
@@ -621,7 +672,9 @@ object PlaywrightAriaSnapshot {
       return AriaLineParsed(
         role = role,
         ariaRole = ariaRoleFromString(role),
-        name = match.groupValues[2],
+        // Playwright quotes the value when plain YAML would misread it (`paragraph: "Total: 10"`);
+        // left quoted, the name is text the page never shows, and a selector built on it can't replay.
+        name = PlaywrightTrailblazeNodeMapper.yamlScalar(match.groupValues[2]),
       )
     }
 

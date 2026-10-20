@@ -140,7 +140,7 @@ class SwitchDeviceTrailblazeToolTest {
   @Test
   fun `binds distinct devices under distinct names`() {
     // The invariant must not reject the normal pair — a same-platform, different-serial roster is
-    // exactly what an X2 seller/buyer session binds.
+    // exactly what a dual-display seller/buyer session binds.
     val bindings = bindings("seller", "buyer")
     assertEquals(setOf("seller", "buyer"), bindings.names)
   }

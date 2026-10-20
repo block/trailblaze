@@ -12,6 +12,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.events.FileEventSink
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.logs.model.DeviceClockSample
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /** Pins the [SessionEventsReader] read path against the [SessionEvents] file contract. */
 class SessionEventsReaderTest {
@@ -180,5 +183,37 @@ class SessionEventsReaderTest {
 
     val s = SessionEventsReader().read(dir).single()
     assertEquals("com.x.plugin.network", s.name)
+  }
+
+  @Test
+  fun `device-clock records land on the host timeline, so buffered app events sort first`() {
+    // The device runs 5s ahead. The app replays events buffered at device 6100/6200 after the host
+    // logged a tool call at 1500; on the host timeline they happened at 1100/1200.
+    val dir = tempDir()
+    DeviceClockSyncFile.appendSample(dir, "emulator-5554", DeviceClockSample(1_000, 1_010, 6_005))
+    FileEventSink(dir).use { sink ->
+      sink.append("tools", 1_500L, obj("tool", "tap"))
+      sink.append("app-events", 6_100L, obj("seq", "1"), clock = TrailblazeClockDomain.DEVICE)
+      sink.append("app-events", 6_200L, obj("seq", "2"), clock = TrailblazeClockDomain.DEVICE)
+    }
+
+    val merged =
+      SessionEventsReader().read(dir).flatMap { stream -> stream.events.map { stream.name to it } }
+        .sortedBy { it.second.timeMs }
+    assertEquals(
+      listOf("app-events" to 1_100L, "app-events" to 1_200L, "tools" to 1_500L),
+      merged.map { it.first to it.second.timeMs },
+    )
+    assertTrue(merged.all { it.second.clock == null }, "every record is now on the host clock")
+  }
+
+  @Test
+  fun `a device-clock record keeps its raw stamp, marked, when the session measured nothing`() {
+    val dir = tempDir()
+    FileEventSink(dir).use { sink ->
+      sink.append("app-events", 6_100L, obj("seq", "1"), clock = TrailblazeClockDomain.DEVICE)
+    }
+    val event = SessionEventsReader().read(dir).single().events.single()
+    assertEquals(6_100L to TrailblazeClockDomain.DEVICE, event.timeMs to event.clock)
   }
 }

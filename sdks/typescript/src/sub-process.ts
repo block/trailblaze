@@ -40,6 +40,8 @@ export type {
   TrailblazeSessionCleanupContext,
   TrailblazeSessionResources,
 } from "./session-resources.js";
+export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
 export type {
   EventMatch,
   EventMatchValue,

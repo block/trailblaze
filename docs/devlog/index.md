@@ -11,6 +11,9 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-10-15 | [Scripted Tools Know Which Computer They Run On](2026-10-15-ctx-host-os-and-arch.md) | Decision |
+| 2026-10-14 | [Retiring expectedText: Assertions Check Text Through the Selector](2026-10-14-retiring-expectedtext.md) | Decision |
+| 2026-10-13 | [runIf: The One Conditional Allowed in Trail YAML](2026-10-13-runif-the-one-conditional-in-yaml.md) | Decision |
 | 2026-10-13 | [Run Trails on GitHub Actions](2026-10-13-github-actions-trail-runner.md) | Decision |
 | 2026-10-06 | [A TypeScript Web UI Instead of Compose](2026-10-06-typescript-web-ui-over-compose.md) | Decision |
 | 2026-10-05 | [Trailblaze vs Maestro: TypeScript Tools, Subflows and Maestro MCP](2026-10-05-typescript-tools-vs-maestro-javascript-and-subflows.md) | Devlog |

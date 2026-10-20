@@ -5,6 +5,8 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointMatcher
@@ -34,7 +36,8 @@ class WaypointLocateCommand : Callable<Int> {
     paramLabel = "<id>",
     description = [
       "Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. " +
-        "Mutually exclusive with --root (--root wins if both given).",
+        "Mutually exclusive with --root (--root wins if both given). Without it, " +
+        "`{{target.appId}}` selectors expand to the app ids of the target the session recorded.",
     ],
   )
   var targetId: String? = null
@@ -118,23 +121,46 @@ class WaypointLocateCommand : Callable<Int> {
         maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
         return TrailblazeExitCode.MISUSE.code
       }
+      // The session's start log names its target, the app it ran against, and the device it ran
+      // on. Without the app, every `{{target.appId}}` waypoint is skipped; without the device's
+      // platform, screens from an iOS session are matched as ANDROID.
+      val sessionContext = (session ?: file?.absoluteFile?.parentFile)
+        ?.takeIf { it.isDirectory }
+        ?.let { SessionLogScreenState.readSessionContext(it) }
       val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
         is TargetContextResolution.Error -> {
           Console.error(r.message)
           return TrailblazeExitCode.MISUSE.code
         }
         is TargetContextResolution.Resolved -> r.context
-        is TargetContextResolution.NoTarget -> null
+        is TargetContextResolution.NoTarget -> sessionContext?.let { sessionTemplateContext(it) }
       }
+      val sessionDevice = sessionContext?.deviceInfo
 
       return if (batchMode) {
-        runBatch(defs, target)
+        runBatch(defs, target, sessionDevice)
       } else {
-        runSingleStep(defs, target)
+        runSingleStep(defs, target, sessionDevice)
       }
     } finally {
       if (batchMode && !wasQuiet) Console.disableQuietMode()
     }
+  }
+
+  /**
+   * Template context for a session when `--target` isn't given: every app id the session's target
+   * declares, plus the one installed at start. The whole list rather than the start app alone,
+   * because the app can be installed, or swapped for another declared variant, after the session
+   * starts. A list can't produce a false match: a resource id carries its app id, so a screen only
+   * matches when it came from one of the target's own apps. Falls back to the start app when the
+   * target's trailmap can't be loaded here.
+   */
+  private fun sessionTemplateContext(context: SessionLogScreenState.SessionContext): TargetTemplateContext? {
+    val declared = context.targetId
+      ?.let { resolveTargetTemplateContext(targetId = it) as? TargetContextResolution.Resolved }
+      ?.context?.appIds.orEmpty()
+    val appIds = (declared + listOfNotNull(context.appId)).distinct()
+    return if (appIds.isEmpty()) null else TargetTemplateContext(appId = null, appIds = appIds)
   }
 
   /**
@@ -189,9 +215,13 @@ class WaypointLocateCommand : Callable<Int> {
    */
   private fun isBatchMode(): Boolean = file == null && session != null && step == null
 
-  private fun runSingleStep(defs: List<WaypointDefinition>, target: TargetTemplateContext?): Int {
+  private fun runSingleStep(
+    defs: List<WaypointDefinition>,
+    target: TargetTemplateContext?,
+    sessionDevice: TrailblazeDeviceInfo?,
+  ): Int {
     val logFile = resolveLogFile() ?: return TrailblazeExitCode.MISUSE.code
-    val screen = SessionLogScreenState.loadStep(logFile)
+    val screen = SessionLogScreenState.loadStep(logFile, sessionDevice)
     Console.log("Locating against ${defs.size} waypoint(s); screen state: ${logFile.name}")
     val results = defs.map { WaypointMatcher.match(it, screen, target) }
     val matched = results.filter { it.matched }
@@ -215,9 +245,11 @@ class WaypointLocateCommand : Callable<Int> {
     val skipped = results.filter { it.skipped != null }
     if (skipped.isNotEmpty()) {
       Console.log("")
-      Console.log("Skipped (no trailblazeNodeTree in screen state):")
-      for (r in skipped) Console.log("  · ${r.definitionId}")
+      Console.log("Skipped:")
+      for (r in skipped) Console.log("  · ${r.definitionId} (${r.skipped})")
     }
+    val unresolved = skipped.count { it.skipped == WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE }
+    if (unresolved > 0) Console.error(noTargetAppWarning(unresolved))
     return TrailblazeExitCode.SUCCESS.code
   }
 
@@ -244,7 +276,11 @@ class WaypointLocateCommand : Callable<Int> {
    * `cat`/`sort`/`awk` without filtering. Console is also in quiet mode for the duration
    * (set by `call()` above) so trailmap-loader chatter from discovery can't leak in.
    */
-  private fun runBatch(defs: List<WaypointDefinition>, target: TargetTemplateContext?): Int {
+  private fun runBatch(
+    defs: List<WaypointDefinition>,
+    target: TargetTemplateContext?,
+    sessionDevice: TrailblazeDeviceInfo?,
+  ): Int {
     val sessionDir = validateSessionDir(session!!) ?: return TrailblazeExitCode.MISUSE.code
     val allLogs = SessionLogScreenState.listScreenStateLogs(sessionDir)
     // `--log-suffix` filter (set by the pipeline shard to pin AgentDriverLog-only accounting,
@@ -263,10 +299,11 @@ class WaypointLocateCommand : Callable<Int> {
     val baseDir = relBase ?: sessionDir.parentFile ?: sessionDir
     Console.error("Locating ${logs.size} step(s) against ${defs.size} waypoint(s) in ${sessionDir.absolutePath}")
     var errorCount = 0
+    var unresolvedCount = 0
     for (logFile in logs) {
       val relPath = relativizePath(baseDir, logFile)
       val results = try {
-        val screen = SessionLogScreenState.loadStep(logFile)
+        val screen = SessionLogScreenState.loadStep(logFile, sessionDevice)
         defs.map { WaypointMatcher.match(it, screen, target) }
       } catch (e: Exception) {
         errorCount++
@@ -274,6 +311,7 @@ class WaypointLocateCommand : Callable<Int> {
         emitTsvRow(relPath, "ERROR")
         continue
       }
+      unresolvedCount += results.count { it.skipped == WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE }
       val matched = results.filter { it.matched }
       if (matched.isEmpty()) {
         // Note: this collapses true "no match" and "all skipped (no trailblazeNodeTree)"
@@ -290,8 +328,19 @@ class WaypointLocateCommand : Callable<Int> {
     // Surface non-zero exit only when EVERY step failed — partial failures should still
     // produce a usable shard. Previous version checked `logs.size == 1`, which silently
     // greenlit fully-failed multi-step sessions.
-    return if (errorCount == logs.size) TrailblazeExitCode.INFRA_FAILED.code else TrailblazeExitCode.SUCCESS.code
+    if (errorCount == logs.size) return TrailblazeExitCode.INFRA_FAILED.code
+    // A templated waypoint that was never evaluated is not a miss, but the TSV can't say so:
+    // its consumers count every non-NONE/ERROR status as a waypoint id. Say it on stderr.
+    // Not a failure: discovery also loads other apps' bundled waypoints, so a session that
+    // recorded no app (a targetless run) would otherwise fail on waypoints it never targeted.
+    if (unresolvedCount > 0) Console.error(noTargetAppWarning(unresolvedCount))
+    return TrailblazeExitCode.SUCCESS.code
   }
+
+  private fun noTargetAppWarning(skippedChecks: Int): String =
+    "Warning: $skippedChecks waypoint check(s) were skipped, not evaluated: their selectors use " +
+      "`{{target.appId}}` and this session recorded no target app. Pass --target <trailmap-id> " +
+      "to match them."
 
   /**
    * TSV rows are `<path>\t<status>`. Tab/newline in the rel-path corrupt the format for any

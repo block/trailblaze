@@ -2,7 +2,7 @@
 // credential arrives in, and the look-alikes that must survive.
 
 import { describe, expect, test } from "bun:test";
-import { redactDeep, redactText } from "./redact.js";
+import { REDACTION_RULES, REDACTION_TRIGGERS, redactDeep, redactText } from "./redact.js";
 
 describe("credentials do not survive redaction", () => {
   test("redaction is by key name, and leaves keys that only look like one alone", () => {
@@ -63,5 +63,25 @@ describe("credentials do not survive redaction", () => {
     // A credential word with something after it is still not one: the separator has to come next.
     expect(redactText("inputTokens=5")).toBe("inputTokens=5");
     expect(redactText('"tokens": 7')).toBe('"tokens": 7');
+  });
+
+  test("a long encoded body beside a credential redacts the credential, in linear time", () => {
+    // A network body is often one unbroken run of base64 or hex. Starting a name anywhere inside
+    // that run made the scan quadratic: 8 s for this line, which is most of a week's snapshot build.
+    const body = "A".repeat(50_000);
+    const started = performance.now();
+    const out = redactText(`{"token":"live","body":"${body}"} a"password"=hunter2`);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(out).toBe(`{"token":"…","body":"${body}"} a"password"="…"`);
+  });
+});
+
+describe("the shortcut past the rules", () => {
+  test("every rule needs a trigger word, so skipping text without one skips nothing", () => {
+    // redactText returns text with no trigger word untouched. A rule that matched without one
+    // would never run, and the credential it was written for would be published.
+    for (const [rule] of REDACTION_RULES) {
+      expect(REDACTION_TRIGGERS.some((words) => rule.source.includes(`(?:${words})`))).toBe(true);
+    }
   });
 });

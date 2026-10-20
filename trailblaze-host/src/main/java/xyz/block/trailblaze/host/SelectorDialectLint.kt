@@ -602,7 +602,7 @@ object SelectorDialectLint {
    * too.
    *
    * Recursing into nested tool-calls is deliberate, not incidental. A wrapper tool records
-   * VERBATIM, inner calls and all — `block_runIf` keeps its `condition.tool` and `then:`/`else:`
+   * VERBATIM, inner calls and all — `runIf` keeps its `condition.tool` and `then:`/`else:`
    * entries in its own args as `{ <toolName>: <args> }` — and those inner selectors are dispatched
    * for real. A wrong dialect in a `condition.selector:` makes the conditional silently
    * always-false (the query tool dispatches on the tree shape the driver produced, so it never

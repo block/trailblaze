@@ -16,8 +16,8 @@ import xyz.block.trailblaze.util.fileUrl
   name = "graph",
   mixinStandardHelpOptions = true,
   description = [
-    "Render the waypoint navigation graph (waypoints, authored shortcuts, authored",
-    "trailheads) as a single self-contained HTML file. The output bakes in screenshots",
+    "Render the waypoint navigation graph (waypoints and authored trailheads) as a",
+    "single self-contained HTML file. The output bakes in screenshots",
     "as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any",
     "browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's",
     "side.",
@@ -33,8 +33,8 @@ class WaypointGraphCommand : Callable<Int> {
     paramLabel = "<id>",
     description = [
       "Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered " +
-        "graph to waypoints whose id starts with `<id>/` and drops shortcuts/trailheads " +
-        "that cross out of that scope. Also resolves --root to " +
+        "graph to waypoints whose id starts with `<id>/` and drops trailheads " +
+        "that land outside that scope. Also resolves --root to " +
         "<workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given.",
     ],
   )
@@ -46,7 +46,7 @@ class WaypointGraphCommand : Callable<Int> {
     description = [
       "Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints " +
         "whose source path is under `waypoints/<platform>/...` and drops " +
-        "shortcuts/trailheads that cross out of that scope. Combine with --target to " +
+        "trailheads that land outside that scope. Combine with --target to " +
         "produce a single (target, platform) map.",
     ],
   )
@@ -130,7 +130,6 @@ class WaypointGraphCommand : Callable<Int> {
     Console.log("Wrote waypoint graph to ${out.absolutePath}")
     Console.log(
       "  ${data.waypoints.size} waypoint(s), " +
-        "${data.shortcuts.size} shortcut(s), " +
         "${data.trailheads.size} trailhead(s)",
     )
     Console.log("Open in a browser: ${out.fileUrl()}")

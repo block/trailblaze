@@ -82,9 +82,13 @@ trailblaze.tool(
     const user = JSON.parse(userResult.textContent) as { name: string; email: string };
 
     // Drive the UI with built-in Trailblaze tools — same typed surface.
-    await client.tools.tapOnElementWithText({ text: "Sign up" });
+    await client.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Sign up.*" } },
+    });
     await client.tools.inputText({ text: user.email });
-    await client.tools.tapOnElementWithText({ text: "Continue" });
+    await client.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Continue.*" } },
+    });
 
     return {
       content: [{ type: "text", text: JSON.stringify(user) }],

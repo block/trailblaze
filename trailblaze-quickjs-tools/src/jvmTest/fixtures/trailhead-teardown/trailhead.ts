@@ -2,7 +2,7 @@
 // bundled the production on-device way and run through the real QuickJS engine and runner.
 // No device calls: the "app" is session memory, so the test drives every branch by setting keys.
 
-import { ToolError, trailblaze } from "@trailblaze/scripting";
+import { formatToolCalls, ToolError, trailblaze } from "@trailblaze/scripting";
 
 export const fixture_signIn = trailblaze.tool<{ persona: string }>(
   {
@@ -58,3 +58,33 @@ export const fixture_addItem = trailblaze.tool<{ id: string }>(async (args, ctx)
   }
   return `added ${args.id}`;
 });
+
+/**
+ * A trailhead whose teardown picks its cleanup from `ctx.history`: the calls of the trail section
+ * only, handed back as `state` so the test can read what teardown saw.
+ */
+export const fixture_historyTrailhead = trailblaze.tool<{ persona: string }>(
+  {
+    trailhead: {
+      to: "fixture/home_signed_in",
+      async teardown(_args, ctx) {
+        const calls = await ctx.history.toolCalls("trail");
+        return {
+          reusable: false,
+          reason: `the trail made ${calls.length} calls`,
+          state: {
+            calls: calls.map((c) => ({
+              name: c.name,
+              args: c.args as { [key: string]: string },
+              rawArgs: c.rawArgs as { [key: string]: string },
+              success: c.outcome?.success ?? null,
+              nested: c.calls.length,
+            })),
+            text: formatToolCalls(calls),
+          },
+        };
+      },
+    },
+  },
+  async (args) => `full setup as ${args.persona}`,
+);

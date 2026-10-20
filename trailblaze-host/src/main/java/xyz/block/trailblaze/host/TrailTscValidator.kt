@@ -43,8 +43,8 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  * has the right type, and that no required argument is missing. The framework already emits, per
  * trailmap, a `client.tools.<name>(args): Promise<O>` typed surface (see
  * [PerTrailmapClientDtsEmitter]) that the trailmap's `.ts` scripted tools compile against. That same
- * surface is the type oracle here: a recorded call `tapOnElementWithText: { text: "Buy" }` becomes
- * `client.tools.tapOnElementWithText({ "text": "Buy" })`, and a clean `tsc --noEmit` means the
+ * surface is the type oracle here: a recorded call `tapOnElementBySelector: { nodeSelector: … }`
+ * becomes `client.tools.tapOnElementBySelector({ nodeSelector: … })`, and a clean `tsc --noEmit` means the
  * recording is type-valid. Tools that don't exist, wrong-typed args, and missing required args all
  * surface as ordinary TypeScript diagnostics, which we remap back to `<trail>.yaml · step N`.
  *

@@ -36,6 +36,43 @@ import { sessionResourcesFor, type TrailblazeSessionResources } from "./session-
 export type { TrailblazeLogger, TrailblazeLogLevel } from "./logger.js";
 export type { TrailblazeMemory } from "./memory.js";
 
+/** Every value `ctx.host.os` can take. */
+export const TRAILBLAZE_HOST_OS = ["macos", "windows", "linux"] as const;
+export type TrailblazeHostOs = (typeof TRAILBLAZE_HOST_OS)[number];
+
+/**
+ * Every value `ctx.host.arch` can take besides `null`. An x64 JVM on Windows on Arm reads `"x64"`,
+ * which is what the programs it runs must be.
+ */
+export const TRAILBLAZE_HOST_ARCH = ["arm64", "x64"] as const;
+export type TrailblazeHostArch = (typeof TRAILBLAZE_HOST_ARCH)[number];
+
+/**
+ * The computer a tool runs on, which a typed tool reads as `ctx.host.os` and `ctx.host.arch`.
+ */
+export interface TrailblazeHostPlatform {
+  os: TrailblazeHostOs;
+  /** Null for an architecture Trailblaze doesn't name. */
+  arch: TrailblazeHostArch | null;
+}
+
+const VALID_HOST_OS: ReadonlySet<string> = new Set(TRAILBLAZE_HOST_OS);
+const VALID_HOST_ARCH: ReadonlySet<string> = new Set(TRAILBLAZE_HOST_ARCH);
+
+/**
+ * Reads a `hostPlatform` block from either envelope (`_meta.trailblaze` or the on-device `__ctx`
+ * literal). Null when absent, which is every on-device invocation, or malformed.
+ */
+export function parseHostPlatform(raw: unknown): TrailblazeHostPlatform | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { os, arch } = raw as Record<string, unknown>;
+  if (typeof os !== "string" || !VALID_HOST_OS.has(os)) return null;
+  return {
+    os: os as TrailblazeHostOs,
+    arch: typeof arch === "string" && VALID_HOST_ARCH.has(arch) ? (arch as TrailblazeHostArch) : null,
+  };
+}
+
 export interface TrailblazeDevice {
   /**
    * Coarse platform; useful for branching in cross-platform tools. Lowercase by convention on
@@ -232,6 +269,12 @@ export interface TrailblazeContext {
   target?: TrailblazeTarget;
 
   /**
+   * The computer the tool runs on. Absent when the tool runs on an Android device, where the
+   * device is the only computer. A typed tool reads it as `ctx.host.os` and `ctx.host.arch`.
+   */
+  hostPlatform?: TrailblazeHostPlatform;
+
+  /**
    * Per-tool-call agent memory surface. Reads consult the host's snapshot captured at
    * envelope build time, plus any writes made earlier in this handler invocation
    * (read-your-own-writes). Writes are buffered locally and flushed back to the host on
@@ -366,6 +409,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
       trailblazePort,
     },
     target,
+    hostPlatform: parseHostPlatform(tb["hostPlatform"]) ?? undefined,
     memory,
     logger: logger ?? noopLogger,
     session: sessionResourcesFor(sessionId),

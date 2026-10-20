@@ -303,7 +303,7 @@ export function createTrailRun(wire: unknown, client: TrailblazeClient): TrailRu
     },
     async query(stream: string, options?: TrailEventsQueryOptions) {
       const args: Record<string, unknown> = { stream };
-      if (options?.match !== undefined) args.match = encodeMatch(options.match);
+      if (options?.match !== undefined) args.match = encodeMatch(options.match, "trailRun.events.query");
       if (options?.window !== undefined) args.window = options.window;
       if (options?.limit !== undefined) args.limit = options.limit;
       return (await host[HOST_FUNCTION_TRAIL_EVENTS_QUERY](args)) as SessionEvent[];
@@ -312,19 +312,19 @@ export function createTrailRun(wire: unknown, client: TrailblazeClient): TrailRu
   return { outcome, notes, events };
 }
 
-/** A `RegExp` crosses to Kotlin as `{ "$regex": source, "$flags": flags }`. */
-function encodeMatch(match: EventMatch): Record<string, unknown> {
+/** A `RegExp` crosses to Kotlin as `{ "$regex": source, "$flags": flags }`. [caller] names the API in errors. */
+export function encodeMatch(match: EventMatch, caller: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(match)) out[key] = encodeMatchValue(value);
+  for (const [key, value] of Object.entries(match)) out[key] = encodeMatchValue(value, caller);
   return out;
 }
 
-function encodeMatchValue(value: EventMatchValue): unknown {
+function encodeMatchValue(value: EventMatchValue, caller: string): unknown {
   if (value instanceof RegExp) return { $regex: value.source, $flags: value.flags };
   if (typeof value === "function") {
-    throw new TypeError("trailRun.events.query: a match can't hold a function; filter the returned records instead");
+    throw new TypeError(`${caller}: a match can't hold a function; filter the returned records instead`);
   }
-  if (value !== null && typeof value === "object") return encodeMatch(value as EventMatch);
+  if (value !== null && typeof value === "object") return encodeMatch(value as EventMatch, caller);
   return value;
 }
 

@@ -56,8 +56,8 @@ object ToolYamlSchemaBuilder {
     put(
       "description",
       "A tool definition. Provide `class:` (Kotlin-backed) OR `tools:` (YAML-composed) — these two are " +
-        "mutually exclusive — or, with neither, a `shortcut:`/`trailhead:` metadata block (`shortcut:` and " +
-        "`trailhead:` are themselves mutually exclusive). A metadata block may also accompany a `class:`/`tools:` body.",
+        "mutually exclusive — or, with neither, a `trailhead:` metadata block. A metadata block may also " +
+        "accompany a `class:`/`tools:` body.",
     )
     put("type", "object")
     putJsonArray("required") { add("id") }
@@ -96,17 +96,8 @@ object ToolYamlSchemaBuilder {
       putJsonObject("is_recordable") { put("type", "boolean"); put("description", "Whether calls are recorded into a trail. TOOLS mode only; null defaults to true.") }
       putJsonObject("requires_host") { put("type", "boolean"); put("description", "Host-only execution. TOOLS mode only; null defaults to false.") }
       putJsonObject("is_verification") { put("type", "boolean"); put("description", "Marks the tool as a read-only assertion. TOOLS mode only; null defaults to false.") }
-      putJsonObject("shortcut") {
-        put("type", "object"); put("description", "METADATA mode: a navigation shortcut (waypoint→waypoint). File must be *.shortcut.yaml. Mutually exclusive with `trailhead:`.")
-        put("additionalProperties", true); putJsonArray("required") { add("from"); add("to") }
-        putJsonObject("properties") {
-          putJsonObject("from") { put("type", "string"); put("description", "Waypoint that must match before this shortcut runs.") }
-          putJsonObject("to") { put("type", "string"); put("description", "Waypoint that must match after this shortcut runs.") }
-          putJsonObject("variant") { put("type", "string"); put("description", "Optional variant discriminator.") }
-        }
-      }
       putJsonObject("trailhead") {
-        put("type", "object"); put("description", "METADATA mode: a trailhead (bootstrap to a waypoint, no `from`). File must be *.trailhead.yaml. Mutually exclusive with `shortcut:`.")
+        put("type", "object"); put("description", "METADATA mode: a trailhead (bootstrap to a waypoint, no `from`). File must be *.trailhead.yaml.")
         put("additionalProperties", true)
         putJsonObject("properties") {
           putJsonObject("to") { put("type", "string"); put("description", "Waypoint that must match after the trailhead runs.") }

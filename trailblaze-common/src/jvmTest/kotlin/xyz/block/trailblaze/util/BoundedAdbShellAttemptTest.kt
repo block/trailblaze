@@ -97,4 +97,23 @@ class BoundedAdbShellAttemptTest {
     assertEquals("answered", result.value)
   }
 
+
+  @Test
+  fun `a timed-out attempt reports when its worker finally ends`() {
+    val finished = CountDownLatch(1)
+    val result =
+      AndroidHostAdbUtils.runSingleAdbShellAttempt(
+        deviceId = deviceId,
+        command = "date",
+        redactedCommand = "date",
+        timeoutMs = 10L,
+        evictClientOnTimeout = false,
+        onWorkerFinished = { finished.countDown() },
+        shellCall = { _ -> release.await(); "1" },
+      )
+    assertEquals(AndroidHostAdbUtils.ShellAttemptOutcome.TIMED_OUT, result.outcome)
+    assertEquals(1L, finished.count, "the worker is still parked")
+    release.countDown()
+    assertEquals(true, finished.await(5, TimeUnit.SECONDS))
+  }
 }

@@ -11,7 +11,7 @@ const DEFAULT_FORM_LINK_REF = "css=a[href='#form']";
 export interface OpenFormIfNeededArgs {
   /** Sample-app fixture path (relative to repo root). */
   relativePath?: string;
-  /** Visible heading used to detect that the form is already open. */
+  /** Heading used to detect that the form is already open. */
   formHeading?: string;
 }
 
@@ -32,13 +32,13 @@ export const playwrightSample_web_openFormIfNeeded = trailblaze.tool<OpenFormIfN
     try {
       // The current callback contract throws when an inner tool fails, so probing state is
       // try/catch for now.
-      await ctx.tools.web_verifyTextVisible({ text: formHeading });
+      await ctx.tools.web_verifyElementVisible({ ref: `heading "${formHeading}"` });
       return `The form section was already visible at ${relativePath}.`;
     } catch {
       await ctx.tools.web_click({
         ref: DEFAULT_FORM_LINK_REF,
       });
-      await ctx.tools.web_verifyTextVisible({ text: formHeading });
+      await ctx.tools.web_verifyElementVisible({ ref: `heading "${formHeading}"` });
       return `Opened the form section from ${relativePath}.`;
     }
   },

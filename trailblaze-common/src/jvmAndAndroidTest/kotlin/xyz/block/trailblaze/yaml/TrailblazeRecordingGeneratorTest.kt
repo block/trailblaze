@@ -41,7 +41,6 @@ import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.toLogPayloads
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
@@ -312,7 +311,14 @@ class TrailblazeRecordingGeneratorTest {
     val step = VerificationStep(verify = "Search results visible")
     val logs = listOf(
       objectiveStart(step),
-      toolLog(AssertVisibleWithTextTrailblazeTool(text = "Results"), "assertVisibleWithText"),
+      toolLog(
+        AssertVisibleBySelectorTrailblazeTool(
+          nodeSelector = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "Results"),
+          ),
+        ),
+        "assertVisibleBySelector",
+      ),
       objectiveComplete(step),
     )
 
@@ -323,8 +329,10 @@ class TrailblazeRecordingGeneratorTest {
       |  - verify: "Search results visible"
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Results
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Results
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -345,7 +353,14 @@ class TrailblazeRecordingGeneratorTest {
       // (`TrailblazeAgentContext`) — hard-coding `true` here would let the tool be marked
       // unrecordable without this test noticing.
       toolLog(handover, "switchDevice", isRecordable = handover.getIsRecordableFromAnnotation()),
-      toolLog(AssertVisibleWithTextTrailblazeTool(text = "Approve"), "assertVisibleWithText"),
+      toolLog(
+        AssertVisibleBySelectorTrailblazeTool(
+          nodeSelector = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "Approve"),
+          ),
+        ),
+        "assertVisibleBySelector",
+      ),
       objectiveComplete(step),
     )
 
@@ -358,8 +373,10 @@ class TrailblazeRecordingGeneratorTest {
       |      android:
       |        - switchDevice:
       |            name: buyer
-      |        - assertVisibleWithText:
-      |            text: Approve
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Approve
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -767,8 +784,10 @@ class TrailblazeRecordingGeneratorTest {
       |  - verify: Login button visible
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Login
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Login
     """.trimMargin()
     val originalYaml = """
       |trail:
@@ -786,8 +805,10 @@ class TrailblazeRecordingGeneratorTest {
       |  - verify: "Login button visible"
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Login
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Login
     """.trimMargin()
 
     // 1. Parse the source YAML to get trail items
@@ -934,8 +955,10 @@ class TrailblazeRecordingGeneratorTest {
       |  - verify: Welcome message shown
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Welcome
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Welcome
     """.trimMargin()
     val originalYaml = """
       |trail:
@@ -954,8 +977,10 @@ class TrailblazeRecordingGeneratorTest {
       |  - verify: "Welcome message shown"
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Welcome
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Welcome
     """.trimMargin()
 
     val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
@@ -1130,7 +1155,14 @@ class TrailblazeRecordingGeneratorTest {
       ),
       objectiveComplete(step1),
       objectiveStart(step2),
-      toolLog(AssertVisibleWithTextTrailblazeTool(text = "Dashboard"), "assertVisibleWithText"),
+      toolLog(
+        AssertVisibleBySelectorTrailblazeTool(
+          nodeSelector = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "Dashboard"),
+          ),
+        ),
+        "assertVisibleBySelector",
+      ),
       objectiveComplete(step2),
     )
 
@@ -1224,28 +1256,28 @@ class TrailblazeRecordingGeneratorTest {
 
   @Test
   fun anAssertionThatFailedThenPassedRecordsOnlyThePassingCall() {
-    // The live shape: the agent asserts a ref with an expectedText that misses (the node's text has
-    // a newline where the agent wrote a space), the executed assertVisibleBySelector logs a failure
-    // at both dispatch layers, then the agent retries without expectedText and passes. Replaying the
-    // failed call would fail the step every time, so only the passing one may be recorded.
+    // The live shape: the agent asserts an element whose text has since changed, the executed
+    // assertVisibleBySelector logs a failure at both dispatch layers, then the agent asserts the
+    // element on the refreshed screen and passes. Replaying the failed call would fail the step
+    // every time, so only the passing one may be recorded.
     val step = VerificationStep(verify = "Verify the submission shows Jane Doe")
-    val selector = TrailblazeNodeSelector.withMatch(
-      DriverNodeMatch.AndroidAccessibility(textRegex = "Name: Jane Doe\nEmail: "),
-    )
     val failedAssert = AssertVisibleBySelectorTrailblazeTool(
       reason = "Check the submission result",
-      nodeSelector = selector,
-      expectedText = "Name: Jane Doe Email:",
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(textRegex = "Submitting\\.\\.\\."),
+      ),
     )
     val passingAssert = AssertVisibleBySelectorTrailblazeTool(
       reason = "Check the submission result",
-      nodeSelector = selector,
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(textRegex = "Name: Jane Doe\nEmail: "),
+      ),
     )
     fun trace(origin: TraceId.Companion.TraceOrigin) = TraceId.generate(origin)
     val logs = listOf(
       objectiveStart(step),
       delegatingToolLog(
-        AssertVisibleTrailblazeTool(ref = "a12", expectedText = "Name: Jane Doe Email:"),
+        AssertVisibleTrailblazeTool(ref = "a12"),
         "assertVisible",
         executableTools = listOf(failedAssert),
       ),

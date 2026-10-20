@@ -620,6 +620,10 @@
   // ---- Session events + the attachments they reference ------------------------------------------
 
   var EVENTS_STREAM_RE = /^events\/[^/]+\.ndjson$/;
+  var DEVICE_CLOCK_FILE = 'session_device_clock.json';
+  // A run samples once a minute; this is days of samples, and keeps a hostile archive from
+  // inflating a huge entry just to read it.
+  var DEVICE_CLOCK_MAX_BYTES = 4 * 1024 * 1024;
 
   // Generic session events (`events/<name>.ndjson`) → the same EventStream[] the bun driver embeds,
   // through the renderer's own decode pipeline (buildEventStream) so the two paths cannot drift. No
@@ -638,7 +642,16 @@
     var streams = [];
     var totalChars = 0;
     var overTotal = false;
-    var chain = Promise.resolve();
+    // The session's measured device clock readings put device-clock lines on the host timeline,
+    // as the bun driver does. Absent or unreadable leaves every line on its own stamp.
+    var clockSync = null;
+    var clockEntry = session.byFileName[DEVICE_CLOCK_FILE];
+    var parseClock = render.parseDeviceClockSync;
+    var chain = typeof parseClock === 'function' && clockEntry && clockEntry.uncompressedSize <= DEVICE_CLOCK_MAX_BYTES
+      ? readZipEntry(zipBytes, clockEntry, inflateRaw).then(function (data) {
+          clockSync = parseClock(utf8.decode(data));
+        }).catch(function () { clockSync = null; })
+      : Promise.resolve();
     eventFiles.forEach(function (name) {
       chain = chain.then(function () {
         if (overTotal) return;
@@ -649,7 +662,7 @@
           return;
         }
         return readZipEntry(zipBytes, entry, inflateRaw).then(function (data) {
-          var stream = render.buildEventStream(name.slice('events/'.length), utf8.decode(data).split('\n'), [], { sessionPassed: false });
+          var stream = render.buildEventStream(name.slice('events/'.length), utf8.decode(data).split('\n'), [], { sessionPassed: false }, clockSync);
           if (!stream) return;
           totalChars += JSON.stringify(stream).length;
           if (totalChars > render.MAX_EVENT_STREAMS_TOTAL_CHARS) {
@@ -804,6 +817,7 @@
       packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
       traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
       buildEventStream: render.buildEventStream || g.buildEventStream,
+      parseDeviceClockSync: render.parseDeviceClockSync || g.parseDeviceClockSync,
       collectStreamAttachmentRefs: render.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,
       ATTACHMENT_MIME: render.ATTACHMENT_MIME || g.ATTACHMENT_MIME,
       MAX_ATTACHMENTS_PER_SESSION: render.MAX_ATTACHMENTS_PER_SESSION || g.MAX_ATTACHMENTS_PER_SESSION,

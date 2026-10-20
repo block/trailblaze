@@ -20,7 +20,7 @@ import xyz.block.trailblaze.util.Console
  *
  * Scripted tools live under `trails/config/trailmaps/<id>/tools/` next to their descriptor YAML
  * (a [TrailmapScriptedToolFile] — a plain `.yaml`, NOT one of the `*.tool.yaml` /
- * `*.shortcut.yaml` / `*.trailhead.yaml` operational suffixes that [ToolYamlLoader] owns).
+ * `*.trailhead.yaml` operational suffixes that [ToolYamlLoader] owns).
  * Historically these descriptors were "deliberately excluded" from the global name registry and
  * reached the runtime only through a target's `target.tools:` list — see the note in
  * `ToolYamlLoader.discoverTrailmapBundledToolContents`. As a result, a scripted name listed in a
@@ -206,8 +206,9 @@ object ScriptedToolNameDiscoverer {
   /**
    * Walks the trailmap tree and decodes every scripted-tool descriptor under a `tools/`
    * directory. Returns relPath -> decoded descriptor. Files carrying the operational
-   * `*.tool.yaml` / `*.shortcut.yaml` / `*.trailhead.yaml` suffixes (owned by [ToolYamlLoader])
-   * are excluded by suffix; any remaining plain `.yaml` that fails to decode as a
+   * `*.tool.yaml` / `*.trailhead.yaml` suffixes (owned by [ToolYamlLoader]) are excluded
+   * by suffix, as are leftover `*.shortcut.yaml` files (shortcuts were removed; keep this
+   * skip so a stale file is never decoded as a descriptor); any remaining plain `.yaml` that fails to decode as a
    * [TrailmapScriptedToolFile] (e.g. it has no `script:` field) is skipped.
    */
   private fun discoverDescriptors(
@@ -232,8 +233,8 @@ object ScriptedToolNameDiscoverer {
       // strips the leading `trails/config/trailmaps/` prefix, so relPath starts at `<id>/...`.
       val segments = relPath.split('/')
       if (segments.size < 3 || segments[1] != "tools") return@forEach
-      // The three operational suffixes are owned by ToolYamlLoader (class-backed / YAML-defined
-      // tools + shortcut/trailhead edges). Scripted descriptors use a plain `.yaml`.
+      // The operational suffixes are owned by ToolYamlLoader (class-backed / YAML-defined
+      // tools + trailheads). Scripted descriptors use a plain `.yaml`.
       if (isOperationalToolSuffix(relPath)) return@forEach
       val descriptor = try {
         TrailblazeConfigYaml.instance.decodeFromString(
@@ -253,8 +254,9 @@ object ScriptedToolNameDiscoverer {
 
   private fun isOperationalToolSuffix(relPath: String): Boolean =
     relPath.endsWith(".tool.yaml") ||
-      relPath.endsWith(".shortcut.yaml") ||
-      relPath.endsWith(".trailhead.yaml")
+      relPath.endsWith(".trailhead.yaml") ||
+      // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+      relPath.endsWith(".shortcut.yaml")
 
   /**
    * Resolves the classpath/asset path of the committed `.bundle.js` for a discovered scripted-tool

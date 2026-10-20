@@ -756,7 +756,7 @@ internal suspend fun tryVerifyFastPath(
     val result = try {
       agent.runTrailblazeTools(
         tools = listOf(
-          AssertVisibleTrailblazeTool(ref = match.ref, expectedText = match.phrase, reasoning = "verify fast path"),
+          AssertVisibleTrailblazeTool(ref = match.ref, reasoning = "verify fast path"),
         ),
         traceId = traceId,
         screenState = screenProvider(),

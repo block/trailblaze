@@ -18,6 +18,7 @@ import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
+import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
@@ -524,8 +525,7 @@ class PerTrailmapClientDtsEmitterTest {
     // The durable fix: the surface is derived from `isRecordable`, so recordable tools that live in
     // NO tool_sets (the selector-migration pipeline's `assertVisibleBySelector` /
     // `assertNotVisibleBySelector`, which the LLM never picks) and YAML-defined recordable tools
-    // (`eraseText`) land in EVERY binding — even a trailmap with no tool_sets and no
-    // scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
+    // land in EVERY binding — even a trailmap with no tool_sets and no scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
     // HAND_CURATED_RECORDABLE tools are left to built-in-tools.ts so the two surfaces don't collide.
     val trailmapDir = newTrailmapDir("recordable_surface_pack")
     val trailmap = ResolvedTrailmap(
@@ -540,7 +540,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), workspaceRoot = null)
+    YamlDefinedToolFixture.registered { PerTrailmapClientDtsEmitter.emit(listOf(trailmap), workspaceRoot = null) }
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
 
     // Selector-migration tools that are in no tool_sets still appear — including
@@ -567,7 +567,9 @@ class PerTrailmapClientDtsEmitterTest {
       toolEntryBlock(rendered, "tapOn").contains("selector: TrailblazeNodeSelector;")
     }
     // YAML-defined recordable tools flow in from their config params.
-    assertTrue("expected YAML-defined eraseText: $rendered") { rendered.contains("eraseText:") }
+    assertTrue("expected the YAML-defined fixture: $rendered") {
+      toolEntryBlock(rendered, YamlDefinedToolFixture.NAME).contains("text: string;")
+    }
     // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
     assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {
       rendered.contains("mobile_maestro:")
@@ -1344,7 +1346,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected toolset-delivered openUrl in the typed surface: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
     assertTrue("expected openUrl's url arg from the classpath descriptor's inputSchema: $rendered") {
       toolEntryBlock(rendered, "openUrl").contains("url: string;")
@@ -1389,7 +1391,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected driver-delivered openUrl in the typed surface despite no tool_sets: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1435,7 +1437,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected mobile-only openUrl to be absent from the web-only surface: $rendered") {
-      !rendered.contains("openUrl:")
+      !hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1518,7 +1520,7 @@ class PerTrailmapClientDtsEmitterTest {
       File(outputBase, "bundled_scripted_app/tools/trailblaze-client.d.ts").toPath(),
     )
     assertTrue("expected toolset-delivered openUrl in the classpath validation surface: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1640,6 +1642,10 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected a closing `};` for the `$toolName` entry") { end >= 0 }
     return rendered.substring(start, end)
   }
+
+  /** Whether [rendered] declares a top-level entry for exactly [toolName], not one it suffixes. */
+  private fun hasToolEntry(rendered: String, toolName: String): Boolean =
+    Regex("""^    ${Regex.escape(toolName)}: \{""", RegexOption.MULTILINE).containsMatchIn(rendered)
 }
 
 @Serializable

@@ -9,12 +9,19 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -311,6 +318,97 @@ class QuickJsToolHostTest {
     val text = (result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive
     assertEquals("outer wraps inner-result", text.content)
   }
+
+  private suspend fun assertCancellingReturnsPromptly(binding: HostBinding, call: String) {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["waits"] = {
+        name: "waits",
+        spec: {},
+        handler: async () => {
+          await $call;
+          return { content: [] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    coroutineScope {
+      val tool = launch(Dispatchers.Default) { host.callTool("waits", JsonObject(emptyMap())) }
+      hostCallStarted.await()
+      val started = System.currentTimeMillis()
+
+      val finished = withTimeoutOrNull(10_000) { tool.cancelAndJoin() }
+
+      assertNotNull(finished, "the tool call was still running 10 s after it was cancelled")
+      assertTrue(System.currentTimeMillis() - started < 5_000)
+    }
+  }
+
+  private val hostCallStarted = CompletableDeferred<Unit>()
+
+  @Test
+  fun `cancelling a tool cancels a tool it called that is waiting`() = runBlocking {
+    // The nested call dispatches like the agent does: blocking, in its own runBlocking, linked to
+    // whatever Job the dispatch was handed.
+    val binding = object : HostBinding {
+      override suspend fun callFromBundle(name: String, argsJson: String): String = withContext(Dispatchers.IO) {
+        runBlocking {
+          // Bounded, so a cancel that never arrives fails the test and still frees the engine thread.
+          DispatchCancellation.linked(this) { hostCallStarted.complete(Unit); delay(20_000) }
+          """{"ok":true,"value":null}"""
+        }
+      }
+      override suspend fun callHostFunction(name: String, argsJson: String): String = error("unused")
+    }
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["waits"] = {
+        name: "waits",
+        spec: {},
+        handler: async () => {
+          await globalThis.__trailblazeCall("nested", "{}");
+          return { content: [] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    // Its own scope, so a nested wait the cancel never reaches fails the test instead of hanging it.
+    val tool = CoroutineScope(Dispatchers.Default).launch { host.callTool("waits", JsonObject(emptyMap())) }
+    withTimeout(10_000) { hostCallStarted.await() }
+
+    tool.cancel()
+
+    assertNotNull(withTimeoutOrNull(5_000) { tool.join() }, "the nested call was still waiting 5 s after the cancel")
+  }
+
+  @Test
+  fun `cancelling a tool cancels the host function it is blocked in`() = runBlocking {
+    // Like a `ctx.events` query waiting for a record that never arrives.
+    val binding = object : HostBinding {
+      override suspend fun callFromBundle(name: String, argsJson: String): String = error("unused")
+      override suspend fun callHostFunction(name: String, argsJson: String): String {
+        hostCallStarted.complete(Unit)
+        delay(60_000)
+        return """{"ok":true,"value":null}"""
+      }
+    }
+    assertCancellingReturnsPromptly(binding, "globalThis.__trailblazeHost(\"slow\", \"{}\")")
+  }
+
+  @Test
+  fun `cancelling a tool cancels the host call it is blocked in`() = runBlocking {
+    val binding = HostBinding { _, _ ->
+      hostCallStarted.complete(Unit)
+      delay(60_000)
+      """{"content":[]}"""
+    }
+    assertCancellingReturnsPromptly(binding, "globalThis.__trailblazeCall(\"slow\", \"{}\")")
+  }
+
 
   @Test
   fun `a hostBinding that re-enters the same host fails fast instead of deadlocking`() = runBlocking {

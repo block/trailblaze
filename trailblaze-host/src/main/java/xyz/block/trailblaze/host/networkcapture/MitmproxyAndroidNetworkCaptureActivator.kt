@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.host.networkcapture
 
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isWindows
 import java.io.File
+import java.io.InputStream
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentHashMap
 
@@ -52,6 +54,42 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
    * store; the legacy `/system/etc/security/cacerts` remount for API 24–33 is a planned follow-up.
    */
   private const val MIN_SUPPORTED_SDK = 34
+
+  /** A line the proxy addon prints when it loses an event. Mirrors `mitmproxy_netcapture.py`. */
+  internal const val CAPTURE_INCOMPLETE_LINE_PREFIX = "[mitm-capture] capture-incomplete: "
+
+  /** The stream the proxy writes, `network.ndjson`; its losses are recorded against it. */
+  internal const val NETWORK_STREAM = "network"
+
+  /**
+   * Copies the proxy's output into [log] and records a loss it reports with
+   * [SessionCaptureHealth], in memory, so the loss counts even when the disk that failed the
+   * proxy's write can't take a marker or this log. Keeps draining after a log write fails: a
+   * full pipe would stall the proxy.
+   */
+  internal fun relayProxyOutput(output: InputStream, log: File, sessionDir: File) {
+    val writer = runCatching { log.bufferedWriter() }.getOrNull()
+    var writing = writer != null
+    try {
+      output.bufferedReader().useLines { lines ->
+        lines.forEach { line ->
+          if (line.startsWith(CAPTURE_INCOMPLETE_LINE_PREFIX)) {
+            SessionCaptureHealth.markIncomplete(
+              sessionDir,
+              line.removePrefix(CAPTURE_INCOMPLETE_LINE_PREFIX),
+              NETWORK_STREAM,
+            )
+          }
+          if (writing) {
+            writing = runCatching { writer!!.write(line); writer.newLine(); writer.flush() }.isSuccess
+          }
+        }
+      }
+    } finally {
+      // Also when the pipe read fails (the proxy killed at shutdown), or the log stays open.
+      runCatching { writer?.close() }
+    }
+  }
 
   private val cacheRoot: File = File(System.getProperty("user.home"), ".trailblaze/network-capture")
   private val confDir: File = File(cacheRoot, "mitmproxy")
@@ -214,8 +252,11 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       ).redirectErrorStream(true)
       pb.environment()["TRAILBLAZE_SESSION_ID"] = sessionId
       pb.environment()["TRAILBLAZE_SESSION_DIR"] = sessionDir.absolutePath
-      pb.redirectOutput(File(sessionDir, "mitmdump.log"))
-      process = pb.start()
+      process = pb.start().also { started ->
+        Thread({ relayProxyOutput(started.inputStream, File(sessionDir, "mitmdump.log"), sessionDir) }, "mitm-capture-$sessionId")
+          .apply { isDaemon = true }
+          .start()
+      }
       Console.log("[mitm-capture] $sessionId: mitmdump pid=${process?.pid()} on 127.0.0.1:$port")
 
       // mitmdump writes the CA to confdir on startup; wait for it AND confirm the process is still

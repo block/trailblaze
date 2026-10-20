@@ -39,7 +39,7 @@ object TrailYamlSchemaBuilder {
    *   completion still works — over-offering is far better than an empty/erroring schema.
    */
   fun build(entries: List<ToolCatalogEntry>, targetToolNames: Set<String>?): String {
-    // Framework tools (e.g. `mobile_maestro`, `assertVisibleWithText`, `launchApp`) are always in
+    // Framework tools (e.g. `mobile_maestro`, `assertVisibleBySelector`, `launchApp`) are always in
     // completion scope: they're not in a target's LLM-facing registered set, yet they're exactly the
     // primitives that show up in recorded `tools:` blocks. Mirrors ToolYamlSchemaBuilder's framework
     // inclusion so both editors complete the same framework surface.

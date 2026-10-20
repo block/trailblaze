@@ -143,9 +143,6 @@ object CoreTools {
   // Assertion/Verification Tools
   // =========================================================================
 
-  /** Assert that text is visible on screen. */
-  const val ASSERT_VISIBLE_WITH_TEXT = "assertVisibleWithText"
-
   /** Assert that text is NOT visible on screen. */
   const val ASSERT_NOT_VISIBLE_WITH_TEXT = "assertNotVisibleWithText"
 

@@ -185,7 +185,7 @@ fun List<TrailblazeTool>.toLogPayloads(): List<OtherTrailblazeTool> = map { it.t
  * Resolves the verification bit for a tool instance.
  *
  * Verification tools are read-only assertions whose successful execution is itself the
- * verify verdict (e.g. `assertVisible`, `web_verifyTextVisible`). Used by
+ * verify verdict (e.g. `assertVisible`, `web_verifyElementVisible`). Used by
  * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute — non-verification
  * tools could side-effect the device and their success is unrelated to the assertion.
  *

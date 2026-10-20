@@ -71,6 +71,138 @@ private val countInParensRegex = Regex("""($NON_LINE_TERMINATOR*?)$JAVA_WS*\(\d[
 private val trailingBareCountRegex = Regex("""($NON_LINE_TERMINATOR*?)$JAVA_WS+\d[\d.,]*""")
 
 /**
+ * This selector with its own driver match also requiring exactly the text [detail] shows, or null
+ * when the element shows none, is a password field, or this selector already matches a different
+ * dialect. The text goes in the field it came from (the first non-blank of each dialect's text
+ * fields), so the resolver reads it from the same place, and replaces any pattern already there:
+ * the generator's patterns tolerate changing numbers, which an assertion must not.
+ *
+ * - An empty field showing its hint or label also requires the field to stay empty, or typing
+ *   into it would still pass. That includes a field named only by its accessibility label.
+ * - An AXe element pins both its label and its value: a text field's label is its name and its
+ *   value is what was typed.
+ * - Maestro-shape dialects match case-insensitively by default, so their patterns opt out with
+ *   `(?-i)`: a recorded "Active" must not pass on "active".
+ *
+ * A password field returns null rather than pinning its hint: the typed value and the hint share
+ * the field on several dialects, and a recording is a file anyone can read.
+ */
+internal fun TrailblazeNodeSelector.withTextOf(detail: DriverNodeDetail): TrailblazeNodeSelector? {
+  val caseInsensitiveDialect = detail is DriverNodeDetail.AndroidMaestro || detail is DriverNodeDetail.IosMaestro
+  fun exact(text: String): String =
+    assertedTextPattern(text).let { if (caseInsensitiveDialect) "$CASE_SENSITIVE$it" else it }
+  fun pattern(text: String?): String? = text?.takeIf { it.isNotBlank() }?.let(::exact)
+
+  // A text field that is unset resolves to its hint, so the same hint pattern pins it; one that
+  // is set (to "" or blank) must stay exactly that.
+  fun shownHintText(text: String?, hintPattern: String): String = if (text == null) hintPattern else exact(text)
+  // A field named only by its label that is set (to "" or blank) must stay exactly that too.
+  fun shownText(text: String?, current: String?): String? = text?.let(::exact) ?: current
+  // A Maestro `textRegex` resolves to the accessibility text when text and hint are unset, and the
+  // legacy lowering ([TrailblazeNodeSelector.toTrailblazeElementSelector]) keeps only `textRegex`,
+  // so one already there is replaced by the strict pattern rather than left loose beside it.
+  fun loweredText(detail: DriverNodeDetail, current: String?, strict: String): String? {
+    val (text, hint) = when (detail) {
+      is DriverNodeDetail.AndroidMaestro -> detail.text to detail.hintText
+      is DriverNodeDetail.IosMaestro -> detail.text to detail.hintText
+      else -> return current
+    }
+    return if (current != null && text == null && hint == null) strict else current
+  }
+  return when (detail) {
+    is DriverNodeDetail.AndroidAccessibility -> {
+      if (detail.isPassword || (driverMatch != null && androidAccessibility == null)) return null
+      val base = androidAccessibility ?: DriverNodeMatch.AndroidAccessibility()
+      val match = pattern(detail.text)?.let { base.copy(textRegex = it) }
+        ?: pattern(detail.hintText)?.let { base.copy(textRegex = shownHintText(detail.text, it), hintTextRegex = it) }
+        ?: pattern(detail.contentDescription)?.let { base.copy(textRegex = shownText(detail.text, base.textRegex), contentDescriptionRegex = it) }
+        ?: pattern(detail.labeledByText)?.let { base.copy(textRegex = shownText(detail.text, base.textRegex), labeledByTextRegex = it) }
+        ?: return null
+      copy(androidAccessibility = match)
+    }
+    is DriverNodeDetail.AndroidView -> {
+      if (detail.isPassword || (driverMatch != null && androidView == null)) return null
+      val base = androidView ?: DriverNodeMatch.AndroidView()
+      val match = pattern(detail.text)?.let { base.copy(textRegex = it) }
+        ?: pattern(detail.hintText)?.let { base.copy(textRegex = shownHintText(detail.text, it), hintTextRegex = it) }
+        ?: pattern(detail.contentDescription)?.let { base.copy(textRegex = shownText(detail.text, base.textRegex), contentDescriptionRegex = it) }
+        ?: return null
+      copy(androidView = match)
+    }
+    is DriverNodeDetail.AndroidMaestro -> {
+      if (detail.password || (driverMatch != null && androidMaestro == null)) return null
+      val base = androidMaestro ?: DriverNodeMatch.AndroidMaestro()
+      val match = pattern(detail.text)?.let { base.copy(textRegex = it) }
+        ?: pattern(detail.hintText)?.let { base.copy(textRegex = shownHintText(detail.text, it), hintTextRegex = it) }
+        ?: pattern(detail.accessibilityText)?.let { base.copy(textRegex = loweredText(detail, base.textRegex, it), accessibilityTextRegex = it) }
+        ?: return null
+      copy(androidMaestro = match)
+    }
+    is DriverNodeDetail.Compose -> {
+      if (detail.isPassword || (driverMatch != null && compose == null)) return null
+      val base = compose ?: DriverNodeMatch.Compose()
+      // A Compose `textRegex` reads the typed text before the label, so an empty field can't pin
+      // its label there; it pins that it stays empty, or typing into it would still pass.
+      val match = pattern(detail.editableText)?.let { base.copy(editableTextRegex = it) }
+        ?: detail.editableText?.let { base.copy(editableTextRegex = exact(it)) }
+        ?: pattern(detail.text)?.let { base.copy(textRegex = it) }
+        ?: pattern(detail.contentDescription)?.let { base.copy(contentDescriptionRegex = it) }
+        ?: return null
+      copy(compose = match)
+    }
+    is DriverNodeDetail.IosMaestro -> {
+      if (detail.password || (driverMatch != null && iosMaestro == null)) return null
+      val base = iosMaestro ?: DriverNodeMatch.IosMaestro()
+      val match = pattern(detail.text)?.let { base.copy(textRegex = it) }
+        ?: pattern(detail.hintText)?.let { base.copy(textRegex = shownHintText(detail.text, it), hintTextRegex = it) }
+        ?: pattern(detail.accessibilityText)?.let { base.copy(textRegex = loweredText(detail, base.textRegex, it), accessibilityTextRegex = it) }
+        ?: return null
+      copy(iosMaestro = match)
+    }
+    is DriverNodeDetail.IosAxe -> {
+      val secure = detail.role == AXE_SECURE_TEXT_FIELD || detail.subrole == AXE_SECURE_TEXT_FIELD
+      if (secure || (driverMatch != null && iosAxe == null)) return null
+      val base = iosAxe ?: DriverNodeMatch.IosAxe()
+      val label = pattern(detail.label)
+      // A labelled field whose value is empty must stay empty, or typing into it would still pass.
+      val value = pattern(detail.value) ?: detail.value?.takeIf { label != null }?.let(::exact)
+      val match = if (label != null || value != null) {
+        base.copy(labelRegex = label ?: base.labelRegex, valueRegex = value ?: base.valueRegex)
+      } else {
+        pattern(detail.title)?.let { base.copy(titleRegex = it) } ?: return null
+      }
+      copy(iosAxe = match)
+    }
+    is DriverNodeDetail.Web -> {
+      if (driverMatch != null && web == null) return null
+      val base = web ?: DriverNodeMatch.Web()
+      copy(web = base.copy(ariaNameRegex = pattern(detail.ariaName) ?: return null))
+    }
+  }
+}
+
+/** Leading inline flag that makes a Maestro-shape pattern case-sensitive. */
+private const val CASE_SENSITIVE = "(?-i)"
+
+private const val AXE_SECURE_TEXT_FIELD = "AXSecureTextField"
+
+/**
+ * [text] as a selector pattern that matches it exactly, except that a trailing item-count line
+ * ("Review sale\n3 items") may change or disappear: that count is live cart state, not what the
+ * assertion is about. A text that is only a count stays exact, so a trail can still pin one.
+ */
+internal fun assertedTextPattern(text: String): String {
+  val count = trailingItemCountRegex.find(text)
+  val head = count?.let { text.substring(0, it.range.first) }
+  if (head == null || head.isBlank()) return escapeForSelector(text)
+  return escapeForSelector(head) + OPTIONAL_ITEM_COUNT
+}
+
+private val trailingItemCountRegex = Regex("""\n\s*\d+\s+items?\s*$""", RegexOption.IGNORE_CASE)
+
+private const val OPTIONAL_ITEM_COUNT = """(?:\n\s*\d+\s+(?i:items?)\s*)?"""
+
+/**
  * Builds a map from each child node's id to its parent node, for the entire tree.
  *
  * Used by every hierarchy and spatial strategy to walk upward from a target — pre-computed

@@ -32,14 +32,18 @@ interface CaptureStream {
   fun stop(options: CaptureOptions = CaptureOptions.NONE): CaptureArtifact?
 }
 
-/** Implemented by capture streams that can prove their output is restricted to the target app. */
+/**
+ * Implemented by device-log streams whose crashes can be attributed to the app under test: every
+ * line is the app's ([isAppScoped]), or its lines carry a process name ([appProcessName]).
+ */
 internal interface AppScopedCaptureStream {
   val isAppScoped: Boolean
 
   /**
    * The app's own process name, when the stream's output also carries other processes' lines (an
-   * iOS install's extensions run beside the app). Only that process's crashes fail the run. Null
-   * when every line is the app's, or when the name isn't known for certain.
+   * iOS install's extensions run beside the app; Android logcat is the whole device). Only that
+   * process's crashes fail the run. Null when every line is the app's, or when the name isn't
+   * known for certain.
    */
   val appProcessName: String?
     get() = null

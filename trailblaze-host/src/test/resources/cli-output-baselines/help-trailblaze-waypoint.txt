@@ -24,11 +24,9 @@ Commands:
                       dialect to another's.
   segment           Inspect transitions between waypoints observed in a session
                       log.
-  graph             Render the waypoint navigation graph (waypoints, authored
-                      shortcuts, authored
+  graph             Render the waypoint navigation graph (waypoints and
+                      authored trailheads) as a
   tune              Analyze a session set for near-miss patterns and propose
                       YAML edits.
   propose           Synthesize draft waypoint YAMLs from unmatched-cluster
                       fingerprints.
-  shortcut          Analyze a session set for (A->B) waypoint transitions and
-                      synthesize draft

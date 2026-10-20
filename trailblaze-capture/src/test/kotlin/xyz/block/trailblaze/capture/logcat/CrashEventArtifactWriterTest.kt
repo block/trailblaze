@@ -212,6 +212,229 @@ class CrashEventArtifactWriterTest {
   }
 
   @Test
+  fun `another Android app's crash in the shared logcat does not fail the app's run`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      // A Java crash is named by the next AndroidRuntime line, a native one by crash_dump's tombstone.
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          1772846522.234  777  777 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846522.234  777  777 E AndroidRuntime: Process: com.other.launcher, PID: 777
+          1772846522.234  777  777 E AndroidRuntime: java.lang.IllegalStateException: launcher
+          1772846523.000  888  891 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 891 (Thread-2)
+          1772846523.100  900  900 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+          1772846523.100  900  900 F DEBUG   : pid: 888, tid: 891, name: Thread-2  >>> com.other.camera <<<
+          1772846524.000  123  123 I MyApp : checkout opened
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
+
+      assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
+      assertNull(CrashEventArtifactWriter.failure(sessionDir))
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `the Android app's own crashes still fail its run beside other processes' crashes`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          1772846522.000  777  777 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846522.100  123  123 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846522.100  777  777 E AndroidRuntime: Process: com.other.launcher, PID: 777
+          1772846522.200  123  123 E AndroidRuntime: Process: com.example.store:remote, PID: 123
+          1772846523.000  124  130 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 130 (hwuiTask0), pid 124 (m.example.store)
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
+
+      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(2, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
+      val lines = File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").readLines().map { line ->
+        Json.decodeFromString(SessionEvent.serializer(), line).data.jsonObject
+      }
+      assertEquals(
+        listOf(2, 5),
+        lines.map { it["source"]?.jsonObject?.get("line")?.jsonPrimitive?.content?.toInt() },
+        "the app's Java crash (its :remote process) and its native crash, in log order",
+      )
+      assertEquals(listOf("fatal_exception", "native_crash"), lines.map { it["kind"]?.jsonPrimitive?.content })
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a libc comm that does not fit the app leaves the native crash to its tombstone`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      // 124 is the app under a renamed comm; 888 is another app under its truncated one; 999 never gets a tombstone.
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          1772846523.000  124  130 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 130 (hwuiTask0), pid 124 (hwuiTask0)
+          1772846523.100  900  900 F DEBUG   : pid: 124, tid: 130, name: hwuiTask0  >>> com.example.store <<<
+          1772846524.000  888  891 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 891 (Thread-2), pid 888 (ample.camera.ui)
+          ${(1..500).joinToString("\n          ") { "1772846524.${"%03d".format(it)}  555  555 I OtherApp: Fatal signal 11 received from remote peer, line $it" }}
+          1772846525.100  901  901 F DEBUG   : pid: 888, tid: 891, name: Thread-2  >>> com.other.camera.ui <<<
+          1772846526.000  999  999 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 999 (main), pid 999 (other.service)
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
+
+      val lines = File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").readLines().map { line ->
+        Json.decodeFromString(SessionEvent.serializer(), line).data.jsonObject
+      }
+      assertEquals(
+        listOf(1, 505),
+        lines.map { it["source"]?.jsonObject?.get("line")?.jsonPrimitive?.content?.toInt() },
+        "the app's crash by its tombstone and the crash no tombstone names; the other app's is excluded " +
+          "by a tombstone 500 records later, and another tag's 'Fatal signal' is not a crash",
+      )
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an Android crash whose process is never named still counts`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          1772846522.000  777  777 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846522.100  777  777 E AndroidRuntime: java.lang.IllegalStateException: no Process line this time
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
+
+      assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a crash signature matches only the runtime's own banner, however the tag is padded`() {
+    val android = TrailblazeDevicePlatform.ANDROID
+    val ios = TrailblazeDevicePlatform.IOS
+    val crashes = mapOf(
+      "1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main" to "fatal_exception",
+      "1772846522.234  123  123 E AndroidRuntime   : FATAL EXCEPTION: AsyncTask #1" to "fatal_exception",
+      "1772846522.234  123  123 F libc : Fatal signal 11 (SIGSEGV), code 1" to "native_crash",
+      "1772846522.234  123  123 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 130" to "native_crash",
+    )
+    crashes.forEach { (line, kind) ->
+      assertEquals(kind, CrashEventArtifactWriter.signatureFor(line, android)?.first, line)
+    }
+    val notCrashes = listOf(
+      // The banner's words under another tag: an app logging about a crash, not crashing.
+      "1772846521.100  123  123 I MyApp : FATAL EXCEPTION: main was handled by the retry loop",
+      "1772846524.001  555  555 I OtherApp: Fatal signal 11 received from remote peer",
+      // The right tag, but not the banner.
+      "1772846522.234  123  123 E AndroidRuntime: Process: com.example.store, PID: 123",
+      "1772846522.234  123  123 W AndroidRuntime: non-FATAL EXCEPTION reported",
+      "1772846522.234  123  123 F libc : Fatal signal handler installed",
+      // A libc line whose signal number is missing is not a crash record.
+      "1772846522.234  123  123 F libc : Fatal signal",
+    )
+    notCrashes.forEach { line ->
+      assertNull(CrashEventArtifactWriter.signatureFor(line, android), line)
+      assertNull(CrashEventArtifactWriter.signatureFor(line, ios), "iOS signatures must not fire on Android lines: $line")
+    }
+
+    val iosCrashes = mapOf(
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: *** Terminating app due to uncaught exception 'NSRangeException'" to
+        "uncaught_exception",
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: terminating app due to UNCAUGHT EXCEPTION" to "uncaught_exception",
+      "2026-10-08 15:12:04.837 Df Wallet[21054:7b06b] (libswiftCore.dylib) Fatal error: Index out of range" to "fatal_error",
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: terminated due to signal 9" to "terminated_by_signal",
+      "    Fatal error: continued from the previous line" to "fatal_error",
+    )
+    iosCrashes.forEach { (line, kind) ->
+      assertEquals(kind, CrashEventArtifactWriter.signatureFor(line, ios)?.first, line)
+    }
+    val iosNotCrashes = listOf(
+      // Swift's banner is capitalised; a lowercase "fatal error" is an app's own log line.
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: fatal error: config missing, using defaults",
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: Fatal errors are reported to the crash service",
+      "2026-03-10 14:23:45.678-0700  ExampleApp[12345]: the request was terminated due to a timeout",
+    )
+    iosNotCrashes.forEach { line ->
+      assertNull(CrashEventArtifactWriter.signatureFor(line, ios), line)
+    }
+  }
+
+  @Test
+  fun `an Android record is parsed from the epoch format only`() {
+    val padded = assertNotNull(
+      CrashEventArtifactWriter.androidRecordOf("1772846523.100  900  901 F DEBUG   : pid: 888, tid: 891, name: Thread-2  >>> com.other.camera <<<"),
+    )
+    assertEquals(CrashEventArtifactWriter.AndroidRecord(pid = "900", tag = "DEBUG", message = "pid: 888, tid: 891, name: Thread-2  >>> com.other.camera <<<"), padded)
+    val unpadded = assertNotNull(
+      CrashEventArtifactWriter.androidRecordOf("1772846522.234  123  123 E AndroidRuntime: Process: com.example.store, PID: 123"),
+    )
+    assertEquals(CrashEventArtifactWriter.AndroidRecord(pid = "123", tag = "AndroidRuntime", message = "Process: com.example.store, PID: 123"), unpadded)
+
+    // Stack frames, `threadtime` lines, and a tag with no message are not records.
+    assertNull(CrashEventArtifactWriter.androidRecordOf("    at com.example.store.Checkout.open(Checkout.kt:12)"))
+    assertNull(CrashEventArtifactWriter.androidRecordOf("10-08 15:12:04.837   123   123 E AndroidRuntime: FATAL EXCEPTION: main"))
+    assertNull(CrashEventArtifactWriter.androidRecordOf("1772846522.234  123  123 E AndroidRuntime:"))
+  }
+
+  @Test
+  fun `an Android crash is attributed by the runtime's Process line or the tombstone's pid line`() {
+    fun attributionOf(line: String) = CrashEventArtifactWriter.androidRecordOf(line)?.let(CrashEventArtifactWriter::androidAttributionOf)
+
+    // AndroidRuntime names the process only in the crashing process's own record.
+    assertEquals("123" to "com.example.store", attributionOf("1772846522.234  123  123 E AndroidRuntime: Process: com.example.store, PID: 123"))
+    assertEquals("123" to "com.example.store:remote", attributionOf("1772846522.234  123  125 E AndroidRuntime: Process: com.example.store:remote, PID: 123"))
+    assertNull(
+      attributionOf("1772846522.234  777  777 E AndroidRuntime: Process: com.other.launcher, PID: 123"),
+      "another process's record does not name pid 123's crash",
+    )
+    assertNull(attributionOf("1772846522.234  123  123 E AndroidRuntime: java.lang.IllegalStateException: Process: x, PID: 123"))
+
+    // crash_dump's tombstone names the crashing pid, which is not crash_dump's own.
+    assertEquals(
+      "888" to "com.other.camera",
+      attributionOf("1772846523.100  900  900 F DEBUG   : pid: 888, tid: 891, name: Thread-2  >>> com.other.camera <<<"),
+    )
+    assertEquals(
+      "124" to "com.example.store:remote",
+      attributionOf("1772846523.100  900  900 F DEBUG   : pid: 124, tid: 130, name: hwuiTask0  >>> com.example.store:remote <<<"),
+    )
+    assertNull(attributionOf("1772846523.100  900  900 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***"))
+    assertNull(attributionOf("1772846523.100  900  900 F DEBUG   : Cmdline: com.example.store"))
+
+    // libc's comm is truncated to 15 characters, so it cannot name the process.
+    assertNull(attributionOf("1772846523.000  124  130 F libc    : Fatal signal 6 (SIGABRT) in tid 130 (hwuiTask0), pid 124 (m.example.store)"))
+  }
+
+  @Test
+  fun `the app's Android processes are its package and that package's suffixed processes`() {
+    assertTrue(CrashEventArtifactWriter.androidProcessIsApp(process = "com.example.store", appProcessName = "com.example.store"))
+    assertTrue(CrashEventArtifactWriter.androidProcessIsApp(process = "com.example.store:remote", appProcessName = "com.example.store"))
+    assertFalse(CrashEventArtifactWriter.androidProcessIsApp(process = "com.example.storefront", appProcessName = "com.example.store"))
+    assertFalse(CrashEventArtifactWriter.androidProcessIsApp(process = "com.example", appProcessName = "com.example.store"))
+    assertFalse(CrashEventArtifactWriter.androidProcessIsApp(process = "com.other:com.example.store", appProcessName = "com.example.store"))
+  }
+
+  @Test
   fun `an iOS extension's crash beside the app does not fail the app's run`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {

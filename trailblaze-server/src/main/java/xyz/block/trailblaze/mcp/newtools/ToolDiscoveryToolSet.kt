@@ -94,10 +94,10 @@ class ToolDiscoveryToolSet(
    */
   private val currentDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>? = { null },
   /**
-   * Resource source used to discover `*.trailhead.yaml` / `*.shortcut.yaml` configs for role
+   * Resource source used to discover `*.trailhead.yaml` configs for role
    * enrichment. Injected by the host bootstrap when a workspace config dir is in play (so a
    * workspace-authored trailhead can appear in `trailheadTools`); falls back to the platform's
-   * classpath scan otherwise — same default as [ToolYamlLoader.discoverShortcutsAndTrailheads].
+   * classpath scan otherwise — same default as [ToolYamlLoader.discoverTrailheads].
    *
    * This provider exists purely so the host can layer in the same workspace `ConfigResourceSource`
    * it already uses for target / toolset discovery. When the host doesn't thread one through, the
@@ -242,13 +242,13 @@ class ToolDiscoveryToolSet(
       null
     }
 
-    // Enrich the response with role-grouped slim views (trailheads / shortcuts). Trailheads come
-    // from two sources — see computeRoleNames: YAML-side `*.trailhead.yaml` metadata, and scripted
+    // Enrich the response with a slim trailheads view. Trailheads come from two sources — see
+    // computeTrailheadNames: YAML-side `*.trailhead.yaml` metadata, and scripted
     // (.ts) tools that self-declare `trailhead:` inline in their spec (InlineScriptToolConfig.trailhead).
     // Filtered to tool names actually surfaced in the current platform / target toolsets so the
     // role lists never reference tools the CLI can't show details for.
-    val (trailheadToolNames, shortcutToolNames) =
-      computeRoleNames(platformToolsets, targetToolsets, target = currentTarget)
+    val trailheadToolNames =
+      computeTrailheadNames(platformToolsets, targetToolsets, target = currentTarget)
 
     val result = ToolDiscoveryIndexResult(
       currentTarget = listedTarget?.id,
@@ -270,13 +270,12 @@ class ToolDiscoveryToolSet(
         "For direct execution: blaze(objective=\"description\", tools=\"- toolName:\\n    param: value\"). " +
         "For tool details: toolbox(name=\"toolName\").",
       trailheadTools = trailheadToolNames,
-      shortcutTools = shortcutToolNames,
     )
     return jsonFormat.encodeToString(result)
   }
 
   /**
-   * Returns `(trailheadNames, shortcutNames)` filtered to tool names that appear in the in-scope
+   * Returns trailhead tool names filtered to tool names that appear in the in-scope
    * toolsets. The intersection guard means the CLI's "render trailheads grouped" pass never
    * names a tool the user can't drill into via `toolbox --name <id>`.
    *
@@ -286,13 +285,11 @@ class ToolDiscoveryToolSet(
    * `tools` list or the detailed `toolDetails` list — the helper accepts whichever shape the
    * caller has on hand.
    *
-   * Trailhead names are the union of two sources: YAML-side `*.trailhead.yaml` /
-   * `*.shortcut.yaml` metadata (via [ToolYamlLoader.discoverShortcutsAndTrailheads]), and
-   * scripted (`.ts`) tools that self-declare `trailhead:` inline in their
-   * `TrailblazeTypedToolSpec` instead of a sidecar YAML — those land on
-   * [xyz.block.trailblaze.config.InlineScriptToolConfig.trailhead], reachable off [target]'s
-   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget.getInlineScriptTools]. Shortcuts have no
-   * scripted-tool equivalent yet, so that half stays YAML-only.
+   * Trailhead names are the union of two sources: YAML-side `*.trailhead.yaml` metadata (via
+   * [ToolYamlLoader.discoverTrailheads]), and scripted (`.ts`) tools that self-declare
+   * `trailhead:` inline in their `TrailblazeTypedToolSpec` instead of a sidecar YAML — those land
+   * on [xyz.block.trailblaze.config.InlineScriptToolConfig.trailhead], reachable off [target]'s
+   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget.getInlineScriptTools].
    *
    * @param target the app target whose scripted tools to scan for inline trailheads.
    *   [handleIndexMode] passes the daemon's currently-connected target; [handleTargetMode] passes
@@ -301,11 +298,11 @@ class ToolDiscoveryToolSet(
    *   --target=<other>` reporting the daemon's connected target's scripted trailheads instead of
    *   the requested one).
    */
-  private fun computeRoleNames(
+  private fun computeTrailheadNames(
     vararg toolsetSources: List<ToolDiscoveryToolsetInfo>?,
     extraInScopeNames: Collection<String> = emptyList(),
     target: TrailblazeHostAppTarget?,
-  ): Pair<List<String>, List<String>> {
+  ): List<String> {
     val inScopeNames: Set<String> = buildSet {
       toolsetSources.forEach { sets ->
         sets?.forEach { ts ->
@@ -315,24 +312,18 @@ class ToolDiscoveryToolSet(
       }
       addAll(extraInScopeNames)
     }
-    // Use the injected resource source so a workspace-authored *.trailhead.yaml / *.shortcut.yaml
-    // is also visible — otherwise we'd silently drop workspace role tools that ARE present in
-    // the in-scope toolsets (because the host's target/toolset discovery uses a layered source).
-    val allRoles = ToolYamlLoader.discoverShortcutsAndTrailheads(resourceSourceProvider())
-    val yamlTrailheadNames = allRoles.values.filter { it.trailhead != null }.map { it.id }
+    // Use the injected resource source so a workspace-authored *.trailhead.yaml is also
+    // visible — otherwise we'd silently drop workspace trailheads that ARE present in the
+    // in-scope toolsets (because the host's target/toolset discovery uses a layered source).
+    val yamlTrailheadNames = ToolYamlLoader.discoverTrailheads(resourceSourceProvider()).values.map { it.id }
     val scriptedTrailheadNames = target?.getInlineScriptTools()
       .orEmpty()
       .filter { it.trailhead != null }
       .map { it.name }
-    val trailheads = (yamlTrailheadNames + scriptedTrailheadNames)
+    return (yamlTrailheadNames + scriptedTrailheadNames)
       .filter { it in inScopeNames }
       .distinct()
       .sorted()
-    val shortcuts = allRoles.values
-      .filter { it.shortcut != null && it.id in inScopeNames }
-      .map { it.id }
-      .sorted()
-    return trailheads to shortcuts
   }
 
   private fun handleNameMode(name: String, catalog: ScriptedToolCatalog): String {
@@ -665,7 +656,7 @@ class ToolDiscoveryToolSet(
       // "No trailheads available" for any non-default target. Scope the intersection guard to
       // this target's own toolGroups so we never surface a tool that won't appear when the
       // user drills in via `--name <id>`.
-      val (trailheadToolNames, shortcutToolNames) = computeRoleNames(toolGroups, target = targetApp)
+      val trailheadToolNames = computeTrailheadNames(toolGroups, target = targetApp)
 
       return jsonFormat.encodeToString(
         ToolDiscoveryTargetResult(
@@ -676,7 +667,6 @@ class ToolDiscoveryToolSet(
           systemPrompt = systemPromptForTarget(targetApp),
           toolGroups = toolGroups.ifEmpty { null },
           trailheadTools = trailheadToolNames,
-          shortcutTools = shortcutToolNames,
         )
       )
     }
@@ -702,8 +692,8 @@ class ToolDiscoveryToolSet(
     // connected. Tool ids here come from the per-platform [TrailblazeToolDescriptor] lists rather
     // than a toolset shape, so feed them via the extraInScopeNames hook.
     val flatInScopeNames = platformTools.flatMap { it.tools.map { d -> d.name } }
-    val (trailheadToolNames, shortcutToolNames) =
-      computeRoleNames(extraInScopeNames = flatInScopeNames, target = targetApp)
+    val trailheadToolNames =
+      computeTrailheadNames(extraInScopeNames = flatInScopeNames, target = targetApp)
 
     return jsonFormat.encodeToString(
       ToolDiscoveryTargetResult(
@@ -713,7 +703,6 @@ class ToolDiscoveryToolSet(
         systemPrompt = systemPromptForTarget(targetApp),
         toolsByPlatform = platformTools.ifEmpty { null },
         trailheadTools = trailheadToolNames,
-        shortcutTools = shortcutToolNames,
       )
     )
   }
@@ -1563,11 +1552,6 @@ data class ToolDiscoveryIndexResult(
    * flags don't ride on the shared descriptor; this is a response-level enrichment.
    */
   val trailheadTools: List<String> = emptyList(),
-  /**
-   * Tool names whose YAML config carries a non-null `shortcut:` metadata block — i.e. tools
-   * that jump from one named waypoint to another. Same shape and rationale as [trailheadTools].
-   */
-  val shortcutTools: List<String> = emptyList(),
   // `error` is the contract the CLI formatter (`ToolboxCommand.formatToolsResult`) keys off to
   // short-circuit to `Console.error(...)` regardless of which mode-specific formatter would
   // otherwise run. Toolbox-level validation failures (e.g. unknown `--device` platform) set this
@@ -1630,8 +1614,6 @@ data class ToolDiscoveryTargetResult(
    * target-mode envelope, not index-mode, when a non-default target is requested).
    */
   val trailheadTools: List<String> = emptyList(),
-  /** Tool names with shortcut role metadata, scoped to this target. */
-  val shortcutTools: List<String> = emptyList(),
   val error: String? = null,
 )
 

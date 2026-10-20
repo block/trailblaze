@@ -21,7 +21,7 @@ interface SectionInfo {
 const SECTION_INFO: Readonly<Record<SectionKey, SectionInfo>> = Object.freeze({
   tfa: { anchorCss: "#mp-tfa", headingText: "From today's featured article" },
   itn: { anchorCss: "#mp-itn", headingText: "In the news" },
-  dyk: { anchorCss: "#mp-dyk", headingText: "Did you know" },
+  dyk: { anchorCss: "#mp-dyk", headingText: "Did you know ..." },
   otd: { anchorCss: "#mp-otd", headingText: "On this day" },
 });
 
@@ -110,7 +110,7 @@ export const wikipedia_web_openMainPageSection = trailblaze.tool<OpenMainPageSec
     // exists). The recording captures both calls so a future day's text
     // shift can't break the test.
     const textVisible = await tryOrFalse(() =>
-      ctx.tools.web_verifyTextVisible({ text: info.headingText }),
+      ctx.tools.web_verifyElementVisible({ ref: `heading "${info.headingText}"` }),
     );
 
     return textVisible

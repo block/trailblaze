@@ -991,6 +991,16 @@ class TrailmapTargetGeneratorTest {
       description: not a scripted tool
       """.trimIndent(),
     )
+    // Shortcuts were removed; a leftover one with a composed `tools:` body has entries with no
+    // `name:`, which the descriptor decoder would reject and fail generation on.
+    File(trailmapsDir, "mixedpack/tools/edge.shortcut.yaml").writeText(
+      """
+      id: leftoverShortcut
+      shortcut: { from: mixedpack/a, to: mixedpack/b }
+      tools:
+        - tap: { selector: ok }
+      """.trimIndent(),
+    )
     File(trailmapsDir, "mixedpack/trailmap.yaml").writeText(
       """
       id: mixedpack

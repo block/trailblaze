@@ -180,7 +180,7 @@ export interface MockStubResponse {
 export type MockTrailblazeClient = TrailblazeClient & {
   /**
    * Recorded calls in invocation order. A tool that fires `web_navigate` then
-   * `web_verifyTextVisible` ends up with two entries whose `tool` fields equal those
+   * `web_verifyElementVisible` ends up with two entries whose `tool` fields equal those
    * names and whose `args` mirror what the tool passed in.
    */
   calls: MockCall[];

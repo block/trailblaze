@@ -27,7 +27,9 @@ trail:
             nodeSelector:
               androidAccessibility:
                 collectionItemColumnIndex: 1
-            expectedText: Forms
+              containsChild:
+                androidAccessibility:
+                  textRegex: Forms
 
   - step: "Tap the \"Name\" field and type \"Jane Doe\""
     recording:
@@ -62,9 +64,8 @@ trail:
             reason: 'The Email field is visibly populated with the exact requested value jane@example.com and remains focused. Completed: tapped Email and entered the address. Next: verify the rendered field value, which is the final objective.'
             nodeSelector:
               androidAccessibility:
+                textRegex: \Qjane@example.com\E
                 classNameRegex: android.widget.EditText
-              index: 1
-            expectedText: jane@example.com
 
   - step: "Tap the \"Submit\" button"
     recording:
@@ -83,12 +84,7 @@ trail:
             reason: The form fields already contain the requested values, and the submission result is visible with both values. No interaction is needed; I am verifying the exact result text now.
             nodeSelector:
               androidAccessibility:
-                textRegex: |-
-                  Name: Jane Doe
-                  Email: jane@example.com
-            expectedText: |-
-              Name: Jane Doe
-              Email: jane@example.com
+                textRegex: "\\QName: Jane Doe\nEmail: jane@example.com\\E"
 
   - step: "Tap \"Clear All\" and verify \"Jane Doe\" is no longer visible"
     recording:

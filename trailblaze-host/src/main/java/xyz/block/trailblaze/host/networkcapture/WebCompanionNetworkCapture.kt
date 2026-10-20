@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.networkcapture
 
 import com.microsoft.playwright.BrowserContext
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.util.Console
@@ -21,10 +22,14 @@ import java.io.File
 object WebCompanionNetworkCapture {
 
   private class Armed(
+    val sessionId: String,
     val pageManager: PlaywrightPageManager,
     val context: BrowserContext,
     val capture: WebNetworkCapture,
-  )
+  ) {
+    /** Lets this browser process its events for a while, on its own thread. */
+    val waitPump: (Long) -> Unit = { ms -> pageManager.onPlaywrightThread { pageManager.currentPage.waitForTimeout(ms.toDouble()) } }
+  }
 
   private val lock = Any()
   private val armedBySession = HashMap<String, MutableList<Armed>>()
@@ -54,14 +59,19 @@ object WebCompanionNetworkCapture {
         sessionDir = sessionDir,
         deviceLabel = deviceLabel,
       )
-      Armed(pageManager, context, capture)
+      Armed(sessionId, pageManager, context, capture)
     }
     val sessionEnded = synchronized(lock) {
       if (sessionId in endedSessions) {
         true
       } else {
         val armedForSession = armedBySession.getOrPut(sessionId) { mutableListOf() }
-        if (armedForSession.none { it.capture === armed.capture }) armedForSession += armed
+        if (armedForSession.none { it.capture === armed.capture }) {
+          armedForSession += armed
+          // A `ctx.events` wait keeps this browser delivering requests: Playwright for Java
+          // dispatches events only while it is called.
+          SessionEventsWaitPump.register(sessionId, armed.waitPump)
+        }
         false
       }
     }
@@ -94,6 +104,7 @@ object WebCompanionNetworkCapture {
   }
 
   private fun stopArmed(armed: Armed) {
+    SessionEventsWaitPump.unregister(armed.sessionId, armed.waitPump)
     armed.pageManager.onPlaywrightThread { WebNetworkCapture.stop(armed.context, armed.capture) }
   }
 

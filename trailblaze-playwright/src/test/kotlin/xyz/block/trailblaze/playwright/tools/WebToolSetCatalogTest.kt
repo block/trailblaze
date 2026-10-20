@@ -46,7 +46,6 @@ class WebToolSetCatalogTest {
       requestedIds = listOf("web_verification"),
     )
     assertThat(resolved.toolClasses).containsAll(
-      PlaywrightNativeVerifyTextVisibleTool::class,
       PlaywrightNativeVerifyElementVisibleTool::class,
       PlaywrightNativeVerifyValueTool::class,
       PlaywrightNativeVerifyListVisibleTool::class,

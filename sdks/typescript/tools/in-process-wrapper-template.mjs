@@ -8,7 +8,11 @@ const __client = {
     const resultJson = await __trailblazeCall(name, argsJson);
     const result = JSON.parse(resultJson);
     if (result && result.isError === true) {
-      throw new Error("client.callTool('" + name + "') failed: " + (result.error || result.errorMessage || "(no error message)"));
+      const err = new Error("client.callTool('" + name + "') failed: " + (result.error || result.errorMessage || "(no error message)"));
+      // The call never reached the tool (unknown name, bad arguments, a cycle), as opposed to the
+      // tool running and failing. `runIf` treats the first as an authoring error.
+      if (result.dispatchFailed === true) err.dispatchFailed = true;
+      throw err;
     }
     if (result && typeof result.type === "string" && result.type.indexOf("Error") >= 0) {
       throw new Error("client.callTool('" + name + "') failed: " + (result.errorMessage || result.message || result.type));

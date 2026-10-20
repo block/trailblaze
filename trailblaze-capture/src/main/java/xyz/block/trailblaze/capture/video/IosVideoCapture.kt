@@ -3,6 +3,7 @@ package xyz.block.trailblaze.capture.video
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
@@ -22,8 +23,9 @@ import xyz.block.trailblaze.util.isMacOs
  * simctl itself only writes H.264 in an mp4, at the simulator's full resolution. With
  * [RecordingFormat.WEBM] (the process-wide default on a host with a VP9 encoder) the recording is
  * transcoded at stop into the same VP9 WebM every other platform delivers, downscaled to the ~720px
- * short side Android records at; if that transcode fails the session keeps simctl's mp4 instead of
- * losing its video.
+ * short side Android records at and capped at [MAX_FRAME_RATE]. If that transcode fails, the same
+ * downscale is tried as H.264 in an mp4, and only when that fails too does the session keep
+ * simctl's own mp4 — 30–67 MB for a two-minute session, against ~2 MB for either transcode.
  *
  * ### Clock alignment
  * The recording window is on the **host** clock, like every other video recorder — see "Which
@@ -304,8 +306,35 @@ class IosVideoCapture(
     internal const val DOWNSCALE_FILTER = "scale='if(gt(iw,ih),-2,min(iw,720))':'if(gt(iw,ih),min(ih,720),-2)'"
 
     /**
-     * The ffmpeg command [transcodeToWebm] runs. `-fflags +igndts` makes the decoder stamp every
-     * frame with simctl's presentation time and never its decode time.
+     * simctl records at up to 60 fps wherever the screen moves, and a sign-in trail spends much of
+     * its time on spinners and transitions, so its recording ran ~20 fps and 5–13 MB. Ten frames a
+     * second still shows every screen a step lands on, and cuts the file by more than half (10.8 →
+     * 4.1 MB on a 78 s simulator recording). Frames land on a 100 ms grid, which the report's step
+     * alignment does not resolve anyway.
+     *
+     * The resampler holds the last frame for that frame's whole duration, and simctl's timestamps
+     * can give it seconds of one. Holding it is what the screen showed. Running past the recording
+     * window is not, because the report scales clip time onto the window and would put every step
+     * early. That is why [transcodeCommand] caps the output at the window.
+     */
+    internal const val MAX_FRAME_RATE = 10
+
+    /** Resamples to [MAX_FRAME_RATE]; see there. */
+    internal const val FRAME_RATE_CAP_FILTER = "fps=$MAX_FRAME_RATE"
+
+    /**
+     * Repeats the last frame without end, for [transcodeCommand]'s window cap to cut at the window.
+     * simctl stops writing frames when the screen stops changing, so its file ends short of the
+     * window (see [holdStillTail]). Holding the tail in the transcode itself means the recording is
+     * encoded once. Before, [RecordingTailHold] re-encoded the finished webm a second time to add
+     * the same frames. It runs before [FRAME_RATE_CAP_FILTER]: the cap drops a final frame shorter
+     * than half its grid step, and holding after it would repeat the screen before the last one.
+     */
+    internal const val HOLD_LAST_FRAME_FILTER = "tpad=stop_mode=clone:stop=-1"
+
+    /**
+     * The ffmpeg command [transcode] runs to write [format]. `-fflags +igndts` makes the decoder
+     * stamp every frame with simctl's presentation time and never its decode time.
      *
      * simctl's decode times trail its presentation times by seconds (11 s mid-clip in one local
      * recording), and it occasionally writes two frames with the same presentation time. Left to
@@ -313,11 +342,36 @@ class IosVideoCapture(
      * the decode time. Frames whose decode time falls before the previous frame are then clamped
      * by the WebM muxer onto one instant, and everything after plays seconds early: 191 frames of
      * an app launch stamped 22.320 s in one CI run, then footage ~12 s ahead of the session.
+     *
+     * `-hide_banner -loglevel error` leaves only ffmpeg's errors in the output a failure logs. The
+     * failure log keeps the first 400 characters, and the version banner alone is ~3,000, so
+     * without them a CI failure logged the banner and lost the error. `-nostdin` keeps ffmpeg off
+     * the JVM's stdin pipe.
+     *
+     * [windowMs] caps the output's length; see [MAX_FRAME_RATE]. Null or non-positive (a stop
+     * inside simctl's startup) leaves it uncapped rather than encoding nothing. [holdTail] runs the
+     * last frame out to that cap ([HOLD_LAST_FRAME_FILTER]), and is ignored without one, since the
+     * hold never ends by itself.
      */
-    internal fun transcodeCommand(ffmpegBinary: String, source: File, target: File): List<String> =
-      listOf(ffmpegBinary, "-y", "-fflags", "+igndts", "-i", source.absolutePath, "-an") +
-        RecordingFormat.WEBM.videoFilterArgs(DOWNSCALE_FILTER) + RecordingFormat.WEBM.encodeArgs() +
+    internal fun transcodeCommand(
+      ffmpegBinary: String,
+      source: File,
+      target: File,
+      format: RecordingFormat = RecordingFormat.WEBM,
+      windowMs: Long? = null,
+      holdTail: Boolean = false,
+    ): List<String> {
+      val windowSeconds = windowMs?.takeIf { it > 0 }?.let { "%.3f".format(Locale.ROOT, it / 1000.0) }
+      val hold = HOLD_LAST_FRAME_FILTER.takeIf { holdTail && windowSeconds != null }
+      return listOf(ffmpegBinary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y") +
+        listOf("-fflags", "+igndts", "-i", source.absolutePath, "-an") +
+        format.videoFilterArgs(DOWNSCALE_FILTER, hold, FRAME_RATE_CAP_FILTER) + format.encodeArgs() +
+        // WEBM's encode args already carry the passthrough; MP4's are shared with encodes that
+        // pick their own timing, so it is added here.
+        (if (format == RecordingFormat.MP4) listOf("-fps_mode", "passthrough") else emptyList()) +
+        (windowSeconds?.let { listOf("-t", it) } ?: emptyList()) +
         RecordingTailHold.ENCODER_TIME_BASE + target.absolutePath
+    }
 
     /**
      * Whether a finished transcode produced a recording worth delivering — and, when it did not,
@@ -337,23 +391,30 @@ class IosVideoCapture(
   }
 
   /**
-   * Re-encodes simctl's mp4 into the VP9 WebM the report plays. Timing is passthrough so simctl's
-   * variable-rate timeline survives, on a millisecond encoder time base so it is not snapped to the
-   * 25 fps grid the encoder would otherwise derive; the artifact window is still the
-   * recorder-observed bookends.
+   * Re-encodes simctl's mp4 into [format] at the report's size: VP9 WebM normally, H.264 mp4 as
+   * the fallback. Timing is passthrough so simctl's variable-rate timeline survives, on a
+   * millisecond encoder time base so it is not snapped to the 25 fps grid the encoder would
+   * otherwise derive; the artifact window is still the recorder-observed bookends.
    */
-  private fun transcodeToWebm(source: File, target: File, recordedMs: Long): Boolean {
+  private fun transcode(
+    source: File,
+    target: File,
+    recordedMs: Long,
+    format: RecordingFormat,
+    holdTail: Boolean,
+  ): Boolean {
     val timeoutSeconds = transcodeTimeoutSeconds(recordedMs)
     val result = runSubprocessWithTimeout(
-      command = transcodeCommand(ffmpegBinary, source, target),
+      command = transcodeCommand(ffmpegBinary, source, target, format, windowMs = recordedMs, holdTail = holdTail),
       timeoutSeconds = timeoutSeconds,
     )
     if (!transcodeDelivered(target, result?.exitCode)) {
       if (result == null) {
-        Console.log("iOS video: WebM transcode could not run or timed out after ${timeoutSeconds}s")
+        Console.log("iOS video: $format transcode could not run or timed out after ${timeoutSeconds}s")
       } else {
+        // 255 is ffmpeg's exit after SIGINT or SIGTERM: something else stopped it.
         Console.log(
-          "iOS video: WebM transcode failed (exit=${result.exitCode}): " +
+          "iOS video: $format transcode failed (exit=${result.exitCode}): " +
             sanitizeSubprocessOutputForLog(result.output),
         )
       }
@@ -467,16 +528,26 @@ class IosVideoCapture(
     var deliveredFormat = format
     if (recording.exists() && recording.length() > 0L) {
       if (format == RecordingFormat.WEBM) {
-        if (transcodeToWebm(recording, file, endTimestampMs - startTimestampMs)) {
+        val windowMs = endTimestampMs - startTimestampMs
+        // The transcode holds the tail itself, so the hold after it only probes the duration and
+        // re-encodes nothing. It stays as the backstop for a transcode that came up short.
+        if (transcode(recording, file, windowMs, RecordingFormat.WEBM, holdTail = recorderAlive)) {
           delivered = file
-          holdStillTail(file, endTimestampMs - startTimestampMs, recorderAlive)
+          holdStillTail(file, windowMs, recorderAlive)
         } else {
-          // A video problem must never cost the session its video: deliver simctl's own mp4 under
-          // the mp4 name and publish it as such — the report plays that too.
+          // A video problem must never cost the session its video. The report plays an mp4 too, so
+          // try the same downscale in H.264 (a different encoder) before falling back to simctl's
+          // own file, which is full resolution and ~25x the size.
           val mp4 = File(file.parentFile, "${file.nameWithoutExtension}.mp4")
-          Console.log("iOS video: delivering simctl's mp4 as ${mp4.name} instead of ${file.name}")
-          delivered = moveInto(recording, mp4)
           deliveredFormat = RecordingFormat.MP4
+          if (transcode(recording, mp4, windowMs, RecordingFormat.MP4, holdTail = recorderAlive)) {
+            Console.log("iOS video: delivering a downscaled ${mp4.name} instead of ${file.name}")
+            delivered = mp4
+            holdStillTail(mp4, windowMs, recorderAlive)
+          } else {
+            Console.log("iOS video: delivering simctl's full-resolution mp4 as ${mp4.name} instead of ${file.name}")
+            delivered = moveInto(recording, mp4)
+          }
         }
       } else {
         delivered = moveInto(recording, file)

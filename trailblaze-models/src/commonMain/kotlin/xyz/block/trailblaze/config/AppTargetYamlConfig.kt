@@ -255,8 +255,8 @@ data class InlineScriptToolConfig(
    *
    * Not a dispatch gate — doesn't affect registration or execution, so it deliberately does NOT
    * ride in [meta] (same carve-out as [description]). Discovery surfaces
-   * (`ToolDiscoveryToolSet.computeRoleNames`, the Trail Runner "Use as Trailhead" picker) read it
-   * directly off this config, alongside `ToolYamlLoader.discoverShortcutsAndTrailheads()`'s
+   * (`ToolDiscoveryToolSet.computeTrailheadNames`, the Trail Runner "Use as Trailhead" picker) read it
+   * directly off this config, alongside `ToolYamlLoader.discoverTrailheads()`'s
    * YAML-sourced index.
    */
   val trailhead: TrailheadMetadata? = null,

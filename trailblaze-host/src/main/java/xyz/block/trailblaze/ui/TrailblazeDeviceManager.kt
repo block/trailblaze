@@ -687,8 +687,7 @@ class TrailblazeDeviceManager(
     val resolution: DeviceSessionResolution
     val startCaptureFor: SessionId?
     val captureDeviceId: String
-    val captureTarget: TrailblazeHostAppTarget?
-    val captureAppIds: List<String>
+    val captureTarget: CaptureTargetApps
     val captureOptions: CaptureOptions
     val replacedSessionId: SessionId?
     // What the cast left when a member forced this session (see moveCastOffReplacedSessionLocked).
@@ -727,15 +726,7 @@ class TrailblazeDeviceManager(
       // target, dropping app-scoping from the capture.
       val appConfig = settingsRepo.serverStateFlow.value.appConfig
       val captureTargetId = sessionTargetRegistry.get(sessionId, trailblazeDeviceId) ?: getCurrentSelectedTargetApp()?.id
-      // A target id (`sampleapp`) is not an installed package, and capture needs the package: a
-      // memory reading resolves the app's pid with `pidof <appId>`, which answers nothing for a
-      // target id and leaves every event device-only. Resolve the target back to the ids it may run
-      // under on this platform — the same resolution the CLI path does in `DesktopYamlRunner`, so
-      // both paths scope capture to the same app.
-      captureTarget = availableAppTargets.find { it.id == captureTargetId }
-      captureAppIds = captureTarget
-        ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-        .orEmpty()
+      captureTarget = captureTargetApps(captureTargetId, trailblazeDeviceId.trailblazeDevicePlatform)
       // Resolve capture options from the daemon's `appConfig` toggles. Per-run CLI
       // flags (--capture-video / --capture-logcat) are layered on by
       // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
@@ -776,11 +767,7 @@ class TrailblazeDeviceManager(
           // Resolved out here because it asks the device what is installed, which must not happen
           // under `sessionCreationLock` — and not asked at all when no stream will use the answer,
           // so a session that captures nothing does not wait on a device probe first.
-          appId = if (captureOptions.hasAnyCaptureEnabled) {
-            resolveCaptureAppId(trailblazeDeviceId, captureTarget, captureAppIds)
-          } else {
-            null
-          },
+          appId = if (captureOptions.hasAnyCaptureEnabled) resolveCaptureAppId(trailblazeDeviceId, captureTarget) else null,
         )
         // The cast as it stands now, not as it was at open: a member removed while capture was
         // starting is not started here (its removal waits on this start, see setDeviceRoster).
@@ -795,9 +782,9 @@ class TrailblazeDeviceManager(
       // Experimental opt-in (gated internally, idempotent like the capture start above); restored
       // by the finalization barrier every session-end path runs.
       SessionAnimationDisabler.startForSession(startCaptureFor, trailblazeDeviceId)
-      // `captureAppIds` is every applicationId the target may run under, in declared priority
-      // order — which flavor is installed varies by lane, and both hooks below pick among them by
-      // what they find on the device.
+      // `captureTarget.appIds` is every applicationId the target may run under, in declared
+      // priority order — which flavor is installed varies by lane, and both hooks below pick among
+      // them by what they find on the device.
       //
       // On by default (kill switch inside), idempotent per session: makes sure the app has compiled
       // ART artifacts so its cold starts do not re-verify the APK. Before turbo, whose own compile
@@ -805,16 +792,37 @@ class TrailblazeDeviceManager(
       SessionAppCompileEnsurer.startForSession(
         sessionId = startCaptureFor.toString(),
         deviceId = trailblazeDeviceId,
-        candidateAppIds = captureAppIds,
+        candidateAppIds = captureTarget.appIds,
       )
       SessionTurboAttacher.startForSession(
         sessionId = startCaptureFor.toString(),
         deviceId = trailblazeDeviceId,
-        candidateAppIds = captureAppIds,
+        candidateAppIds = captureTarget.appIds,
       )
     }
     return resolution
   }
+
+  /**
+   * A target as capture sees it on one platform: the target and, in declared priority order, every
+   * applicationId it may run under there. Empty for an unknown [targetId].
+   */
+  internal data class CaptureTargetApps(val target: TrailblazeHostAppTarget?, val appIds: List<String>)
+
+  /**
+   * A target id (`sampleapp`) is not an installed package, and capture needs the package: a memory
+   * reading resolves the app's pid with `pidof <appId>`, which answers nothing for a target id.
+   * This is the same resolution the CLI path does in `DesktopYamlRunner`, so both paths scope
+   * capture to the same app.
+   */
+  internal fun captureTargetApps(targetId: String?, platform: TrailblazeDevicePlatform): CaptureTargetApps {
+    val target = availableAppTargets.find { it.id == targetId }
+    return CaptureTargetApps(target = target, appIds = target?.getPossibleAppIdsForPlatform(platform).orEmpty())
+  }
+
+  /** [resolveCaptureAppId] for a [captureTargetApps] result. Asks the device, so never call under a lock. */
+  internal fun resolveCaptureAppId(trailblazeDeviceId: TrailblazeDeviceId, target: CaptureTargetApps): String? =
+    resolveCaptureAppId(trailblazeDeviceId = trailblazeDeviceId, target = target.target, candidateAppIds = target.appIds)
 
   /**
    * Which of a target's declared applicationIds capture should sample on THIS device.
@@ -1494,6 +1502,20 @@ class TrailblazeDeviceManager(
   private fun membersOnSessionLocked(roster: List<BoundDeviceRosterMember>, sessionId: SessionId): List<BoundDeviceRosterMember> =
     roster.filter { _activeDeviceSessionsFlow.value[it.trailblazeDeviceId] == sessionId }
 
+  /**
+   * [trailblazeDeviceId]'s name in the MCP cast that bound it, or null outside a cast of two or
+   * more. Its capture streams carry this name, as a multi-device trail's do, so each device's
+   * records are read on its own clock. A lone device keeps the unsuffixed streams single-device
+   * readers look for.
+   */
+  fun castMemberName(trailblazeDeviceId: TrailblazeDeviceId): String? =
+    synchronized(sessionCreationLock) {
+      rosterContaining(trailblazeDeviceId)
+        .takeIf { it.size > 1 }
+        ?.firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
+        ?.name
+    }
+
   /** The cast [trailblazeDeviceId] belongs to, or empty when no MCP session has bound it. Call under [sessionCreationLock]. */
   private fun rosterContaining(trailblazeDeviceId: TrailblazeDeviceId): List<BoundDeviceRosterMember> =
     deviceRosters.values.firstOrNull { roster -> roster.any { it.trailblazeDeviceId == trailblazeDeviceId } }.orEmpty()
@@ -1718,12 +1740,14 @@ class TrailblazeDeviceManager(
     sessionCaptureCoordinator.bindDevices(
       sessionId = sessionId,
       devices = members.map { member ->
-        val platform = member.trailblazeDeviceId.trailblazeDevicePlatform
-        val targetId = member.targetId ?: getCurrentSelectedTargetApp()?.id
+        val target = captureTargetApps(
+          targetId = member.targetId ?: getCurrentSelectedTargetApp()?.id,
+          platform = member.trailblazeDeviceId.trailblazeDevicePlatform,
+        )
         SessionCaptureCoordinator.BoundDevice(
           name = member.name,
           deviceId = member.trailblazeDeviceId,
-          appId = availableAppTargets.find { it.id == targetId }?.getPossibleAppIdsForPlatform(platform)?.firstOrNull(),
+          appId = { resolveCaptureAppId(member.trailblazeDeviceId, target) },
         )
       },
     )

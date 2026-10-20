@@ -8,14 +8,12 @@ import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailbl
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
@@ -68,11 +66,9 @@ abstract class TrailblazeToolSet(
       // Deprecated Tools - Tap On by Property
       LongPressOnElementWithTextTrailblazeTool::class,
       LongPressElementWithAccessibilityTextTrailblazeTool::class,
-      TapOnElementWithTextTrailblazeTool::class,
       TapOnElementWithAccessiblityTextTrailblazeTool::class,
 
       // Deprecated Tools - Assert Visible by Property
-      AssertVisibleWithTextTrailblazeTool::class,
       AssertVisibleWithAccessibilityTextTrailblazeTool::class,
       AssertVisibleWithResourceIdTrailblazeTool::class,
     )

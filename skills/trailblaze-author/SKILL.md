@@ -1,9 +1,9 @@
 ---
 name: trailblaze-author
 description: >
-  Use when turning a Trailblaze App demo bundle (demo.yaml, actions.ndjson,
-  screenshots, and view hierarchies) into a runnable Trailblaze trail, or
-  adding another platform's recording to an existing trail.
+  Turn Trailblaze App demo bundles (`demo.yaml`, `actions.ndjson`, screenshots,
+  hierarchies) into runnable trails or add another platform's recording to an
+  existing trail; verify by running.
 ---
 
 # Author a trail from a demonstration bundle

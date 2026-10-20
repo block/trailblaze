@@ -739,12 +739,24 @@ object AndroidHostAdbUtils {
     timeoutMs: Long = DEFAULT_SHORT_CALL_TIMEOUT_MS,
     quiet: Boolean = false,
     evictClientOnTimeout: Boolean = true,
+    onAttemptFinished: (() -> Unit)? = null,
   ): String? {
+    // A retry would make more than one attempt, so "finished" would be ambiguous.
+    require(onAttemptFinished == null || !evictClientOnTimeout) {
+      "onAttemptFinished needs evictClientOnTimeout = false, which makes exactly one attempt"
+    }
     val command = args.joinToString(" ")
     val redactedCommand = redactSecretsForLog(command)
     if (!quiet) Console.log("adb shell ($timeoutMs ms timeout) $redactedCommand")
     if (!evictClientOnTimeout) {
-      return runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs, evictClientOnTimeout = false).value
+      return runSingleAdbShellAttempt(
+        deviceId,
+        command,
+        redactedCommand,
+        timeoutMs,
+        evictClientOnTimeout = false,
+        onWorkerFinished = onAttemptFinished ?: {},
+      ).value
     }
     return execWithReconnectOnTimeout {
       runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs)
@@ -842,6 +854,8 @@ object AndroidHostAdbUtils {
     redactedCommand: String,
     timeoutMs: Long,
     evictClientOnTimeout: Boolean = true,
+    // Runs on the worker when it ends, which after a timeout can be long after this returns.
+    onWorkerFinished: () -> Unit = {},
     shellCall: (onClientResolved: (Dadb) -> Unit) -> String? = { onClientResolved ->
       withDadbNoRetry(deviceId, onClientResolved) { dadb -> shellOutputOf(dadb, command) }
     },
@@ -854,6 +868,8 @@ object AndroidHostAdbUtils {
         resultRef.set(shellCall { usedClientRef.set(it) })
       } catch (t: Throwable) {
         errorRef.set(t)
+      } finally {
+        onWorkerFinished()
       }
     }
     try {

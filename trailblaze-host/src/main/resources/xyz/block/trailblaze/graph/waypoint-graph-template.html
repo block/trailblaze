@@ -32,27 +32,16 @@
       --accent-strong: #a8c4ff;
       --accent-bg: rgba(125, 169, 255, 0.14);
       --trailhead: #c4a9ff;
-      /* Edge contrast bumped: 0.38 was unreadable at default zoom against
-         the dark background once paths got dense. 0.65 makes paths actually
-         visible without competing with node screenshots. */
       --trailhead-bg: rgba(196, 169, 255, 0.14);
-      --tree-edge: rgba(220, 226, 240, 0.7);
       --cross-edge: rgba(220, 226, 240, 0.14);
-      --back-edge: rgba(220, 226, 240, 0.10);
       --text: #e7eaf0;
       --text-strong: #ffffff;
       --text-muted: #7d8597;
       --text-faint: #565d6e;
       --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.18);
       --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
-      --badge-navigate: #7da9ff;
-      --badge-auth: #ffb86b;
       --badge-payment: #5eddb0;
-      --badge-search: #d088ff;
-      --badge-support: #ffd166;
-      --badge-legal: #8a93a3;
       --badge-cancel: #ff7a8a;
-      --badge-account: #95a4c4;
     }
     :root[data-theme="light"] {
       color-scheme: light;
@@ -69,23 +58,15 @@
       --accent-bg: rgba(37, 99, 235, 0.10);
       --trailhead: #7c3aed;
       --trailhead-bg: rgba(124, 58, 237, 0.10);
-      --tree-edge: rgba(20, 24, 32, 0.72);
       --cross-edge: rgba(20, 24, 32, 0.18);
-      --back-edge: rgba(20, 24, 32, 0.10);
       --text: #1f2330;
       --text-strong: #0a0d14;
       --text-muted: #5b6478;
       --text-faint: #8b94a6;
       --shadow-card: 0 1px 2px rgba(15,23,42,0.06), 0 4px 14px rgba(15,23,42,0.06);
       --shadow-elevated: 0 8px 32px rgba(15,23,42,0.12), 0 2px 6px rgba(15,23,42,0.08);
-      --badge-navigate: #2563eb;
-      --badge-auth: #b45309;
       --badge-payment: #047857;
-      --badge-search: #7c3aed;
-      --badge-support: #b45309;
-      --badge-legal: #475569;
       --badge-cancel: #be123c;
-      --badge-account: #475569;
     }
 
     * { box-sizing: border-box; }
@@ -255,83 +236,12 @@
     .agentic-pill strong { color: var(--text); font-weight: 600; }
 
     /* ============================================================================
-       MAIN LAYOUT (sidebar / canvas / detail panel)
+       MAIN LAYOUT (canvas / detail panel)
        ============================================================================ */
     .main {
       flex: 1; display: flex; min-height: 0;
       background: var(--bg);
       background-image: var(--bg-radial);
-    }
-    .sidebar {
-      flex: none;
-      width: 280px;
-      background: var(--bg-elevated);
-      border-right: 1px solid var(--border);
-      display: flex; flex-direction: column;
-      transition: width 0.22s ease, opacity 0.18s ease;
-      overflow: hidden;
-    }
-    .sidebar.collapsed { width: 0; border-right: none; }
-    .sidebar-header {
-      padding: 14px 16px 8px;
-      border-bottom: 1px solid var(--border);
-    }
-    .sidebar-header h2 {
-      margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
-      text-transform: uppercase; color: var(--text-muted);
-    }
-    .sidebar-header .sub {
-      font-size: 11px; color: var(--text-faint); margin-top: 2px;
-    }
-    .sidebar-list { flex: 1; overflow-y: auto; padding: 6px 8px; }
-    .journey-item {
-      padding: 10px 10px;
-      border-radius: 8px;
-      cursor: pointer;
-      margin-bottom: 2px;
-      border: 1px solid transparent;
-      transition: background 0.12s, border-color 0.12s;
-    }
-    .journey-item:hover { background: var(--bg-elevated-2); }
-    .journey-item.active {
-      background: var(--accent-bg);
-      border-color: var(--accent);
-    }
-    .journey-item .journey-row1 {
-      display: flex; align-items: center; gap: 6px;
-      margin-bottom: 4px;
-    }
-    .journey-item .journey-row2 {
-      font-size: 13px; line-height: 1.4; color: var(--text);
-      font-weight: 500;
-      word-break: break-word;
-    }
-    .journey-item .journey-row3 {
-      margin-top: 4px;
-      font-size: 11px; color: var(--text-muted);
-      word-break: break-word;
-    }
-    .journey-badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--bg);
-      background: var(--badge-navigate);
-    }
-    .journey-badge.NAVIGATE { background: var(--badge-navigate); }
-    .journey-badge.AUTH { background: var(--badge-auth); }
-    .journey-badge.PAYMENT { background: var(--badge-payment); }
-    .journey-badge.SEARCH { background: var(--badge-search); }
-    .journey-badge.SUPPORT { background: var(--badge-support); }
-    .journey-badge.LEGAL { background: var(--badge-legal); }
-    .journey-badge.CANCEL { background: var(--badge-cancel); }
-    .journey-badge.ACCOUNT { background: var(--badge-account); }
-    .journey-item .journey-screens {
-      color: var(--text-faint);
-      font-size: 11px;
-      font-variant-numeric: tabular-nums;
     }
 
     .canvas-area { flex: 1; position: relative; min-width: 0; min-height: 0; }
@@ -574,9 +484,8 @@
       border-top: 1px solid var(--border);
     }
 
-    /* Edge label — floating chip on each shortcut edge that names the
-       action ("tap Withdraw"). Sized for legibility against a dense
-       node backdrop. */
+    /* Edge label — floating chip on each edge. Sized for legibility against
+       a dense node backdrop. */
     .react-flow__edge-textbg {
       fill: var(--bg-elevated) !important;
       fill-opacity: 0.96 !important;
@@ -590,19 +499,6 @@
       font-size: 12px !important;
       font-weight: 600;
       pointer-events: none;
-    }
-    /* Back-edge styling — shortcuts pointing at entry points (e.g.
-       Profile → Money tab) are de-emphasized so they don't compete with
-       the tree backbone. Kept visible (the user still sees them) but
-       quiet. */
-    .react-flow__edge.back-edge .react-flow__edge-path {
-      stroke: var(--back-edge) !important;
-      stroke-dasharray: 4 5 !important;
-    }
-    .react-flow__edge.back-edge .react-flow__edge-textbg { fill-opacity: 0.7 !important; }
-    .react-flow__edge.back-edge .react-flow__edge-text {
-      fill: var(--text-muted) !important;
-      font-weight: 500;
     }
     .trailhead-node {
       padding: 9px 16px;
@@ -659,12 +555,6 @@
       transition: background 0.12s, color 0.12s, transform 0.12s;
       cursor: default;
     }
-    .edge-label.back {
-      color: var(--text-muted);
-      font-weight: 500;
-      border-color: var(--border);
-      background: var(--bg-elevated-2);
-    }
     .edge-label.trailhead {
       color: var(--trailhead);
       border-color: var(--trailhead);
@@ -674,11 +564,10 @@
       font-size: 10px;
     }
 
-    /* Focus mode — when a waypoint is selected, dim everything not on its
-       1-hop neighborhood. The selected node + its direct upstream/downstream
-       neighbors stay full opacity; everything else fades to 0.18 so the user
-       can trace the local journey through the dense graph. Background is
-       click-clearable (onPaneClick clears the selection). */
+    /* Focus mode — when a waypoint is selected, the selected node and the
+       trailheads that land on it stay full opacity; everything else fades
+       to 0.18. Background is click-clearable (onPaneClick clears the
+       selection). */
     .react-flow__node.dimmed {
       opacity: 0.18;
       transition: opacity 0.18s;
@@ -699,13 +588,10 @@
     /* ============================================================================
        SUBWAY VIEW — concentric, focal-centered, expand-on-click
        ============================================================================
-       Companion to MAP. Where MAP is a tree-ish hierarchy, SUBWAY treats the
-       app's shortcut graph as undirected at the visual level — a metro
-       network where each "line" is a journey and each waypoint is a station.
-       Default focal = first trailhead's destination. Click any visible
-       station to expand its outgoing shortcuts one level further; shift-
-       click (or use the Re-center pill in the detail panel) to make that
-       station the new focal. */
+       Companion to MAP. A metro-style view centered on one focal station (a
+       waypoint or a trailhead pill), with the stations reachable from it on
+       rings around it. Default focal = the first trailhead. Click any
+       visible station to make it the new focal. */
     .subway-help {
       position: absolute;
       top: 14px; left: 14px;
@@ -1044,7 +930,7 @@
       box-shadow: 0 0 0 3px var(--accent), var(--shadow-elevated) !important;
       border-color: var(--accent) !important;
     }
-    /* Collapsed-deeper indicator — when a station has outgoing shortcuts
+    /* Collapsed-deeper indicator — when a station has outgoing edges
        beyond the currently-expanded depth, mark it with a ⋯ chip so the
        user knows it's expandable. */
     .subway-expandable-indicator {
@@ -1124,7 +1010,7 @@
     }
     .subway-ghost-trailhead .trailhead-icon { margin-right: 4px; opacity: 0.85; font-size: 10px; }
 
-    /* Back-neighbor cards — incoming-shortcut sources for the focal,
+    /* Back-neighbor cards — incoming-edge sources for the focal,
        rendered as a tight inner halo "above" the focal so a leaf
        waypoint isn't a dead end. Heavier fade than forward ghosts +
        dashed border so they clearly read as "where you came from"
@@ -1283,179 +1169,6 @@
       box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.18), 0 0 0 9px var(--trailhead), var(--shadow-elevated);
     }
 
-    /* Shortcut inspect modal — opens when the user clicks an edge label
-       in MAP or SUBWAY view. Shows the shortcut's id, route, description,
-       and the actual sequence of tool calls (or the native class name).
-       Backdrop closes the modal; Escape too. */
-    .shortcut-modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.62);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 32px;
-      animation: shortcutModalFadeIn 0.18s ease-out;
-    }
-    @keyframes shortcutModalFadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    .shortcut-modal {
-      background: var(--bg-elevated);
-      border: 1px solid var(--border-strong);
-      border-radius: 12px;
-      width: min(720px, 100%);
-      max-height: min(82vh, 800px);
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
-      animation: shortcutModalSlideUp 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
-    }
-    @keyframes shortcutModalSlideUp {
-      from { opacity: 0; transform: translateY(12px) scale(0.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    .shortcut-modal-header {
-      padding: 16px 22px 14px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-    }
-    .shortcut-modal-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-muted);
-      letter-spacing: 0.01em;
-      font-family: ui-monospace, "SF Mono", monospace;
-    }
-    .shortcut-modal-route {
-      margin-top: 6px;
-      font-size: 14px;
-      color: var(--text-strong);
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-weight: 600;
-      word-break: break-word;
-    }
-    .shortcut-modal-arrow {
-      color: var(--accent);
-      margin: 0 4px;
-    }
-    .shortcut-modal-description {
-      margin-top: 8px;
-      font-size: 13px;
-      color: var(--text);
-      line-height: 1.5;
-      max-width: 580px;
-    }
-    .shortcut-modal-close {
-      flex-shrink: 0;
-      width: 32px;
-      height: 32px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--text-muted);
-      font-size: 22px;
-      line-height: 1;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.12s, border-color 0.12s, color 0.12s;
-    }
-    .shortcut-modal-close:hover {
-      background: var(--bg-elevated-2);
-      border-color: var(--border-strong);
-      color: var(--text);
-    }
-    .shortcut-modal-body {
-      padding: 16px 22px 22px;
-      overflow-y: auto;
-    }
-    .shortcut-modal-section-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 10px;
-    }
-    .shortcut-step {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      background: var(--bg-elevated-2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-      margin-bottom: 8px;
-    }
-    .shortcut-step-num {
-      flex-shrink: 0;
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      background: var(--accent-bg);
-      color: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: 700;
-      font-family: ui-monospace, "SF Mono", monospace;
-    }
-    .shortcut-step-body {
-      flex: 1;
-      margin: 0;
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 12px;
-      line-height: 1.55;
-      color: var(--text);
-      white-space: pre-wrap;
-      word-break: break-word;
-      tab-size: 2;
-    }
-    .shortcut-modal-native {
-      padding: 14px 16px;
-      background: var(--bg-elevated-2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-    }
-    .shortcut-modal-native code {
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 12px;
-      color: var(--text-strong);
-      background: rgba(124, 58, 237, 0.1);
-      padding: 3px 6px;
-      border-radius: 4px;
-      word-break: break-all;
-    }
-    .shortcut-modal-native-note {
-      margin-top: 8px;
-      font-size: 12px;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-
-    /* Express-shortcut edges: the body has more than one tool call, so
-       the agent traverses a single graph-edge but performs N taps under
-       the hood. Strokes get a slight purple cast and the label shows the
-       tap-count chip so humans can tell at a glance which lines compress
-       multiple steps. */
-    .react-flow__edge.subway-edge-express .react-flow__edge-path {
-      filter: drop-shadow(0 0 1px rgba(124, 58, 237, 0.4));
-    }
-    .edge-label.edge-label-express {
-      border-color: rgba(124, 58, 237, 0.55);
-      background: linear-gradient(180deg, var(--bg-elevated), rgba(124, 58, 237, 0.08));
-    }
-
     /* Shortest-path overlay: when a destination is set, the edges along
        the focal → destination shortest path get a brighter accent stroke
        and a soft glow so they stand out against the rest of the graph
@@ -1468,23 +1181,6 @@
     }
     .react-flow__edge.subway-edge-shortest-path .react-flow__edge-marker {
       opacity: 1 !important;
-    }
-
-    /* Edge labels become clickable buttons when their data carries an
-       inspect callback — light cursor + hover highlight so the user can
-       tell they're interactive. We can't tween `transform` for the hover
-       pop because each label's transform also encodes its midpoint
-       position; touching transform here would teleport the label to (0,0).
-       Stick to color/box-shadow changes. */
-    .edge-label.clickable {
-      cursor: pointer;
-      transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
-    }
-    .edge-label.clickable:hover {
-      background: var(--bg-elevated-2);
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-bg);
-      color: var(--accent);
     }
 
     .empty-state {
@@ -1569,125 +1265,6 @@
       display: -webkit-box;
       -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden;
-    }
-
-    /* ============================================================================
-       REPORT VIEW — auto-generated user-flow docs
-       ============================================================================ */
-    .report-view { padding: 26px 32px 80px; overflow-y: auto; height: 100%; }
-    .report-title {
-      font-size: 28px; font-weight: 700;
-      letter-spacing: -0.02em; line-height: 1.15;
-      color: var(--text-strong);
-      margin: 0 0 8px;
-      text-transform: uppercase;
-    }
-    .report-subtitle {
-      color: var(--text-muted); font-size: 13px;
-      margin: 0 0 22px; max-width: 700px; line-height: 1.55;
-    }
-    .report-toc {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 8px; margin-bottom: 32px;
-      padding-top: 18px;
-      border-top: 1px solid var(--border);
-    }
-    .report-toc-item {
-      padding: 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      font-size: 11px;
-      color: var(--text-muted);
-      font-family: ui-monospace, "SF Mono", monospace;
-      cursor: pointer;
-      transition: border-color 0.12s, color 0.12s;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .report-toc-item:hover { border-color: var(--accent); color: var(--text); }
-
-    .report-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
-      gap: 14px;
-    }
-    .report-card {
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px;
-      transition: border-color 0.12s;
-    }
-    .report-card:hover { border-color: var(--border-active); }
-    .report-card .meta-row {
-      display: flex; align-items: center; gap: 10px;
-      margin-bottom: 10px;
-      font-size: 11px; color: var(--text-faint);
-      font-family: ui-monospace, "SF Mono", monospace;
-      letter-spacing: 0.04em; text-transform: uppercase;
-    }
-    .report-card .meta-num {
-      color: var(--text-muted); font-weight: 600;
-    }
-    .report-card h3 {
-      margin: 0 0 8px;
-      font-size: 16px; font-weight: 600;
-      line-height: 1.35;
-      color: var(--text-strong);
-    }
-    .report-card .description {
-      font-size: 12px; line-height: 1.55;
-      color: var(--text-muted);
-      margin: 0 0 14px;
-    }
-    .report-card .screens-strip {
-      display: flex; gap: 8px;
-      overflow-x: auto;
-      padding-bottom: 6px;
-      margin-bottom: 14px;
-    }
-    .report-card .strip-screen {
-      flex: none;
-      width: 92px;
-      cursor: pointer;
-    }
-    .report-card .strip-screen img,
-    .report-card .strip-screen .strip-no-screenshot {
-      width: 92px;
-      aspect-ratio: 9 / 16;
-      object-fit: contain;
-      background: #000;
-      border-radius: 4px;
-      border: 1px solid var(--border);
-      display: block;
-      transition: transform 0.12s, border-color 0.12s;
-    }
-    .report-card .strip-screen .strip-no-screenshot {
-      background: var(--bg-elevated-2);
-      display: flex; align-items: center; justify-content: center;
-      color: var(--text-faint); font-size: 9px;
-    }
-    .report-card .strip-screen:hover img,
-    .report-card .strip-screen:hover .strip-no-screenshot {
-      border-color: var(--accent); transform: translateY(-1px);
-    }
-    .report-card .strip-label {
-      margin-top: 4px;
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 10px; color: var(--text-muted);
-      overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .report-card .id-pills {
-      display: flex; gap: 6px; flex-wrap: wrap;
-    }
-    .report-card .id-pill {
-      padding: 3px 8px;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 10px; color: var(--text-muted);
-      max-width: 200px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
   </style>
 
@@ -1835,313 +1412,34 @@
       );
     }
 
-    function shortEdgeAction(description, fromId, toId) {
-      if (description) {
-        // Try "tap [the] X button|tab|row|link|card|cell"
-        const m = description.match(/(tap|swipe|click|press|enter|fill|scroll|long[\- ]press|drag)\s+(?:on\s+)?(?:the\s+)?([\w'+\-]+(?:\s+[\w'+\-]+){0,3}?)\s+(?:button|tab|row|link|card|cell|icon|chip|pill|fab|sheet)\b/i);
-        if (m) {
-          const verb = m[1].toLowerCase();
-          const obj = m[2];
-          return verb + ' ' + obj;
-        }
-        // Try "tap [the] X" up to next punctuation/preposition
-        const m2 = description.match(/(tap|swipe|click|press)\s+(?:on\s+)?(?:the\s+)?([\w'+\-]+(?:\s+[\w'+\-]+){0,2})/i);
-        if (m2) return m2[1].toLowerCase() + ' ' + m2[2];
-      }
-      // Fall back: derive from the to-id's last segment
-      const toLeaf = toId.split('/').pop();
-      return '→ ' + toLeaf;
-    }
-
     /* ============================================================================
-       JOURNEY DERIVATION
+       LAYOUT (grid + trailheads above their landings)
        ============================================================================
-       We don't (yet) carry trail data through to the graph view, so we derive
-       "user journeys" from the (trailhead, shortcut) graph itself: BFS from each
-       trailhead, then pick interesting (trailhead → reachable-waypoint) pairs
-       and reconstruct a path of length 1–4 between them. Each pair becomes one
-       journey card.
-
-       This deliberately mirrors what trail YAMLs would produce when piped through
-       — once trail data lands, swap derivation for the real thing without
-       touching the rendering layer.
+       Waypoints sit in a roughly square grid, alphabetical by id so each
+       trailmap's screens cluster together. Rows are spaced so a trailhead
+       pill fits in the gap above the waypoint it lands on, X-aligned to that
+       waypoint's center.
     */
-    function bfsFromTrailhead(trailheadId, startWaypointId, shortcuts, waypointIds) {
-      // shortest-path BFS, returns { waypointId: [pathOfWaypointIds] }
-      const adj = new Map();
-      shortcuts.forEach(sc => {
-        if (!adj.has(sc.from)) adj.set(sc.from, []);
-        adj.get(sc.from).push({ to: sc.to, sc });
-      });
-      const reached = new Map();
-      reached.set(startWaypointId, [startWaypointId]);
-      const queue = [startWaypointId];
-      while (queue.length > 0) {
-        const cur = queue.shift();
-        const next = adj.get(cur) || [];
-        for (const { to } of next) {
-          if (reached.has(to)) continue;
-          if (!waypointIds.has(to)) continue;
-          reached.set(to, [...reached.get(cur), to]);
-          queue.push(to);
-        }
-      }
-      return reached;
-    }
-
-    function categorizeJourney(path) {
-      // Heuristic: pick the badge from the destination's id segments.
-      const last = path[path.length - 1] || '';
-      const lower = last.toLowerCase();
-      if (lower.includes('sign-in') || lower.includes('login') || lower.includes('auth')) return 'AUTH';
-      if (lower.includes('pay') || lower.includes('payment') || lower.includes('checkout')) return 'PAYMENT';
-      if (lower.includes('search') || lower.includes('find')) return 'SEARCH';
-      if (lower.includes('help') || lower.includes('support')) return 'SUPPORT';
-      if (lower.includes('legal') || lower.includes('terms') || lower.includes('privacy')) return 'LEGAL';
-      if (lower.includes('cancel') || lower.includes('delete')) return 'CANCEL';
-      if (lower.includes('profile') || lower.includes('settings') || lower.includes('account')
-          || lower.includes('linked-banks') || lower.includes('banking')) return 'ACCOUNT';
-      return 'NAVIGATE';
-    }
-
-    function deriveJourneys(waypoints, shortcuts, trailheads) {
-      // For each (trailhead, reachable-waypoint with depth >= 1) pair, build a
-      // journey. Skip the trailhead's direct landing screen (depth 0) since
-      // that's a trivial 1-step path. Cap pairs per trailhead to keep the list
-      // navigable on a real-world dataset.
+    function computeLayout(waypoints, trailheads) {
       const waypointIds = new Set(waypoints.map(w => w.id));
-      const wpById = new Map(waypoints.map(w => [w.id, w]));
-      const journeys = [];
-      let counter = 1;
-      trailheads.forEach(th => {
-        if (!waypointIds.has(th.to)) return;
-        const reached = bfsFromTrailhead(th.id, th.to, shortcuts, waypointIds);
-        // sort destinations by path length (shortest paths first), then by id
-        const dests = [...reached.entries()]
-          .filter(([id]) => id !== th.to) // skip trivial 1-step "trailhead → its own to"
-          .sort((a, b) => a[1].length - b[1].length || a[0].localeCompare(b[0]));
-        dests.forEach(([destId, path]) => {
-          const dest = wpById.get(destId);
-          journeys.push({
-            num: counter++,
-            id: 'journey::' + th.id + '::' + destId,
-            trailheadId: th.id,
-            trailheadLabel: th.id,
-            destinationId: destId,
-            destinationLabel: dest ? (dest.description?.split('.')[0] || dest.id) : destId,
-            path,
-            screens: path.length,
-            category: categorizeJourney(path),
-          });
-        });
-      });
-      return journeys;
-    }
 
-    /* ============================================================================
-       LAYOUT (SCC condensation + BFS-layered + barycentric ordering)
-       ============================================================================
-       The IA insight: bottom-nav peers in a typical mobile app (the four or
-       five top-level tabs every screen can hop between) are mutually reachable
-       via tap-a-tab shortcuts. In graph theory terms, they form a strongly-
-       connected component (SCC). The user's mental model says these are
-       *peers at the same level* — the same row of the layout, not stacked
-       across multiple rows just because dagre/BFS picks one as the entry and
-       finds the others "one hop away."
-
-       Algorithm:
-        1. Compute SCCs over the full forward graph (Tarjan's, no edge filtering).
-        2. Condense: each SCC is a single super-node. Inter-SCC edges form a DAG.
-        3. BFS-shortest the SCC DAG from entry SCCs (those containing entry
-           points) → each SCC gets a depth.
-        4. Every waypoint inherits its SCC's depth.
-        5. Within each depth row, order nodes by barycentric x (avg parent x
-           from upstream SCCs) to minimize crossings.
-        6. Trailheads anchor above their targets, X-aligned to target center.
-
-       Result: the bottom-nav cluster becomes a single horizontal row of peers,
-       drill-downs flow below as the next layer, deeper drill-downs below those.
-    */
-    function computeLayout(waypoints, shortcuts, trailheads) {
-      const waypointIds = new Set(waypoints.map(w => w.id));
-      const entryPoints = new Set();
-      trailheads.forEach(th => {
-        if (waypointIds.has(th.to)) entryPoints.add(th.to);
-      });
-
-      // Full forward adjacency (no filtering — SCCs need every real edge).
-      const childrenOf = new Map();
-      const parentsOf = new Map();
-      waypoints.forEach(wp => {
-        childrenOf.set(wp.id, []);
-        parentsOf.set(wp.id, []);
-      });
-      shortcuts.forEach(sc => {
-        if (!waypointIds.has(sc.from) || !waypointIds.has(sc.to)) return;
-        childrenOf.get(sc.from).push(sc.to);
-        parentsOf.get(sc.to).push(sc.from);
-      });
-
-      // ---- Tarjan's SCC (iterative, to avoid recursion-depth issues) ----
-      const sccs = []; // array of arrays of waypoint ids
-      const sccIndex = new Map();
-      {
-        const ids = new Map();
-        const low = new Map();
-        const onStack = new Set();
-        const tStack = [];
-        let counter = 0;
-        const callStack = [];
-        waypoints.forEach(wp => {
-          if (ids.has(wp.id)) return;
-          callStack.push({ v: wp.id, phase: 'enter', childIdx: 0, lastChild: null });
-          while (callStack.length > 0) {
-            const frame = callStack[callStack.length - 1];
-            const v = frame.v;
-            if (frame.phase === 'enter') {
-              ids.set(v, counter); low.set(v, counter); counter++;
-              tStack.push(v); onStack.add(v);
-              frame.phase = 'loop';
-            }
-            if (frame.phase === 'returned') {
-              low.set(v, Math.min(low.get(v), low.get(frame.lastChild)));
-              frame.phase = 'loop';
-            }
-            const kids = childrenOf.get(v);
-            let recursed = false;
-            while (frame.childIdx < kids.length && !recursed) {
-              const w = kids[frame.childIdx++];
-              if (!ids.has(w)) {
-                frame.lastChild = w;
-                frame.phase = 'returned';
-                callStack.push({ v: w, phase: 'enter', childIdx: 0, lastChild: null });
-                recursed = true;
-              } else if (onStack.has(w)) {
-                low.set(v, Math.min(low.get(v), ids.get(w)));
-              }
-            }
-            if (!recursed) {
-              if (low.get(v) === ids.get(v)) {
-                const scc = [];
-                let w;
-                do { w = tStack.pop(); onStack.delete(w); scc.push(w); } while (w !== v);
-                const sccI = sccs.length;
-                sccs.push(scc);
-                scc.forEach(id => sccIndex.set(id, sccI));
-              }
-              callStack.pop();
-            }
-          }
-        });
-      }
-
-      // ---- Condensation graph (SCC i → SCC j if any forward edge crosses) ----
-      const sccChildren = new Map();
-      sccs.forEach((_, i) => sccChildren.set(i, new Set()));
-      shortcuts.forEach(sc => {
-        if (!waypointIds.has(sc.from) || !waypointIds.has(sc.to)) return;
-        const i = sccIndex.get(sc.from);
-        const j = sccIndex.get(sc.to);
-        if (i !== j) sccChildren.get(i).add(j);
-      });
-
-      // ---- Entry SCCs: those containing at least one trailhead target ----
-      const entrySCCs = new Set();
-      entryPoints.forEach(ep => {
-        if (sccIndex.has(ep)) entrySCCs.add(sccIndex.get(ep));
-      });
-
-      // ---- BFS-shortest in condensation graph to assign SCC depths ----
-      const sccDepth = new Map();
-      const bfsQueue = [];
-      entrySCCs.forEach(i => { sccDepth.set(i, 0); bfsQueue.push(i); });
-      while (bfsQueue.length > 0) {
-        const cur = bfsQueue.shift();
-        const curDepth = sccDepth.get(cur);
-        sccChildren.get(cur).forEach(next => {
-          if (sccDepth.has(next)) return;
-          sccDepth.set(next, curDepth + 1);
-          bfsQueue.push(next);
-        });
-      }
-      // Orphan SCCs (not reachable from any entry) at depth 0
-      sccs.forEach((_, i) => { if (!sccDepth.has(i)) sccDepth.set(i, 0); });
-
-      // ---- Each waypoint inherits its SCC's depth ----
-      const depth = new Map();
-      waypoints.forEach(wp => {
-        depth.set(wp.id, sccDepth.get(sccIndex.get(wp.id)));
-      });
-
-      // Group by depth
-      const byDepth = new Map();
-      depth.forEach((d, id) => {
-        if (!byDepth.has(d)) byDepth.set(d, []);
-        byDepth.get(d).push(id);
-      });
-      const maxDepth = Math.max(...byDepth.keys(), 0);
-
-      // Within-rank ordering: barycentric. Initialize depth 0 alphabetically
-      // (peers within the same SCC slot in next to each other since they share
-      // a trailmap-id prefix). For each subsequent depth, sort by avg position of
-      // *upstream* parents only — within-SCC same-depth parents are filtered
-      // out so they don't muddy the heuristic.
-      const orderIndex = new Map();
-      // Cluster depth 0 by SCC so SCC members sit together in the row.
-      const dZero = (byDepth.get(0) || []).slice().sort((a, b) => {
-        const sa = sccIndex.get(a), sb = sccIndex.get(b);
-        return sa - sb || a.localeCompare(b);
-      });
-      dZero.forEach((id, i) => orderIndex.set(id, i));
-      byDepth.set(0, dZero);
-      for (let d = 1; d <= maxDepth; d++) {
-        const inRank = (byDepth.get(d) || []).slice();
-        inRank.sort((a, b) => {
-          const aDepth = depth.get(a);
-          const aParents = parentsOf.get(a)
-            .filter(p => depth.get(p) < aDepth)         // upstream only
-            .map(p => orderIndex.get(p))
-            .filter(x => x !== undefined);
-          const bDepth = depth.get(b);
-          const bParents = parentsOf.get(b)
-            .filter(p => depth.get(p) < bDepth)
-            .map(p => orderIndex.get(p))
-            .filter(x => x !== undefined);
-          const aBary = aParents.length ? aParents.reduce((s, x) => s + x, 0) / aParents.length : 0;
-          const bBary = bParents.length ? bParents.reduce((s, x) => s + x, 0) / bParents.length : 0;
-          // Tie-break: same SCC → cluster together; then alphabetical.
-          if (aBary !== bBary) return aBary - bBary;
-          const sa = sccIndex.get(a), sb = sccIndex.get(b);
-          if (sa !== sb) return sa - sb;
-          return a.localeCompare(b);
-        });
-        inRank.forEach((id, i) => orderIndex.set(id, i));
-        byDepth.set(d, inRank);
-      }
-
-      // Final pixel positions. Each rank's row is centered horizontally
-      // around x=0; rows stack downward.
-      // RANKSEP is the vertical gap between depth rows. Generous now (260)
-      // because: (1) titles aren't line-clamped anymore so nodes can be ~470px
-      // tall, (2) edge labels need a clear band between rows to read, and
-      // (3) at this depth the smoothstep curves benefit from extra Y to bend
-      // gracefully instead of cramping into right-angle hairpins.
-      // NODESEP scales with width — wide rows (10+ peer screens) need
-      // headroom for edge labels to sit between siblings.
-      const RANKSEP = 260;
+      // ROWSEP is the vertical gap between rows — room for the trailhead
+      // pills that sit above their landing waypoints.
+      const ROWSEP = 260;
       const NODESEP = 64;
+      const sorted = waypoints.map(w => w.id).sort((a, b) => a.localeCompare(b));
+      // Pick the column count that makes the grid roughly square in pixels.
+      // Cards are much taller than they are wide, so this favors columns.
+      const cols = Math.max(1, Math.ceil(Math.sqrt(
+        sorted.length * (NODE_HEIGHT + ROWSEP) / (NODE_WIDTH + NODESEP),
+      )));
       const positions = {};
-      let y = 80;
-      for (let d = 0; d <= maxDepth; d++) {
-        const inRank = byDepth.get(d) || [];
-        const totalWidth = inRank.length * NODE_WIDTH + Math.max(0, inRank.length - 1) * NODESEP;
-        let x = -totalWidth / 2;
-        inRank.forEach(id => {
-          positions[id] = { x, y };
-          x += NODE_WIDTH + NODESEP;
-        });
-        y += NODE_HEIGHT + RANKSEP;
-      }
+      sorted.forEach((id, i) => {
+        positions[id] = {
+          x: (i % cols) * (NODE_WIDTH + NODESEP),
+          y: 80 + Math.floor(i / cols) * (NODE_HEIGHT + ROWSEP),
+        };
+      });
 
       // Trailheads above their targets, X-aligned to target center, fanning
       // horizontally if multiple trailheads share a target.
@@ -2211,19 +1509,13 @@
     /* ============================================================================
        CUSTOM EDGE — staggered HTML labels + class for focus dimming
        ============================================================================
-       Why custom: React Flow's built-in smoothstep edge centers its label at
-       the path midpoint as an SVG `<text>`. When many edges leave the same
-       source going down to a row of children, all those midpoints land at
-       roughly the same Y, producing the stack-of-labels overlap the user
-       reported ("press a contact in / tap a contact name / tap Back / tap +"
-       all clobbering each other on one horizontal line).
-
-       Fix: render the label as an HTML chip via EdgeLabelRenderer, and shift
-       it by `data.labelOffsetY` so siblings stagger vertically. The offset is
-       computed in the edges memo below as `index_within_source_group * 18 px`
-       centered around 0. With 5 siblings that's labels at y∈{-36,-18,0,18,36}
-       relative to the path midpoint — readable at default zoom, and the
-       clamp keeps things from flying off when one source has 30 children.
+       Why custom: React Flow's built-in edge draws its label as an SVG
+       `<text>` centered at the path midpoint. Rendering it as an HTML chip via
+       EdgeLabelRenderer instead lets the label carry classes (`dimmed`,
+       `trailhead`) and an offset (`data.labelOffsetX` / `data.labelOffsetY`)
+       so labels of edges sharing a midpoint can be staggered apart.
+       `data.straight` and `data.floating` give the subway view straight lines
+       that attach to whichever side of each card faces the other endpoint.
     */
     /** Center + size of an internal-node, with sensible fallbacks for the
         first render before React Flow has measured the DOM box. */
@@ -2287,18 +1579,12 @@
       const offsetY = (data && data.labelOffsetY) || 0;
       const offsetX = (data && data.labelOffsetX) || 0;
       const labelClass = data && data.labelClass ? data.labelClass : '';
-      const onLabelClick = data && data.onLabelClick;
-      const isClickable = typeof onLabelClick === 'function';
-      const fullLabelClass = 'edge-label ' + labelClass + (isClickable ? ' clickable' : '');
       return React.createElement(React.Fragment, null,
         React.createElement(BaseEdge, { path: edgePath, markerEnd, style }),
         label
           ? React.createElement(EdgeLabelRenderer, null,
               React.createElement('div', {
-                className: fullLabelClass,
-                onClick: isClickable
-                  ? (e) => { e.stopPropagation(); onLabelClick(); }
-                  : undefined,
+                className: 'edge-label ' + labelClass,
                 style: {
                   transform: `translate(-50%, -50%) translate(${midX + offsetX}px, ${midY + offsetY}px)`,
                   // Re-render decision: nodrag/nopan attrs let users still
@@ -2317,85 +1603,26 @@
     /* ============================================================================
        MAP VIEW
        ============================================================================ */
-    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, onInspectShortcut, themeKey }) {
+    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, themeKey }) {
       const positions = useMemo(
-        () => computeLayout(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
-        [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
+        () => computeLayout(filtered.waypoints, filtered.trailheads),
+        [filtered.waypoints, filtered.trailheads],
       );
 
-      // Compute the focused set: when a waypoint W is selected, light up
-      // *every shortest path from any trailhead to W*, plus W's immediate
-      // outgoing neighbors. This answers "how could the agent have arrived
-      // here?" — the union of routes back to a trailhead — instead of just
-      // 1-hop neighbors. Everything outside that union dims out.
-      //
-      // Algorithm: forward BFS from each trailhead destination, recording
-      // the parent of each visited node. If W was reached, walk back through
-      // parents to enumerate the shortest path from that trailhead to W and
-      // add every node + the corresponding shortcut edges to the focused set.
-      // Multiple trailheads → multiple paths → the union shows every shortest
-      // way to get there.
+      // Compute the focused set: when a waypoint W is selected, light up W
+      // plus every trailhead that lands on it — "how could the agent have
+      // arrived here?". Everything outside that set dims out.
       const focusedSet = useMemo(() => {
         if (!selectedWaypoint) return null;
         const nodes = new Set([selectedWaypoint]);
-        const edges = new Set(); // 'shortcut::<id>' or 'trailhead::<id>'
-
-        // Build forward adjacency, keyed by source. Each entry holds the
-        // outgoing shortcut id alongside the destination so we can identify
-        // the exact edge on the path (not just the node pair) — important
-        // when two shortcuts connect the same pair of waypoints.
-        const forward = new Map();
-        filtered.shortcuts.forEach(sc => {
-          if (!forward.has(sc.from)) forward.set(sc.from, []);
-          forward.get(sc.from).push({ to: sc.to, id: sc.id });
-        });
-
-        // For each trailhead's destination, BFS until W is found, then walk
-        // the parent chain back to mark every node + edge on the route.
+        const edges = new Set(); // 'trailhead::<id>'
         filtered.trailheads.forEach(th => {
-          if (!forward.has(th.to) && th.to !== selectedWaypoint) {
-            // Trailhead lands at a waypoint with no outgoing shortcuts and
-            // it isn't W — no path to W from here.
-            return;
-          }
-          const parent = new Map(); // childWp -> { from, edgeId }
-          parent.set(th.to, null);
-          const queue = [th.to];
-          let found = th.to === selectedWaypoint;
-          while (queue.length && !found) {
-            const v = queue.shift();
-            const children = forward.get(v) || [];
-            for (const c of children) {
-              if (parent.has(c.to)) continue;
-              parent.set(c.to, { from: v, edgeId: c.id });
-              if (c.to === selectedWaypoint) { found = true; break; }
-              queue.push(c.to);
-            }
-          }
-          if (!found) return;
-
-          // Walk back from W → trailhead-destination, marking the route.
-          let cur = selectedWaypoint;
-          while (cur !== null && parent.get(cur) !== null) {
-            nodes.add(cur);
-            const p = parent.get(cur);
-            edges.add('shortcut::' + p.edgeId);
-            cur = p.from;
-          }
-          // Add the trailhead-destination + the trailhead pill itself
-          // + the trailhead → destination edge.
-          nodes.add(th.to);
+          if (th.to !== selectedWaypoint) return;
           nodes.add(TRAILHEAD_NODE_PREFIX + th.id);
           edges.add('trailhead::' + th.id);
         });
-
-        // Strict path-only focus: nothing else gets added. Off-path edges
-        // (including W's own outgoing "next steps") dim with the rest of
-        // the graph — the user explicitly asked for label brightness to
-        // match the dimmed nodes around them.
-
         return { nodes, edges };
-      }, [selectedWaypoint, filtered.shortcuts, filtered.trailheads]);
+      }, [selectedWaypoint, filtered.trailheads]);
 
       const nodes = useMemo(() => [
         ...filtered.waypoints.map(wp => {
@@ -2428,111 +1655,28 @@
         }),
       ], [filtered.waypoints, filtered.trailheads, positions, selectedWaypoint, focusedSet]);
 
-      // Compute the entry-point set once for edge classification — same set
-      // the layout uses to drop back-edges from dagre input. Here we use it
-      // to *style* back-edges differently (faded, dashed) so the user can
-      // still see them but they don't compete with the tree backbone.
-      const entryPoints = useMemo(
-        () => new Set(filtered.trailheads.map(th => th.to)),
-        [filtered.trailheads],
-      );
-
-      const edges = useMemo(() => {
-        // Group shortcuts by source so we can stagger their label Y offsets —
-        // each child gets `index * 18 px` shift centered around 0, which
-        // unstacks labels that would otherwise pile up at the same midpoint.
-        const sourceGroupCount = new Map();
-        const sourceGroupIndex = new Map();
-        filtered.shortcuts.forEach(sc => {
-          sourceGroupCount.set(sc.from, (sourceGroupCount.get(sc.from) || 0) + 1);
-        });
-        const STAGGER_STEP = 18; // px between sibling labels
-        const STAGGER_CAP = 64;  // don't fly off when one source has many children
-
-        return [
-          ...filtered.shortcuts.map(sc => {
-            const isBack = entryPoints.has(sc.to);
-            const idx = sourceGroupIndex.get(sc.from) || 0;
-            sourceGroupIndex.set(sc.from, idx + 1);
-            const total = sourceGroupCount.get(sc.from) || 1;
-            // Center the offset around 0 so siblings spread above and below
-            // the path midpoint symmetrically. Clamped at ±STAGGER_CAP.
-            let offsetY = (idx - (total - 1) / 2) * STAGGER_STEP;
-            if (offsetY > STAGGER_CAP) offsetY = STAGGER_CAP;
-            if (offsetY < -STAGGER_CAP) offsetY = -STAGGER_CAP;
-
-            // An edge is focused IFF it's explicitly on the focused-path set
-            // (the union of trailhead→W shortest-path edges + W's outgoing
-            // 1-hop edges). Endpoint-membership alone is not enough — two
-            // focused nodes can sit on different paths through the graph,
-            // and an edge between them that's not on those paths should
-            // dim with the rest of the off-path graph.
-            const edgeKey = 'shortcut::' + sc.id;
-            const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
-            const classes = [];
-            if (isBack) classes.push('back-edge');
-            if (!isFocused) classes.push('dimmed');
-            if (focusedSet && isFocused) classes.push('focused');
-
-            // Label class needs the dimmed marker too — labels are rendered
-            // via EdgeLabelRenderer (a portal), so the .dimmed class on the
-            // edge SVG never cascades down to them.
-            const labelClasses = [];
-            if (isBack) labelClasses.push('back');
-            if (!isFocused) labelClasses.push('dimmed');
-
-            return {
-              id: 'shortcut::' + sc.id,
-              source: sc.from,
-              target: sc.to,
-              type: 'staggered',
-              className: classes.join(' '),
-              label: isBack ? '' : shortEdgeAction(sc.description, sc.from, sc.to),
-              data: {
-                labelOffsetY: offsetY,
-                labelClass: labelClasses.join(' '),
-                // Click the label to open the inspect modal — back-edges
-                // have no label so the click handler simply never fires
-                // on them (label === '' in that branch).
-                onLabelClick: onInspectShortcut ? () => onInspectShortcut(sc) : null,
-              },
-              markerEnd: {
-                type: MarkerType.ArrowClosed,
-                color: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
-                width: isBack ? 14 : 18,
-                height: isBack ? 14 : 18,
-              },
-              style: {
-                stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
-                strokeWidth: isBack ? 1.25 : 2.5,
-              },
-            };
-          }),
-          ...filtered.trailheads.map(th => {
-            const edgeKey = 'trailhead::' + th.id;
-            // Same strict path-only rule as shortcut edges — the trailhead
-            // edge is focused only when its id is explicitly in the path
-            // set. Sharing a landing waypoint with a focused trailhead
-            // doesn't make this one's edge focused.
-            const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
-            const classes = [];
-            if (!isFocused) classes.push('dimmed');
-            const labelClasses = ['trailhead'];
-            if (!isFocused) labelClasses.push('dimmed');
-            return {
-              id: 'trailhead::' + th.id,
-              source: TRAILHEAD_NODE_PREFIX + th.id,
-              target: th.to,
-              type: 'staggered',
-              className: classes.join(' '),
-              label: 'entry',
-              data: { labelOffsetY: 0, labelClass: labelClasses.join(' ') },
-              markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--trailhead)', width: 18, height: 18 },
-              style: { stroke: 'var(--trailhead)', strokeWidth: 2, strokeDasharray: '7 6' },
-            };
-          }),
-        ];
-      }, [filtered.shortcuts, filtered.trailheads, entryPoints, focusedSet, onInspectShortcut]);
+      const edges = useMemo(() => filtered.trailheads.map(th => {
+        const edgeKey = 'trailhead::' + th.id;
+        // Focused only when this trailhead lands on the selected waypoint.
+        // Sharing a landing waypoint with a focused trailhead doesn't make
+        // this one's edge focused.
+        const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
+        const classes = [];
+        if (!isFocused) classes.push('dimmed');
+        const labelClasses = ['trailhead'];
+        if (!isFocused) labelClasses.push('dimmed');
+        return {
+          id: edgeKey,
+          source: TRAILHEAD_NODE_PREFIX + th.id,
+          target: th.to,
+          type: 'staggered',
+          className: classes.join(' '),
+          label: 'entry',
+          data: { labelOffsetY: 0, labelClass: labelClasses.join(' ') },
+          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--trailhead)', width: 18, height: 18 },
+          style: { stroke: 'var(--trailhead)', strokeWidth: 2, strokeDasharray: '7 6' },
+        };
+      }), [filtered.trailheads, focusedSet]);
 
       const onNodeClick = useCallback((_, node) => {
         if (node.type === 'waypoint') onSelectWaypoint(node.id);
@@ -2544,10 +1688,9 @@
       const onPaneClick = useCallback(() => onSelectWaypoint(null), [onSelectWaypoint]);
 
       // Capture the React Flow instance so we can auto-zoom to the
-      // focused-path bounds whenever the user selects a waypoint. With
-      // the off-path nodes already dimmed and the path edges highlighted,
-      // zooming to just those bounds turns the whole map into "this is
-      // how you got here" at a glance.
+      // focused-set bounds whenever the user selects a waypoint. With the
+      // rest of the map already dimmed, zooming to just those bounds turns
+      // the whole map into "this is how you got here" at a glance.
       const flowInstanceRef = useRef(null);
       const onInit = useCallback((instance) => {
         flowInstanceRef.current = instance;
@@ -2619,47 +1762,16 @@
     /* ============================================================================
        SUBWAY VIEW — concentric, focal-centered, expand-on-click
        ============================================================================
-       Mental model: pick a focal station (default = first trailhead's
-       destination). Render the focal at the origin. Stations 1 hop away
-       sit on a ring at radius R₁; 2 hops on a ring at R₂; deeper hops are
-       hidden until the user opts into them by clicking an expandable node.
-       Edges between any two visible stations get drawn — they include
-       upstream shortcuts (so you can see "how could I get here from a
-       neighbor"), not just downstream ones.
+       Mental model: pick a focal station (default = the first trailhead
+       pill). Render the focal at the origin. Stations 1 hop away sit on a
+       ring at radius R₁; 2 hops on a ring at R₂; and so on out to the Depth
+       control. Edges are trailhead → landing launches.
 
        Click semantics:
-         - plain click on a station: expand it — its outgoing shortcuts
-           reveal one more level of children, added to the visible set
-         - shift-click (or ⌘-click) on a station: re-center — that station
-           becomes the new focal, ring distances recompute
+         - click on a station: re-center — that station becomes the new
+           focal, ring distances recompute
          - click background: clears selection (does not change focal)
-
-       "Lines" = journeys from a trailhead to a leaf waypoint. Each line
-       gets a categorical color from a 12-color palette (rotated by hash).
-       Edges color by the dominant line they belong to. Stations on multiple
-       lines (transfer stations) show no extra decoration — the inbound
-       edges already broadcast the line colors visually.
     */
-    const SUBWAY_PALETTE = [
-      '#FF6B6B', '#4ECDC4', '#FFD166', '#A78BFA',
-      '#06D6A0', '#FF9F1C', '#118AB2', '#EF476F',
-      '#73D2DE', '#F4A261', '#9D4EDD', '#43AA8B',
-    ];
-    function colorForJourney(idx) { return SUBWAY_PALETTE[idx % SUBWAY_PALETTE.length]; }
-
-    /** Undirected adjacency from shortcuts. Same Map<id, Set<id>> shape used
-        by every subway-graph traversal below. */
-    function buildUndirectedAdj(shortcuts) {
-      const adj = new Map();
-      shortcuts.forEach(sc => {
-        if (!adj.has(sc.from)) adj.set(sc.from, new Set());
-        if (!adj.has(sc.to)) adj.set(sc.to, new Set());
-        adj.get(sc.from).add(sc.to);
-        adj.get(sc.to).add(sc.from);
-      });
-      return adj;
-    }
-
     /** Build a BFS tree rooted at `rootId` over an adjacency map.
         Returns { depth, parent, children }. Children only includes BFS-tree
         edges (not back-edges) so we can recurse for radial layout. */
@@ -2877,7 +1989,7 @@
       return parts.length > 0 ? '#' + parts.join('&') : '';
     }
 
-    function SubwayView({ filtered, journeys, selectedWaypoint, onSelectWaypoint, onInspectShortcut, onAgentTextChange, themeKey }) {
+    function SubwayView({ filtered, selectedWaypoint, onSelectWaypoint, onAgentTextChange, themeKey }) {
       // Focal model: the subway is a "what can I reach from this waypoint?"
       // view, with the focal waypoint sitting at the center. The picker
       // exposes every waypoint as a candidate focal, with trailhead landings
@@ -2985,23 +2097,11 @@
         }
       }, [filtered.waypoints, trailheads, focalId, defaultFocalId, trailheadFromNodeId]);
 
-      // Adjacency for the BFS — *directed*. Both shortcuts and trailheads
-      // are one-way edges in the model: from any waypoint, the user can
-      // only forward-navigate via outgoing shortcuts. The subway view
-      // mirrors this — "from where I am, where can I go?" — so the BFS
-      // walks only forward edges. Back-edges from a deeper node to an
-      // earlier visible node are still rendered (they're outgoing from
-      // their own source); they just never *expand* the visible set in
-      // the wrong direction.
+      // Adjacency for the BFS — *directed*: a trailhead pill points at the
+      // waypoint it lands on. The subway view answers "from where I am,
+      // where can I go?", so the BFS walks only forward edges.
       const adj = useMemo(() => {
         const a = new Map();
-        filtered.shortcuts.forEach(sc => {
-          if (!a.has(sc.from)) a.set(sc.from, new Set());
-          a.get(sc.from).add(sc.to);
-          // Make sure both endpoints have an entry so callers can iterate
-          // them without `|| new Set()` everywhere.
-          if (!a.has(sc.to)) a.set(sc.to, new Set());
-        });
         trailheads.forEach(th => {
           const tid = TRAILHEAD_NODE_PREFIX + th.id;
           if (!a.has(tid)) a.set(tid, new Set());
@@ -3011,7 +2111,7 @@
           }
         });
         return a;
-      }, [filtered.shortcuts, trailheads]);
+      }, [trailheads]);
 
       const tree = useMemo(() => {
         if (!focalId) return { depth: new Map(), parent: new Map(), children: new Map() };
@@ -3134,8 +2234,8 @@
       // tree rooted at the focal, so the parent-walk yields the shortest
       // forward path by construction. Returns:
       //   - found: true with `nodes` (focal-to-dest, inclusive) and `edges`
-      //     (set of `subway::<sc.id>` / `subway-th::<th.id>` ids that lie on
-      //     the path) when destination is reachable forward.
+      //     (set of `subway-th::<th.id>` ids that lie on the path) when
+      //     destination is reachable forward.
       //   - found: false with empty collections otherwise. The picker UI
       //     surfaces "no path" so the user knows the destination isn't
       //     forward-reachable from this focal — they might need to pick a
@@ -3156,24 +2256,14 @@
         }
         const nodes = reverse.reverse();
         const edgeIds = new Set();
-        // Build a quick lookup so step-edge resolution is O(1) per step.
-        const shortcutByFromTo = new Map(); // 'from||to' -> sc.id  (any one — multiple parallel edges collapse)
-        filtered.shortcuts.forEach(sc => {
-          const k = sc.from + '||' + sc.to;
-          if (!shortcutByFromTo.has(k)) shortcutByFromTo.set(k, sc.id);
-        });
         for (let i = 0; i + 1 < nodes.length; i++) {
           const a = nodes[i];
-          const b = nodes[i + 1];
           if (typeof a === 'string' && a.startsWith(TRAILHEAD_NODE_PREFIX)) {
             edgeIds.add('subway-th::' + a.slice(TRAILHEAD_NODE_PREFIX.length));
-          } else {
-            const scId = shortcutByFromTo.get(a + '||' + b);
-            if (scId) edgeIds.add('subway::' + scId);
           }
         }
         return { found: true, nodes, edges: edgeIds, hops: nodes.length - 1 };
-      }, [focalId, destinationId, tree.depth, tree.parent, filtered.shortcuts]);
+      }, [focalId, destinationId, tree.depth, tree.parent]);
 
       const visibleIds = useMemo(() => {
         if (!focalId) return new Set();
@@ -3216,24 +2306,6 @@
         if (!focalId) return new Map();
         return computeDepthRadii(visibleIds, focalId, angleMap, tree.depth);
       }, [focalId, visibleIds, angleMap, tree.depth]);
-
-      // One color per journey (trailhead → leaf path). Edges that appear
-      // on multiple journeys take the color of the lowest-index journey.
-      const edgeColors = useMemo(() => {
-        const colors = new Map();
-        const edgeId = new Map();
-        filtered.shortcuts.forEach(sc => {
-          edgeId.set(sc.from + '||' + sc.to, sc.id);
-        });
-        journeys.forEach((j, idx) => {
-          const color = colorForJourney(idx);
-          for (let i = 0; i + 1 < j.path.length; i++) {
-            const eid = edgeId.get(j.path[i] + '||' + j.path[i + 1]);
-            if (eid && !colors.has(eid)) colors.set(eid, color);
-          }
-        });
-        return colors;
-      }, [journeys, filtered.shortcuts]);
 
       const positions = useMemo(() => {
         const m = new Map();
@@ -3321,86 +2393,10 @@
         [stationNodes, trailheadNodes],
       );
 
-      // Forward-only edges. Two filters together:
-      //   1. depth(from) < depth(to) — the edge must take the user
-      //      *outward* in the BFS expansion. Back-edges (deeper node →
-      //      shallower) and same-depth cross-edges are skipped, because
-      //      they don't represent forward navigation from "where I am."
-      //   2. dedupe by directed (from, to) pair so variants sharing the
-      //      same source/target collapse into a single rendered edge —
-      //      the inspect modal still surfaces all variants on click.
-      const dedupedEdges = useMemo(() => {
-        const seen = new Set();
-        const out = [];
-        filtered.shortcuts.forEach(sc => {
-          if (!visibleIds.has(sc.from) || !visibleIds.has(sc.to)) return;
-          const dFrom = tree.depth.get(sc.from);
-          const dTo = tree.depth.get(sc.to);
-          if (dFrom === undefined || dTo === undefined) return;
-          if (dFrom >= dTo) return;
-          const key = sc.from + '||' + sc.to;
-          if (seen.has(key)) return;
-          seen.add(key);
-          out.push(sc);
-        });
-        return out;
-      }, [filtered.shortcuts, visibleIds, tree.depth]);
-
+      // Trailhead → landing "launch" edges, drawn dashed in the trailhead
+      // color.
       const edges = useMemo(() => {
-        const arr = dedupedEdges.map(sc => {
-          const edgeKey = 'subway::' + sc.id;
-          const onPath = pathToDest.found && pathToDest.edges.has(edgeKey);
-          const baseColor = edgeColors.get(sc.id) || 'var(--tree-edge)';
-          const color = onPath ? 'var(--accent)' : baseColor;
-          // Edge depth = max of its endpoints, so it fades with the dimmer
-          // side. A label class mirror keeps the portaled label opacity in
-          // sync with the edge stroke. Path-overlay edges bypass the depth
-          // dimming so the answer to "how do I get there" reads cleanly
-          // even when the destination is past `maxDepth`.
-          const dFrom = tree.depth.get(sc.from) || 0;
-          const dTo = tree.depth.get(sc.to) || 0;
-          const d = Math.max(dFrom, dTo);
-          const depthClass = d >= 5 ? 'subway-edge-depth-deep' : ('subway-edge-depth-' + d);
-          // Express-shortcut badge: when the shortcut body is more than
-          // one tool call, the agent reaches the destination in a single
-          // graph-edge but multiple actual taps. Show the tap count
-          // inline so humans see "this is graph-distance 1 but 3 taps
-          // under the hood."
-          const tapCount = (sc.toolsList && sc.toolsList.length) || 0;
-          const baseLabel = shortEdgeAction(sc.description, sc.from, sc.to);
-          const label = (tapCount > 1)
-            ? baseLabel + '  ·  ' + tapCount + ' taps'
-            : baseLabel;
-          const classes = [depthClass];
-          if (tapCount > 1) classes.push('subway-edge-express');
-          if (onPath) classes.push('subway-edge-shortest-path');
-          return {
-            id: edgeKey,
-            source: sc.from,
-            target: sc.to,
-            type: 'staggered',
-            className: classes.join(' '),
-            label,
-            data: {
-              straight: true,
-              floating: true,
-              labelOffsetY: 0,
-              labelClass: tapCount > 1 ? 'edge-label-express' : '',
-              // Click the label to open the shortcut inspect modal —
-              // the user can see exactly which actions take them from
-              // sc.from to sc.to.
-              onLabelClick: onInspectShortcut ? () => onInspectShortcut(sc) : null,
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color, width: onPath ? 18 : 16, height: onPath ? 18 : 16 },
-            style: {
-              stroke: color,
-              strokeWidth: onPath ? 5 : 3,
-              strokeOpacity: onPath ? 1 : 0.85,
-            },
-          };
-        });
-        // Trailhead → landing "launch" edges. Drawn dashed in the trailhead
-        // color so they're visually distinct from regular shortcuts.
+        const arr = [];
         trailheads.forEach(th => {
           const tid = TRAILHEAD_NODE_PREFIX + th.id;
           if (!visibleIds.has(tid) || !visibleIds.has(th.to)) return;
@@ -3430,7 +2426,7 @@
           });
         });
         return arr;
-      }, [dedupedEdges, edgeColors, tree.depth, trailheads, visibleIds, onInspectShortcut, pathToDest]);
+      }, [tree.depth, trailheads, visibleIds, pathToDest]);
 
       const onNodeClick = useCallback((evt, node) => {
         // Subway semantics: every click re-roots the focal at that node.
@@ -3513,8 +2509,8 @@
         if (!inst || !container || !focalId) return;
         const t = setTimeout(() => {
           cancelInFlightAnim();
-          // When selected is distinct from focal (e.g. user picked a
-          // waypoint from the side journey panel without re-focusing),
+          // When selected is distinct from focal (e.g. a waypoint selected
+          // in another view before switching here),
           // fly to the selected node at the current zoom. Otherwise the
           // target is the focal itself at world (0, 0), and we also
           // compute a zoom that fits ring 1 in the viewport — so a click
@@ -3635,10 +2631,10 @@
       // structure to keep token usage flat as depth grows: first, a
       // depth-grouped list of *just* waypoint ids (with the immediate
       // parent shown for context past depth 1); then two flat lookup
-      // appendices — one for waypoint descriptions, one for the
-      // shortcuts used along the visible BFS tree. Each unique waypoint
-      // and shortcut appears in the dictionary exactly once regardless
-      // of how many paths cite it.
+      // appendices — one for waypoint descriptions, one for the trailhead
+      // launches used along the visible BFS tree. Each unique waypoint and
+      // launch appears in the dictionary exactly once regardless of how
+      // many paths cite it.
       const agentViewText = useMemo(() => {
         if (!focalId) return '';
         const wpById = new Map();
@@ -3649,7 +2645,6 @@
           if (id.startsWith(TRAILHEAD_NODE_PREFIX)) return '✈ ' + id.slice(TRAILHEAD_NODE_PREFIX.length);
           return id;
         };
-        const shortcutsFromTo = (from, to) => filtered.shortcuts.filter(sc => sc.from === from && sc.to === to);
 
         const out = [];
         out.push('You are at: ' + labelFor(focalId));
@@ -3677,9 +2672,7 @@
               out.push('  ' + labelFor(id));
             } else {
               // Show only the immediate parent with a back-arrow. The
-              // full chain is recoverable from each node's parent link,
-              // and the action labels live in the SHORTCUTS appendix
-              // below — no need to repeat them per path.
+              // full chain is recoverable from each node's parent link.
               const parent = tree.parent.get(id);
               out.push('  ' + labelFor(id) + '  ← ' + labelFor(parent));
             }
@@ -3711,47 +2704,23 @@
         });
         out.push('');
 
-        // Appendix 2: every shortcut that connects two visible nodes
-        // along the BFS tree (i.e. every edge actually involved in a
-        // visible path). One line per unique (from → to) pair.
+        // Appendix 2: every trailhead launch along the BFS tree (i.e. every
+        // launch actually involved in a visible path).
         out.push('---');
-        out.push('SHORTCUTS USED (from → to: action)');
+        out.push('LAUNCHES USED (trailhead → landing)');
         out.push('');
-        const seenSc = new Set();
-        const usedShortcutLines = [];
+        const launchLines = new Set();
         byDepth.forEach(ids => {
           ids.forEach(id => {
             const parent = tree.parent.get(id);
-            if (!parent) return;
-            // Trailhead → landing edges have no shortcut record.
-            if (parent.startsWith(TRAILHEAD_NODE_PREFIX)) {
-              const key = 'th::' + parent + '||' + id;
-              if (seenSc.has(key)) return;
-              seenSc.add(key);
-              usedShortcutLines.push(
-                '  ' + labelFor(parent) + ' → ' + id + ': launch (trailhead)'
-              );
-              return;
-            }
-            const scs = shortcutsFromTo(parent, id);
-            scs.forEach(sc => {
-              const key = 'sc::' + sc.id;
-              if (seenSc.has(key)) return;
-              seenSc.add(key);
-              const taps = (sc.toolsList && sc.toolsList.length) || 1;
-              const tapNote = taps > 1 ? ' [' + taps + ' taps]' : '';
-              const action = sc.description || sc.id;
-              usedShortcutLines.push(
-                '  ' + labelFor(sc.from) + ' → ' + labelFor(sc.to) + ': ' + action + tapNote
-              );
-            });
+            if (!parent || !parent.startsWith(TRAILHEAD_NODE_PREFIX)) return;
+            launchLines.add('  ' + labelFor(parent) + ' → ' + id);
           });
         });
-        usedShortcutLines.sort();
-        usedShortcutLines.forEach(line => out.push(line));
+        [...launchLines].sort().forEach(line => out.push(line));
 
         return out.join('\n');
-      }, [focalId, maxDepth, tree.depth, tree.parent, filtered.shortcuts, filtered.waypoints, filtered.trailheads]);
+      }, [focalId, maxDepth, tree.depth, tree.parent, filtered.waypoints, filtered.trailheads]);
 
       // Bubble the live agent text up to App so the unified right-side
       // panel can render it without us owning a panel here in SubwayView.
@@ -4074,106 +3043,6 @@
     }
 
     /* ============================================================================
-       REPORT VIEW — auto-generated user-flow docs
-       ============================================================================ */
-    function ReportView({ filtered, journeys, onSelectWaypoint }) {
-      const wpById = useMemo(
-        () => new Map(filtered.waypoints.map(w => [w.id, w])),
-        [filtered.waypoints],
-      );
-      const targets = [...new Set(filtered.waypoints.map(w => w.id.split('/')[0]))];
-      const titleScope = targets.length === 1 ? targets[0] : 'app';
-
-      return React.createElement('div', { className: 'report-view' },
-        React.createElement('h1', { className: 'report-title' }, titleScope + ' user flows'),
-        React.createElement('p', { className: 'report-subtitle' },
-          'Auto-derived from the waypoint navigation graph: every reachable (trailhead → screen) pair across ',
-          React.createElement('strong', null, filtered.waypoints.length + ' screen' + (filtered.waypoints.length === 1 ? '' : 's')),
-          ', generated from your test corpus and refreshed on every run. Use these for UX teardown work, QA coverage planning, and AI agent navigation context.',
-        ),
-
-        // Table of contents
-        journeys.length > 0 ? React.createElement('div', { className: 'report-toc' },
-          journeys.slice(0, 12).map(j =>
-            React.createElement('div', {
-              key: j.id, className: 'report-toc-item', title: j.destinationLabel,
-            }, (j.num + '').padStart(2, '0') + '  ' + j.destinationId)
-          ),
-        ) : null,
-
-        // Cards
-        React.createElement('div', { className: 'report-grid' },
-          journeys.map(j => {
-            const screensInPath = j.path.map(id => wpById.get(id)).filter(Boolean);
-            return React.createElement('div', { key: j.id, className: 'report-card' },
-              React.createElement('div', { className: 'meta-row' },
-                React.createElement('span', { className: 'meta-num' }, (j.num + '').padStart(2, '0')),
-                React.createElement('span', null, 'Path'),
-                React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
-                React.createElement('span', null, j.screens + ' screen' + (j.screens === 1 ? '' : 's')),
-              ),
-              React.createElement('h3', null, j.destinationLabel),
-              React.createElement('p', { className: 'description' },
-                'From ' + j.trailheadLabel + ' → ' + j.destinationId + '. ' +
-                'Walks ' + j.screens + ' mapped app ' + (j.screens === 1 ? 'screen' : 'screens') + '. ' +
-                'Use this path for mobile UX teardown work, QA coverage planning, and AI agent navigation context.',
-              ),
-              screensInPath.length > 0 ? React.createElement('div', { className: 'screens-strip' },
-                screensInPath.map((wp, i) =>
-                  React.createElement('div', {
-                    key: i, className: 'strip-screen',
-                    onClick: () => onSelectWaypoint(wp.id),
-                  },
-                    wp.screenshotDataUri
-                      ? React.createElement('img', { src: wp.screenshotDataUri, alt: wp.id })
-                      : React.createElement('div', { className: 'strip-no-screenshot' }, '(no screenshot)'),
-                    React.createElement('div', { className: 'strip-label' }, wp.id),
-                  ),
-                ),
-              ) : null,
-              React.createElement('div', { className: 'id-pills' },
-                screensInPath.map((wp, i) =>
-                  React.createElement('div', { key: i, className: 'id-pill' }, wp.id)
-                ),
-              ),
-            );
-          }),
-        ),
-      );
-    }
-
-    /* ============================================================================
-       SIDEBAR — User Journeys list
-       ============================================================================ */
-    function JourneysSidebar({ journeys, selectedJourneyId, onSelectJourney, mode }) {
-      // The sidebar contributes to MAP and REPORT modes. SCREENS is the gallery
-      // view — a journeys panel next to it would compete visually for no gain.
-      if (mode === 'screens') return null;
-      return React.createElement('aside', { className: 'sidebar' },
-        React.createElement('div', { className: 'sidebar-header' },
-          React.createElement('h2', null, 'User Journeys'),
-          React.createElement('div', { className: 'sub' }, journeys.length + ' path' + (journeys.length === 1 ? '' : 's') + ' discovered'),
-        ),
-        React.createElement('div', { className: 'sidebar-list' },
-          journeys.map(j =>
-            React.createElement('div', {
-              key: j.id,
-              className: 'journey-item' + (selectedJourneyId === j.id ? ' active' : ''),
-              onClick: () => onSelectJourney(j),
-            },
-              React.createElement('div', { className: 'journey-row1' },
-                React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
-                React.createElement('span', { className: 'journey-screens' }, j.screens + ' scr'),
-              ),
-              React.createElement('div', { className: 'journey-row2' }, j.destinationLabel),
-              React.createElement('div', { className: 'journey-row3' }, 'via ' + j.trailheadLabel),
-            )
-          ),
-        ),
-      );
-    }
-
-    /* ============================================================================
        DETAIL PANEL — right-side click-to-explore
        ============================================================================ */
     /** Body-only version of DetailPanel — no outer aside, no header bar.
@@ -4181,7 +3050,7 @@
      *  × close), so this component just renders the structured detail
      *  sections inline. The waypoint title moves into the body's first
      *  section since the tabs replace the title bar. */
-    function DetailPanelInline({ waypoint, incoming, outgoing, trailheads, onSelectWaypoint, allWaypoints }) {
+    function DetailPanelInline({ waypoint, trailheads, onSelectWaypoint, allWaypoints }) {
       if (!waypoint) return null;
       return React.createElement('div', { className: 'detail-content' },
         React.createElement('div', { className: 'detail-inline-title' },
@@ -4237,49 +3106,13 @@
               ),
             )
           : null,
-        incoming.length > 0
-          ? React.createElement('div', { className: 'detail-section' },
-              React.createElement('h4', null, 'Incoming shortcuts'),
-              React.createElement('div', { className: 'detail-edges' },
-                incoming.map(sc =>
-                  React.createElement('div', {
-                    key: sc.id, className: 'detail-edge',
-                    onClick: () => onSelectWaypoint(sc.from),
-                  },
-                    React.createElement('span', { className: 'target-id' }, sc.from),
-                    React.createElement('span', { className: 'arrow' }, '→'),
-                    React.createElement('span', { className: 'target-id' }, 'here'),
-                    sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
-                  )
-                ),
-              ),
-            )
-          : null,
-        outgoing.length > 0
-          ? React.createElement('div', { className: 'detail-section' },
-              React.createElement('h4', null, 'Outgoing shortcuts'),
-              React.createElement('div', { className: 'detail-edges' },
-                outgoing.map(sc =>
-                  React.createElement('div', {
-                    key: sc.id, className: 'detail-edge',
-                    onClick: () => onSelectWaypoint(sc.to),
-                  },
-                    React.createElement('span', { className: 'target-id' }, 'here'),
-                    React.createElement('span', { className: 'arrow' }, '→'),
-                    React.createElement('span', { className: 'target-id' }, sc.to),
-                    sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
-                  )
-                ),
-              ),
-            )
-          : null,
         waypoint.sourceLabel
           ? React.createElement('div', { className: 'detail-source' }, waypoint.sourceLabel)
           : null,
       );
     }
 
-    function DetailPanel({ waypoint, incoming, outgoing, trailheads, onClose, onSelectWaypoint, allWaypoints }) {
+    function DetailPanel({ waypoint, trailheads, onClose, onSelectWaypoint, allWaypoints }) {
       if (!waypoint) return null;
       const wpById = new Map(allWaypoints.map(w => [w.id, w]));
       return React.createElement('aside', { className: 'detail-panel' },
@@ -4349,42 +3182,6 @@
                 ),
               )
             : null,
-          incoming.length > 0
-            ? React.createElement('div', { className: 'detail-section' },
-                React.createElement('h4', null, 'Incoming shortcuts'),
-                React.createElement('div', { className: 'detail-edges' },
-                  incoming.map(sc =>
-                    React.createElement('div', {
-                      key: sc.id, className: 'detail-edge',
-                      onClick: () => onSelectWaypoint(sc.from),
-                    },
-                      React.createElement('span', { className: 'target-id' }, sc.from),
-                      React.createElement('span', { className: 'arrow' }, '→'),
-                      React.createElement('span', { className: 'target-id' }, 'here'),
-                      sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
-                    )
-                  ),
-                ),
-              )
-            : null,
-          outgoing.length > 0
-            ? React.createElement('div', { className: 'detail-section' },
-                React.createElement('h4', null, 'Outgoing shortcuts'),
-                React.createElement('div', { className: 'detail-edges' },
-                  outgoing.map(sc =>
-                    React.createElement('div', {
-                      key: sc.id, className: 'detail-edge',
-                      onClick: () => onSelectWaypoint(sc.to),
-                    },
-                      React.createElement('span', { className: 'target-id' }, 'here'),
-                      React.createElement('span', { className: 'arrow' }, '→'),
-                      React.createElement('span', { className: 'target-id' }, sc.to),
-                      sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
-                    )
-                  ),
-                ),
-              )
-            : null,
           waypoint.sourceLabel
             ? React.createElement('div', { className: 'detail-source' }, waypoint.sourceLabel)
             : null,
@@ -4396,16 +3193,11 @@
        APP
        ============================================================================ */
     function App({ data }) {
-      const [mode, setMode] = useState('map');                  // 'map' | 'subway' | 'screens' | 'report'
+      const [mode, setMode] = useState('map');                  // 'map' | 'subway' | 'screens'
       const [selectedTarget, setSelectedTarget] = useState(null);
       const [selectedPlatform, setSelectedPlatform] = useState(null);
       const [selectedWaypoint, setSelectedWaypoint] = useState(null);
-      const [selectedJourneyId, setSelectedJourneyId] = useState(null);
       const [theme, setTheme] = useState('dark');
-      // Shortcut inspect modal — click an edge label in any view to peek
-      // at the shortcut's body (the actions it performs to get from `from`
-      // to `to`). Set to a shortcut object when open, null when closed.
-      const [inspectShortcut, setInspectShortcut] = useState(null);
 
       // Right-side panel: collapsible dock with two tabs (Detail / Agent).
       // The user can collapse it via the × on the panel; a thin button on
@@ -4483,45 +3275,22 @@
         };
         const waypoints = data.waypoints.filter(matches);
         const wpIds = new Set(waypoints.map(wp => wp.id));
-        const shortcuts = data.shortcuts.filter(sc => wpIds.has(sc.from) && wpIds.has(sc.to));
         const trailheads = data.trailheads.filter(th => wpIds.has(th.to));
-        return { waypoints, shortcuts, trailheads, generatedNote: data.generatedNote };
+        return { waypoints, trailheads, generatedNote: data.generatedNote };
       }, [data, selectedTarget, selectedPlatform]);
-
-      const journeys = useMemo(
-        () => deriveJourneys(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
-        [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
-      );
 
       // ----- detail-panel data -----
       const selectedWaypointObj = useMemo(
         () => selectedWaypoint ? data.waypoints.find(w => w.id === selectedWaypoint) : null,
         [selectedWaypoint, data.waypoints],
       );
-      const incomingShortcuts = useMemo(
-        () => selectedWaypoint ? data.shortcuts.filter(sc => sc.to === selectedWaypoint) : [],
-        [selectedWaypoint, data.shortcuts],
-      );
-      const outgoingShortcuts = useMemo(
-        () => selectedWaypoint ? data.shortcuts.filter(sc => sc.from === selectedWaypoint) : [],
-        [selectedWaypoint, data.shortcuts],
-      );
       const incomingTrailheads = useMemo(
         () => selectedWaypoint ? data.trailheads.filter(th => th.to === selectedWaypoint) : [],
         [selectedWaypoint, data.trailheads],
       );
 
-      // ----- selecting a journey jumps to its destination on the map -----
-      const onSelectJourney = useCallback((j) => {
-        setSelectedJourneyId(j.id);
-        setSelectedWaypoint(j.destinationId);
-        // If we're not in MAP mode, switching there is more useful than staying.
-        if (mode === 'screens') setMode('map');
-      }, [mode]);
-
       // ----- header strings -----
       const totalWaypoints = data.waypoints.length;
-      const totalShortcuts = data.shortcuts.length;
       const totalTrailheads = data.trailheads.length;
       const scopeLabel = [selectedTarget, selectedPlatform].filter(Boolean).join(' / ') || 'all';
 
@@ -4541,7 +3310,7 @@
             React.createElement('button', {
               className: 'mode-button' + (mode === 'subway' ? ' active' : ''),
               onClick: () => setMode('subway'),
-              title: 'Concentric, focal-centered view of the shortcut graph',
+              title: 'Concentric, focal-centered view of the waypoint graph',
             }, 'Subway'),
             React.createElement('button', {
               className: 'mode-button' + (mode === 'screens' ? ' active' : ''),
@@ -4549,10 +3318,6 @@
             }, 'Screens',
               React.createElement('span', { className: 'count' }, filtered.waypoints.length),
             ),
-            React.createElement('button', {
-              className: 'mode-button' + (mode === 'report' ? ' active' : ''),
-              onClick: () => setMode('report'),
-            }, 'Report'),
           ),
           React.createElement('div', { className: 'header-counts' },
             React.createElement('span', { className: 'count-pair' },
@@ -4560,12 +3325,8 @@
               'screens',
             ),
             React.createElement('span', { className: 'count-pair' },
-              React.createElement('span', { className: 'num' }, journeys.length),
-              'paths',
-            ),
-            React.createElement('span', { className: 'count-pair' },
-              React.createElement('span', { className: 'num' }, filtered.shortcuts.length),
-              'shortcuts',
+              React.createElement('span', { className: 'num' }, filtered.trailheads.length),
+              'trailheads',
             ),
           ),
           React.createElement('button', {
@@ -4634,39 +3395,20 @@
 
         // ---- Main content area ----
         React.createElement('div', { className: 'main' },
-          // The journeys sidebar is only useful in modes where you'd want
-          // a quick "jump to a discovered destination" affordance — i.e.
-          // Screens and Report. MAP retired it (the dagre tree already
-          // shows the routes), and SUBWAY replaces it with the inline
-          // Agent-view panel that lives inside SubwayView itself.
-          (mode === 'screens' || mode === 'report')
-            ? React.createElement(JourneysSidebar, {
-                journeys,
-                selectedJourneyId,
-                onSelectJourney,
-                mode,
-              })
-            : null,
           React.createElement('div', { className: 'canvas-area' },
             mode === 'map' ? React.createElement(MapView, {
               filtered, selectedWaypoint,
               onSelectWaypoint: setSelectedWaypoint,
-              onInspectShortcut: setInspectShortcut,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
             }) : null,
             mode === 'subway' ? React.createElement(SubwayView, {
-              filtered, journeys, selectedWaypoint,
+              filtered, selectedWaypoint,
               onSelectWaypoint: setSelectedWaypoint,
-              onInspectShortcut: setInspectShortcut,
               onAgentTextChange: setAgentViewText,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
             }) : null,
             mode === 'screens' ? React.createElement(ScreensView, {
               filtered, selectedWaypoint,
-              onSelectWaypoint: setSelectedWaypoint,
-            }) : null,
-            mode === 'report' ? React.createElement(ReportView, {
-              filtered, journeys,
               onSelectWaypoint: setSelectedWaypoint,
             }) : null,
           ),
@@ -4676,7 +3418,7 @@
           // Agent body shows the LLM prompt text from SubwayView. When
           // closed, a thin "‹" button on the right edge brings it back.
           // Auto-opens once on the user's first waypoint selection.
-          (mode !== 'report' && rightPanelOpen) ? React.createElement('aside', { className: 'detail-panel right-panel-dock' },
+          rightPanelOpen ? React.createElement('aside', { className: 'detail-panel right-panel-dock' },
             React.createElement('div', { className: 'right-panel-tabs' },
               React.createElement('button', {
                 className: 'panel-tab' + (rightPanelTab === 'detail' ? ' active' : ''),
@@ -4709,8 +3451,6 @@
               : (selectedWaypoint && selectedWaypointObj
                   ? React.createElement(DetailPanelInline, {
                       waypoint: selectedWaypointObj,
-                      incoming: incomingShortcuts,
-                      outgoing: outgoingShortcuts,
                       trailheads: incomingTrailheads,
                       allWaypoints: data.waypoints,
                       onSelectWaypoint: setSelectedWaypoint,
@@ -4723,126 +3463,12 @@
           // Right-edge "show panel" button — visible only when the panel
           // is collapsed. Single click reopens the panel at whichever tab
           // was last active.
-          (mode !== 'report' && !rightPanelOpen) ? React.createElement('button', {
+          !rightPanelOpen ? React.createElement('button', {
             className: 'right-panel-show-btn',
             onClick: () => setRightPanelOpen(true),
             title: 'Show panel',
             'aria-label': 'Show panel',
           }, '‹') : null,
-        ),
-        // Shortcut inspect modal — overlays everything when open. Closes
-        // on backdrop click, X button, or Escape (handled inside).
-        inspectShortcut ? React.createElement(ShortcutInspectModal, {
-          shortcut: inspectShortcut,
-          onClose: () => setInspectShortcut(null),
-        }) : null,
-      );
-    }
-
-    /** Format a JsonObject (typed as a plain JS object after parsing) into
-        YAML-ish text for the inspect modal. Single-key wrapper objects
-        like `{"tapElement": {...}}` are common — they render as
-        `tapElement:` followed by indented children, mirroring how the
-        shortcut would look in its source `.shortcut.yaml` file. */
-    function formatYamlish(obj, indent) {
-      indent = indent || 0;
-      const pad = '  '.repeat(indent);
-      if (obj === null || obj === undefined) return pad + 'null';
-      if (typeof obj === 'string') return JSON.stringify(obj);
-      if (typeof obj !== 'object') return String(obj);
-      if (Array.isArray(obj)) {
-        if (obj.length === 0) return '[]';
-        return obj.map(item => {
-          if (item !== null && typeof item === 'object') {
-            const inner = formatYamlish(item, indent + 1);
-            // Replace the first line's leading whitespace with `- ` so the
-            // dash anchors the array element at the parent indent.
-            const lines = inner.split('\n');
-            lines[0] = '  '.repeat(indent) + '- ' + lines[0].slice((indent + 1) * 2);
-            return lines.join('\n');
-          }
-          const valStr = typeof item === 'string' ? JSON.stringify(item) : String(item);
-          return pad + '- ' + valStr;
-        }).join('\n');
-      }
-      const entries = Object.entries(obj);
-      if (entries.length === 0) return pad + '{}';
-      return entries.map(([k, v]) => {
-        if (v !== null && typeof v === 'object') {
-          if (Array.isArray(v) && v.length === 0) return pad + k + ': []';
-          if (!Array.isArray(v) && Object.keys(v).length === 0) return pad + k + ': {}';
-          return pad + k + ':\n' + formatYamlish(v, indent + 1);
-        }
-        const valStr = typeof v === 'string' ? JSON.stringify(v) : String(v);
-        return pad + k + ': ' + valStr;
-      }).join('\n');
-    }
-
-    function ShortcutInspectModal({ shortcut, onClose }) {
-      // Close on Escape — registered via useEffect so we don't re-bind
-      // every render.
-      useEffect(() => {
-        const handler = (e) => { if (e.key === 'Escape') onClose(); };
-        window.addEventListener('keydown', handler);
-        return () => window.removeEventListener('keydown', handler);
-      }, [onClose]);
-      const onBackdropClick = useCallback((e) => {
-        // Only close if the click landed on the backdrop, not bubbled up
-        // from inside the modal panel.
-        if (e.target === e.currentTarget) onClose();
-      }, [onClose]);
-      const hasTools = shortcut.toolsList && shortcut.toolsList.length > 0;
-      const variantSuffix = shortcut.variant ? ' · variant: ' + shortcut.variant : '';
-      return React.createElement('div',
-        { className: 'shortcut-modal-overlay', onClick: onBackdropClick },
-        React.createElement('div', { className: 'shortcut-modal' },
-          React.createElement('div', { className: 'shortcut-modal-header' },
-            React.createElement('div', null,
-              React.createElement('div', { className: 'shortcut-modal-title' }, 'Shortcut · ' + shortcut.id),
-              React.createElement('div', { className: 'shortcut-modal-route' },
-                shortcut.from, ' ',
-                React.createElement('span', { className: 'shortcut-modal-arrow' }, '→'), ' ',
-                shortcut.to,
-                variantSuffix,
-              ),
-              shortcut.description
-                ? React.createElement('div', { className: 'shortcut-modal-description' }, shortcut.description)
-                : null,
-            ),
-            React.createElement('button', {
-              className: 'shortcut-modal-close',
-              onClick: onClose,
-              title: 'Close (Esc)',
-            }, '×'),
-          ),
-          React.createElement('div', { className: 'shortcut-modal-body' },
-            hasTools
-              ? React.createElement(React.Fragment, null,
-                  React.createElement('div', { className: 'shortcut-modal-section-label' },
-                    shortcut.toolsList.length + ' step' + (shortcut.toolsList.length === 1 ? '' : 's'),
-                  ),
-                  ...shortcut.toolsList.map((tool, idx) =>
-                    React.createElement('div', { key: idx, className: 'shortcut-step' },
-                      React.createElement('div', { className: 'shortcut-step-num' }, idx + 1),
-                      React.createElement('pre', { className: 'shortcut-step-body' }, formatYamlish(tool)),
-                    ),
-                  ),
-                )
-              : shortcut.toolClass
-                ? React.createElement('div', { className: 'shortcut-modal-native' },
-                    React.createElement('div', { className: 'shortcut-modal-section-label' }, 'Native (Kotlin) tool'),
-                    React.createElement('code', null, shortcut.toolClass),
-                    React.createElement('div', { className: 'shortcut-modal-native-note' },
-                      'This shortcut runs Kotlin code; its body isn\'t introspectable from YAML.',
-                    ),
-                  )
-                : React.createElement('div', { className: 'shortcut-modal-native' },
-                    React.createElement('div', { className: 'shortcut-modal-section-label' }, 'No body'),
-                    React.createElement('div', { className: 'shortcut-modal-native-note' },
-                      'No tool steps or class declared for this shortcut.',
-                    ),
-                  ),
-          ),
         ),
       );
     }

@@ -24,8 +24,10 @@ class MetadataSerializationTest {
         - verify: Verify text "Hello World" is visible
           recording:
             android:
-              - assertVisibleWithText:
-                  text: "Hello World"
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: "Hello World"
     """.trimIndent()
 
     val trail = trailblazeYaml.decodeUnifiedTrail(yaml)
@@ -47,8 +49,10 @@ class MetadataSerializationTest {
         - verify: Verify text "Hello World" is visible
           recording:
             android:
-              - assertVisibleWithText:
-                  text: "Hello World"
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: "Hello World"
     """.trimIndent()
 
     val trail = trailblazeYaml.decodeUnifiedTrail(yaml)

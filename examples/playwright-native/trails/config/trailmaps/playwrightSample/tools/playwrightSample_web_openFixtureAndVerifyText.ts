@@ -5,30 +5,30 @@ import {
   PLAYWRIGHT_SAMPLE_HOME,
 } from "./playwrightSample_shared";
 
-const DEFAULT_TEXT = "Trailblaze Test Fixture";
+const DEFAULT_HEADING = "Trailblaze Test Fixture";
 
 export interface OpenFixtureAndVerifyTextArgs {
   /** Sample-app fixture path (relative to repo root). */
   relativePath?: string;
-  /** Visible text to assert on the loaded page. */
-  text?: string;
+  /** Heading to assert on the loaded page. */
+  heading?: string;
 }
 
 /**
- * Open the Playwright sample page and verify visible text.
+ * Open the Playwright sample page and verify its heading.
  */
 export const playwrightSample_web_openFixtureAndVerifyText = trailblaze.tool<OpenFixtureAndVerifyTextArgs>(
   { supportedPlatforms: ["web"], requiresContext: true },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, PLAYWRIGHT_SAMPLE_HOME);
-    const text = nonEmptyString(args.text, DEFAULT_TEXT);
+    const heading = nonEmptyString(args.heading, DEFAULT_HEADING);
 
     await ctx.tools.web_navigate({
       action: "GOTO",
       url: relativePath,
     });
-    await ctx.tools.web_verifyTextVisible({ text });
+    await ctx.tools.web_verifyElementVisible({ ref: `heading "${heading}"` });
 
-    return `Opened ${relativePath} and verified "${text}".`;
+    return `Opened ${relativePath} and verified heading "${heading}".`;
   },
 );
