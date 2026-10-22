@@ -74,6 +74,33 @@ class CliExecEndpointTest {
     }
   }
 
+  @Test fun `a request from a web page is refused before the command runs`() = testApplication {
+    var ran = false
+    application {
+      routing {
+        CliExecEndpoint.register(this) {
+          ran = true
+          CliExecResponse(stdout = "secret", stderr = "", exitCode = 0, forwarded = true)
+        }
+      }
+    }
+    val browserHeaders = listOf(
+      HttpHeaders.Origin to "https://example.com",
+      HttpHeaders.Origin to "http://localhost:52525",
+      "Sec-Fetch-Site" to "cross-site",
+    )
+    for ((name, value) in browserHeaders) {
+      val response = client.post(CliEndpoints.EXEC_V2) {
+        header(name, value)
+        contentType(ContentType.Text.Plain)
+        setBody("""{"args":["selector","suggest","--batch","/etc/hosts"]}""")
+      }
+      assertEquals(HttpStatusCode.Forbidden, response.status, "$name: $value")
+      assertFalse("secret" in response.bodyAsText(), "$name: $value")
+    }
+    assertFalse(ran, "the command must not run for a browser request")
+  }
+
   @Test fun `success path deserializes env field and surfaces it to the callback`() = testApplication {
     // Pins the wire contract for env forwarding: the bash shim sends the
     // user's allowlisted shell env vars (currently just TRAILBLAZE_DEVICE)

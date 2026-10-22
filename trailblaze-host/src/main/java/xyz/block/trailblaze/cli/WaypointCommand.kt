@@ -17,10 +17,7 @@ import java.util.concurrent.Callable
     WaypointLocateCommand::class,
     WaypointValidateCommand::class,
     WaypointCaptureExampleCommand::class,
-    // Translate one element ref (as shown in `trailblaze snapshot`) into a list of
-    // selector candidates the author can paste into a *.waypoint.yaml. Wraps the
-    // existing TrailblazeNodeSelectorGenerator strategies — same logic the runtime
-    // uses for tap recordings, repurposed for waypoint authoring.
+    // Hidden: renamed to `trailblaze selector suggest`; this name keeps working.
     WaypointSuggestSelectorCommand::class,
     // Mechanical Maestro→accessibility selector migration. Walks a trail YAML, pairs each
     // selector-bearing tool with the corresponding session log step, runs the deterministic

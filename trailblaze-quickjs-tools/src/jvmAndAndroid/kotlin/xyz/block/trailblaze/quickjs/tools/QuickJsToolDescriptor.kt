@@ -48,13 +48,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
  */
 internal fun RegisteredToolSpec.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor {
   val description = (spec[SPEC_KEY_DESCRIPTION] as? JsonPrimitive)?.contentOrNull
-  val inputSchema = spec[SPEC_KEY_INPUT_SCHEMA] as? JsonObject
+  val schemaObject = spec[SPEC_KEY_INPUT_SCHEMA] as? JsonObject
     ?: return TrailblazeToolDescriptor(name = name, description = description)
 
   // Try the JSON Schema shape first; on a deserialization mismatch (e.g. `properties` is
   // not an object map, `required` is not a list of strings) fall through to flat-shape
   // parsing. The data class itself defines the field names — no string keys here.
-  val jsonSchema = inputSchema.tryDecodeAsJsonSchema()
+  val jsonSchema = schemaObject.tryDecodeAsJsonSchema()
   return if (jsonSchema != null && jsonSchema.isObjectShape()) {
     val all = jsonSchema.properties.orEmpty().toParameterDescriptors()
     val requiredNames = jsonSchema.required.toSet()
@@ -63,11 +63,15 @@ internal fun RegisteredToolSpec.toTrailblazeToolDescriptor(): TrailblazeToolDesc
       description = description,
       requiredParameters = all.filter { it.name in requiredNames },
       optionalParameters = all.filter { it.name !in requiredNames },
-    )
+    ).apply {
+      // The full schema keeps array `items` / nested `properties` for the LLM-facing projection
+      // (`TrailblazeKoogTool.toKoogToolDescriptor`); the flat parameter split above can't carry them.
+      this.inputSchema = schemaObject.takeIf { all.isNotEmpty() }
+    }
   } else {
     // Flat author shape: every top-level key is a parameter; treat all as required since
     // there's no `required:` to partition by.
-    val all = inputSchema.toParameterDescriptors()
+    val all = schemaObject.toParameterDescriptors()
     TrailblazeToolDescriptor(
       name = name,
       description = description,

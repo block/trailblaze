@@ -699,21 +699,17 @@ class TrailCommandPlanTrailExecutionTest {
     // Defensive branch: the walk filters `isFile`, so an unreadable file is only reachable when
     // permissions deny the read. Expansion must not crash; the file lands in the legacy bucket
     // and resolves like any recording (here: the dir's only file, picked with a warning).
+    // The read fails through the injected reader: a permission bit doesn't stop root.
     val dir = File(tempFolder.root, "unreadable").apply { mkdirs() }
     val locked = writeUnifiedTrail("locked-scenario.trail.yaml", dir)
-    org.junit.Assume.assumeTrue(
-      "cannot revoke read permission on this platform/user; skipping",
-      locked.setReadable(false) && !locked.canRead(),
-    )
-    try {
-      val capturedErr = ByteArrayOutputStream()
-      val expanded = withCapturedStderr(capturedErr) {
-        TrailCommand.expandTrailFiles(files = listOf(dir))
-      }
-      assertEquals(listOf(locked.canonicalPath), expanded.map { it.canonicalPath })
-    } finally {
-      locked.setReadable(true)
+    val capturedErr = ByteArrayOutputStream()
+    val expanded = withCapturedStderr(capturedErr) {
+      TrailCommand.expandTrailFiles(
+        files = listOf(dir),
+        readText = { throw java.nio.file.AccessDeniedException(it.path) },
+      )
     }
+    assertEquals(listOf(locked.canonicalPath), expanded.map { it.canonicalPath })
   }
 
   @Test

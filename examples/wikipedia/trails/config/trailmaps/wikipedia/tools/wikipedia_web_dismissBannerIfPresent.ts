@@ -50,11 +50,11 @@ export interface DismissBannerIfPresentArgs {
 // plain message.
 //
 // (spec, handler) overload: the inline spec object carries `supportedPlatforms`
-// + `requiresContext` so the runtime `_meta` gates are populated entirely from
+// so the runtime `_meta` gates are populated entirely from
 // the `.ts` source — no need for the YAML descriptor's `_meta:` block. The
 // analyzer extracts the literal at the call site.
 export const wikipedia_web_dismissBannerIfPresent = trailblaze.tool<DismissBannerIfPresentArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (_args, ctx) => {
     if (!(await elementIsVisible(ctx, BANNER_PROBE))) {
       return "No Wikipedia banner visible — nothing to dismiss.";

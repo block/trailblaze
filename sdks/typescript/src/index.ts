@@ -13,6 +13,7 @@ import type { RunOptions } from "./run.js";
 import type {
   TrailblazeToolHandler,
   TrailblazeToolSpec,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
 } from "./tool.js";
@@ -46,8 +47,15 @@ export type {
   SessionEventsScan,
   SessionEventsSince,
 } from "./session-events.js";
-export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export type { HistorySection, MemoryChange, ToolCall, ToolHistory } from "./history.js";
 export { formatToolCalls } from "./history.js";
+export type {
+  SurveyRunFinding,
+  SurveyRunOptions,
+  SurveyRunResult,
+  TrailblazeSurveyMap,
+  TrailblazeSurveys,
+} from "./session-surveys.js";
 export type {
   EventMatch,
   EventMatchValue,
@@ -118,6 +126,7 @@ export type {
   RunOptions,
   TrailblazeToolHandler,
   TrailblazeToolSpec,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
 };
@@ -133,4 +142,4 @@ export type {
  * re-exported here. The SDK's public surface is `tool`, `run`, `fromMeta`, and the type
  * exports above; tests that need internals import from the module's relative path directly.
  */
-export { trailblaze, run, tool } from "./sub-process.js";
+export { trailblaze, run, tool, trailhead } from "./sub-process.js";

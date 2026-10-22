@@ -7,10 +7,10 @@ import { trailblaze } from "@trailblaze/scripting";
 // on `android_adbShell` over the Maestro-shaped `launchApp`, on `am start` over `monkey`,
 // and on the `ctx.target?.resolveAppId({ defaultAppId })` resolution order. `android_adbShell`
 // is dual-mode (`requiresHost: false`), so this tool composes cleanly whether the daemon
-// dispatches it on host or, in the future, on-device. `requiresContext: true` guarantees
-// `ctx`; we still optional-chain `ctx.target` for target-less sessions.
+// dispatches it on host or, in the future, on-device. We
+// optional-chain `ctx.target` for target-less sessions.
 export const contacts_android_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     const appId = ctx.target?.resolveAppId({ defaultAppId: "com.google.android.contacts" });
     if (!appId) {

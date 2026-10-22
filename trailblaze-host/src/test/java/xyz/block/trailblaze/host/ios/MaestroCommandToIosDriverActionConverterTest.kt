@@ -18,6 +18,7 @@ import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
@@ -291,6 +292,17 @@ class MaestroCommandToIosDriverActionConverterTest {
     val cmd = KillAppCommand(appId = "com.example.app")
     val action = assertIs<IosDriverAction.StopApp>(convert(cmd).single())
     assertEquals("com.example.app", action.bundleId)
+  }
+
+  @Test
+  fun `SetPermissionsCommand maps to SetPermissions with its map intact`() {
+    // ios_setPermissions hands the notifications answer to the driver as this command; failing
+    // the batch here would leave the AXe driver unable to answer the alert.
+    val permissions = mapOf("notifications" to "allow", "microphone" to "deny")
+    val cmd = SetPermissionsCommand(appId = "com.example.app", permissions = permissions)
+    val action = assertIs<IosDriverAction.SetPermissions>(convert(cmd).single())
+    assertEquals("com.example.app", action.bundleId)
+    assertEquals(permissions, action.permissions)
   }
 
   @Test

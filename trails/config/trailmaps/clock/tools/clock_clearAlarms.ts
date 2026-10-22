@@ -8,8 +8,7 @@ import { trailblaze } from "@trailblaze/scripting";
 // no relaunch, just a single `pm clear` followed by a force-stop.
 //
 // App-id resolution: `ctx.target?.resolveAppId({ defaultAppId })` — framework-provided
-// method, see clock_android_launchApp.ts for the full priority order. `requiresContext:
-// true` guarantees `ctx`; we still optional-chain `ctx.target` for target-less sessions.
+// method, see clock_android_launchApp.ts for the full priority order. We optional-chain `ctx.target` for target-less sessions.
 //
 // Why force-stop AFTER pm clear? `pm clear <pkg>` resets the app's user data (preferences,
 // databases, files — everything alarms are stored in) but doesn't necessarily kill an
@@ -17,7 +16,7 @@ import { trailblaze } from "@trailblaze/scripting";
 // re-write its state files on its next lifecycle event. Following with `am force-stop`
 // makes sure the next launch comes up against the cleared state.
 export const clock_clearAlarms = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     const appId = ctx.target?.resolveAppId({ defaultAppId: "com.android.deskclock" });
     if (!appId) {

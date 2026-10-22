@@ -38,12 +38,11 @@ export interface WaitForTextInput {
  * Fails if it doesn't appear within `timeoutMs`.
  */
 // The spec MUST be an inline object literal here: this is a descriptor-less tool (no sibling
-// `.yaml`), so the build-time analyzer reads `supportedPlatforms` / `requiresContext` straight off
+// `.yaml`), so the build-time analyzer reads `supportedPlatforms` straight off
 // this literal. A `const SPEC = {…}` reference would be dropped and the tool would advertise
-// un-gated. Composes Android device-control primitives, so it's Android-only and needs a live
-// driver context (`requiresContext: true` guarantees `ctx`).
+// un-gated. Composes Android device-control primitives, so it's Android-only.
 export const sampleapp_waitForText = trailblaze.tool<WaitForTextInput>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (args, ctx) => {
     const text = String(args.text ?? "").trim();
     if (!text) {

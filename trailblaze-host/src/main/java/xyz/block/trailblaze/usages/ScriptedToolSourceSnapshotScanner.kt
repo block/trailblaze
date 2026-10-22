@@ -48,7 +48,7 @@ object ScriptedToolSourceSnapshotScanner {
 
   /** The loader's typed-binding shape: `export const <name> = trailblaze.tool<...>(...)`. */
   private val TYPED_TOOL_BINDING_PATTERN =
-    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.tool\s*[<(]""")
+    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
 
   private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
 

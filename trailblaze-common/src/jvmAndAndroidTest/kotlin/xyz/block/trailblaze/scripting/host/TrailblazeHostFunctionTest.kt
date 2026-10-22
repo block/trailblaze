@@ -64,6 +64,14 @@ internal data class HostTestGreet(val name: String, val shout: Boolean = false) 
   }
 }
 
+/** A second class claiming [HostTestGreet]'s name, as a trailmap declaring a different function would. */
+@Serializable
+@TrailblazeHostFunctionClass(name = "test_greet", result = HostTestGreeting::class)
+internal data class HostTestGreetImpostor(val name: String) : TrailblazeHostFunction<HostTestGreeting> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext): HostTestGreeting =
+    HostTestGreeting("impostor", 8)
+}
+
 @Serializable
 @TrailblazeHostFunctionClass(name = "test_refuse", result = HostTestGreeting::class)
 internal data class HostTestRefuse(val reason: String) : TrailblazeHostFunction<HostTestGreeting> {
@@ -240,7 +248,7 @@ class TrailblazeHostFunctionTest {
       "test_wait",
       "test_blocking_wait",
     )
-    assertThat(registry.resolve("test_greet")?.trailmapId).isEqualTo("greetings")
+    assertThat(registry.resolve("test_greet")?.trailmapIds).isEqualTo(setOf("greetings"))
   }
 
   @Test
@@ -258,6 +266,30 @@ class TrailblazeHostFunctionTest {
       ),
     )
     assertThat(registry.all.keys).containsOnly("test_crash")
+  }
+
+  @Test
+  fun `a function two trailmaps declare with the same class belongs to both`() {
+    val registry = registryOf(
+      mapOf(
+        "greetings/host/test_greet.host.yaml" to descriptor("test_greet", "HostTestGreet"),
+        "salutations/host/test_greet.host.yaml" to descriptor("test_greet", "HostTestGreet"),
+      ),
+    )
+    assertThat(registry.resolve("test_greet")?.trailmapIds).isEqualTo(setOf("greetings", "salutations"))
+  }
+
+  @Test
+  fun `a name two trailmaps declare with different classes keeps the first trailmap's`() {
+    val registry = registryOf(
+      mapOf(
+        "greetings/host/test_greet.host.yaml" to descriptor("test_greet", "HostTestGreet"),
+        "salutations/host/test_greet.host.yaml" to descriptor("test_greet", "HostTestGreetImpostor"),
+      ),
+    )
+    val entry = registry.resolve("test_greet")
+    assertThat(entry?.trailmapIds).isEqualTo(setOf("greetings"))
+    assertThat(entry?.functionClass?.simpleName).isEqualTo("HostTestGreet")
   }
 
   @Test

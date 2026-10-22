@@ -32,6 +32,7 @@ import maestro.orchestra.ScrollUntilVisibleCommand
 import maestro.orchestra.SetAirplaneModeCommand
 import maestro.orchestra.SetLocationCommand
 import maestro.orchestra.SetOrientationCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
@@ -399,6 +400,14 @@ object MaestroYamlSerializer {
     is ClearKeychainCommand -> {
       MaestroCommandYamlNode(
         type = "clearKeychain",
+      )
+    }
+    // COMPLETE
+    is SetPermissionsCommand -> {
+      MaestroCommandYamlNode(
+        type = "setPermissions",
+        stringProps = mutableMapOf<String, String>("appId" to command.appId),
+        mapProps = mutableMapOf("permissions" to command.permissions),
       )
     }
     // COMPLETE

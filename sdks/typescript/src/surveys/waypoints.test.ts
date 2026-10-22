@@ -7,7 +7,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { runSurvey } from "./run-one.js";
 import type { SurveySession } from "./session.js";
+import { survey } from "./survey.js";
 import type { LogRecord } from "./types.js";
 import {
   classifierChain,
@@ -24,6 +26,7 @@ import {
   type HierarchyNode,
   type ScreenSpec,
   type Waypoint,
+  waypointFindings,
 } from "./waypoints.js";
 
 /** The SDK package root, which `source` paths in these tests are relative to. */
@@ -208,7 +211,7 @@ describe("the screens of a session", () => {
   const record = (type: string, timeMs: number, log: Record<string, unknown>): LogRecord =>
     ({ kind: "log", type, index: timeMs, file: `${timeMs}_${type}.json`, timeMs, log } as unknown as LogRecord);
   const session = (records: LogRecord[]): SurveySession =>
-    ({ objectives: { all: () => [] }, logs: { filter: (q: { type: string }) => records.filter((r) => r.type === q.type) } }) as unknown as SurveySession;
+    ({ objectives: { all: () => [] }, trailblazeLogs: { filter: (q: { type: string }) => records.filter((r) => r.type === q.type) } }) as unknown as SurveySession;
 
   test("the runner's terminal snapshot counts as a screen, so the screen the last action produced is not lost", () => {
     const screens = screensOf(
@@ -221,6 +224,15 @@ describe("the screens of a session", () => {
       [A, "TapOnElementCommand", "s1.webp"],
       [B, "final_screenshot", "s2.webp"],
     ]);
+  });
+
+  test("a waypoint finding says it is one, so a legacy survey's spec feature and kind cannot refile it", async () => {
+    const signIn: Waypoint = { id: "app/sign-in", description: "", source: "s", byClassifier: { android: { required: [{ description: "Sign in", selector: { text: "Sign in" } }], forbidden: [] } } };
+    const run = { ...session([record("MaestroDriverLog", 1000, { viewHierarchy: A })]), id: "s1", summary: { platform: "android" } } as unknown as SurveySession;
+    // A survey written before findings were free-form, whose spec defaulted a feature and a kind.
+    const legacy = survey({ feature: "app.screens", kind: "signal" } as never, (s) => waypointFindings(s, [signIn]));
+    const [finding] = await runSurvey(legacy, run, "screens");
+    expect(finding?.data).toMatchObject({ waypoint: "app/sign-in", kind: "waypoint", feature: "app.screens" });
   });
 
   test("a snapshot of the screen the driver just captured is the same visit, not a second one", () => {

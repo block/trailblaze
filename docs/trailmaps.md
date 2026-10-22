@@ -87,7 +87,7 @@ toolsets:                                     # trailmap-level file refs
 | `defaults` | optional | Per-platform defaults this trailmap contributes to consumers via dependency resolution. Same shape as `target.platforms`. Consumers with `dependencies: [<this trailmap>]` inherit any field they leave null. |
 | `toolsets` | optional | List of trailmap-relative paths to `ToolSetYamlConfig` files. |
 | `platforms` | optional (library trailmaps only) | Top-level per-platform config declaring the library's own runtime-registry needs — the toolsets its internal scripted tools dispatch against. Same shape as `target.platforms`. Setting it on a target trailmap is a load-time error (a target's platform config belongs under `target.platforms:`). |
-| `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
+| `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. This is how a TypeScript tool is shared across trailmaps: list it in this trailmap's `target.tools:` or `target.platforms.<p>.tools:`, export it, and every trailmap with this one in its `dependencies:` gets it on the platforms the tool supports. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
 | `waypoints` | deprecated / ignored | Waypoints auto-discover from any `*.waypoint.yaml` under `<trailmap>/waypoints/` (any depth). The field survives in the schema only so legacy manifests still parse — leave it absent. |
 | `trail_validation` | optional | `trail_validation.exempt: "<reason>"` opts this target's `.trail.yaml` recordings out of the default-fatal trail-recording type-validation phase of `trailblaze check` — findings are reported but never fail the build. Blank reason = not exempt. |
 | `trails` | reserved | First-class artifact loading deferred. |
@@ -287,10 +287,14 @@ optional `trailhead` metadata block populated.
 
 ### Trailhead tools
 
-A **trailhead** is a tool with a populated `trailhead: { to }` block — a bootstrap
-primitive that takes the agent from any state to a known waypoint. Always available,
-with no precondition. The framework asserts the agent landed at `to` after the body runs.
-Trailheads are the right shape for "launch the app and reach a logged-in screen",
+A **trailhead** is a bootstrap tool that takes the agent from any state to a known starting
+point. Always available, with no precondition. In TypeScript, define it with
+`trailblaze.trailhead(spec, handler)` in place of `trailblaze.tool`. In YAML, give a
+`*.trailhead.yaml` tool a `trailhead:` block; `trailhead: {}` is enough.
+
+A trailhead needn't name where it lands. The optional `to` names the waypoint it usually lands
+on, and only draws its edge on the waypoint graph: nothing checks it. A trailhead that must fail
+on the wrong screen asserts that in its own body. Trailheads are the right shape for "launch the app and reach a logged-in screen",
 "force-quit and re-sign-in", and similar reset/genesis moves that need to work regardless
 of where the agent currently is.
 
@@ -320,15 +324,12 @@ whatever happened: passed, failed, cancelled, or the trailhead itself threw. It 
 the run left behind and says whether the next trail can reuse this setup.
 
 ```ts
-export const myapp_launchAppSignedIn = trailblaze.tool<{ email: string }>(
+export const myapp_launchAppSignedIn = trailblaze.trailhead<{ email: string }>(
   {
-    trailhead: {
-      to: "myapp/android/home_signed_in",
-      async teardown(args, ctx, trailRun) {
-        for (const n of trailRun.notes) if (n.created) await deleteItem(ctx, n.created.id);
-        if (trailRun.outcome !== "passed") return { reusable: false, reason: "trail did not pass" };
-        return { reusable: true, reason: "home screen", state: { cartItems: await cartCount(ctx) } };
-      },
+    async teardown(args, ctx, trailRun) {
+      for (const n of trailRun.notes) if (n.created) await deleteItem(ctx, n.created.id);
+      if (trailRun.outcome !== "passed") return { reusable: false, reason: "trail did not pass" };
+      return { reusable: true, reason: "home screen", state: { cartItems: await cartCount(ctx) } };
     },
   },
   async (args, ctx) => {
@@ -419,7 +420,7 @@ if (!login.captured) throw new Error("no analytics capture in this session");
   `cursor` passed as `after`.
 - **`count(stream, options)`** returns how many records match, with no payloads.
 - Both say `complete: false`, with an `incompleteReason`, when a capture writing the session's
-  streams recorded losing data, or when the read skipped a record over 1 MB. An absence check ("no 5xx since the mark") should fail then, since
+  streams recorded losing data, or when the read skipped a record over 4 MB. An absence check ("no 5xx since the mark") should fail then, since
   the record it looks for may have been dropped.
 - **`mark(name)`** names this point in every stream. A stream that appears after the mark starts
   after it.
@@ -431,6 +432,9 @@ if (!login.captured) throw new Error("no analytics capture in this session");
 
 Which streams exist depends on what the trailmap captures. Records are returned to the tool
 as captured, so don't log or return payloads that may hold secrets.
+
+A trailmap's [surveys](surveys.md#running-a-survey-mid-trail) run over the same streams, as typed
+functions: `await ctx.surveys.checkoutDone({ waitMs: 15_000 })` returns `{ passed, message, findings }`.
 
 ### Authoring forms
 

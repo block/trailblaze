@@ -55,6 +55,14 @@ object SessionEventsHostFunctions {
    * its cursor back as `after` for the rest.
    */
   const val MAX_RESULT_BYTES: Long = 4_000_000
+
+  /**
+   * The longest record a query reads; a longer one is skipped unread and makes the result
+   * incomplete. As large as the result budget, so any line one result can hold is read: a capture's
+   * routine records (an app's sync response often runs past 1 MB) are not a loss, and memory
+   * stays bounded by the budget, since a page holds at most one record past it.
+   */
+  const val MAX_LINE_BYTES: Int = MAX_RESULT_BYTES.toInt()
   const val MAX_WAIT_MS: Long = 300_000
   private const val FIRST_POLL_MS = 100L
   private const val MAX_POLL_MS = 1_000L
@@ -120,7 +128,7 @@ object SessionEventsHostFunctions {
     // Settled before the stream is looked up, so a bad `since` fails whether or not capture began.
     val startPoint = resolveSince(since, after, context)
 
-    val scanner = EventStreamScanner(EventStreamScanner.needlesFor(matchJson))
+    val scanner = EventStreamScanner(EventStreamScanner.needlesFor(matchJson), maxLineBytes = MAX_LINE_BYTES)
     val stats = EventStreamScanner.Stats()
     var events = mutableListOf<Kept>()
     var matched = 0
@@ -214,7 +222,7 @@ object SessionEventsHostFunctions {
     // Read last, so a loss recorded during the wait still counts. A record over the line cap was
     // skipped unread, so it could have matched: that makes the result incomplete too.
     val skipped = stats.oversized.takeIf { it > 0 }?.let {
-      "$it record(s) over ${EventStreamScanner.DEFAULT_MAX_LINE_BYTES} bytes were skipped unread"
+      "$it record(s) over $MAX_LINE_BYTES bytes were skipped unread"
     }
     // Only losses in the stream read count: another capture's gap says nothing about this one.
     val streamRead = file?.let { SessionEvents.parseFileName(it.name) } ?: stream
@@ -228,6 +236,8 @@ object SessionEventsHostFunctions {
       if (countOnly) put("count", matched) else put("events", JsonArray(events.map { it.record }))
       if (truncated) put("truncated", true)
       put("cursor", offset)
+      // Where a record came from, for evidence: the stream's name hides a device's file suffix.
+      if (file != null && sessionDir != null) put("file", file.relativeTo(sessionDir).invariantSeparatorsPath)
       putJsonObject("scan") {
         put("bytesRead", stats.bytesRead)
         put("lines", stats.lines)
@@ -249,10 +259,7 @@ object SessionEventsHostFunctions {
     val record = TrailEventsHostFunctions.parseRecord(line, context, clockTrack) ?: return null
     if (record.timeMs < start.fromMs) return null
     if (match != null && !match.matches(record.data)) return null
-    return buildJsonObject {
-      put(SessionEvents.TIME_FIELD, record.timeMs)
-      put("data", record.data)
-    }
+    return record.toJson()
   }
 
   /** [line]'s size as UTF-8, what the budget is in, without encoding it. */

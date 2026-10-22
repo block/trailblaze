@@ -123,7 +123,7 @@ class MaestroInteractionToolFactory(
   }
 
   /**
-   * Mirrors `./trailblaze waypoint suggest-selector --at` so the recording UI can offer the
+   * Mirrors `./trailblaze selector suggest --at` so the recording UI can offer the
    * author the same alternatives. The default best-first entry matches what [createTapTool]
    * already emits; subsequent entries let the author swap to a more semantic strategy
    * (e.g. trade `index: 1` for a parent-anchored selector or a className+text combination)

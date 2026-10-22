@@ -54,7 +54,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "llm",
     description = "LLM provider and model (shorthand: provider/model)",
-    validValues = "provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) or 'none' to disable",
+    validValues = "provider/model (e.g., openai/gpt-6-luna, anthropic/claude-sonnet-4-20250514) or 'none' to disable",
     get = { config ->
       if (config.llmProvider == LLM_NONE) LLM_NONE
       else "${config.llmProvider}/${config.llmModel}"
@@ -88,7 +88,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "llm-model",
     description = "LLM model ID",
-    validValues = "e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable",
+    validValues = "e.g., gpt-6-luna, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable",
     get = { config -> config.llmModel },
     set = { config, value ->
       if (value.isLlmNoneValue()) {

@@ -4,6 +4,7 @@ import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -365,10 +366,10 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    * loads the screenshot bytes into memory) only runs on screenshot-bearing logs. The matcher
    * itself does not look at the bytes; this is purely a cheap shortcut.
    *
-   * "Most recent" is decided by the JSON `timestamp` field on each log, NOT by filename: farm
+   * "Most recent" is decided by each log's `timestamp` on the host clock, NOT by filename: farm
    * / CI accessibility-driver runs use hex-hash filenames that don't sort chronologically by
-   * name. Local CLI numeric-prefix filenames (`008_…`) sort correctly under either key, so
-   * timestamp-sort is uniformly correct.
+   * name, and a device whose clock runs ahead of the host's would otherwise rank its older
+   * captures newest (see [SessionLogScreenState.listScreenStateLogsOnHostClock]).
    */
   private fun findMatchingLog(
     def: WaypointDefinition,
@@ -378,13 +379,13 @@ class WaypointCaptureExampleCommand : Callable<Int> {
   ): File? {
     // Display key (session/file) is kept separate from the sort key so the status line stays
     // human-readable while ordering is driven by parsed timestamp.
-    data class Candidate(val file: File, val timestamp: String?, val displayKey: String)
+    data class Candidate(val file: File, val timestamp: Instant?, val displayKey: String)
 
     val matches = mutableListOf<Candidate>()
     var totalScanned = 0
     var totalEligible = 0
     for (sessionDir in sessionDirs) {
-      for (logFile in SessionLogScreenState.listScreenStateLogs(sessionDir)) {
+      for ((logFile, hostTime) in SessionLogScreenState.listScreenStateLogsOnHostClock(sessionDir)) {
         totalScanned++
         if (!SessionLogScreenState.hasScreenshot(logFile)) continue
         totalEligible++
@@ -396,7 +397,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
         if (WaypointMatcher.match(def, screen, target).matched) {
           matches += Candidate(
             file = logFile,
-            timestamp = SessionLogScreenState.readTimestamp(logFile),
+            timestamp = hostTime,
             displayKey = "${sessionDir.name}/${logFile.name}",
           )
         }
@@ -407,10 +408,10 @@ class WaypointCaptureExampleCommand : Callable<Int> {
       Console.error("Hint: drive the device to the screen this waypoint represents, then re-run.")
       return null
     }
-    // ISO-8601 string compare is order-preserving. Files with no readable timestamp fall back
-    // to displayKey so the sort stays total — but they rank below any timestamp-bearing match.
+    // Files with no readable timestamp fall back to displayKey so the sort stays total — but they
+    // rank below any timestamp-bearing match.
     val pick = matches.maxWithOrNull(
-      compareBy({ it.timestamp ?: "" }, { it.displayKey }),
+      compareBy<Candidate, Instant?>(nullsFirst()) { it.timestamp }.thenBy { it.displayKey },
     )!!
     Console.log("Auto-search picked ${pick.displayKey} (${matches.size} candidate(s) across $totalScanned scanned).")
     return pick.file

@@ -32,6 +32,12 @@ abstract class TrailmapToolBundleSpec {
 
   /** The trailmap's scripted-tool source directory — the `tools/` dir containing `*.ts` files. */
   abstract val toolsDir: Property<File>
+
+  /**
+   * The trailmap's survey directory, whose `*.survey.ts` files `ctx.surveys` runs mid-trail. Defaults
+   * to `surveys/` beside [toolsDir]; nothing is packaged when it holds no survey files.
+   */
+  abstract val surveysDir: Property<File>
 }
 
 /**
@@ -143,6 +149,14 @@ internal fun registerTrailmapToolBundle(
   }
 
   registerTrailmapToolDefs(project, extension, id, toolsDir, sdkRoot)
+  registerTrailmapSurveyBundles(
+    project,
+    extension,
+    id,
+    surveysDir = spec.surveysDir.orNull ?: File(toolsDir.parentFile, "surveys"),
+    sdkRoot = sdkRoot,
+    esbuild = esbuild,
+  )
 }
 
 /**
@@ -305,8 +319,8 @@ internal fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String
 /**
  * Returns the in-process scripted-tool `.ts` files in [toolsDir] — a `<name>.ts` qualifies when
  * either a sibling `<name>.yaml`'s runtime isn't `subprocess`, or (descriptor-less) the `.ts`
- * declares the tool inline via `trailblaze.tool<…>(…)`. Excludes `.test.ts`, `.d.ts`, and helper
- * modules that never call `trailblaze.tool`. Sorted for deterministic task registration order.
+ * declares the tool inline via `trailblaze.tool<…>(…)` or `trailblaze.trailhead<…>(…)`. Excludes
+ * `.test.ts`, `.d.ts`, and helper modules that call neither. Sorted for deterministic task registration order.
  *
  * A descriptor-less `.ts` is ALWAYS in-process here. The inline spec can set `runtime`, but reading
  * it needs the analyzer, so a subprocess tool also declares it in a YAML sidecar's
@@ -319,7 +333,7 @@ internal fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String
  */
 internal fun inProcessToolSources(toolsDir: File): List<File> {
   val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
-  val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
+  val toolExport = Regex("""trailblaze\s*\.\s*(?:tool|trailhead)\s*[<(]""")
   if (!toolsDir.isDirectory) return emptyList()
   // Recursive so `tools/<subdir>/`-organized tools are bundled too, preserving subpath to match
   // the on-device resolver (ScriptedToolNameDiscoverer.bundleResourcePathForScript).

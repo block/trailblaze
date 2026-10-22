@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst
 import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
@@ -892,22 +893,9 @@ class AccessibilityDeviceManager(
     }
 
   /**
-   * Resolves a [TrailblazeNodeSelector] against the live accessibility tree using a
-   * filtered-first / unfiltered-fallback strategy.
-   *
-   * Default: resolve against the [filterImportantForAccessibility]-applied tree, which
-   * matches the tree shape the LLM and recording-playback see by default
-   * ([AccessibilityServiceScreenState] applies the same filter when [includeAllElements]
-   * is false). Without this, intermediate non-important nodes (e.g. Compose layout
-   * wrappers) break selectors that use [TrailblazeNodeSelector.containsChild] — the
-   * filtered tree promotes children of dropped nodes up, so the selector's
-   * direct-child relationship survives, but the unfiltered tree shows the target as
-   * a grandchild via the wrapper.
-   *
-   * Fallback: if the filtered resolution yields [TrailblazeNodeSelectorResolver.ResolveResult.NoMatch],
-   * try the unfiltered tree. This preserves the `--all` / [SnapshotDetail.ALL_ELEMENTS]
-   * escape hatch — selectors generated from those captures can target nodes that are
-   * themselves `isImportantForAccessibility=false`, so they'd never match the filtered tree.
+   * Resolves a [TrailblazeNodeSelector] against the live accessibility tree, filtered-first with
+   * an unfiltered fallback — see [resolveImportantForAccessibilityFirst], which
+   * `trailblaze selector match` shares so a capture answers the way the device does.
    */
   private fun resolveSelectorWithFallback(
     baseTree: TrailblazeNode,
@@ -919,15 +907,7 @@ class AccessibilityDeviceManager(
     // Which selector a five-second poll was chasing is the first thing you want from the profile.
     args = if (TrailblazeTracer.isVerbose) mapOf("selector" to selector.description()) else emptyMap(),
   ) {
-    val filtered = baseTree.filterImportantForAccessibility()
-    val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector, templateContext)
-    if (filteredResult !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
-      return@traceDetail filteredResult
-    }
-    // Selector did not match in the default (filtered) tree shape. Try the unfiltered
-    // tree to support [SnapshotDetail.ALL_ELEMENTS]-generated selectors that target
-    // non-important nodes.
-    TrailblazeNodeSelectorResolver.resolve(baseTree, selector, templateContext)
+    resolveImportantForAccessibilityFirst(baseTree, selector, templateContext)
   }
 
   // --- Private helpers ---

@@ -1,14 +1,14 @@
 // Public data model for session surveys.
 //
-// A survey reads one finished session — its Trailblaze log records plus every captured sidecar
-// (network requests, analytics streams, device log, visible screen text) — and reports which known
-// features that session exercised, each backed by the concrete records that prove it. This file
-// holds only the shapes; `session.ts` loads them and `survey.ts` defines the authoring surface.
+// A survey is a named check over one session — its Trailblaze log records plus every captured
+// sidecar (network requests, analytics streams, device log, visible screen text). It reports
+// whatever it finds, each finding backed by the concrete records that prove it. This file holds
+// only the shapes; `session.ts` loads them and `survey.ts` defines the authoring surface.
 
 import type { TrailblazeLog, TrailblazeToolLog } from "../generated/trailrunner-dtos.js";
 
 /** Where a piece of evidence came from. Drives how a report renders it. */
-import type { FootprintSpec } from "./survey.js";
+import type { FindingSpec } from "./survey.js";
 
 export type RecordKind =
   | "network"
@@ -94,11 +94,14 @@ export interface AnalyticsEvent extends SessionRecord {
   raw: unknown;
 }
 
-/** One row of any `events/<stream>.ndjson` sidecar, undecoded. */
-export interface StreamEvent extends SessionRecord {
+/**
+ * One row of any `events/<stream>.ndjson` sidecar, undecoded. `T` is the shape its reader says the
+ * row has (see `SurveySession.stream`); nothing checks it.
+ */
+export interface StreamEvent<T = unknown> extends SessionRecord {
   kind: "event";
   stream: string;
-  data: unknown;
+  data: T;
 }
 
 /** One Trailblaze log record with its parsed payload. */
@@ -202,58 +205,35 @@ export interface SessionSummary {
   hasDeviceLog: boolean;
 }
 
-/** What a survey hands back for one match. The runner fills in `survey` and `session`. */
-export interface FindingInput {
-  /**
-   * Which feature this finding belongs to. Defaults to the survey's `feature`; a survey that
-   * recognizes many features sets it per finding.
-   */
-  feature?: string;
-  /**
-   * What kind of thing `feature` names. Defaults to the survey's `kind`, then `"feature"`. A
-   * survey can also place a session on another axis, such as `"job"` or `"gap"`. `diagnosis`,
-   * `signal` and `measure` mark a finding about how the run went rather than what it exercised
-   * (see `purposeOf`).
-   */
-  kind?: string;
+/**
+ * What a survey hands back for one match. The runner fills in `survey` and `session`. A finding is
+ * a one-line `summary`, the `evidence` that proves it, and whatever `data` its survey chooses to
+ * carry: like an event stream's rows, its shape is the survey's own, and the readers that know the
+ * survey know what to expect in it.
+ */
+export interface FindingInput<D extends object = Record<string, unknown>> {
   /** One line: what happened in this session. */
   summary: string;
   /** The records that prove it. Query results can be passed straight through. */
   evidence: SessionRecord[];
-  confidence?: "high" | "medium" | "low";
-  /** Anything else worth carrying into the report (an amount, an id, a variant). */
-  data?: Record<string, unknown>;
+  /** Anything else worth carrying into the report (an id, an amount, a variant), in any shape. */
+  data?: D;
 }
 
-/** A finding as it appears in a report: one feature a session exercised, with the records that prove it. */
-export interface Finding extends FindingInput {
-  feature: string;
-  kind: string;
+/** A finding as it appears in a report: what one survey found in one session, with the records that prove it. */
+export interface Finding<D extends object = Record<string, unknown>> extends FindingInput<D> {
+  /** The survey that found it: its export name. */
   survey: string;
   session: string;
 }
 
-/** Declares what a survey detects and which sessions it applies to. */
+/**
+ * Declares what a survey checks and which sessions it applies to. The survey's name is the name it
+ * is exported under. A survey with a handler needs nothing here; a declarative one needs a
+ * `description`, or a `summary` on its finding, to say what it found.
+ */
 export interface SurveySpec {
-  /**
-   * Stable id of the feature this survey detects, e.g. `payments.checkout.gift-card`. Reports
-   * group by it, so several surveys may share one feature. A survey that recognizes many features
-   * (`footprints`, or a handler that sets `feature` per footprint) uses it as the family name.
-   */
-  feature: string;
-  /** Default `kind` of this survey's findings. `"feature"` when unset. */
-  kind?: string;
-  /**
-   * Every feature id a handler may report, when that is more than `feature`. Declared features are
-   * report rows even when no session matched; `footprints` keys declare themselves.
-   */
-  features?: ReadonlyArray<string>;
-  /**
-   * The kind of a declared feature whose findings are not the survey's `kind`, for a handler that
-   * reports several kinds. Keeps a never-matched row on its own kind; `footprints` declare theirs.
-   */
-  kinds?: Readonly<Record<string, string>>;
-  /** What the feature is, for readers of the report. */
+  /** What the survey checks, for readers of the report. */
   description?: string;
   /** Only run on sessions whose platform is listed. Unset runs everywhere. */
   platforms?: ReadonlyArray<string>;
@@ -264,14 +244,22 @@ export interface SurveySpec {
   /** Free-form tags for filtering which surveys a run includes. */
   tags?: ReadonlyArray<string>;
   /**
-   * Declarative form: what this feature's footprint looks like. Give this instead of a handler
-   * when the feature is "these records were observed" and nothing needs computing.
+   * True when the survey needs the finished session: its outcome or duration, logs, tool calls,
+   * screen text, the device log, the trace, or any file. Such a survey runs only after the run, on
+   * the host under Bun, where it may import anything.
+   *
+   * Default false: the survey also runs while the trail is running, from a tool
+   * (`ctx.surveys`), on the host or on a device. It then sees only what is captured
+   * so far in the session's event streams (`network`, `analytics`, `events`) and runs under the
+   * same rules as a scripted tool, so it cannot import `node:*` or Bun APIs.
    */
-  footprint?: FootprintSpec;
+  requiresFinishedSession?: boolean;
   /**
-   * Declarative form for many features at once: each key is a feature id and its value is that
-   * feature's footprint. One finding is reported per key that matches, so one survey can place a
-   * session against a whole catalog.
+   * Declarative form: the finding the survey reports and the queries that prove it. Give this
+   * instead of a handler when the check is "these records were observed" and nothing needs
+   * computing.
    */
-  footprints?: Readonly<Record<string, FootprintSpec>>;
+  finding?: FindingSpec;
+  /** @deprecated Renamed to {@link finding}; still read when `finding` is unset. */
+  footprint?: FindingSpec;
 }

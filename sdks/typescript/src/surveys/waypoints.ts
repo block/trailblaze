@@ -257,11 +257,11 @@ export function screensOf(session: SurveySession, options: ScreenOptions = {}): 
   };
   const url = (v: string | null | undefined) => (v && isTrustedArtifactUrl(v, hosts) ? v : undefined);
   const captures: Array<{ record: LogRecord; hierarchy: HierarchyNode; screenshotFile?: string | null; action?: string; snapshot: boolean }> = [];
-  for (const record of session.logs.filter({ type: "MaestroDriverLog" })) {
+  for (const record of session.trailblazeLogs.filter({ type: "MaestroDriverLog" })) {
     const log = record.log as unknown as DriverLog;
     if (log.viewHierarchy) captures.push({ record, hierarchy: log.viewHierarchy, screenshotFile: log.screenshotFile, action: log.action?.class?.split(".").pop(), snapshot: false });
   }
-  for (const record of session.logs.filter({ type: "TrailblazeSnapshotLog" })) {
+  for (const record of session.trailblazeLogs.filter({ type: "TrailblazeSnapshotLog" })) {
     const log = record.log as unknown as SnapshotLog;
     if (log.viewHierarchy) captures.push({ record, hierarchy: log.viewHierarchy, screenshotFile: log.screenshotFile, action: log.displayName ?? "snapshot", snapshot: true });
   }
@@ -380,8 +380,6 @@ export function waypointFindings(session: SurveySession, waypoints: ReadonlyArra
     const stepsSeen = [...new Set(hits.map((h) => h.step).filter((s): s is number => s !== undefined))].sort((a, b) => a - b);
     const stepText = stepsSeen.length === 0 ? "" : stepsSeen.length === 1 ? ` during step ${stepsSeen[0]}` : ` during steps ${stepsSeen[0]}–${stepsSeen[stepsSeen.length - 1]}`;
     out.push({
-      feature: wp.id,
-      kind: "waypoint",
       summary: `On screen ${hits.length} time${hits.length === 1 ? "" : "s"}${stepText}`,
       // `data.screens` below already carries screenshot/step/action per hit; a `detail` here would
       // just duplicate it; the generic evidence renderer only reads kind/summary/file/timeMs anyway.
@@ -391,8 +389,11 @@ export function waypointFindings(session: SurveySession, waypoints: ReadonlyArra
         file: h.file,
         timeMs: h.timeMs,
       })),
-      confidence: "high",
       data: {
+        waypoint: wp.id,
+        // Says what the finding is, so a reader files it as a waypoint even beside a `feature` (a
+        // legacy survey's spec default, folded into `data`).
+        kind: "waypoint",
         classifier,
         platform: session.summary.platform ?? "",
         source: wp.source,

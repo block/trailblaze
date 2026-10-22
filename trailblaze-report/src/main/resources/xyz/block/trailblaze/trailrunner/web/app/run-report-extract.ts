@@ -794,6 +794,15 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
   });
 }
 
+// The binding a successful `switchDevice` log handed the session over to (its tool `name`, else the
+// stamp the host wrote under the destination); null for any other log and for a failed handover,
+// which never moved the session.
+function switchDestination(l: any): string | null {
+  if (!l || l.toolName !== 'switchDevice' || l.successful === false) return null;
+  const raw = l.trailblazeTool && l.trailblazeTool.raw;
+  return (raw && typeof raw.name === 'string' && raw.name) || (typeof l.deviceName === 'string' && l.deviceName) || null;
+}
+
 // Stamps each row of a multi-device session with the binding name of the device it acted on
 // (TraceStep.device). Two signals exist in the folded log stream and neither alone covers it:
 //  - a log's own `deviceName` — the binding name the host stamps when IT emits the log. Ground
@@ -816,11 +825,7 @@ function assignTraceDevices(rows: any[]): void {
   const failedSwitch = (l: any): boolean => l.toolName === 'switchDevice' && l.successful === false;
   const switchDestOf = (logs: any[]): string | null => {
     let dest: string | null = null;
-    for (const l of logs) {
-      if (!l || l.toolName !== 'switchDevice' || failedSwitch(l)) continue;
-      const raw = l.trailblazeTool && l.trailblazeTool.raw;
-      dest = (raw && typeof raw.name === 'string' && raw.name) || (typeof l.deviceName === 'string' && l.deviceName) || dest;
-    }
+    for (const l of logs) dest = switchDestination(l) || dest;
     return dest;
   };
   const stampOf = (logs: any[]): string | null => {
@@ -926,7 +931,7 @@ function toolChildren(r: any): TraceChild[] | null {
   // dispatch. The action also supplies the tap/swipe overlay for the child's frame. This is what
   // lets a folded batch show EVERY interaction's screenshot (the row itself keeps only the first).
   const executedAt = logs.map((l, i) => (i > 0 && l && isExecuted(l) ? i : -1)).filter((i) => i >= 0);
-  const spanCapture = (from: number): { screenshotFile: string | null; shotEndTs: number | null; mark: ActionMark | null; captureIds: string[] } => {
+  const spanCapture = (from: number): { screenshotFile: string | null; shotEndTs: number | null; mark: ActionMark | null; markTs: number | null; captureIds: string[] } => {
     const to = executedAt.find((j) => j > from) ?? logs.length;
     const captureIds = screenshotlessCaptureIds(logs.slice(from, to));
     let screenshotFile = (logs[from] && logs[from].screenshotFile) || null;
@@ -935,19 +940,26 @@ function toolChildren(r: any): TraceChild[] | null {
     const span = { start: spanStart, end: spanStart == null || !Number.isFinite(spanStart) ? null : spanStart + ((logs[from] && logs[from].durationMs) || 0) };
     let shotEndTs = screenshotFile ? captureEndTs([logs[from]], screenshotFile, span) : null;
     let mark: ActionMark | null = null;
+    let markTs: number | null = null;
     for (let j = from + 1; j < to && !(screenshotFile && mark); j++) {
       const l = logs[j];
       if (!l) continue;
       if (!screenshotFile && l.screenshotFile) { screenshotFile = l.screenshotFile; shotEndTs = captureEndTs([l], screenshotFile, span); }
       const action = logClass(l) === 'MaestroDriverLog' ? l.action : null;
-      if (!mark && action) mark = actionMark(action, l);
+      if (!mark && action) {
+        mark = actionMark(action, l);
+        // The instant the driver acted, as the row's own markTs is: a dispatch that waited before
+        // acting would otherwise draw its tap at its start.
+        const at = mark && l.timestamp ? Date.parse(l.timestamp) : NaN;
+        if (mark) markTs = sameClockCueTs(span.start, span.end, Number.isFinite(at) ? at : null);
+      }
     }
-    return { screenshotFile, shotEndTs, mark, captureIds };
+    return { screenshotFile, shotEndTs, mark, markTs, captureIds };
   };
   const executed = logs
     .map((l, i) => ({ l, i }))
     .filter(({ l, i }) => i > 0 && l && isExecuted(l))
-    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, note: timelineReasoningByLog.get(l) || null, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ts: l.timestamp ? Date.parse(l.timestamp) : null, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null, result: l.resultSummary == null ? null : String(l.resultSummary), args: toolArgsYaml(l.toolName, l.trailblazeTool && l.trailblazeTool.raw), _logs: [l], ...spanCapture(i) }));
+    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, note: timelineReasoningByLog.get(l) || null, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ts: l.timestamp ? Date.parse(l.timestamp) : null, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null, switchTo: switchDestination(l), result: l.resultSummary == null ? null : String(l.resultSummary), args: toolArgsYaml(l.toolName, l.trailblazeTool && l.trailblazeTool.raw), _logs: [l], ...spanCapture(i) }));
   // A delegating log is a dispatch wrapper, not a step: it declares executors the device then logs
   // itself under the same traceId. Keep executed records; surface a declaration only to fill in an
   // executor that never logged — matched to its executor by name AND raw args (`sig`, not the
@@ -960,7 +972,7 @@ function toolChildren(r: any): TraceChild[] | null {
   const rootIdentity = { label: String((logs[0] && logs[0].toolName) || r.label || ''), sig: JSON.stringify((logs[0] && logs[0].trailblazeTool && logs[0].trailblazeTool.raw) ?? null) };
   unmatched.set(key(rootIdentity), (unmatched.get(key(rootIdentity)) || 0) + 1);
   for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
-  const declared: Array<{ i: number; label: string; tool: string; note: string | null; sig: string; ms: number | null; ts: number | null; ok: boolean; err: string | null; code: string | null; result: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null; captureIds?: string[]; _logs: TrailblazeLogRecord[] }> = [];
+  const declared: Array<{ i: number; label: string; tool: string; note: string | null; sig: string; ms: number | null; ts: number | null; ok: boolean; err: string | null; code: string | null; result: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null; markTs?: number | null; switchTo?: string | null; captureIds?: string[]; _logs: TrailblazeLogRecord[] }> = [];
   logs.forEach((l, i) => {
     if (!isDelegating(l)) return;
     for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
@@ -996,7 +1008,7 @@ function toolChildren(r: any): TraceChild[] | null {
     }
     // A ×N fold keeps the FIRST member's ts (set here, never advanced above) — the instant the
     // folded sequence began, which is what playback schedules its one entry on.
-    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, ...(c.screenshotFile && (c as any).shotEndTs != null ? { shotEndTs: (c as any).shotEndTs } : {}), mark: c.mark ?? null, ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), _logs: c._logs || [] });
+    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, ...(c.screenshotFile && (c as any).shotEndTs != null ? { shotEndTs: (c as any).shotEndTs } : {}), mark: c.mark ?? null, ...(c.markTs != null && c.markTs !== c.ts ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), _logs: c._logs || [] });
     prevSig = c.sig;
   }
   return kids.length ? kids : null;
@@ -1007,6 +1019,25 @@ function toolChildren(r: any): TraceChild[] | null {
 // overlays it on the step's screenshot scaled by ratio. Returns null when there are no coordinates
 // (e.g. a keypress) or no device dimensions to scale against. Set-of-mark numbered boxes are NOT
 // here — those are baked into the screenshot pixels at capture time.
+// The smallest element in the capture's tree centered on a point: the one a visibility assertion
+// found there. The screen may have moved on by the time the tree was read, so a point nothing is
+// centered on has no box.
+function boundsAt(tree: any, x: number, y: number): MarkBox | null {
+  let best: MarkBox | null = null;
+  const area = (b: MarkBox) => (b.right - b.left) * (b.bottom - b.top);
+  const stack = tree ? [tree] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    const b = node && node.bounds;
+    if (b && [b.left, b.top, b.right, b.bottom].every((v) => typeof v === 'number' && Number.isFinite(v))
+      && Math.abs((b.left + b.right) / 2 - x) <= 1 && Math.abs((b.top + b.bottom) / 2 - y) <= 1 && area(b) > 0 && (!best || area(b) < area(best))) {
+      best = { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    }
+    if (node && Array.isArray(node.children)) stack.push(...node.children);
+  }
+  return best;
+}
+
 function actionMark(action: any, log: TrailblazeLogRecord): ActionMark | null {
   if (!action) return null;
   const dw = log.deviceWidth || null;
@@ -1018,7 +1049,12 @@ function actionMark(action: any, log: TrailblazeLogRecord): ActionMark | null {
     return { kind: 'swipe', x1: action.startX, y1: action.startY, x2: action.endX, y2: action.endY, dw, dh };
   }
   if (action.x == null || action.y == null) return null;
-  if (kind === 'AssertCondition') return { kind: 'assert', x: action.x, y: action.y, dw, dh, ok: action.succeeded !== false };
+  if (kind === 'AssertCondition') {
+    // A not-visible check's point is the screen's center, not something it found.
+    const found = action.isVisible === true && action.succeeded !== false;
+    const box = found ? boundsAt((log as any).trailblazeNodeTree, action.x, action.y) : null;
+    return { kind: 'assert', x: action.x, y: action.y, dw, dh, ok: action.succeeded !== false, ...(action.isVisible === false ? { visible: false as const } : {}), ...(box ? { box } : {}) };
+  }
   return { kind: 'tap', x: action.x, y: action.y, dw, dh };
 }
 
@@ -1564,7 +1600,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold,
     // full args, its own capture) — the common green declared-or-single dispatch slims to just
     // label+tool.
-    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.screenshotFile && c.shotEndTs != null ? { shotEndTs: c.shotEndTs } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.screenshotFile && c.shotEndTs != null ? { shotEndTs: c.shotEndTs } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), ...(c.mark ? { mark: c.mark } : {}), ...(c.markTs != null ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
     // Which device this row acted on (see assignTraceDevices). Only stamped on multi-device

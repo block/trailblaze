@@ -47,8 +47,11 @@ export type EventMatchValue = string | number | boolean | null | RegExp | EventM
 
 /** One record from a session event stream (`events/<stream>.ndjson`). */
 export interface SessionEvent {
+  /** On the host clock, unless `clock` says otherwise. */
   timeMs: number;
   data: unknown;
+  /** `"device"` when `timeMs` is a device stamp with no clock measurement to convert it. */
+  clock?: "device";
 }
 
 export interface TrailEventsQueryOptions {

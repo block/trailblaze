@@ -10,11 +10,11 @@ export interface OpenMainPageArgs {
  * Open the English Wikipedia home page (Main_Page) and wait for it to render.
  */
 // (spec, handler) overload: the inline spec object carries `supportedPlatforms`
-// + `requiresContext` so the runtime `_meta` gates are populated entirely from
+// so the runtime `_meta` gates are populated entirely from
 // the `.ts` source — no need for the YAML descriptor's `_meta:` block. The
 // analyzer extracts the literal at the call site.
 export const wikipedia_web_openMainPage = trailblaze.tool<OpenMainPageArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const dismissBanner = input.dismissBanner !== false;
 

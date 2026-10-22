@@ -312,6 +312,42 @@ class SensitiveArgsLogRedactionTest {
     }
   }
 
+  @Test
+  fun authoredSecretWithInterpolationIsMaskedBeforeResolvedValueMasking() {
+    val agent = CapturingAgentContext()
+    agent.memory.putArg("account", JsonPrimitive("alice"))
+    val authoredSecret = "token=private;account={{args.account}}"
+    val resolvedSecret = "token=private;account=alice"
+    val authored = AuthoredRawArgsTool(
+      instanceToolName = "android_adbShell",
+      rawToolArguments = buildJsonObject {
+        putJsonArray("command") { listOf("fixture-command", authoredSecret).forEach { add(JsonPrimitive(it)) } }
+        putJsonArray("secrets") { add(JsonPrimitive(authoredSecret)) }
+      },
+    )
+    val executed = AdbShellTrailblazeTool(
+      command = listOf("fixture-command", resolvedSecret), secrets = listOf(resolvedSecret),
+    )
+
+    agent.logToolExecution(
+      tool = executed,
+      timeBeforeExecution = Clock.System.now(),
+      context = TrailblazeToolExecutionContext(
+        screenState = null, traceId = null,
+        trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+        sessionProvider = agent.sessionProvider,
+        trailblazeLogger = agent.trailblazeLogger,
+        memory = agent.memory,
+      ),
+      result = TrailblazeToolResult.Success(),
+      rawTool = authored,
+    )
+
+    val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertTrue(!log.rawTrailblazeTool.toString().contains("private"))
+    assertTrue(!log.trailblazeTool.toString().contains("private"))
+  }
+
   /**
    * A nested `ctx.tools.X()` call (a `runIf` branch, a composing tool) logs with no authored form:
    * its caller already resolved the arguments. A `rememberSensitive` value in them must still be

@@ -22,7 +22,7 @@ export interface SearchProductsAndOpenResultArgs {
  * Search the products demo, open one result, and verify its detail text.
  */
 export const playwrightSample_web_searchProductsAndOpenResult = trailblaze.tool<SearchProductsAndOpenResultArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, DEFAULT_RELATIVE_PATH);
     const query = nonEmptyString(args.query, DEFAULT_QUERY);

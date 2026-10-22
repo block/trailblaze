@@ -52,6 +52,9 @@ object KoogToMcpExt {
       is ToolParameterType.Object -> {
         put("type", JsonPrimitive("object"))
         type.additionalProperties?.let { put("additionalProperties", JsonPrimitive(it)) }
+        if (type.requiredProperties.isNotEmpty()) {
+          putJsonArray("required") { type.requiredProperties.forEach { add(JsonPrimitive(it)) } }
+        }
         putJsonObject("properties") {
           type.properties.forEach { property ->
             putJsonObject(property.name) {

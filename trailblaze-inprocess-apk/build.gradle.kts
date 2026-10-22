@@ -37,14 +37,4 @@ dependencies {
 
 tasks.named<Test>("test") {
   useJUnit()
-  // The real-APK cross-checks (see RealApkProbeTest) take their inputs by system property because
-  // the APKs they read are build outputs and mobile-releases downloads, not committed fixtures.
-  // Forwarded rather than hardcoded so the same test class is a no-op on a machine that has neither.
-  listOf(
-    "trailblaze.probe.appApk",
-    "trailblaze.probe.shellApk",
-    "trailblaze.probe.declaredDeps",
-  ).forEach { key ->
-    System.getProperty(key)?.let { systemProperty(key, it) }
-  }
 }

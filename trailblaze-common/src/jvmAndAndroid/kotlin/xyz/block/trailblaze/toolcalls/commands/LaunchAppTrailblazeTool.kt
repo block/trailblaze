@@ -157,7 +157,7 @@ internal sealed interface ForegroundVerdict {
  * in the call:
  * - To open an app as-is: `openApp` ([OpenAppTrailblazeTool]).
  * - To start a test from a known state: the target's trailhead, composing `mobile_clearAppData`,
- *   `android_forceStop` / `ios_terminate`, `android_grantPermissions` / `ios_grantPrivacy`, then
+ *   `android_forceStop` / `ios_terminate`, `android_grantPermissions` / `ios_setPermissions`, then
  *   `openApp`. Mode by mode: `RESUME` → `openApp`; `FORCE_RESTART` → force-stop/terminate, then
  *   `openApp`; `REINSTALL` → `mobile_clearAppData`, then `openApp` (plus whatever grants the app
  *   needs, which this tool used to apply on iOS without saying so).

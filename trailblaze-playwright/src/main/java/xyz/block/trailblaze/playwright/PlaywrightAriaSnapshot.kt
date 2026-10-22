@@ -173,6 +173,15 @@ object PlaywrightAriaSnapshot {
    * preserves tier ordering (e.g. per-tier bounded waits), not an or() union.
    */
   /**
+   * The name [resolveRoleAndName] looks up exactly for [ariaNameRegex], or null when it matches
+   * [ariaNameRegex] as a regex in the browser instead.
+   */
+  fun exactAriaName(ariaNameRegex: String): String? = literalAriaName(ariaNameRegex)
+
+  /** True when replay looks [role] up as itself; any other role is resolved as `generic`. */
+  fun isPlaywrightAriaRole(role: String): Boolean = AriaRole.values().any { it.name == role.uppercase() }
+
+  /**
    * Resolves an ARIA role plus a recorded [ariaNameRegex], honoring that field's REGEX contract.
    *
    * `DriverNodeMatch.Web.ariaNameRegex` is matched as a pattern everywhere else — see

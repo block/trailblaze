@@ -125,7 +125,6 @@ tools:
     _meta:
       trailblaze/supportedPlatforms: [WEB]
       trailblaze/toolset: web_core
-      trailblaze/requiresContext: true
     inputSchema:
       type: object
       properties:

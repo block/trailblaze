@@ -15,10 +15,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
@@ -40,14 +42,17 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher.Outcome
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -198,6 +203,26 @@ class ToolCallHistoryTest {
   }
 
   @Test
+  fun `a launch argument stays out of args and rawArgs, literal or resolved from memory`() {
+    agent.memory.remember("sessionToken", "memory-session-secret")
+
+    runCatching {
+      run(
+        MaestroTrailblazeTool(
+          """- launchApp: {appId: com.example.app, arguments: {appToken: literal-app-secret, sessionToken: "{{sessionToken}}"}}""",
+        ),
+      )
+    }
+
+    val call = ToolCallHistory.toolCalls(sessionId).single()
+    listOf(call.args.toString(), call.rawArgs.toString(), call.outcome?.message.orEmpty()).forEach { recorded ->
+      assertThat(recorded).doesNotContain("literal-app-secret")
+      assertThat(recorded).doesNotContain("memory-session-secret")
+    }
+    assertThat(call.args.toString()).contains("com.example.app")
+  }
+
+  @Test
   fun `a secret the call replaces while it runs stays masked in its outcome`() {
     agent.memory.rememberSensitive("password", "hunter2")
     run(RotatesSecret("returns", thenThrow = false))
@@ -210,6 +235,365 @@ class ToolCallHistoryTest {
       assertThat(it).contains("rejected")
       assertThat(it).doesNotContain("hunter2")
     }
+  }
+
+  @Test
+  fun `a call records the memory it set and deleted, and not what it read`() {
+    agent.memory.remember("cartId", "cart-9")
+    agent.memory.remember("staleId", "old")
+
+    run(
+      WritesMemory("addItem") { memory ->
+        memory.variables["cartId"]
+        memory.remember("newItemId", "item-1")
+        memory.delete("staleId")
+      },
+    )
+    run(Leaf("tap"))
+
+    val (addItem, tap) = ToolCallHistory.toolCalls(sessionId)
+    assertThat(addItem.memory).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.SET, "newItemId", "item-1"),
+      HistoryMemoryChange(HistoryMemoryChange.DELETE, "staleId", null),
+    )
+    assertThat(tap.memory).isEmpty()
+  }
+
+  @Test
+  fun `a sensitive value is recorded as its token, however the key became sensitive`() {
+    agent.memory.rememberSensitive("pin", "1234")
+    agent.memory.rememberSensitive("token", "abc-secret")
+
+    run(WritesMemory("signIn") { it.rememberSensitive("password", "hunter2") })
+    // A plain remember of a key already sensitive stays sensitive.
+    run(WritesMemory("rotatePin") { it.remember("pin", "5678") })
+    // clear() drops the marker, so the value set after it is masked by the marker it had at start.
+    run(
+      WritesMemory("reset") { memory ->
+        memory.clear()
+        memory.remember("token", "abc-new")
+      },
+    )
+    // A secret inside another key's value is masked like it is in an outcome.
+    agent.memory.rememberSensitive("password", "hunter2")
+    run(WritesMemory("note") { it.remember("greeting", "welcome hunter2") })
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["signIn"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "password", "{{password}}"))
+    assertThat(byName["rotatePin"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "pin", "{{pin}}"))
+    assertThat(byName["reset"]!!).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.DELETE, "password", null),
+      HistoryMemoryChange(HistoryMemoryChange.DELETE, "pin", null),
+      HistoryMemoryChange(HistoryMemoryChange.SET, "token", "{{token}}"),
+    )
+    assertThat(byName["note"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "greeting", "welcome {{password}}"))
+  }
+
+  @Test
+  fun `a key holding a secret is masked, and its nested call keeps the change`() {
+    agent.memory.rememberSensitive("pin", "1234")
+
+    run(WritesMemory("outer", inner = WritesMemory("cache") { it.remember("cache-1234", "hit") }) {})
+    run(WritesMemory("saveSecret") { it.rememberSensitive("token-1234", "abc") })
+    run(WritesMemory("evict") { it.delete("cache-1234") })
+    // Masking a copied secret as its key's token would show the secret in the key's name.
+    run(WritesMemory("copy") { it.remember("note", "sent abc") })
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["cache"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "cache-{{pin}}", "hit"))
+    assertThat(byName["outer"]!!).isEmpty()
+    assertThat(byName["saveSecret"]!!).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.SET, "token-{{pin}}", REDACTED_TOOL_ARG_PLACEHOLDER),
+    )
+    assertThat(byName["copy"]!!).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.SET, "note", "sent $REDACTED_TOOL_ARG_PLACEHOLDER"),
+    )
+    assertThat(byName["evict"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.DELETE, "cache-{{pin}}", null))
+  }
+
+  @Test
+  fun `a change a nested call made is recorded on that call, not the one it ran inside`() {
+    run(
+      WritesMemory("outer", inner = WritesMemory("inner") { it.remember("newItemId", "item-1") }) { memory ->
+        memory.remember("outerKey", "mine")
+      },
+    )
+    // The outer call overwriting what its nested call set is its own change.
+    run(
+      WritesMemory("overrides", inner = WritesMemory("sets") { it.remember("newItemId", "item-2") }) { memory ->
+        memory.remember("newItemId", "item-3")
+      },
+    )
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["inner"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "newItemId", "item-1"))
+    assertThat(byName["outer"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "outerKey", "mine"))
+    assertThat(byName["sets"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "newItemId", "item-2"))
+    assertThat(byName["overrides"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "newItemId", "item-3"))
+  }
+
+  @Test
+  fun `an outer call's own write survives a nested call that restored the key, or wrote a lookalike value`() {
+    agent.memory.remember("k", "A")
+    // The middle call puts back what the inner one changed: that is the middle call's change, and
+    // the outer call's write after it is the outer call's.
+    run(
+      WritesMemory(
+        "outer",
+        inner = WritesMemory("middle", inner = WritesMemory("inner") { it.remember("k", "B") }) { it.remember("k", "A") },
+      ) { it.remember("k", "B") },
+    )
+    // "Aa" and "BB" share a String hash code; the outer call's value is still its own.
+    run(WritesMemory("overwrites", inner = WritesMemory("writes") { it.remember("j", "Aa") }) { it.remember("j", "BB") })
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["inner"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "B"))
+    assertThat(byName["middle"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "A"))
+    assertThat(byName["outer"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "B"))
+    assertThat(byName["writes"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "j", "Aa"))
+    assertThat(byName["overwrites"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "j", "BB"))
+  }
+
+  @Test
+  fun `an outer call putting back a key its nested call changed records that`() {
+    agent.memory.remember("k", "X")
+
+    run(WritesMemory("outer", inner = WritesMemory("inner") { it.delete("k") }) { it.remember("k", "X") })
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["inner"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.DELETE, "k", null))
+    assertThat(byName["outer"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "X"))
+  }
+
+  @Test
+  fun `an outer call putting back a key is recorded when the call it ran inside shows no net change`() {
+    agent.memory.remember("k", "A")
+    // The middle call ends where it started, but its history shows k going to A and back to B, so
+    // the outer call's restore to A is the outer call's change.
+    run(
+      WritesMemory(
+        "outer",
+        before = { it.remember("k", "B") },
+        inner = WritesMemory("middle", inner = WritesMemory("inner") { it.remember("k", "A") }) { it.remember("k", "B") },
+      ) { it.remember("k", "A") },
+    )
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["inner"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "A"))
+    assertThat(byName["middle"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "B"))
+    assertThat(byName["outer"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "A"))
+  }
+
+  @Test
+  fun `a nested call writing a different memory does not take the outer call's change`() = runBlocking {
+    // A daemon route runs each device call against a fresh memory, inside a host call on another.
+    val hostMemory = AgentMemory()
+    val deviceMemory = AgentMemory()
+
+    ToolCallHistory.recordExecution(sessionId, Leaf("outer"), memory = hostMemory) {
+      ToolCallHistory.recordExecution(sessionId, Leaf("inner"), memory = deviceMemory) {
+        deviceMemory.remember("k", "V")
+        TrailblazeToolResult.Success()
+      }
+      hostMemory.remember("k", "V")
+      TrailblazeToolResult.Success()
+    }
+
+    val byName = ToolCallHistory.toolCalls(sessionId).associate { it.name to it.memory }
+    assertThat(byName["inner"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "V"))
+    assertThat(byName["outer"]!!).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "k", "V"))
+  }
+
+  @Test
+  fun `a declared secret that contains a sensitive memory value is masked whole`() {
+    agent.memory.rememberSensitive("pin", "1234")
+    run(DeclaresSecret("signIn", secret = "sess-1234-abcd") { it.remember("note", "sent sess-1234-abcd") })
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value)
+      .isEqualTo("sent $REDACTED_TOOL_ARG_PLACEHOLDER")
+  }
+
+  @Test
+  fun `secrets that overlap in a value are masked as one span`() {
+    agent.memory.rememberSensitive("pin", "1234")
+    run(NamesSecretArg("signIn", token = "34abcd") { memory, token -> memory.remember("note", "sent 12$token ok") })
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value)
+      .isEqualTo("sent $REDACTED_TOOL_ARG_PLACEHOLDER ok")
+  }
+
+  @Test
+  fun `a value holding a secret the tool declares is masked`() {
+    run(
+      DeclaresSecret("signIn", secret = "s3cret") { it.remember("lastMessage", "sent s3cret") },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value!!).doesNotContain("s3cret")
+  }
+
+  @Test
+  fun `a replacement secret written after clear() is masked inside other values`() {
+    agent.memory.rememberSensitive("password", "old-pw")
+
+    run(
+      WritesMemory("rotate") { memory ->
+        memory.clear()
+        memory.remember("password", "new-pw")
+        memory.remember("note", "sent new-pw")
+      },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.SET, "note", "sent {{password}}"),
+      HistoryMemoryChange(HistoryMemoryChange.SET, "password", "{{password}}"),
+    )
+  }
+
+  @Test
+  fun `a declared secret with a quote in it is masked where a JSON value escapes it`() {
+    run(DeclaresSecret("signIn", secret = "s\"3cret") { it.remember("body", """{"pin":"s\"3cret"}""") })
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value!!).doesNotContain("3cret")
+  }
+
+  @Test
+  fun `an arg the tool names as secret is masked where its value lands in memory`() {
+    run(NamesSecretArg("signIn", token = "tok-4821") { memory, token -> memory.remember("note", "signed in with $token") })
+
+    val value = ToolCallHistory.toolCalls(sessionId).single().memory.single().value!!
+    assertThat(value).doesNotContain("tok-4821")
+    assertThat(value).contains("signed in with")
+  }
+
+  @Test
+  fun `an arg the tool names as secret is masked once resolved, when it is written as a memory token`() {
+    agent.memory.remember("credential", "cred-7731")
+    // As a scripted tool receives it: the token as written, resolved inside the tool.
+    run(
+      NamesSecretArg("signIn", token = "{{credential}}") { memory, token ->
+        memory.remember("note", "signed in with ${memory.interpolateVariables(token)}")
+      },
+    )
+
+    val value = ToolCallHistory.toolCalls(sessionId).single().memory.single().value!!
+    assertThat(value).doesNotContain("cred-7731")
+    assertThat(value).contains("signed in with")
+  }
+
+  @Test
+  fun `a named secret arg resolved into another arg is masked in the recorded args`() {
+    agent.memory.remember("credential", "cred-7731")
+    run(
+      NamesSecretArg(
+        "signIn",
+        token = "{{credential}}",
+        otherArgs = buildJsonObject { put("note", "sent {{credential}}") },
+      ) { _, _ -> },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().args.toString()).doesNotContain("cred-7731")
+  }
+
+  @Test
+  fun `a named secret arg overlapping a sensitive memory value is masked whole in the recorded args`() {
+    agent.memory.rememberSensitive("pin", "1234")
+    agent.memory.remember("credential", "34abcd")
+    run(
+      NamesSecretArg(
+        "signIn",
+        token = "{{credential}}",
+        otherArgs = buildJsonObject { put("note", "12{{credential}}") },
+      ) { _, _ -> },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().args["note"]!!.jsonPrimitive.content)
+      .isEqualTo(REDACTED_TOOL_ARG_PLACEHOLDER)
+  }
+
+  @Test
+  fun `a short value a structured secret arg resolves to is not masked everywhere it appears`() {
+    agent.memory.remember("month", "1")
+    run(
+      NamesSecretArg(
+        "pay",
+        token = "tok-4821",
+        otherArgs = buildJsonObject { put("card", buildJsonObject { put("expMonth", "{{month}}") }) },
+        secretArgs = setOf("card"),
+      ) { memory, _ -> memory.remember("lastItem", "item-1") },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value).isEqualTo("item-1")
+  }
+
+  @Test
+  fun `a short value inside a structured secret arg is not masked everywhere it appears`() {
+    run(
+      NamesSecretArg(
+        "pay",
+        token = "tok-4821",
+        otherArgs = buildJsonObject {
+          put(
+            "card",
+            buildJsonObject {
+              put("number", "4111111111111111")
+              put("expMonth", 1)
+            },
+          )
+        },
+        secretArgs = setOf("card"),
+      ) { memory, _ -> memory.remember("note", "paid 4111111111111111 at 10:41") },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value)
+      .isEqualTo("paid $REDACTED_TOOL_ARG_PLACEHOLDER at 10:41")
+  }
+
+  @Test
+  fun `a long memory value is cut like an outcome message`() {
+    run(WritesMemory("dump") { it.remember("page", "x".repeat(ToolCallHistory.MAX_MESSAGE_CHARS + 500)) })
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory.single().value!!.length)
+      .isEqualTo(ToolCallHistory.MAX_MESSAGE_CHARS)
+  }
+
+  @Test
+  fun `memory the host merges back from a device call is recorded on that call`() {
+    agent.memory.remember("hostOnly", "kept")
+    agent.memory.remember("deletedOnDevice", "x")
+
+    // What the host does with the device's answer to an RPC: re-mark its sensitive keys, merge its
+    // values, apply its explicit deletes. Writes straight to `variables`, past AgentMemory's API.
+    run(
+      WritesMemory("deviceTool") { memory ->
+        memory.markSensitive("pin")
+        memory.variables.putAll(mapOf("hostOnly" to "kept", "orderId" to "o-7", "pin" to "1234"))
+        memory.variables.remove("deletedOnDevice")
+      },
+    )
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory).containsExactly(
+      HistoryMemoryChange(HistoryMemoryChange.DELETE, "deletedOnDevice", null),
+      HistoryMemoryChange(HistoryMemoryChange.SET, "orderId", "o-7"),
+      HistoryMemoryChange(HistoryMemoryChange.SET, "pin", "{{pin}}"),
+    )
+  }
+
+  @Test
+  fun `a call that writes memory and then fails keeps the writes it made`() {
+    runCatching { run(WritesMemory("crash", thenThrow = true) { it.remember("half", "done") }) }
+
+    assertThat(ToolCallHistory.toolCalls(sessionId).single().memory)
+      .containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "half", "done"))
+  }
+
+  @Test
+  fun `a script reads each call's memory changes`() = runBlocking {
+    run(WritesMemory("addItem") { it.remember("newItemId", "item-1") })
+
+    val all = hostCall(ToolCallHistoryHostFunctions.TOOL_CALLS, "{}") as Outcome.Success
+
+    assertThat((all.value as JsonArray).single().jsonObject["memory"].toString())
+      .isEqualTo("""[{"op":"set","key":"newItemId","value":"item-1"}]""")
   }
 
   @Test
@@ -293,12 +677,15 @@ class ToolCallHistoryTest {
       val tool = Outer("aiPicked", inner = Leaf("inner"))
 
       ToolCallHistory.recordExecution(context, tool) { tool.execute(context) }
+      val writes = WritesMemory("aiRemembered") { it.remember("newItemId", "item-1") }
+      ToolCallHistory.recordExecution(context, writes) { writes.execute(context) }
 
       val calls = ToolCallHistory.toolCalls(sessionId)
-      assertThat(calls.map { it.name }).containsExactly("aiPicked", "inner")
-      val (outer, inner) = calls
+      assertThat(calls.map { it.name }).containsExactly("aiPicked", "inner", "aiRemembered")
+      val (outer, inner, remembered) = calls
       assertThat(inner.parentId).isEqualTo(outer.id)
       assertThat(outer.outcome).isEqualTo(HistoryToolCallOutcome(success = true, message = "aiPicked done"))
+      assertThat(remembered.memory).containsExactly(HistoryMemoryChange(HistoryMemoryChange.SET, "newItemId", "item-1"))
     }
 
   @Test
@@ -566,6 +953,57 @@ class ToolCallHistoryTest {
   private class Throwing(override val advertisedToolName: String) : HostLocalExecutableTrailblazeTool {
     override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
       throw IllegalStateException("boom")
+  }
+
+  /** Takes a `token` arg it names as secret, the way a scripted tool's `sensitiveArgNames` does, then writes memory with [write]. */
+  private class NamesSecretArg(
+    override val advertisedToolName: String,
+    private val token: String,
+    /** More args beside `token`; the ones in [secretArgs] are named secret too. */
+    private val otherArgs: JsonObject = JsonObject(emptyMap()),
+    private val secretArgs: Set<String> = emptySet(),
+    private val write: (AgentMemory, String) -> Unit,
+  ) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool, SensitiveArgsTrailblazeTool {
+    override val instanceToolName: String get() = advertisedToolName
+    override val rawToolArguments: JsonObject get() = JsonObject(mapOf("token" to JsonPrimitive(token)) + otherArgs)
+    override val sensitiveArgNames: Set<String> get() = setOf("token") + secretArgs
+    override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+      write(toolExecutionContext.memory, token)
+      return TrailblazeToolResult.Success()
+    }
+  }
+
+  /** Declares [secret] by value, then writes memory with [write]. */
+  private class DeclaresSecret(
+    override val advertisedToolName: String,
+    private val secret: String,
+    private val write: (AgentMemory) -> Unit,
+  ) : HostLocalExecutableTrailblazeTool, SensitiveValuesTrailblazeTool {
+    override val sensitiveValues: Collection<String> get() = listOf(secret)
+    override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+      write(toolExecutionContext.memory)
+      return TrailblazeToolResult.Success()
+    }
+  }
+
+  /**
+   * Writes memory with [before], runs [inner], if any, then writes memory with [write]; throws after
+   * writing when [thenThrow].
+   */
+  private class WritesMemory(
+    override val advertisedToolName: String,
+    private val inner: TrailblazeTool? = null,
+    private val thenThrow: Boolean = false,
+    private val before: (AgentMemory) -> Unit = {},
+    private val write: (AgentMemory) -> Unit,
+  ) : HostLocalExecutableTrailblazeTool {
+    override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+      before(toolExecutionContext.memory)
+      inner?.let { toolExecutionContext.nestedToolExecutor!!.invoke(it) }
+      write(toolExecutionContext.memory)
+      if (thenThrow) throw IllegalStateException("boom")
+      return TrailblazeToolResult.Success()
+    }
   }
 
   /** Replaces the `password` secret while it runs, then fails with the old value in its message. */

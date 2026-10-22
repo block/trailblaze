@@ -54,7 +54,7 @@ export interface SessionEventsQueryResult {
   captured: boolean;
   /**
    * False when a capture writing these streams recorded losing data, or the read skipped a record
-   * over 1 MB, so a missing record may have been dropped. Check it before treating "no match" as proof something didn't happen.
+   * over 4 MB, so a missing record may have been dropped. Check it before treating "no match" as proof something didn't happen.
    */
   complete: boolean;
   /** What the capture said it lost, when `complete` is false. */
@@ -67,6 +67,8 @@ export interface SessionEventsQueryResult {
    * stopped early. An oldest-first read continues from `cursor` passed as `after`.
    */
   truncated?: boolean;
+  /** The file the stream was read from, relative to the session directory, when it has one. */
+  file?: string;
   scan: SessionEventsScan;
 }
 

@@ -342,7 +342,7 @@ class TrailYamlValidationTest {
  * `@TrailblazeToolClass("…")` in Kotlin sources, and — for scripted TypeScript tools, whose names
  * are only fully knowable by running the analyzer — a deliberate SUPERSET built from two
  * independent extractors: every candidate `.ts` basename, and every
- * `export const X = trailblaze.tool` declaration.
+ * `export const X = trailblaze.tool` (or `trailblaze.trailhead`) declaration.
  *
  * The superset bias is the point: its only failure mode is MISSING a typo, never inventing one. A
  * false failure here would get the gate disabled, which is strictly worse than a measured blind
@@ -372,7 +372,7 @@ private object ToolNameBackings {
   private val ANNOTATED_NAME = Regex("""@TrailblazeToolClass\(\s*(?:name\s*=\s*)?"([^"]+)"""")
   private val YAML_TOOL_ID = Regex("""^id:\s*(\S+)\s*$""", RegexOption.MULTILINE)
   private val DESCRIPTOR_NAME = Regex("""^\s*(?:-\s+)?name:\s*"?($WORD+)"?\s*$""", RegexOption.MULTILINE)
-  private val EXPORTED_TOOL = Regex("""export\s+const\s+($WORD+)\s*=\s*trailblaze\s*\.\s*tool""")
+  private val EXPORTED_TOOL = Regex("""export\s+const\s+($WORD+)\s*=\s*trailblaze\s*\.\s*(?:tool|trailhead)""")
 
   /**
    * A tool advertised by an MCP server the host spawns as a subprocess at session start (the

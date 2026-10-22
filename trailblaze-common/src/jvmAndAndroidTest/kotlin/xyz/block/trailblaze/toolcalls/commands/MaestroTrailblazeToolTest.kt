@@ -14,6 +14,11 @@ import maestro.orchestra.EraseTextCommand
 import maestro.orchestra.InputTextCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
+import kotlin.test.assertContains
+import kotlin.test.assertFalse
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -36,6 +41,67 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *   https://docs.maestro.dev/reference/commands-available
  */
 class MaestroTrailblazeToolTest {
+  private var executionFailure: Exception? = null
+
+  @Test
+  fun `driver exceptions cannot escape with raw launch arguments`() = runBlocking {
+    executionFailure = IllegalStateException("driver echoed fixture-session-secret")
+    val tool = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: fixture-session-secret}}""",
+    )
+
+    val result = tool.execute(createContext())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertContains((result as TrailblazeToolResult.Error).errorMessage, "driver echoed")
+    assertFalse(result.toString().contains("fixture-session-secret"))
+  }
+
+  @Test
+  fun `launch argument redaction preserves the execution wire payload`() {
+    val tool = kotlinx.serialization.json.Json.decodeFromString(
+      MaestroTrailblazeToolSerializer,
+      """{"commands":[{"launchApp":{"appId":"com.example.app","arguments":{"credential":"fixture-session-secret"}}}]}""",
+    )
+    val wire = kotlinx.serialization.json.Json.encodeToString(MaestroTrailblazeToolSerializer, tool)
+    assertContains(wire, "fixture-session-secret")
+    val logged = tool.toLogPayload().raw.toString()
+    assertContains(logged, "com.example.app")
+    assertContains(logged, "credential")
+    assertFalse(logged.contains("fixture-session-secret"))
+    assertFalse(tool.toString().contains("fixture-session-secret"))
+  }
+
+  @Test
+  fun `launch argument redaction masks numeric values without changing unrelated command fields`() {
+    val tool = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app1, arguments: {pin: 47391, debug: 1}}
+- inputText: Item 1""",
+    )
+
+    val logged = tool.toLogPayload().raw.toString()
+    assertFalse(logged.contains("47391"))
+    assertContains(logged, "com.example.app1")
+    assertContains(logged, "Item 1")
+    assertContains(logged, "<redacted>")
+  }
+
+  @Test
+  fun `malformed source does not leak through parse failures or log encoder diagnostics`() = runBlocking {
+    val tool = MaestroTrailblazeTool("- launchApp: [fixture-session-secret")
+    val priorErr = System.err
+    val captured = ByteArrayOutputStream()
+    try {
+      System.setErr(PrintStream(captured))
+      val result = tool.execute(createContext())
+      assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+      assertFalse(result.toString().contains("fixture-session-secret"))
+      assertFalse(tool.toLogPayload().toString().contains("fixture-session-secret"))
+    } finally {
+      System.setErr(priorErr)
+    }
+    assertFalse(captured.toString().contains("fixture-session-secret"))
+  }
 
   private val testAgent =
     object :
@@ -64,7 +130,10 @@ class MaestroTrailblazeToolTest {
       override suspend fun executeMaestroCommands(
         commands: List<Command>,
         traceId: TraceId?,
-      ): TrailblazeToolResult = TrailblazeToolResult.Success()
+      ): TrailblazeToolResult {
+        executionFailure?.let { throw it }
+        return TrailblazeToolResult.Success()
+      }
     }
 
   private fun createContext(): TrailblazeToolExecutionContext {

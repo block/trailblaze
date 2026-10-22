@@ -329,6 +329,7 @@ class ComposeHostDriverDescriptor(
       TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
         targetTestApp = runOnHostParams.targetTestApp,
         config = runYamlRequest.config,
+        trailFilePath = runYamlRequest.trailFilePath,
         sessionId = session.sessionId,
         deviceInfo = trailblazeDeviceInfo,
         logsRepo = loggingRule.logsRepo,

@@ -43,6 +43,11 @@ class InProcessToolSourcesTest {
     assertEquals(listOf("sidecarless.ts"), discoveredNames())
   }
 
+  @Test fun `includes a descriptor-less trailhead declared with trailblaze_trailhead`() {
+    write("launchApp.ts", "export const launchApp = trailblaze.trailhead(async () => \"ok\")\n")
+    assertEquals(listOf("launchApp.ts"), discoveredNames())
+  }
+
   @Test fun `excludes a shared helper module that never calls trailblaze_tool`() {
     write("app_shared.ts", "export function textSelector(t: string) { return { t } }\n")
     assertEquals(emptyList(), discoveredNames())

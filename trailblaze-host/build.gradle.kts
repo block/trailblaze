@@ -406,6 +406,8 @@ dependencies {
   testImplementation(libs.ktor.serialization.kotlinx.json)
   // Trail Runner endpoint tests: spin up an in-memory Ktor app via testApplication.
   testImplementation(libs.ktor.server.test.host)
+  // Reads a QuickJS engine's heap after a survey runs in it (LiveSurveyReadEquivalenceTest).
+  testImplementation(libs.quickjs.kt)
 }
 
 tasks.test {

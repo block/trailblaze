@@ -12,6 +12,7 @@ import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.host.llm.OpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.http.OpenAiReasoningEffortCompatibilityPlugin
+import xyz.block.trailblaze.llm.OpenAiResponsesLlmClient
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
@@ -146,9 +147,11 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
           httpClientFactory = httpClientFactory,
         )
 
-        TrailblazeLlmProvider.OPENAI -> OpenAILLMClient(
-          apiKey = apiKey,
-          httpClientFactory = httpClientFactory,
+        TrailblazeLlmProvider.OPENAI -> OpenAiResponsesLlmClient(
+          OpenAILLMClient(
+            apiKey = apiKey,
+            httpClientFactory = httpClientFactory,
+          ),
         )
 
         TrailblazeLlmProvider.OPEN_ROUTER -> OpenRouterLLMClient(

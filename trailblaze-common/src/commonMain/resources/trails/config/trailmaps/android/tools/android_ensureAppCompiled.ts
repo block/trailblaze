@@ -207,7 +207,6 @@ export const android_ensureAppCompiled = trailblaze.tool<EnsureAppCompiledInput>
       "every launch. A healthy app costs one read and nothing else. Call before the first launch of the " +
       "app under test.",
     supportedPlatforms: ["android"],
-    requiresContext: true,
     // Author-named rather than agent-picked: a trail lists this as a setup step. Hiding it also keeps
     // it off every target's advertised surface, which discovery is global over.
     surfaceToLlm: false,

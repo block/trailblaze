@@ -17,7 +17,7 @@ export interface SubmitIfVisibleResult {
 }
 
 export const submit_if_visible = trailblaze.tool<EmptyInput, SubmitIfVisibleResult>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     const [matches] = await ctx.tools.findSelectorMatches({
       selectors: [{ androidAccessibility: { textRegex: "Submit" } }],

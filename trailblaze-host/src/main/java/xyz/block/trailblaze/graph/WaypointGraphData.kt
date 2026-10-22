@@ -95,8 +95,13 @@ data class WaypointGraphNode(
 data class WaypointGraphTrailhead(
   val id: String,
   val description: String?,
-  /** Destination waypoint, or null for a [dynamic] trailhead whose destination varies by input. */
+  /** The waypoint the trailhead declares it lands on, or null when it declares none. */
   val to: String? = null,
-  /** True when this trailhead has no fixed destination waypoint (destination varies by input). */
+  /** True when the trailhead declares no [to], so the graph draws it with no edge. */
   val dynamic: Boolean = false,
+  /**
+   * Lowercase platforms the trailhead's tool can run on (a scripted tool's `supportedPlatforms`).
+   * Empty means unrestricted. A platform-scoped view drops a trailhead whose tool can't run there.
+   */
+  val platforms: List<String> = emptyList(),
 )

@@ -161,6 +161,8 @@ object TrailTargetLint {
     private val classpathIds: Set<String> by lazy(classpathTrailmapIds)
     private val byWorkspaceRoot = mutableMapOf<File, Set<String>>()
 
+    // Synchronized: `trailblaze check` lints trails on several threads at once.
+    @Synchronized
     fun forWorkspace(workspaceRoot: File): Set<String> = byWorkspaceRoot.getOrPut(workspaceRoot) {
       resolvableTargetIds(
         workspaceTargetIds = workspaceTargetIds(workspaceRoot),

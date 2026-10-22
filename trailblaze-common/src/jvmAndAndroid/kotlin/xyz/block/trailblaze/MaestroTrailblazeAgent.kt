@@ -242,6 +242,17 @@ abstract class MaestroTrailblazeAgent(
   open suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult? = null
 
   /**
+   * Has the driver answer [appId]'s iOS notifications alert whenever a screen read sees it: [allow]
+   * true taps Allow, false taps Don't Allow, null stops answering it.
+   *
+   * Override in drivers that answer the alert themselves (today: the AXe iOS driver).
+   *
+   * @return A [TrailblazeToolResult] if the driver handled it, or null when this driver has no
+   *   answer of its own.
+   */
+  open suspend fun answerNotificationsAlert(appId: String, allow: Boolean?, traceId: TraceId?): TrailblazeToolResult? = null
+
+  /**
    * Waits until the on-device UI tree changes relative to a baseline captured at call entry,
    * then waits [quietWindowMs] of no further events to settle.
    *

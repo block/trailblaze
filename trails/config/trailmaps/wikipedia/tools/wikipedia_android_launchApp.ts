@@ -7,10 +7,9 @@ import { trailblaze } from "@trailblaze/scripting";
 // on `android_adbShell` over the Maestro-shaped `launchApp`, on `am start` over `monkey`,
 // and on the `ctx.target?.resolveAppId({ defaultAppId })` resolution order. `android_adbShell`
 // is dual-mode (`requiresHost: false`), so this tool needs no `requiresHost` and composes
-// cleanly on both deployment paths. `requiresContext: true` guarantees `ctx`; we still
-// optional-chain `ctx.target` for target-less sessions.
+// cleanly on both deployment paths. We optional-chain `ctx.target` for target-less sessions.
 export const wikipedia_android_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     const appId = ctx.target?.resolveAppId({ defaultAppId: "org.wikipedia" });
     if (!appId) {

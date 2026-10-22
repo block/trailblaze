@@ -11,6 +11,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import xyz.block.trailblaze.utils.Ext.asJsonObject
 
 /**
@@ -42,16 +43,22 @@ object OrchestraRunner {
     screenStateProvider: (() -> ScreenState)?,
     orchestraFactory: (OrchestraCallbacks) -> OrchestraExecutor,
   ): TrailblazeToolResult {
+    val batchLaunchSecrets = commands.flatMap { maestroLaunchArgumentSecrets(it.asJsonObject()) }
     // Create assertion logger for visualization
     val assertionLogger = AssertionLogger(
       maestro = maestro,
       screenStateProvider = screenStateProvider,
       trailblazeLogger = trailblazeLogger,
-      sessionProvider = sessionProvider
+      sessionProvider = sessionProvider,
+      sensitiveValues = batchLaunchSecrets,
     )
 
     commands.forEach { maestroCommand ->
-      val maestroCommandJsonObj = maestroCommand.asJsonObject()
+      val rawCommandJson = maestroCommand.asJsonObject()
+      val maestroCommandJsonObj = rawCommandJson.withMaestroLaunchArgumentsRedacted()
+        .withKnownMaestroLaunchValuesRedacted(
+          batchLaunchSecrets, preserveReferences = false,
+        )
       val startTime = Clock.System.now()
       var result: TrailblazeToolResult = TrailblazeToolResult.Success()
 
@@ -67,7 +74,8 @@ object OrchestraRunner {
 
           result = TrailblazeToolResult.Error.MaestroValidationError(
             commandJsonObject = maestroCommandJsonObj,
-            errorMessage = "Failed to run command: $maestroCommandJsonObj. Error: ${throwable.message}",
+            errorMessage = "Failed to run command: $maestroCommandJsonObj. Error: " +
+              redactSensitiveValuesIn(throwable.message.orEmpty(), batchLaunchSecrets),
           )
         },
       )

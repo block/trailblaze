@@ -10,6 +10,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 
 /**
  * End-to-end behavior tests for `trailblaze waypoint capture-example`.
@@ -95,6 +98,55 @@ class WaypointCaptureExampleBehaviorTest {
       "--step requires --session" !in err,
       "fail-fast error should NOT fire when --step is absent, got: $err",
     )
+  }
+
+  @Test
+  fun `capture-example auto-search picks the newest match on the host clock`() {
+    // The device's clock runs 60s ahead: its tool log, stamped 10:01:00, reached the host at
+    // 10:00:00.100. Its capture stamped 10:01:10 was taken at about 10:00:10 host time, before the
+    // host-stamped LLM request at 10:00:30, which is the newest match despite its earlier stamp.
+    val root = newTempDir()
+    // An android block with no conditions matches every android screen, so both captures match.
+    File(root, "home.waypoint.yaml").writeText(
+      """
+      id: "myapp/home"
+      description: "Test waypoint."
+      android:
+        required: []
+      """.trimIndent(),
+    )
+    val sessionDir = File(newTempDir(), "session-1").apply { mkdirs() }
+    File(sessionDir, "device.png").writeBytes(byteArrayOf(1, 1, 1))
+    File(sessionDir, "host.png").writeBytes(byteArrayOf(2, 2, 2))
+    val tree = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(
+      TrailblazeNode.serializer(),
+      TrailblazeNode(nodeId = 1, driverDetail = DriverNodeDetail.AndroidAccessibility()),
+    )
+    File(sessionDir, "001_TrailblazeToolLog.json").writeText(
+      """{"class":"xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog",""" +
+        """"trailblazeTool":{"toolName":"tap","raw":{}},"toolName":"tap","successful":true,""" +
+        """"traceId":"tool-1","durationMs":0,"session":"s","timestamp":"2026-05-08T10:01:00Z",""" +
+        """"clock":"device","hostReceivedAt":"2026-05-08T10:00:00.100Z"}""",
+    )
+    File(sessionDir, "aaa_AgentDriverLog.json").writeText(
+      """{"trailblazeNodeTree":$tree,"screenshotFile":"device.png","timestamp":"2026-05-08T10:01:10Z","clock":"device",""" +
+        """"hostReceivedAt":"2026-05-08T10:00:10.200Z"}""",
+    )
+    File(sessionDir, "bbb_TrailblazeLlmRequestLog.json").writeText(
+      """{"trailblazeNodeTree":$tree,"screenshotFile":"host.png","timestamp":"2026-05-08T10:00:30Z"}""",
+    )
+
+    val exitCode = withCapture {
+      execute(
+        "waypoint", "capture-example", "--id", "myapp/home",
+        "--root", root.absolutePath, "--logs-dir", sessionDir.parentFile.absolutePath,
+      )
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode, "stderr: $capturedErr")
+    // The example's screenshot is copied from the picked capture.
+    val example = root.listFiles { f -> f.extension == "png" }.orEmpty().single()
+    assertTrue(example.readBytes().contentEquals(byteArrayOf(2, 2, 2)), "picked the device capture's screenshot")
   }
 
   // ==========================================================================

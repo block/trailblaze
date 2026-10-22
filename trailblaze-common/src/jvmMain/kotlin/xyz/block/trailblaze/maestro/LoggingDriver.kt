@@ -6,6 +6,7 @@ import maestro.DeviceInfo
 import maestro.Driver
 import maestro.KeyCode
 import maestro.Point
+import maestro.orchestra.MaestroCommand
 import maestro.ScreenRecording
 import maestro.SwipeDirection
 import maestro.TreeNode
@@ -17,6 +18,8 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
+import xyz.block.trailblaze.utils.Ext.asJsonObject
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
@@ -33,7 +36,21 @@ class LoggingDriver(
   private val screenStateProvider: () -> ScreenState,
   private val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
+  private val sensitiveValues: Collection<String> = emptyList(),
 ) : Driver {
+
+  /** A batch-local wrapper avoids sharing credentials between concurrent host command batches. */
+  fun forMaestroBatch(commands: List<MaestroCommand>): LoggingDriver {
+    val values = commands.flatMap { maestroLaunchArgumentSecrets(it.asJsonObject()) }
+    return if (values.isEmpty()) this else LoggingDriver(
+      delegate, screenStateProvider, trailblazeLogger, sessionProvider, values,
+    )
+  }
+
+  private fun AgentDriverAction.safeForLog(): AgentDriverAction = when (this) {
+    is AgentDriverAction.EnterText -> copy(text = redactSensitiveValuesIn(text, sensitiveValues))
+    else -> this
+  }
 
   private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
     Console.log("Maestro-${delegate::class.java.simpleName}-$name()")
@@ -78,7 +95,7 @@ class LoggingDriver(
         (screenState as? xyz.block.trailblaze.api.MigrationScreenState)
           ?.driverMigrationTreeNode,
       screenshotFile = screenshotFilename,
-      action = action,
+      action = action.safeForLog(),
       durationMs = executionTimeMs,
       timestamp = startTime,
       session = session.sessionId,
@@ -102,7 +119,7 @@ class LoggingDriver(
     val log = TrailblazeLog.AgentDriverLog(
       viewHierarchy = null,
       screenshotFile = null,
-      action = action,
+      action = action.safeForLog(),
       durationMs = executionTimeMs,
       timestamp = startTime,
       session = session.sessionId,
@@ -201,8 +218,7 @@ class LoggingDriver(
   }
 
   override fun setPermissions(appId: String, permissions: Map<String, String>) {
-    val filteredPermissions = permissions.filter { it.key != "all" }
-    if (filteredPermissions.isNotEmpty()) {
+    if (permissions.isNotEmpty()) {
       logActionWithoutScreenshot(
         AgentDriverAction.GrantPermissions(
           appId = appId,

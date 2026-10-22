@@ -649,6 +649,7 @@ class McpProxy(
 
     try {
       val pb = ProcessBuilder(command)
+      CliCallerContext.removeLauncherCwd(pb.environment())
       if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
         pb.environment()["TRAILBLAZE_PORT"] = port.toString()
       }
@@ -1983,7 +1984,7 @@ internal fun findTrailblazeLauncher(): File? {
  */
 internal fun daemonSpawnCommand(): List<String>? {
   if (!isWindows()) {
-    return findTrailblazeLauncher()?.let { daemonSpawnArgv(it, foreground = true, headless = true) }
+    return findTrailblazeLauncher()?.let { inOwnSession(daemonSpawnArgv(it, foreground = true, headless = true)) }
   }
   val jar = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
     ?.let { File(it) }
@@ -2000,6 +2001,38 @@ internal fun daemonSpawnCommand(): List<String>? {
     currentJvmArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().inputArguments,
   )
 }
+
+/**
+ * [argv] run as the leader of a new session, so a signal the terminal sends the CLI's process group
+ * does not also reach the daemon it starts.
+ *
+ * A terminal's Ctrl-C signals its whole foreground process group. A daemon started in it took that
+ * signal too, and its Playwright driver (Node resets inherited signal dispositions) died mid-trail
+ * before the CLI's run cancel reached the daemon, so the cancelled run ended Failed, not Cancelled.
+ * Both wrappers exec in place, so the PID the startup claim records is still the daemon's. A host
+ * with neither starts the daemon as before.
+ *
+ * Under CI (`CI` set, as CI services do) the daemon stays in the job's group: no
+ * one presses Ctrl-C there, and a cancelled job stops its daemon by killing that group — a detached
+ * one would outlive the job on a reused agent.
+ *
+ * SISTER-IMPL-TAG: daemon-own-session. The launcher's `tb_in_own_session` does the same for a
+ * daemon it starts itself.
+ */
+internal fun inOwnSession(
+  argv: List<String>,
+  setsid: File? = findOnPath("setsid"),
+  perl: File? = File("/usr/bin/perl").takeIf { it.canExecute() },
+  underCi: Boolean = !System.getenv("CI").isNullOrEmpty(),
+): List<String> = when {
+  underCi -> argv
+  setsid != null -> listOf(setsid.absolutePath) + argv
+  perl != null -> listOf(perl.absolutePath, "-MPOSIX", "-e", PERL_SETSID_THEN_EXEC, "--") + argv
+  else -> argv
+}
+
+/** `setsid` fails only for a process group leader, which a fresh child never is; exec either way. */
+private const val PERL_SETSID_THEN_EXEC = "POSIX::setsid(); exec { \$ARGV[0] } @ARGV or die \"exec \$ARGV[0]: \$!\\n\""
 
 /**
  * The [daemonSpawnCommand] argv for a host with no launcher: `java <flags> -jar <jar> app start

@@ -15,7 +15,7 @@ import { LABELS, tapOnText, textIsVisible, tryOrFalse } from "./contacts_ios_sha
 // Critical pattern for iOS — the keyboard occludes hit-testing for any view it
 // overlaps, so leaving it up from a previous step often breaks the next tap.
 export const contacts_ios_dismissKeyboardIfPresent = trailblaze.tool(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (_input, ctx) => {
     if (!(await textIsVisible(ctx, LABELS.searchCancel))) {
       return "No keyboard visible — nothing to dismiss.";

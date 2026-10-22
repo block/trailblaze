@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.quickjs.tools
 
+import ai.koog.agents.core.tools.ToolParameterType
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -164,6 +166,42 @@ class QuickJsToolHostTest {
     assertEquals("string", direction.type)
     assertEquals(listOf("UP", "DOWN", "LEFT", "RIGHT"), direction.validValues)
     assertNull(descriptor.requiredParameters.single { it.name == "label" }.validValues)
+  }
+
+  @Test
+  fun `array and object params of an on-device tool reach the LLM with their element shape`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      const trailblaze = {
+        tool(name, spec, handler) { tools[name] = { name, spec, handler }; },
+      };
+      trailblaze.tool(
+        "seed_order",
+        {
+          description: "Seed",
+          inputSchema: {
+            type: "object",
+            properties: {
+              items: { type: "array", items: { type: "string" } },
+              prices: {
+                type: "array",
+                items: { type: "object", properties: { item: { type: "string" }, cents: { type: "number" } } },
+              },
+            },
+          },
+        },
+        async () => ({ content: [] }),
+      );
+      """.trimIndent(),
+    )
+
+    val koog = host.listTools().single().toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = false)
+    val types = koog.optionalParameters.associate { it.name to it.type }
+
+    assertEquals(ToolParameterType.List(ToolParameterType.String), types["items"])
+    val price = ((types["prices"] as ToolParameterType.List).itemsType as ToolParameterType.Object)
+    assertEquals(listOf("item", "cents"), price.properties.map { it.name })
   }
 
   @Test

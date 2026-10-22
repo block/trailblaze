@@ -33,7 +33,7 @@ object InProcessTestApks {
     name: String = "shell.apk",
     extra: Map<String, ByteArray> = emptyMap(),
     /** The shell's own properties asset. Null omits it, as a shell built before it existed would. */
-    properties: String? = "shellVersion=20260831.000000.abc1234\nfloored=true\nruntimeToolSource=true\n",
+    properties: String? = "shellVersion=20260831.000000.abc1234\nfloored=true\nruntimeToolSource=true\npackagedSurveys=true\n",
   ): File {
     val apk = File(dir, name)
     ZipOutputStream(apk.outputStream().buffered()).use { out ->

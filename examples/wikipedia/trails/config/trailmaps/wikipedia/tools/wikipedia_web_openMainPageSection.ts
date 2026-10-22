@@ -56,7 +56,7 @@ export interface OpenMainPageSectionArgs {
 // which broke recorded trails — now it's only a sanity belt-and-suspenders
 // applied when the anchor is reachable.
 export const wikipedia_web_openMainPageSection = trailblaze.tool<OpenMainPageSectionArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // Normalize to a lowercase short code if the caller supplied a string;
     // anything else (number, missing, etc.) collapses to "" which fails the

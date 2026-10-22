@@ -21,10 +21,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -39,6 +41,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -277,6 +280,60 @@ class QuickJsToolBundleLauncherTest {
       listOf("url"),
       registration.trailblazeDescriptor.requiredParameters.map { it.name },
     )
+  }
+
+  @Test
+  fun `an on-device tool drops arguments its YAML schema doesn't declare`() = runBlocking {
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["openThing"] = { handler: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+      tools["openEither"] = { handler: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+    """.trimIndent()
+    fun config(name: String, schema: JsonObject) = InlineScriptToolConfig(
+      script = "ignored.js",
+      name = name,
+      inputSchema = schema,
+      inputSchemaExhaustive = true,
+    )
+    val plain = buildJsonObject {
+      put("type", "object")
+      put("properties", buildJsonObject { put("url", buildJsonObject { put("type", "string") }) })
+    }
+    // A root union accepts keys its top-level `properties` doesn't list, so nothing can be dropped.
+    val union = buildJsonObject {
+      put(
+        "anyOf",
+        JsonArray(
+          listOf("url", "path").map { key ->
+            buildJsonObject {
+              put("type", "object")
+              put("properties", buildJsonObject { put(key, buildJsonObject { put("type", "string") }) })
+            }
+          },
+        ),
+      )
+    }
+    launchedRuntime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      advertisementOverrides = mapOf(
+        ToolName("openThing") to QuickJsToolAdvertisement.fromInlineScriptToolConfig(config("openThing", plain)),
+        ToolName("openEither") to QuickJsToolAdvertisement.fromInlineScriptToolConfig(config("openEither", union)),
+      ),
+    )
+    val args = buildJsonObject {
+      put("url", "https://example.com")
+      put("path", "/home")
+      put("reasoning", "Opening the page.")
+    }
+
+    fun decodedKeys(tool: String) =
+      (toolRepo.toolCallToTrailblazeTool(tool, args.toString()) as RawArgumentTrailblazeTool).rawToolArguments.keys
+    assertEquals(setOf("url"), decodedKeys("openThing"))
+    assertEquals(args.keys, decodedKeys("openEither"))
   }
 
   @Test

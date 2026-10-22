@@ -19,7 +19,7 @@ export interface OpenDuplicateProductDetailArgs {
  * Open the duplicate-list demo, click a specific product row, and verify its detail panel.
  */
 export const playwrightSample_web_openDuplicateProductDetail = trailblaze.tool<OpenDuplicateProductDetailArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, DEFAULT_RELATIVE_PATH);
     const itemId = nonEmptyString(args.itemId, DEFAULT_ITEM_ID);

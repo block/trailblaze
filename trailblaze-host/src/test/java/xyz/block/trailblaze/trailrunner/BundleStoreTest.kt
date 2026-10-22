@@ -18,6 +18,15 @@ class BundleStoreTest {
   val tmp = TemporaryFolder()
 
   @Test
+  fun `blank recording never replaces an existing variant`() {
+    val bundle = tmp.newFolder("bundle")
+    val variant = File(bundle, "ios.trail.yaml").apply { writeText("existing recording") }
+
+    assertEquals(null, BundleStore.writeVariant(bundle, "ios", "  \n"))
+    assertEquals("existing recording", variant.readText())
+  }
+
+  @Test
   fun `explicit create refuses to replace a recording`() {
     val bundle = tmp.newFolder("bundle")
     File(bundle, "ios.trail.yaml").writeText("old")

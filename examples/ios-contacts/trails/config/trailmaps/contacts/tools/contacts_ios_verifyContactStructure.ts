@@ -25,7 +25,7 @@ export interface VerifyContactStructureArgs {
 //      is visible. Each field has its own assertion so individual failures
 //      map back to a specific missing row.
 export const contacts_ios_verifyContactStructure = trailblaze.tool<VerifyContactStructureArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_NAME);
     const requireFields = filterNonEmptyStrings(input?.requireFields);

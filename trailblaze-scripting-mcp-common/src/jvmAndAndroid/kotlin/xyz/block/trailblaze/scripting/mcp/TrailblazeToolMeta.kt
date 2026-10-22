@@ -53,6 +53,7 @@ data class TrailblazeToolMeta(
   val requiredClassifiers: RequiredDeviceClassifiers = RequiredDeviceClassifiers.None,
   /** Null = global registry (pull-based). Non-null = pushed into that toolset at registration. */
   val toolset: String? = null,
+  /** Deprecated and ignored: every handler gets `ctx`. Still parsed so older specs load. */
   val requiresContext: Boolean = false,
   /**
    * Reserved runtime capability: this hidden MCP tool drains process-local opaque session
@@ -76,7 +77,7 @@ data class TrailblazeToolMeta(
    * applies; `false` when any of the filter rules rejects it.
    *
    * Implements the scope devlog's § Capability filtering order: drivers → platforms →
-   * requiresHost → requiredClassifiers. `requiresContext` is not a filter — it's UX-only per § 1.
+   * requiresHost → requiredClassifiers. `requiresContext` is deprecated and ignored.
    *
    * On-device callers pass `preferHostAgent = false`, which is what makes
    * `trailblaze/requiresHost: true` tools skip at registration without any extra branching

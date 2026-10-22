@@ -161,6 +161,7 @@ internal suspend fun runIosSimulatorYaml(
     TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
       targetTestApp = runOnHostParams.targetTestApp,
       config = runYamlRequest.config,
+      trailFilePath = runYamlRequest.trailFilePath,
       sessionId = session.sessionId,
       deviceInfo = hostTbRunner.trailblazeDeviceInfo,
       logsRepo = hostTbRunner.hostLoggingRule.logsRepo,

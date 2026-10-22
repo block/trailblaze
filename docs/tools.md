@@ -119,6 +119,27 @@ capture screenshots must use a `tool` condition. The agent never sees `runIf`, s
 `trailblaze toolbox` and you write it into recordings yourself. Scripted tools can call it too,
 via `ctx.tools.runIf(...)`.
 
+## Raw Maestro launch arguments
+
+`mobile_maestro` treats values inside `launchApp.arguments` as confidential and masks them in
+tool logs and legacy Maestro command logs. The real values still reach the app at launch;
+execution and transport serialization retain them. Native iOS launch failures also mask arguments
+if the device transport repeats them in its error output. Malformed command diagnostics omit the
+raw source because a parser error can repeat arbitrary input.
+
+Use whole-value memory references for launch arguments that need to survive recording. Literal
+and mixed-template arguments are masked in logs; recording generation refuses the whole session
+recording because it cannot replay a redacted placeholder or safely omit the launch from a later
+action sequence. A matching value elsewhere in authored text is masked only when it was also
+authored literally in the launch argument.
+For direct MCP `step(tools: ...)` on native iOS, the outer log cannot verify that a launch
+reference resolved, so saving the interactive step may refuse the recording. Put the launch in
+a trail or scripted tool when it must be replayed.
+
+Nested framework calls are excluded from recordings while their tool logs remain available.
+Recordability alone does not hide data: keep credentials inside the sign-in tool and avoid
+printing them, returning them to the model, or storing them as ordinary memory.
+
 ## Browsing the live tool catalog
 
 Once you've added a tool — or you're trying to figure out what's already available

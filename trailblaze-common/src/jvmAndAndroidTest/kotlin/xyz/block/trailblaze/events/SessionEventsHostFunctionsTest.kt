@@ -6,6 +6,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -96,6 +97,8 @@ class SessionEventsHostFunctionsTest {
     val ends = query("""{"stream":"$stream","match":{"eventType":{"type":"end"}}}""")
     assertTrue(ends["captured"]!!.jsonPrimitive.boolean)
     assertEquals(listOf("LOGIN", "CHECKOUT"), names(ends))
+    // Evidence cites the file the records came from, relative to the session.
+    assertEquals("${SessionEvents.DIR_NAME}/${SessionEvents.fileName(stream)}", ends["file"]!!.jsonPrimitive.content)
 
     val missing = query("""{"stream":"com.example.analytics"}""")
     assertFalse(missing["captured"]!!.jsonPrimitive.boolean)
@@ -120,8 +123,23 @@ class SessionEventsHostFunctionsTest {
       }
       waiter.await()
     }
-    val timeMs = result["events"]!!.jsonArray.single().jsonObject["timeMs"]!!.jsonPrimitive.long
+    val event = result["events"]!!.jsonArray.single().jsonObject
+    val timeMs = event["timeMs"]!!.jsonPrimitive.long
     assertTrue(timeMs <= System.currentTimeMillis(), "on the host clock, not an hour ahead: $timeMs")
+    assertNull(event["clock"], "a converted record is on the host clock")
+  }
+
+  @Test
+  fun `a device stamp with no clock measurement comes back raw and marked device`() {
+    FileEventSink(sessionDir).use {
+      it.append(stream, 5_000L, journey("CHECKOUT", "end"), TrailblazeClockDomain.DEVICE)
+    }
+    append(stream, journey("LOGIN", "end"))
+
+    val events = query("""{"stream":"$stream"}""")["events"]!!.jsonArray.map { it.jsonObject }
+    assertEquals(5_000L, events[0]["timeMs"]!!.jsonPrimitive.long)
+    assertEquals("device", events[0]["clock"]!!.jsonPrimitive.content)
+    assertNull(events[1]["clock"], "a host-stamped record carries no marker")
   }
 
   @Test
@@ -354,8 +372,20 @@ class SessionEventsHostFunctionsTest {
   }
 
   @Test
+  fun `a record over a megabyte is read whole, so a routine large response is not a loss`() {
+    // An app's sync response can pass 1 MB; skipping it made every read of its stream incomplete.
+    append(stream, buildJsonObject { put("journeyName", "SYNC"); put("blob", "x".repeat(1_100_000)) })
+    append(stream, journey("LOGIN", "end"))
+
+    val result = query("""{"stream":"$stream"}""")
+
+    assertTrue(result["complete"]!!.jsonPrimitive.boolean, result["incompleteReason"].toString())
+    assertEquals(listOf("SYNC", "LOGIN"), names(result))
+  }
+
+  @Test
   fun `a record too large to read makes the result incomplete, since it might have matched`() {
-    append(stream, buildJsonObject { put("journeyName", "LOGIN"); put("blob", "x".repeat(EventStreamScanner.DEFAULT_MAX_LINE_BYTES)) })
+    append(stream, buildJsonObject { put("journeyName", "LOGIN"); put("blob", "x".repeat(SessionEventsHostFunctions.MAX_LINE_BYTES)) })
     append(stream, journey("CHECKOUT", "end"))
 
     val counted = query("""{"stream":"$stream","count":true,"match":{"journeyName":"LOGIN"}}""")

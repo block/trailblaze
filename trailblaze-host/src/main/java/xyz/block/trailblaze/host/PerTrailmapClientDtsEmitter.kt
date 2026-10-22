@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.host
 
+import xyz.block.trailblaze.bundle.SurveyDts
+import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
+import xyz.block.trailblaze.surveys.SurveyBundles
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
@@ -189,6 +192,7 @@ object PerTrailmapClientDtsEmitter {
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
         extraParamsByToolName = kotlinTools.selectorParamsByName,
         hostFunctions = hostFunctionDtsFor(dependencyClosureIds(trailmap, trailmapsById), hostFunctions),
+        surveys = midTrailSurveys(trailmapDir),
       )
       // Emit the machine-readable arg-type sidecar next to the .d.ts so the trail-recording
       // validator can coerce recorded args to their declared types (see
@@ -389,6 +393,18 @@ object PerTrailmapClientDtsEmitter {
     }
   }
 
+  /**
+   * The trailmap's own surveys that can run mid-trail, for `ctx.surveys.<name>`. A survey that sets
+   * `requiresFinishedSession` runs only after the session, so it is left out.
+   */
+  internal fun midTrailSurveys(trailmapDir: File): List<SurveyDts> =
+    WorkspaceSurveyBundleSource.surveyFiles(trailmapDir).flatMap { file ->
+      val relative = file.relativeTo(trailmapDir).invariantSeparatorsPath
+      SurveyBundles.exportedSurveys(file.readText())
+        .filterNot { it.requiresFinishedSession }
+        .map { SurveyDts(name = it.name, feature = it.feature, file = relative) }
+    }
+
   /** [trailmap]'s id plus every id reachable through `dependencies:`, resolved or not. */
   private fun dependencyClosureIds(
     trailmap: ResolvedTrailmap,
@@ -413,7 +429,7 @@ object PerTrailmapClientDtsEmitter {
     closureIds: Set<String>,
     registry: TrailblazeHostFunctionRegistry,
   ): HostFunctionDts = try {
-    val functions = registry.all.values.filter { it.trailmapId in closureIds }
+    val functions = registry.all.values.filter { entry -> entry.trailmapIds.any { it in closureIds } }
     if (functions.isEmpty()) {
       HostFunctionDts.NONE
     } else {

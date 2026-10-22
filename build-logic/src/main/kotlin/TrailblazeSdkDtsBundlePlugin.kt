@@ -125,6 +125,15 @@ interface TrailblazeSdkDtsBundleExtension {
    * bundle keeps its `node:` builtin imports (`fs`, `path`, `zlib`, ...) and bun supplies them.
    */
   val sdkSurveysRuntimeOutputFile: RegularFileProperty
+
+  /**
+   * Path to the generated `dist/surveys-in-process.js` — what `@trailblaze/scripting/surveys`
+   * aliases to when a survey is bundled to run mid-trail, on an install that ships no SDK
+   * source. **Neutral platform**: built from `src/surveys/in-process.ts`, the
+   * surveys entry that reads no files, so it runs in the in-process QuickJS sandbox. Runtime only:
+   * authors typecheck against `surveys.d.ts`.
+   */
+  val sdkSurveysInProcessRuntimeOutputFile: RegularFileProperty
 }
 
 /**
@@ -163,6 +172,7 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       task.sdkMatcherRuntimeOutputFile.set(ext.sdkMatcherRuntimeOutputFile)
       task.sdkDtsSurveysBundleOutputFile.set(ext.sdkDtsSurveysBundleOutputFile)
       task.sdkSurveysRuntimeOutputFile.set(ext.sdkSurveysRuntimeOutputFile)
+      task.sdkSurveysInProcessRuntimeOutputFile.set(ext.sdkSurveysInProcessRuntimeOutputFile)
       task.projectDir.set(project.layout.projectDirectory)
       task.installLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-install.log"))
       task.dtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts.log"))
@@ -173,6 +183,9 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       task.matcherRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-matcher-runtime.log"))
       task.surveysDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-surveys.log"))
       task.surveysRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-surveys-runtime.log"))
+      task.surveysInProcessRuntimeLogFile.set(
+        project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-surveys-in-process-runtime.log"),
+      )
       declareSdkDtsBundleInputs(task, ext, project)
       task.outputs.files(
         project.provider {
@@ -237,6 +250,15 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           }
         },
       ).withPropertyName("sdkSurveysRuntime")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkSurveysInProcessRuntimeOutputFile.isPresent) {
+            project.files(ext.sdkSurveysInProcessRuntimeOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkSurveysInProcessRuntime")
 
     }
 
@@ -278,6 +300,10 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
   @get:OutputFile
   abstract val sdkSurveysRuntimeOutputFile: RegularFileProperty
 
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkSurveysInProcessRuntimeOutputFile: RegularFileProperty
+
   @get:Internal
   abstract val projectDir: DirectoryProperty
 
@@ -307,6 +333,9 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
 
   @get:Internal
   abstract val surveysRuntimeLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val surveysInProcessRuntimeLogFile: RegularFileProperty
 
   @TaskAction
   fun bundle() {
@@ -467,6 +496,24 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
       logger.lifecycle(
         "Regenerated ${surveysRuntimeFile.relativeToOrSelf(projectDirectory)} " +
           "(${surveysRuntimeFile.length() / 1024} KiB).",
+      )
+    }
+
+    if (sdkSurveysInProcessRuntimeOutputFile.isPresent) {
+      val inProcessFile = sdkSurveysInProcessRuntimeOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK sandbox surveys runtime → ${inProcessFile.relativeToOrSelf(projectDirectory)}",
+      )
+      // Neutral platform: this one runs in the scripted-tool sandbox. See
+      // [TrailblazeSdkDtsBundleExtension.sdkSurveysInProcessRuntimeOutputFile].
+      runEsbuildEsmBundle(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/surveys/in-process.ts"),
+        outputFile = inProcessFile,
+        logFile = surveysInProcessRuntimeLogFile.get().asFile,
+      )
+      logger.lifecycle(
+        "Regenerated ${inProcessFile.relativeToOrSelf(projectDirectory)} (${inProcessFile.length() / 1024} KiB).",
       )
     }
   }

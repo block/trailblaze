@@ -108,7 +108,6 @@ name: myapp_login
 description: Sign into MyApp with the supplied credentials.
 _meta:
   trailblaze/supportedPlatforms: [android]
-  trailblaze/requiresContext: true
 inputSchema:
   email:
     type: string
@@ -274,7 +273,7 @@ import { trailblaze } from "@trailblaze/scripting";
 export interface MyappLoginArgs { /* unchanged */ }
 
 export const myapp_login = trailblaze.tool<MyappLoginArgs>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (input, ctx) => {
     // requireSessionContext drops out — typed ToolContext is always provided.
     // ... uses ctx.tools.X(args)

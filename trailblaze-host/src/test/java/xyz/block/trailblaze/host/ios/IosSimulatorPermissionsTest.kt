@@ -148,6 +148,12 @@ class IosSimulatorPermissionsTest {
 
   // --- findNotificationAlertTap(): springboard alert auto-dismiss ---
 
+  @Test
+  fun `the alert names the app it asks for`() {
+    assertEquals("Example App", IosSimulatorPermissions.notificationAlertAppName(notificationAlert(button("Allow", left = 0))))
+    assertEquals(null, IosSimulatorPermissions.notificationAlertAppName(node(children = listOf(button("Allow", left = 0)))))
+  }
+
   private fun node(
     label: String? = null,
     type: String? = null,

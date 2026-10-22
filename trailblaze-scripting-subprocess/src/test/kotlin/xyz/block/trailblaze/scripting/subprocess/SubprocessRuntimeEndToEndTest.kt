@@ -41,14 +41,9 @@ import kotlin.test.Test
  * End-to-end: spawn a real subprocess MCP server, finish the initialize handshake, exercise
  * tools/list + filter + tools/call, and tear it down gracefully.
  *
- * Two fixtures live side-by-side at `src/test/resources/mcp-fixture/`:
- *
- * - `fixture.js` — hand-rolled JSON-RPC over stdio. No `node_modules`, no install step. Always
- *   runs in CI (as long as bun is on PATH) and catches Kotlin-client-side wire regressions
- *   cheaply.
- * - `fixture.ts` — real `@modelcontextprotocol/sdk` server. Opt-in: the test only runs when
- *   `node_modules/` exists next to `fixture.ts` (or env `TRAILBLAZE_E2E_TYPESCRIPT=true`).
- *   Catches drift on the SDK author surface Trailblaze tool authors will actually use.
+ * The fixture, `src/test/resources/mcp-fixture/fixture.js`, is hand-rolled JSON-RPC over stdio:
+ * no `node_modules`, no install step, so it catches Kotlin-client-side wire regressions cheaply.
+ * A server built on the real `@modelcontextprotocol/sdk` is covered by [SampleAppMcpToolsTest].
  *
  * Skipped entirely when bun isn't on PATH — there's no practical way to exercise the spawn
  * path without them. Unit tests cover the pure-function filter/parser logic regardless.
@@ -78,13 +73,6 @@ class SubprocessRuntimeEndToEndTest {
     File(url.toURI())
   }
 
-  private val tsFixture: File by lazy {
-    val url = requireNotNull(javaClass.getResource("/mcp-fixture/fixture.ts")) {
-      "Missing /mcp-fixture/fixture.ts on classpath — Gradle copy tasks out of sync?"
-    }
-    File(url.toURI())
-  }
-
   private val context = McpSpawnContext(
     platform = TrailblazeDevicePlatform.ANDROID,
     driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
@@ -107,31 +95,6 @@ class SubprocessRuntimeEndToEndTest {
         runtimeAvailable(),
       )
       runFixtureScenario(jsFixture)
-    }
-  }
-
-  /**
-   * Same scenario, but against the real-SDK TypeScript fixture. Opt-in: install deps first via
-   * `cd src/test/resources/mcp-fixture && bun install` (or `npm install`), then either run the
-   * test with `TRAILBLAZE_E2E_TYPESCRIPT=true` or let the auto-detection pick up `node_modules/`
-   * next to `fixture.ts`.
-   *
-   * Intentionally **not** wired into the default `check` task's required path — the install is
-   * heavy enough (and environment-specific enough) that CI stays on the JS fixture only.
-   */
-  @Test fun `TypeScript fixture spawn connect list-filter dispatch and shutdown`() {
-    runBlocking {
-      assumeTrue(
-        "bun must be on PATH to exercise the e2e runtime",
-        runtimeAvailable(),
-      )
-      assumeTrue(
-        "TypeScript fixture deps not installed. To opt in, run:\n" +
-          "  cd trailblaze-scripting-subprocess/src/test/resources/mcp-fixture && bun install\n" +
-          "(or `npm install`). Or set TRAILBLAZE_E2E_TYPESCRIPT=true to force the attempt.",
-        typescriptFixtureOptedIn(),
-      )
-      runFixtureScenario(tsFixture)
     }
   }
 
@@ -334,16 +297,5 @@ class SubprocessRuntimeEndToEndTest {
     true
   } catch (_: NoBunRuntimeException) {
     false
-  }
-
-  /**
-   * True when the TypeScript fixture has been locally bootstrapped. Either `node_modules/` is
-   * next to `fixture.ts`, or the developer has explicitly asked for the run via the env flag.
-   */
-  private fun typescriptFixtureOptedIn(): Boolean {
-    if (System.getenv("TRAILBLAZE_E2E_TYPESCRIPT")?.equals("true", ignoreCase = true) == true) {
-      return true
-    }
-    return File(tsFixture.parentFile, "node_modules").isDirectory
   }
 }

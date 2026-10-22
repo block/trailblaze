@@ -7,6 +7,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonArray
@@ -93,17 +94,23 @@ class QuickJsToolHistoryTest {
 
     runTrail(host, "item-1", "item-2")
 
+    // Each call carries the `ctx.memory.set` it made, committed when it returned.
     assertEquals(
       listOf(
-        TrailCall("fixture_addItem", "item-1", success = true),
-        TrailCall("fixture_addItem", "item-2", success = true),
+        TrailCall("fixture_addItem", "item-1", success = true, memory = listOf("set fixture_lastItemId=item-1")),
+        TrailCall("fixture_addItem", "item-2", success = true, memory = listOf("set fixture_lastItemId=item-2")),
       ),
       callsTeardownSaw(),
     )
     // The same calls as `formatToolCalls` prints them, durations aside.
     assertEquals(
-      listOf("✓ fixture_addItem(id: \"item-1\")", "✓ fixture_addItem(id: \"item-2\")"),
-      teardownState()["text"]!!.jsonPrimitive.content.lines().map { it.substringBefore("  ") },
+      listOf(
+        "✓ fixture_addItem(id: \"item-1\")",
+        "  = fixture_lastItemId ← \"item-1\"",
+        "✓ fixture_addItem(id: \"item-2\")",
+        "  = fixture_lastItemId ← \"item-2\"",
+      ),
+      teardownState()["text"]!!.jsonPrimitive.content.lines().map { it.replace(Regex("""  \d+\.\ds$"""), "") },
     )
     // Teardown ran in its own section, opening the instant the trail's closed.
     val (_, trailhead, trail, teardown) = ToolCallHistory.sections(session.sessionId)
@@ -122,7 +129,9 @@ class QuickJsToolHistoryTest {
     memory.remember("fixture_addItemThrowsCyclic", "true")
     assertFails { runTrail(host, "item-1") }
 
+    // Its `ctx.memory.set` ran before it threw, and was discarded with the failure.
     assertEquals(listOf(TrailCall("fixture_addItem", "item-1", success = false)), callsTeardownSaw())
+    assertNull(memory.variables["fixture_lastItemId"])
   }
 
   /** The `fixture_historyTrailhead` trailhead, then one `fixture_addItem` step per id. */
@@ -153,8 +162,14 @@ class QuickJsToolHistoryTest {
     }
   }
 
-  /** A trail step as teardown reported it; `nested` counts the calls it made. */
-  private data class TrailCall(val name: String, val id: String?, val success: Boolean, val nested: Int = 0)
+  /** A trail step as teardown reported it; `nested` counts the calls it made, `memory` lists its changes. */
+  private data class TrailCall(
+    val name: String,
+    val id: String?,
+    val success: Boolean,
+    val nested: Int = 0,
+    val memory: List<String> = emptyList(),
+  )
 
   /** What `teardown` returned as its `state`. */
   private fun teardownState(): JsonObject {
@@ -173,6 +188,7 @@ class QuickJsToolHistoryTest {
         id = call["args"]?.jsonObject?.get("id")?.jsonPrimitive?.content,
         success = call["success"]!!.jsonPrimitive.content.toBooleanStrict(),
         nested = call["nested"]!!.jsonPrimitive.content.toInt(),
+        memory = (call["memory"] as JsonArray).map { it.jsonPrimitive.content },
       )
     }
   }

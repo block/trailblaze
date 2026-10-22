@@ -529,6 +529,7 @@ object ToolCatalogBuilder {
       val stem = fileName.removeSuffix(".ts")
       if (fileName.startsWith("_") || stem.endsWith("_shared") || stem == "tools") return@mapNotNull null
       val declaresTool = content.contains("trailblaze.tool") ||
+        content.contains("trailblaze.trailhead") ||
         content.contains("function $stem") ||
         content.contains("const $stem")
       if (!declaresTool) return@mapNotNull null

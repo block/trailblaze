@@ -11,11 +11,10 @@ const APP_ID = "com.apple.MobileAddressBook";
  * Launch the iOS Contacts app and land on the top-level contacts list, from whatever screen the
  * device is on.
  */
-export const contacts_ios_launchApp = trailblaze.tool(
+export const contacts_ios_launchApp = trailblaze.trailhead(
   {
     supportedPlatforms: ["ios"],
-    requiresContext: true,
-    trailhead: { to: "contacts/ios/list" },
+    to: "contacts/ios/list",
   },
   async (_input, ctx) => {
     await ctx.tools.launchApp({ appId: APP_ID, launchMode: "FORCE_RESTART" });

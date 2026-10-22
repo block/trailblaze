@@ -19,13 +19,17 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.logs.client.temp.JsonElementSerializer
 import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 import xyz.block.trailblaze.maestro.MaestroYamlParser
+import xyz.block.trailblaze.maestro.maestroLaunchArgumentSecrets
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -56,7 +60,13 @@ import xyz.block.trailblaze.util.Console
 data class MaestroTrailblazeTool(
   /** Full Maestro commands-list YAML (list items prefixed with `- `). */
   val yaml: String,
-) : ExecutableTrailblazeTool {
+) : ExecutableTrailblazeTool, SensitiveValuesTrailblazeTool {
+  // A nested tool still emits logs even when excluded from recordings. The existing value-mask
+  // boundary also covers authored raw args and resolved memory, without changing execution bytes.
+  override val sensitiveValues: Collection<String> get() = maestroLaunchArgumentSecrets(yaml)
+
+  override fun toString(): String = "MaestroTrailblazeTool(commands=<omitted>)"
+
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
@@ -66,15 +76,32 @@ data class MaestroTrailblazeTool(
     val parsed = try {
       MaestroYamlParser.parseYaml(yaml)
     } catch (e: Throwable) {
-      Console.error("Failed to parse Maestro YAML: ${e.message}\nYAML:\n$yaml")
+      // Malformed YAML cannot be inspected reliably for secrets, and parser diagnostics can
+      // repeat arbitrary source lines. Keep both the console and returned failure source-free.
+      Console.error("Failed to parse Maestro YAML (${e::class.simpleName})")
       return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Maestro YAML failed to deserialize: ${e.message}",
+        errorMessage = "Maestro YAML failed to deserialize. Check command names and field types.",
       )
     }
-    return agent.runMaestroCommands(
-      maestroCommands = parsed,
-      traceId = toolExecutionContext.traceId,
-    )
+    val result = try {
+      agent.runMaestroCommands(
+        maestroCommands = parsed,
+        traceId = toolExecutionContext.traceId,
+      )
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "Maestro command failed: " + redactSensitiveValuesIn(e.message.orEmpty(), sensitiveValues),
+        stackTrace = redactSensitiveValuesIn(e.stackTraceToString(), sensitiveValues),
+      )
+    }
+    return if (result is TrailblazeToolResult.Error.ExceptionThrown) {
+      result.copy(
+        errorMessage = redactSensitiveValuesIn(result.errorMessage, sensitiveValues),
+        stackTrace = result.stackTrace?.let { redactSensitiveValuesIn(it, sensitiveValues) },
+      )
+    } else result
   }
 }
 
@@ -101,10 +128,16 @@ object MaestroTrailblazeToolSerializer : KSerializer<MaestroTrailblazeTool> {
       val serializableCommands = if (value.yaml.isBlank()) {
         emptyList()
       } else {
-        val rootNode = Yaml.default.parseToYamlNode(value.yaml)
+        val rootNode = try {
+          Yaml.default.parseToYamlNode(value.yaml)
+        } catch (_: Exception) {
+          // The canonical log encoder reports serializer failures. Never let a parser's
+          // source-bearing message escape through that diagnostic path.
+          throw IllegalArgumentException("Maestro commands must be valid YAML")
+        }
         require(rootNode is YamlList) {
           "MaestroTrailblazeTool.yaml must be a YAML list of commands, got " +
-            "${rootNode::class.simpleName}. YAML:\n${value.yaml}"
+            "${rootNode::class.simpleName}."
         }
         rootNode.items.map { item ->
           // A command can appear as either a YAML map (e.g. `eraseText: {charactersToErase: 3}`)

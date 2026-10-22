@@ -1,7 +1,19 @@
 package xyz.block.trailblaze.toolcalls
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import xyz.block.trailblaze.yaml.TrailArgTokens
+import xyz.block.trailblaze.maestro.withAuthoredMaestroLaunchArgumentsRedacted
+import xyz.block.trailblaze.maestro.maestroLaunchArgumentSecrets
+import xyz.block.trailblaze.maestro.maestroAuthoredLaunchLiterals
+import xyz.block.trailblaze.maestro.withKnownMaestroLaunchValuesRedacted
+import xyz.block.trailblaze.maestro.withMaestroLaunchArgumentsRedacted
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
@@ -122,7 +134,76 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  */
 fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted()
   .let { if (this is SensitiveArgsTrailblazeTool) it.withSensitiveArgsRedacted(sensitiveArgNames) else it }
-  .let { if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues) else it }
+  .let {
+    if (this is MaestroTrailblazeTool) it.copy(raw = it.raw.withMaestroLaunchArgumentsRedacted()
+      .withKnownMaestroLaunchValuesRedacted(sensitiveValues, preserveReferences = false))
+    else if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues)
+    else it
+  }
+
+/** Preserve only authored references that demonstrably changed in the executed payload. */
+internal fun TrailblazeTool.toAuthoredLogPayload(executed: TrailblazeTool): OtherTrailblazeTool {
+  val authored = toLogPayloadUnredacted()
+  val resolved = executed.toLogPayloadUnredacted()
+  val maskedNames = (executed as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet()
+  val rawDeclaredValues = if (executed is SensitiveValuesTrailblazeTool) {
+    (authored.raw["secrets"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }
+      ?.filterNot { value ->
+        TrailArgTokens.TOKEN_REGEX.matchEntire(value)?.let { match ->
+          TrailArgTokens.tokenBody(match)?.let { body ->
+            if (TrailArgTokens.isArgsToken(body)) TrailArgTokens.isValidDottedPath(body)
+            else Regex("""[A-Za-z_][A-Za-z0-9_.-]*""").matches(body)
+          }
+        } == true
+      } ?: emptyList()
+  } else emptyList()
+  val maskedValues = rawDeclaredValues +
+    ((this as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList()) +
+    ((executed as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList())
+  return authored.withSensitiveArgsRedacted(maskedNames).withSensitiveValuesRedacted(maskedValues, resolved)
+}
+
+/** The authored form keeps only references that actually changed during memory resolution. */
+internal fun TrailblazeTool.toAuthoredMaestroLogPayload(executed: MaestroTrailblazeTool): OtherTrailblazeTool {
+  val authored = toLogPayloadUnredacted()
+  val resolved = executed.toLogPayloadUnredacted()
+  return authored.copy(raw = authored.raw.withAuthoredMaestroLaunchArgumentsRedacted(resolved.raw)
+    .withKnownMaestroLaunchValuesRedacted(
+      maestroAuthoredLaunchLiterals(authored.raw, resolved.raw), preserveReferences = true, executed = resolved.raw,
+    ))
+}
+
+/**
+ * The text of each arg a [SensitiveArgsTrailblazeTool] declares secret, for masking that value
+ * where it turns up outside the payload (a tool can copy an arg into memory or a message). Every
+ * string or number inside an object or list arg counts, unless it is shorter than
+ * [MIN_NESTED_SECRET_CHARS]: masking a card's `expMonth: 1` would hide every "1" in the text.
+ * Booleans and nulls can't hold a secret. [resolve] adds each value as a scripted tool would resolve
+ * it (a token to what memory holds); the length rule applies to what it resolves to.
+ */
+internal fun TrailblazeTool.sensitiveArgValues(resolve: (String) -> String? = { null }): List<String> {
+  val names = (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames.orEmpty()
+  if (names.isEmpty()) return emptyList()
+  val args = toLogPayloadUnredacted().raw
+  return buildList {
+    fun addTexts(value: JsonElement, nested: Boolean) {
+      when (value) {
+        is JsonObject -> value.values.forEach { addTexts(it, nested = true) }
+        is JsonArray -> value.forEach { addTexts(it, nested = true) }
+        is JsonPrimitive ->
+          if (value != JsonNull && (value.isString || value.booleanOrNull == null)) {
+            listOfNotNull(value.content, resolve(value.content))
+              .filter { it.isNotBlank() && (!nested || it.length >= MIN_NESTED_SECRET_CHARS) }
+              .forEach(::add)
+          }
+      }
+    }
+    names.forEach { name -> args[name]?.let { addTexts(it, nested = false) } }
+  }
+}
+
+/** Shortest value inside an object or list secret arg that [sensitiveArgValues] masks elsewhere. */
+private const val MIN_NESTED_SECRET_CHARS = 3
 
 private fun TrailblazeTool.toLogPayloadUnredacted(): OtherTrailblazeTool {
   if (this is OtherTrailblazeTool) return this

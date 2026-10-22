@@ -26,7 +26,7 @@ export interface SearchAndVerifyArgs {
 // workflows without copying their bodies. The composition runs inside one
 // QuickJS invocation, so the agent only pays one round-trip's worth of latency.
 export const wikipedia_web_searchAndVerify = trailblaze.tool<SearchAndVerifyArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const query = nonEmptyString(input.query, "Trailblazer");
     const expectedHeading = nonEmptyString(input.expectedHeading, query);

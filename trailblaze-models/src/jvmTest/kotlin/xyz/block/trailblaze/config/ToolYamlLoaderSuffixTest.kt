@@ -96,6 +96,39 @@ class ToolYamlLoaderSuffixTest {
     assertNotNull(parsed.single().trailhead)
   }
 
+  @Test
+  fun `trailhead yaml suffix accepts an empty trailhead block with no destination`() {
+    val yamlContents = mapOf(
+      "launchApp.trailhead" to """
+        id: myapp_launchApp
+        description: Launch the app.
+        tools:
+          - tap: { selector: "x" }
+        trailhead: {}
+      """.trimIndent(),
+    )
+    val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
+    assertEquals(TrailheadMetadata(to = null), parsed.single().trailhead)
+  }
+
+  @Test
+  fun `trailhead yaml suffix rejects a blank destination and says to omit it`() {
+    val yamlContents = mapOf(
+      "launchApp.trailhead" to """
+        id: myapp_launchApp
+        description: Launch the app.
+        tools:
+          - tap: { selector: "x" }
+        trailhead:
+          to: ""
+      """.trimIndent(),
+    )
+    val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
+    assertEquals(0, parsed.size)
+    val log = capturedText()
+    assertTrue(log.contains("'trailhead.to' is blank") && log.contains("Omit it"), "Expected blank-destination error; got: $log")
+  }
+
   // ----------------------------------------------------------------------
   // Suffix-content mismatches — the most important rule the loader
   // enforces beyond what ToolYamlConfig.validate() already covers.

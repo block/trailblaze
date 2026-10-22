@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import xyz.block.trailblaze.api.filterImportantForAccessibility
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.util.Log
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
@@ -11,7 +12,6 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.accessibility.filterImportantForAccessibility
 import xyz.block.trailblaze.android.accessibility.toAccessibilityNode
 import xyz.block.trailblaze.android.accessibility.toTrailblazeNode
 import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollector

@@ -158,7 +158,7 @@ export interface MyappLoginArgs {
  * to log in, sign in, authenticate, or otherwise reach a signed-in state.
  */
 export const myapp_login = trailblaze.tool<MyappLoginArgs>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (input, ctx) => {
     await ctx.tools.tapOnElement({ ref: "Email" });
     await ctx.tools.inputText({ text: input.email });
@@ -181,7 +181,7 @@ What the typed surface gives you:
   parameter's LLM-facing description.
 - The TSDoc on the exported `const` becomes the tool's description — what the agent reads
   when deciding whether to call this tool.
-- The spec object (`{ supportedPlatforms, requiresContext }`) becomes the runtime's
+- The spec object (`{ supportedPlatforms }`) becomes the runtime's
   registration gates and metadata hints — no separate `_meta:` YAML required.
 - `ctx.tools.<name>(args)` is the typed composition surface. Every framework tool, every
   sibling trailmap-local tool, and every tool inherited via a dep's `exports:` is a

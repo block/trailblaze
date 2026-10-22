@@ -35,7 +35,7 @@ const CONTENT_LOADED_WAIT_MS = 30_000;
  */
 // Waits for the result rather than sleeping, so it works for every delay chip (1s / 3s / 6s).
 export const sampleapp_launchToLoadedContent = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     if (ctx.device?.driverType && ctx.device.driverType !== ACCESSIBILITY_DRIVER_TYPE) {
       throw new Error(

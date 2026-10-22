@@ -534,6 +534,64 @@ class TrailTscValidatorTest {
   }
 
   @Test
+  fun `validate ignores trails inside a nested agent worktree under dot-claude`() {
+    val trailsRoot = tmp.newFolder("trails")
+    val trail = """
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - demoTap:
+              text: Settings
+    """.trimIndent()
+    File(trailsRoot, "own.trail.yaml").writeText(trail)
+    // Another branch's checkout: a full second copy of the corpus that is not this workspace's.
+    File(trailsRoot, ".claude/worktrees/agent-1/trails").mkdirs()
+    File(trailsRoot, ".claude/worktrees/agent-1/trails/other.trail.yaml").writeText(trail)
+
+    val report = TrailTscValidator.validate(
+      trailsRoot = trailsRoot,
+      trailmaps = emptyList(),
+      jsRuntime = "bun",
+      tscJs = File(trailsRoot, "unused-tsc.js").toPath(),
+    )
+
+    assertEquals(1, report.trailsDiscovered, "only the workspace's own trail is discovered")
+    assertEquals(mapOf("demo" to 1), report.skippedNoManifest)
+  }
+
+  @Test
+  fun `validate follows a trails root that is a symlink`() {
+    val shared = tmp.newFolder("shared-trails")
+    File(shared, "login.trail.yaml").writeText(
+      """
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - demoTap:
+              text: Settings
+      """.trimIndent(),
+    )
+    val trailsRoot = File(tmp.root, "trails")
+    java.nio.file.Files.createSymbolicLink(trailsRoot.toPath(), shared.toPath())
+
+    val report = TrailTscValidator.validate(
+      trailsRoot = trailsRoot,
+      trailmaps = emptyList(),
+      jsRuntime = "bun",
+      tscJs = File(trailsRoot, "unused-tsc.js").toPath(),
+    )
+
+    assertEquals(1, report.trailsDiscovered)
+    assertEquals(mapOf("demo" to 1), report.skippedNoManifest)
+  }
+
+  @Test
   fun `validate classifies a no-surface target as missing-surface only when its manifest is known`() {
     // Two trails, two targets. `hasManifest` is in knownManifestTargets (a manifest exists, its
     // surface just wasn't loaded this run); `noManifest` is not, so it can never be validated.

@@ -21,7 +21,7 @@ export interface OpenAppArgs {
 // restore the app's last scene, which on Contacts often means a still-open
 // draft from the previous trail.
 export const contacts_ios_openApp = trailblaze.tool<OpenAppArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const dismissKeyboard = input?.dismissKeyboard !== false;
 

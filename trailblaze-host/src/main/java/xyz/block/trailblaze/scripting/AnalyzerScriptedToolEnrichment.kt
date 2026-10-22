@@ -550,7 +550,7 @@ class AnalyzerScriptedToolEnrichment(
       // declared a full `inputSchema:` (which wins over the analyzer), or the analyzer read the
       // tool's `<I>` generic. Both are the tool's complete argument contract.
       inputSchemaExhaustive = true,
-      trailhead = ScriptedToolDefProjection.trailheadOf(entryName, def.spec),
+      trailhead = ScriptedToolDefProjection.trailheadOf(def.spec),
     )
   }
 

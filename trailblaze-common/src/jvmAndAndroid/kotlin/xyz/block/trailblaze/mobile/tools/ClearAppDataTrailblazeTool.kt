@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mobile.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.device.PmClearOutcome
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -8,6 +9,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 /**
@@ -16,7 +18,8 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  * Supports both Android and iOS:
  * - **Android**: delegates to [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.clearAppData]
  *   (`pm clear` on-device or `adb shell pm clear` from host).
- * - **iOS**: uses `xcrun simctl` to locate and delete the app's data container.
+ * - **iOS**: terminates the app, waits for it to exit, then empties its data container via `xcrun simctl`.
+ *   On `ios-axe` it also forgets the app's `ios_setPermissions` notifications answer, as a fresh install has none.
  */
 @Serializable
 @TrailblazeToolClass(
@@ -48,10 +51,17 @@ data class ClearAppDataTrailblazeTool(
         }
 
         TrailblazeDevicePlatform.IOS -> {
-          IosHostSimctlUtils.clearAppDataContainer(
+          val outcome = IosHostSimctlUtils.clearAppDataContainer(
             deviceId = deviceInfo.trailblazeDeviceId.instanceId,
             appId = appId,
           )
+          // Before the not-installed return too: an answer armed ahead of install must not answer it.
+          forgetNotificationsAnswer(toolExecutionContext)?.let { return it }
+          if (outcome == IosHostSimctlUtils.ClearAppDataOutcome.NOT_INSTALLED) {
+            return TrailblazeToolResult.Success(
+              message = "Nothing to clear: '$appId' is not installed on this simulator.",
+            )
+          }
         }
 
         TrailblazeDevicePlatform.WEB ->
@@ -67,6 +77,8 @@ data class ClearAppDataTrailblazeTool(
       TrailblazeToolResult.Success(
         message = "Cleared app data for '$appId'.",
       )
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "Failed to clear app data for '$appId': ${e.message}",
@@ -75,4 +87,15 @@ data class ClearAppDataTrailblazeTool(
       )
     }
   }
+
+  /**
+   * Has a driver that answers the notifications alert itself (`ios-axe`) stop answering this app's;
+   * the error if it refused. That answer lives in the driver, which this simctl clear never reaches.
+   * `ios-host` is left alone: Maestro's runner keeps one answer for the whole simulator, so unsetting
+   * it would also drop every other app's answer.
+   */
+  internal suspend fun forgetNotificationsAnswer(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult? =
+    toolExecutionContext.maestroTrailblazeAgent
+      ?.answerNotificationsAlert(appId, allow = null, traceId = toolExecutionContext.traceId)
+      ?.takeUnless { it.isSuccess() }
 }

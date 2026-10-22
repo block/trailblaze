@@ -8,16 +8,13 @@ import { trailblaze, type ToolContext } from "@trailblaze/scripting";
 const APP_ID = "xyz.block.trailblaze.examples.sampleapp";
 
 /** Launch the Sample App on the Settings tab with "Accept Terms" unchecked. */
-export const sampleapp_openSettings = trailblaze.tool(
+export const sampleapp_openSettings = trailblaze.trailhead(
   {
     supportedPlatforms: ["android"],
-    requiresContext: true,
-    trailhead: {
-      to: "sampleapp/android/settings",
-      async teardown(_args, _ctx, trailRun) {
-        if (trailRun.outcome !== "passed") return { reusable: false, reason: `trail ${trailRun.outcome}` };
-        return { reusable: true, reason: "left on Settings", state: { acceptTermsChecked: true } };
-      },
+    to: "sampleapp/android/settings",
+    async teardown(_args, _ctx, trailRun) {
+      if (trailRun.outcome !== "passed") return { reusable: false, reason: `trail ${trailRun.outcome}` };
+      return { reusable: true, reason: "left on Settings", state: { acceptTermsChecked: true } };
     },
   },
   async (_input, ctx) => {

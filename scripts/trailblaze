@@ -589,6 +589,30 @@ tb_roll_daemon_log() {
     mv -f "$TRAILBLAZE_DAEMON_LOG" "${TRAILBLAZE_DAEMON_LOG}.1" 2>/dev/null || true
 }
 
+# Execs "$@" as the leader of a new session, so a signal the terminal sends this command's process
+# group does not also reach the daemon it starts. A terminal's Ctrl-C signals the whole foreground
+# group, and neither `nohup` nor a background `&` protects the daemon's Playwright driver from it
+# (Node resets inherited signal dispositions): it died mid-trail before the CLI's run cancel reached
+# the daemon, so a cancelled run ended Failed, not Cancelled. Both wrappers exec in place, so `$!`
+# is still the daemon's PID. macOS has no `setsid`; a host with neither starts the daemon as before.
+#
+# Under CI (`CI` set, as CI services do) the daemon stays in the job's group: no
+# one presses Ctrl-C there, and a cancelled job stops its daemon by killing that group — a detached
+# one would outlive the job on a reused agent.
+#
+# SISTER-IMPL-TAG: daemon-own-session. McpProxy.kt's inOwnSession does the same for a daemon the
+# JVM starts.
+tb_in_own_session() {
+    if [ -n "${CI:-}" ]; then
+        exec "$@"
+    elif command -v setsid > /dev/null 2>&1; then
+        exec setsid "$@"
+    elif [ -x /usr/bin/perl ]; then
+        exec /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!\n"' -- "$@"
+    fi
+    exec "$@"
+}
+
 # Execution functions — overridable by defining them before sourcing this script.
 # All functions accept variadic args to preserve quoting (e.g., YAML with newlines).
 if ! declare -f tb_run > /dev/null 2>&1; then
@@ -602,7 +626,7 @@ if ! declare -f tb_run > /dev/null 2>&1; then
   tb_run_background() {
     mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
     tb_roll_daemon_log
-    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
+    tb_in_own_session nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
   }
 
   tb_run_quiet() {
@@ -995,7 +1019,7 @@ release_daemon_startup() {
 # diffs this line against the Kotlin set so the drift is loud instead; keep the
 # declaration on one line and space-separated, because that check parses it.
 # Adding one that can run for minutes? Say so in ipc_try_forward's waiting notice.
-TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS="snapshot ask config tool"
+TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS="snapshot ask config tool selector"
 #
 # Falls through to the normal JVM path if:
 #   - jq isn't installed (we can't assemble/parse JSON safely without it)
@@ -1328,7 +1352,7 @@ ipc_try_forward() {
         # (only `trail` and `mcp` do), so the old hint sent users to an "Unknown option" error.
         # Every clause here is bounded by what the daemon actually guarantees. It serializes
         # /cli/exec behind one lock, so a second forwarded command is queued rather than running.
-        # `blaze` is deliberately absent: the forwardable set is `snapshot ask config tool`, so
+        # `blaze` is deliberately absent: the forwardable set is `snapshot ask config tool selector`, so
         # this notice can never fire for it. And `status` does not list a forwarded command —
         # its activeRuns counts async trail runs, not execs — so it is offered as a health check
         # only. `stop` ends the daemon, after which the failed forward falls through and this

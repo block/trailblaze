@@ -674,6 +674,7 @@ class TeardownTest {
     val record = queried!!.single().jsonObject
     assertEquals("checkout", record["data"]!!.jsonObject["name"]!!.jsonPrimitive.content)
     assertTrue(record["timeMs"]!!.jsonPrimitive.content.toLong() < System.currentTimeMillis(), record.toString())
+    assertNull(record["clock"], "a converted record is on the host clock")
   }
 
   @Test

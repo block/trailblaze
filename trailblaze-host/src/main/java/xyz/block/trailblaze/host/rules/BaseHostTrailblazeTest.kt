@@ -727,6 +727,7 @@ abstract class BaseHostTrailblazeTest(
     if (sendSessionStartLog) {
       val session = loggingRule.session
       if (session != null) {
+        (connectedDevice as? IosNativeConnectedDevice)?.onSessionStart(session.sessionId)
         // A session that runs under a real JUnit harness carries a Description we can read the
         // class/method from. CLI / daemon runs don't (the runner builds an anonymous
         // `object : BaseHostTrailblazeTest`, whose simpleName is empty), so derive a readable
@@ -786,6 +787,7 @@ abstract class BaseHostTrailblazeTest(
         launchedScripting = HostScriptedToolLauncher.launch(
           targetTestApp = appTarget,
           config = config,
+          trailFilePath = trailFilePath,
           sessionId = session.sessionId,
           deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
           logsRepo = hostLoggingRule.logsRepo,

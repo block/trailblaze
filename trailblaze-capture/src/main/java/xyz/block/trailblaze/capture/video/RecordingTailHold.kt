@@ -110,11 +110,17 @@ object RecordingTailHold {
     else RecordingFormat.WEBM
 
   /**
-   * Clones the final frame once, then moves only that clone to [untilMs]. Frames are counted from
-   * zero, so the clone is frame [frames]. Internal so the graph is assertable without ffmpeg.
+   * Clones the final frame, keeps one clone, then moves only that clone to [untilMs]. Frames are
+   * counted from zero, so the clone is frame [frames]. Internal so the graph is assertable without
+   * ffmpeg.
+   *
+   * Pads two and keeps the first because a single pad is not always written: the static ffmpeg
+   * 7.0.2 build Hermit installs on Linux drops it for an mp4 input, so the file still ends at the
+   * last change. Two pads write at least one on every build tried, and the select drops a second
+   * so it cannot stack a duplicate stamp.
    */
   internal fun filter(frames: Int, untilMs: Long): String =
-    "tpad=stop_mode=clone:stop=1,setpts='if(gte(N,$frames),${untilMs / 1000.0}/TB,PTS)'"
+    "tpad=stop_mode=clone:stop=2,select='lte(n,$frames)',setpts='if(gte(N,$frames),${untilMs / 1000.0}/TB,PTS)'"
 
   /**
    * Frames in [file], read from the demuxer without decoding. The live encode runs with no

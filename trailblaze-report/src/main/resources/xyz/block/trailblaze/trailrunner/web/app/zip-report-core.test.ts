@@ -287,6 +287,17 @@ describe("a session read straight off disk is put on one clock before it is orde
     expect(session.logs[1].hostReceivedAt).toBe("2026-06-30T20:05:01.000Z");
   });
 
+  test("a whole report built from the archive measures the run on that one clock", async () => {
+    // The renderer is handed to the full assembly, not to the reader underneath it, so the
+    // assembly must pass it on. Left raw, the device log's 20:00 opens the run and the five-minute
+    // skew lands in the run's duration.
+    const dir = SESSION_ID + "/";
+    const logs = [hostLog("2026-06-30T20:02:00.000Z"), deviceToolLog(), hostLog("2026-06-30T20:06:00.000Z")];
+    const zip = buildZip(logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })));
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].meta.duration).toBe("4m 0s");
+  });
+
   test("a session with no anchored device log keeps its raw timestamps", async () => {
     // No offset is derivable, so nothing is invented. A pre-marker archive must read the same as
     // it did before this normalization existed.

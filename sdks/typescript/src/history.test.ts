@@ -59,8 +59,32 @@ describe("ctx.history", () => {
         endedAt: 2_000,
         device: null,
         calls: [],
+        memory: [],
       },
     ]);
+  });
+
+  test("each call carries the memory changes it committed", async () => {
+    const flat = [
+      recorded("c1", "myapp_signIn", null, {
+        memory: [
+          { op: "set", key: "password", value: "{{password}}" },
+          { op: "delete", key: "staleId", value: null },
+        ],
+      }),
+      recorded("c2", "myapp_addItem", "c1", { memory: [{ op: "set", key: "newItemId", value: "item-1" }] }),
+    ];
+    let seen: ToolCall[] = [];
+    const def = tool(async (_input, ctx) => {
+      seen = await ctx.history.toolCalls();
+      return "ok";
+    });
+    await def({}, {} as never, hostClient([], () => flat));
+    expect(seen[0].memory).toEqual([
+      { op: "set", key: "password", value: "{{password}}" },
+      { op: "delete", key: "staleId", value: null },
+    ]);
+    expect(seen[0].calls[0].memory).toEqual([{ op: "set", key: "newItemId", value: "item-1" }]);
   });
 
   test("toolCalls() asks for the whole session", async () => {
@@ -164,6 +188,7 @@ describe("formatToolCalls", () => {
     endedAt: 3_200,
     device: null,
     calls: [],
+    memory: [],
     ...extra,
   });
 
@@ -182,6 +207,27 @@ describe("formatToolCalls", () => {
         '  ✓ tapOnElement(text: "Add")  0.7s',
         '✗ assertVisible(text: "item-1")  1.8s  Element not found',
         "… teardown()  running",
+      ].join("\n"),
+    );
+  });
+
+  test("prints each memory change a call committed after the calls it made", () => {
+    const text = formatToolCalls([
+      node("myapp_addItem", {
+        calls: [node("tapOnElement", { endedAt: 1_700, memory: [{ op: "set", key: "tapped", value: "yes" }] })],
+        memory: [
+          { op: "set", key: "newItemId", value: "item-1" },
+          { op: "delete", key: "draftId", value: null },
+        ],
+      }),
+    ]);
+    expect(text).toBe(
+      [
+        "✓ myapp_addItem()  2.2s",
+        "  ✓ tapOnElement()  0.7s",
+        '    = tapped ← "yes"',
+        '  = newItemId ← "item-1"',
+        "  = draftId deleted",
       ].join("\n"),
     );
   });

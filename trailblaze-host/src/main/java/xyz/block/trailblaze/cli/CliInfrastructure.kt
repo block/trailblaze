@@ -2694,6 +2694,7 @@ private fun cliTryStartDaemon(
   val child = try {
     val pb = ProcessBuilder(spawnCommand)
     pb.environment().putAll(childEnvironment)
+    CliCallerContext.removeLauncherCwd(pb.environment())
     if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
       pb.environment()["TRAILBLAZE_PORT"] = port.toString()
     }

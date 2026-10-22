@@ -3,6 +3,7 @@ package xyz.block.trailblaze.llm.config
 import java.io.File
 import java.net.URI
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.jar.JarFile
 import xyz.block.trailblaze.util.Console
 
@@ -44,19 +45,42 @@ object ClasspathResourceDiscovery {
           "jar" -> {
             val jarPath = jarFileOf(url)
             try {
-              JarFile(jarPath).use { jar ->
-                jar.entries().asSequence()
-                  .filter {
-                    it.name.startsWith("$directoryPath/") && it.name.endsWith(suffix)
-                  }
-                  .forEach { filenames.add(it.name.removePrefix("$directoryPath/")) }
-              }
+              jarEntryNames(jarPath).under("$directoryPath/")
+                .filter { it.endsWith(suffix) }
+                .forEach { filenames.add(it.removePrefix("$directoryPath/")) }
             } catch (_: Exception) { /* Skip unreadable JARs */ }
           }
         }
       }
     } catch (_: Exception) { /* Fall back gracefully */ }
     return filenames
+  }
+
+  /**
+   * Every entry name in one JAR, sorted, so a directory's entries are one contiguous run. A scan
+   * reads the JAR's whole directory, and the Trailblaze JAR has tens of thousands of entries, so
+   * each JAR is read once per process rather than once per scan; loading a workspace's bundled
+   * trailmaps scans it many times. Keyed by size and modification time as well as path, so a JAR
+   * rewritten in place is read again.
+   */
+  private class JarEntryNames(private val sorted: Array<String>) {
+    /** The names that start with [prefix], in order. */
+    fun under(prefix: String): Sequence<String> {
+      val from = sorted.binarySearch(prefix).let { if (it < 0) -it - 1 else it }
+      return (from until sorted.size).asSequence().map { sorted[it] }.takeWhile { it.startsWith(prefix) }
+    }
+  }
+
+  private data class JarKey(val path: String, val length: Long, val lastModified: Long)
+
+  private val jarEntryNamesCache = ConcurrentHashMap<JarKey, JarEntryNames>()
+
+  /** Throws what opening [jar] throws; a failed read is not cached. */
+  private fun jarEntryNames(jar: File): JarEntryNames {
+    val key = JarKey(jar.absolutePath, jar.length(), jar.lastModified())
+    jarEntryNamesCache[key]?.let { return it }
+    val names = JarFile(jar).use { file -> file.entries().asSequence().map { it.name }.toList() }
+    return JarEntryNames(names.toTypedArray().apply { sort() }).also { jarEntryNamesCache[key] = it }
   }
 
   /**
@@ -164,13 +188,10 @@ object ClasspathResourceDiscovery {
           "jar" -> {
             val jarPath = jarFileOf(url)
             try {
-              JarFile(jarPath).use { jar ->
-                jar.entries().asSequence()
-                  .filter {
-                    it.name.startsWith("$directoryPath/") && it.name.endsWith(suffix) && !it.isDirectory
-                  }
-                  .forEach { results.add(it.name.removePrefix("$directoryPath/")) }
-              }
+              jarEntryNames(jarPath).under("$directoryPath/")
+                // A directory entry's name ends in `/`, which is how [JarEntry.isDirectory] tells.
+                .filter { it.endsWith(suffix) && !it.endsWith("/") }
+                .forEach { results.add(it.removePrefix("$directoryPath/")) }
             } catch (e: Exception) {
               // Skip unreadable JARs but log the cause — corrupted artifacts, permission
               // issues, or zip-format errors can mask "missing trailmap on prod" bugs that are

@@ -83,7 +83,7 @@ export interface OpenArticleArgs {
  * Open a Wikipedia article by title and verify its heading is visible.
  */
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, "Wikipedia");
 
@@ -109,7 +109,7 @@ Read the full file:
 | The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name listed under `target.tools:` in `trailmap.yaml`. |
 | The TSDoc above `export const` | The tool's LLM-facing description (and IDE hover text on `ctx.tools.wikipedia_web_openArticle(...)`). |
 | The `<I, O>` type parameters | The tool's input JSON Schema and (when O is given) typed result shape. Per-field TSDoc on each interface property becomes that field's JSON Schema `description`. |
-| The spec object (`{ supportedPlatforms, requiresContext, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
+| The spec object (`{ supportedPlatforms, requiresHost, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
 | The handler body | The runtime behavior. |
 
 ### Three overloads, simplest-to-richest
@@ -122,7 +122,7 @@ when the tool's contract calls for them.
 // 1. Typed input, string return — the workhorse for "drive UI, report what happened".
 //    This is what 90%+ of scripted tools end up looking like.
 export const search = trailblaze.tool<SearchArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => { /* ... */ return `Searched for "${input.query}".`; },
 );
 
@@ -138,7 +138,7 @@ export const ping = trailblaze.tool(async () => "pong");
 ```
 
 The spec object is also optional — pass it as the first positional argument when the tool
-needs gating (`supportedPlatforms`, `requiresContext`, etc.); omit it for a bare-handler
+needs gating (`supportedPlatforms`, `requiresHost`, etc.); omit it for a bare-handler
 shape:
 
 ```ts
@@ -147,7 +147,7 @@ trailblaze.tool<Args>(async (input, ctx) => { ... });
 
 // With spec.
 trailblaze.tool<Args>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => { ... },
 );
 ```
@@ -254,7 +254,7 @@ export interface ArticleMetadata {
 }
 
 export const wikipedia_web_describeArticle = trailblaze.tool<DescribeArticleArgs, ArticleMetadata>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // ... read the page ...
     return { title: input.title, lengthBytes: 12345 };
@@ -273,7 +273,7 @@ For the no-input case, import `EmptyInput`:
 import { trailblaze, type EmptyInput } from "@trailblaze/scripting";
 
 export const wikipedia_web_openMainPage = trailblaze.tool<EmptyInput>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (_, ctx) => { /* ... */ return "Opened main page."; },
 );
 ```
@@ -287,7 +287,7 @@ in the legacy YAML descriptor. Every field is optional:
 |---|---|
 | `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
-| `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
+| `requiresContext?: boolean` | **Deprecated and ignored** — every handler already gets `ctx`. Omit it; it will be removed. |
 | `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with the `runtime` field below (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
 | `requiredClassifiers?: string[]` | Registration gate on the session device's classifier. The tool registers only when the device's classifiers include every listed segment — `["rig"]` registers on a device classified `android-phone-rig`, not on `android-phone`. Use for tools that need hardware or infrastructure only some devices have. A tool listing with no connected device still shows the tool. Empty/omitted = any device. |
@@ -425,9 +425,9 @@ construction, which is what you want for almost every tool. Reach for spec
 `description` when you specifically want to keep implementation notes in TSDoc and ship
 a different agent-facing string.
 
-A tool whose spec is `{ supportedPlatforms: ["web"], requiresContext: true }` is the
+A tool whose spec is `{ supportedPlatforms: ["web"] }` is the
 canonical shape for a UI-driving web tool. Mobile UI tools use
-`{ supportedPlatforms: ["ios"], requiresContext: true }` or `["android"]`. Cross-platform
+`{ supportedPlatforms: ["ios"] }` or `["android"]`. Cross-platform
 helpers omit `supportedPlatforms` entirely.
 
 ## Composing other tools via `ctx.tools.<name>(args)`
@@ -476,7 +476,7 @@ higher-level workflow:
 
 ```ts
 export const contacts_ios_searchAndVerify = trailblaze.tool<SearchAndVerifyArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const query = nonEmptyString(input?.query, "John Appleseed");
     const expectedName = nonEmptyString(input?.expectedName, query);
@@ -590,7 +590,8 @@ async teardown(args, ctx, trailRun) {
 - **`toolCalls(section?)`** lists the calls the trail, the AI and the trailhead made, in the order
   they started. Each has `name`, `args`, `rawArgs`, `outcome` (`{ success, message }`, or `null`
   while running), `startedAt` / `endedAt` (epoch ms), `device` (the device binding in a
-  multi-device session) and `calls`: the calls it made, nested the same way.
+  multi-device session), `calls`: the calls it made, nested the same way, and `memory`: the
+  memory changes it committed, each `{ op: "set", key, value }` or `{ op: "delete", key, value: null }`.
 - **`section`** is `"trailhead"` (the setup), `"trail"` (everything after it) or `"teardown"`, for
   the current run; each starts the moment the previous one ends. A section that hasn't started has
   no calls.
@@ -599,8 +600,11 @@ async teardown(args, ctx, trailRun) {
   ```
   ✓ myapp_addItem(itemId: "item-1")  2.2s
     ✓ tapOnElement(text: "Add")  0.7s
+    = newItemId ← "item-1"
   ✗ assertVisible(text: "item-1")  1.8s  Element not found
   ```
+
+  A memory change prints after the calls the call made, as `= key ← "value"` or `= key deleted`.
 
 - **`args` are what the tool received; `rawArgs` are as written.** A step written as
   `{ id: "{{newItemId}}" }` has `args` `{ id: "item-1" }` and `rawArgs` `{ id: "{{newItemId}}" }`,
@@ -610,6 +614,15 @@ async teardown(args, ctx, trailRun) {
   `message` has known secret values masked, including one the call replaced while it ran, and is
   capped in length. A tool whose result is a credential (a Kotlin tool implementing
   `SecretResultTrailblazeTool`) succeeds with `message` `"<redacted>"`.
+- **`memory` is what a call changed, recorded when it returned.** It compares memory before and
+  after the call, so a key set and set back reads as unchanged, and reads never appear. A change a
+  nested call made is on that call, not on the one it ran inside; a call that puts back a key a
+  nested call changed records that. A scripted tool's `ctx.memory`
+  writes commit when it returns successfully, so a failed scripted tool has no changes even if it
+  called `ctx.memory.set` first; a Kotlin tool's writes stick, failed or not. Changes a device
+  call sends back to the host are on that call. A sensitive key's value is its token, such as
+  `{{password}}`, a secret inside another value is masked the same way, and a value is capped in
+  length like `message`.
 - **Nesting assumes a tool runs its calls one at a time.** Of two calls a tool starts at once
   (`Promise.all`), one can land under the other.
 - **Where it works:** `trailblaze run`, the daemon, and trails running inside an Android test APK.
@@ -647,7 +660,7 @@ export interface SearchAndOpenFirstResultArgs {
  * resulting article's heading.
  */
 export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndOpenFirstResultArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const query = nonEmptyString(input.query, "Trailblazer");
     const expectedHeading = nonEmptyString(input.expectedHeading, query);
@@ -694,7 +707,7 @@ export interface VerifyContactStructureArgs {
  * labels ("phone", "email", "home", etc.)...
  */
 export const contacts_ios_verifyContactStructure = trailblaze.tool<VerifyContactStructureArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_NAME);
     const requireFields = filterNonEmptyStrings(input?.requireFields);

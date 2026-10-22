@@ -65,12 +65,13 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
 
     val result = gradleRunner(projectDir, "dumpRegistered").build()
     assertEquals(TaskOutcome.SUCCESS, result.task(":dumpRegistered")?.outcome)
-    // Discovery is alphabetical; bundle + stage tasks are registered per tool, and one tool-defs
-    // stage per trailmap because neither tool has a descriptor YAML.
+    // Discovery is alphabetical; bundle + stage tasks are registered per tool, one tool-defs stage
+    // per trailmap because neither tool has a descriptor YAML, and one survey stage per trailmap,
+    // which with no surveys only sweeps stale ones.
     assertTrue("expected the per-tool bundle + stage tasks to be registered: ${result.output}") {
       result.output.contains(
         "REGISTERED=bundleTrailmapPBuzzToolBundle,bundleTrailmapPFizzToolBundle," +
-          "stageTrailmapPBuzzToolBundleAsset,stageTrailmapPFizzToolBundleAsset,stageTrailmapPToolDefs\n"
+          "stageTrailmapPBuzzToolBundleAsset,stageTrailmapPFizzToolBundleAsset,stageTrailmapPSurveys,stageTrailmapPToolDefs\n"
       )
     }
   }
@@ -381,8 +382,8 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
     assertTrue("expected bundle+stage tasks for both trailmaps: ${result.output}") {
       result.output.contains(
         "REGISTERED=bundleTrailmapAlphaFizzToolBundle,bundleTrailmapBetaBuzzToolBundle," +
-          "stageTrailmapAlphaFizzToolBundleAsset,stageTrailmapAlphaToolDefs," +
-          "stageTrailmapBetaBuzzToolBundleAsset,stageTrailmapBetaToolDefs\n"
+          "stageTrailmapAlphaFizzToolBundleAsset,stageTrailmapAlphaSurveys,stageTrailmapAlphaToolDefs," +
+          "stageTrailmapBetaBuzzToolBundleAsset,stageTrailmapBetaSurveys,stageTrailmapBetaToolDefs\n"
       )
     }
   }
@@ -541,6 +542,136 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
     )
   }
 
+  @Test
+  fun `stages each survey with its bundle, or why it has none, and drops a deleted one`() {
+    val esbuild = File(frameworkSdkDir, "node_modules/.bin/esbuild")
+    requireEsbuildInCi(esbuild)
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", TYPED_TOOL_SOURCE)
+    val surveys = File(projectDir, "surveys").apply { mkdirs() }
+    File(surveys, "checkout.survey.ts").writeText(
+      "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const checkoutDone = trailblaze.survey({ description: \"Checkout finished\", finding: { analytics: { name: \"done\" } } });\n",
+    )
+    File(surveys, "disk.survey.ts").writeText(
+      "import { readFileSync } from \"node:fs\";\n" +
+        "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const diskRead = trailblaze.survey({ description: readFileSync(\"f\", \"utf8\"), finding: {} });\n",
+    )
+
+    File(surveys, "weekly.survey.ts").writeText(
+      "import { readFileSync } from \"node:fs\";\n" +
+        "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const weeklyTotals = trailblaze.survey({ description: readFileSync(\"f\", \"utf8\"), requiresFinishedSession: true, finding: {} });\n",
+    )
+
+    val result = gradleRunner(projectDir, "stageTrailmapPSurveys").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":stageTrailmapPSurveys")?.outcome, result.output)
+
+    val staged = File(projectDir, "$STAGING_ROOT/trailblaze/surveys/trailmaps/p/surveys")
+    assertTrue(File(staged, "checkout.survey.ts").isFile, "survey source not staged under $staged")
+    val bundle = File(staged, "checkout.survey.ts.bundle.js")
+    assertTrue(bundle.readText().contains("__trailblazeSurveyBundle"), "not a survey bundle: $bundle")
+    assertTrue(File(staged, "disk.survey.ts").isFile)
+    assertTrue(!File(staged, "disk.survey.ts.bundle.js").exists())
+    assertTrue(File(staged, "disk.survey.ts.bundle-error.txt").readText().contains("node:fs"))
+    // Runs only after the session, so its failed bundle is expected: nothing reported, as make-test-apk does.
+    assertTrue(File(staged, "weekly.survey.ts").isFile)
+    assertTrue(!File(staged, "weekly.survey.ts.bundle-error.txt").exists())
+    assertTrue("weekly.survey.ts" !in result.output, result.output)
+
+    File(surveys, "checkout.survey.ts").delete()
+    gradleRunner(projectDir, "stageTrailmapPSurveys").build()
+    assertEquals(
+      listOf("disk.survey.ts", "disk.survey.ts.bundle-error.txt", "weekly.survey.ts"),
+      staged.list()!!.sorted(),
+    )
+  }
+
+  @Test
+  fun `drops the staged surveys of a trailmap whose block was renamed`() {
+    val esbuild = File(frameworkSdkDir, "node_modules/.bin/esbuild")
+    requireEsbuildInCi(esbuild)
+    fun script(id: String) =
+      androidFixtureBuildScript(
+        """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "$id"
+            toolsDir = file("tools")
+          }
+        }
+        """
+      )
+    val projectDir = newFixtureProject(script("p"), tempDirs)
+    writeTool(projectDir, "onlyTool.ts", TYPED_TOOL_SOURCE)
+    File(projectDir, "surveys").mkdirs()
+    File(projectDir, "surveys/checkout.survey.ts").writeText(
+      "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const checkoutDone = trailblaze.survey({ description: \"Checkout finished\", finding: { analytics: { name: \"done\" } } });\n",
+    )
+    val trailmaps = File(projectDir, "$STAGING_ROOT/trailblaze/surveys/trailmaps")
+    gradleRunner(projectDir, "stageTrailmapPSurveys").build()
+    assertEquals(listOf("p"), trailmaps.list()!!.sorted())
+
+    File(projectDir, "build.gradle.kts").writeText(script("q"))
+    gradleRunner(projectDir, "stageTrailmapQSurveys").build()
+    assertEquals(listOf("q"), trailmaps.list()!!.sorted())
+  }
+
+  @Test
+  fun `rebundles a survey when only a helper outside its surveys directory changed`() {
+    val esbuild = File(frameworkSdkDir, "node_modules/.bin/esbuild")
+    requireEsbuildInCi(esbuild)
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", TYPED_TOOL_SOURCE)
+    val helper = File(projectDir, "shared/names.ts").apply { parentFile.mkdirs() }
+    helper.writeText("export const DONE = \"first_name\";\n")
+    File(projectDir, "surveys").mkdirs()
+    File(projectDir, "surveys/checkout.survey.ts").writeText(
+      "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "import { DONE } from \"../shared/names\";\n" +
+        "export const checkoutDone = trailblaze.survey({ description: \"Checkout finished\", finding: { analytics: { name: DONE } } });\n",
+    )
+    val bundle = File(projectDir, "$STAGING_ROOT/trailblaze/surveys/trailmaps/p/surveys/checkout.survey.ts.bundle.js")
+
+    gradleRunner(projectDir, "stageTrailmapPSurveys").build()
+    assertTrue(bundle.readText().contains("first_name"), "helper not inlined: $bundle")
+
+    helper.writeText("export const DONE = \"second_name\";\n")
+    gradleRunner(projectDir, "stageTrailmapPSurveys").build()
+    assertTrue(bundle.readText().contains("second_name"), "stale helper still packaged: $bundle")
+  }
+
   // ---- Fixtures ----
 
   /**
@@ -559,6 +690,12 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
       assertEquals(emptyList(), missing, "tool-definition extraction can't run on this CI agent")
     }
     assumeTrue("Skipping tool-definition extraction test: ${missing.joinToString()}", missing.isEmpty())
+  }
+
+  /** Survey bundling runs esbuild. Skips locally without it; CI installs it, so a skip there fails. */
+  private fun requireEsbuildInCi(esbuild: File) {
+    if (System.getenv("CI") == "true") assertTrue(esbuild.isFile, "esbuild not installed at ${esbuild.absolutePath} on this CI agent")
+    assumeTrue("esbuild not present at ${esbuild.absolutePath}; skipping survey stage test.", esbuild.isFile)
   }
 
   private fun writeTool(projectDir: File, fileName: String, contents: String) {

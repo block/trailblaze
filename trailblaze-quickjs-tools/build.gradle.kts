@@ -79,18 +79,30 @@ tasks.withType<Test>().configureEach {
   if (name == "jvmTest") {
     dependsOn("bundleSampleAppTypedAuthorTool")
     dependsOn("bundleOnDeviceMemoryProbeAuthorTool")
-    dependsOn("bundleDispatchBenchmarkAuthorTool")
     dependsOn("bundleTrailheadTeardownAuthorTool")
     systemProperty("trailblaze.test.sampleAppTypedBundle", sampleAppTypedBundle.get())
     systemProperty("trailblaze.test.onDeviceMemoryProbeBundle", onDeviceMemoryProbeBundle.get())
-    systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
     systemProperty("trailblaze.test.trailheadTeardownBundle", trailheadTeardownBundle.get())
-    // Opt-in for QuickJsToolDispatchBenchmark. A provider, not System.getenv in the test, so the
-    // configuration cache keys on it instead of replaying a stale value into later runs:
-    //   ./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
-    //     -Dtrailblaze.benchmark=true -i
-    systemProperty("trailblaze.benchmark", providers.systemProperty("trailblaze.benchmark").getOrElse("false"))
+    // A benchmark, not a test: it runs only through `dispatchBenchmark` below.
+    filter.excludeTestsMatching("*QuickJsToolDispatchBenchmark")
   }
+}
+
+// Times scripted-tool dispatch for the devlog; asserts nothing about speed, so it stays out of
+// `check`. Run it with: ./gradlew :trailblaze-quickjs-tools:dispatchBenchmark
+val dispatchBenchmark = tasks.register<Test>("dispatchBenchmark") {
+  description = "Times QuickJS scripted-tool dispatch against a Kotlin tool and prints the table."
+  group = "verification"
+  // The collections, not the task: they carry the compile dependencies without running jvmTest.
+  val jvmTest = tasks.named<Test>("jvmTest").get()
+  testClassesDirs = jvmTest.testClassesDirs
+  classpath = jvmTest.classpath
+  filter.includeTestsMatching("*QuickJsToolDispatchBenchmark")
+  dependsOn("bundleDispatchBenchmarkAuthorTool")
+  systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
+  testLogging.showStandardStreams = true
+  // Timings, so never served from cache or skipped as up to date.
+  outputs.upToDateWhen { false }
 }
 
 android {

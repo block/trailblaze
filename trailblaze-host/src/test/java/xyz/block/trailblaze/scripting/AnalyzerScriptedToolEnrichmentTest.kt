@@ -8,6 +8,7 @@ import kotlinx.serialization.json.put
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.config.TrailheadMetadata
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
@@ -1337,13 +1338,12 @@ class AnalyzerScriptedToolEnrichmentTest {
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
     assertEquals("myapp/android/home_signed_in", config.trailhead?.to)
-    assertEquals(false, config.trailhead?.dynamic)
     // Not a dispatch gate — must never leak into the namespaced `_meta`.
     assertNull(config.meta?.get("trailblaze/trailhead"))
   }
 
   @Test
-  fun `trailhead dynamic true is populated when to is omitted`() {
+  fun `a trailhead with only the retired dynamic flag is still a trailhead, with no destination`() {
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "launchDeepLink.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1368,15 +1368,12 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead?.to)
-    assertEquals(true, config.trailhead?.dynamic)
+    assertEquals(TrailheadMetadata(to = null), config.trailhead)
   }
 
   @Test
-  fun `malformed trailhead with neither to nor dynamic is dropped, not surfaced as a trailhead`() {
-    // Lenient policy (mirrors the analyzer's general "skip the unresolvable bit" posture rather
-    // than the YAML loader's hard `require()`): a `trailhead: {}` with no destination and no
-    // `dynamic: true` isn't a real bootstrap, so it's dropped rather than failing the whole tool.
+  fun `an empty trailhead block is a trailhead with no destination`() {
+    // What the analyzer emits for every `trailblaze.trailhead(...)` that names no `to`.
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "emptyTrailhead.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1399,13 +1396,11 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead, "expected a trailhead block with neither to nor dynamic to be dropped")
+    assertEquals(TrailheadMetadata(to = null), config.trailhead)
   }
 
   @Test
-  fun `malformed trailhead with both to and dynamic keeps dynamic and drops to`() {
-    // Mutual-exclusion mirrors TrailheadMetadata's YAML contract, resolved leniently in favor of
-    // `dynamic` (the more permissive interpretation) rather than hard-failing.
+  fun `to is kept when the retired dynamic flag is also set`() {
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "conflictingTrailhead.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1436,8 +1431,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead?.to, "expected 'to' dropped when both 'to' and 'dynamic: true' are set")
-    assertEquals(true, config.trailhead?.dynamic)
+    assertEquals(TrailheadMetadata(to = "myapp/android/home"), config.trailhead)
   }
 
   @Test

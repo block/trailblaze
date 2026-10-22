@@ -108,6 +108,34 @@ export function rowPhase(trace: TraceStep[], model: ReportTraceModel, index: num
   return trace.some((t) => t.objective && t.trailhead) ? 'trailhead' : null;
 }
 
+/**
+ * Each dispatch's instant under its row: its own `ts`, else one spread inside the row's span.
+ *
+ * A dispatch whose log carried no timestamp (payloads predating TraceChild.ts) still needs its OWN
+ * instant: sharing the row's would collapse the whole fold onto one moment. They ran back to back
+ * INSIDE the row, so their instants are spread across the row's span, weighted by each dispatch's
+ * duration. That span is a ceiling, not a starting point: the row's ms comes from the delegating
+ * wrapper log, whose duration already covers the executors it waited on, so walking past it lets a
+ * fold overtake the NEXT row's real ts. Midpoints keep each synthetic instant strictly inside the
+ * span, clear of the row's own entry and of the next row alike. With no span to divide (a row that
+ * recorded no duration), the dispatches' own cumulative durations stand in.
+ */
+export function childInstants(row: {
+  ts?: number | null;
+  ms?: number | null;
+  children?: ReadonlyArray<{ ts?: number | null; ms?: number | null }> | null;
+}): Array<number | null> {
+  const kids = row.children || [];
+  const span = row.ms ?? 0;
+  const kidsMs = kids.reduce((total, child) => total + (child.ms ?? 0), 0);
+  let elapsed = 0;
+  return kids.map((child, kid) => {
+    elapsed += child.ms ?? 0;
+    const frac = kidsMs > 0 ? (elapsed - (child.ms ?? 0) / 2) / kidsMs : (kid + 1) / (kids.length + 1);
+    return child.ts ?? (row.ts == null ? null : row.ts + Math.round(span > 0 ? span * frac : elapsed));
+  });
+}
+
 /** Build the authored-step, retry, row-id, and exact LLM-call indexes in one trace pass. */
 export function buildReportTraceModel(trace: TraceStep[], llmCount: number): ReportTraceModel {
   const groups: ReportTraceGroup[] = [];
@@ -194,23 +222,9 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
     entryIndexById.set(row.i, entries.length);
     entries.push({ row, kid: null, child: null, ts: row.ts ?? null, ms: row.ms ?? null });
     let shownShot: string | null = row.screenshotFile || null;
-    // A dispatch whose log carried no timestamp (payloads predating TraceChild.ts) still needs its
-    // OWN instant: sharing the row's would collapse the whole fold onto its last dispatch, which is
-    // the frame-skipping this list exists to fix. They ran back to back INSIDE the row, so their
-    // instants are spread across the row's span, weighted by each dispatch's duration. That span is
-    // a ceiling, not a starting point: the row's ms comes from the delegating wrapper log, whose
-    // duration already covers the executors it waited on, so walking past it lets a fold overtake
-    // the NEXT row's real ts and drags every offset after it forward. Midpoints keep each synthetic
-    // instant strictly inside the span, clear of the row's own entry and of the next row alike.
-    const span = row.ms ?? 0;
-    const kidsMs = kids.reduce((total, child) => total + (child.ms ?? 0), 0);
-    let elapsed = 0;
+    const instants = childInstants(row);
     kids.forEach((child, kid) => {
-      elapsed += child.ms ?? 0;
-      const frac = kidsMs > 0 ? (elapsed - (child.ms ?? 0) / 2) / kidsMs : (kid + 1) / (kids.length + 1);
-      // With no span to divide (a row that recorded no duration), fall back to the dispatches' own
-      // cumulative durations — nothing to overrun, and the fold still gets distinct instants.
-      const ts = child.ts ?? (row.ts == null ? null : row.ts + Math.round(span > 0 ? span * frac : elapsed));
+      const ts = instants[kid];
       if (child.screenshotFile && child.screenshotFile !== shownShot) {
         entries.push({ row, kid, child, ts, ms: child.ms ?? null });
         shownShot = child.screenshotFile;

@@ -4,15 +4,12 @@
 
 import { formatToolCalls, ToolError, trailblaze } from "@trailblaze/scripting";
 
-export const fixture_signIn = trailblaze.tool<{ persona: string }>(
+export const fixture_signIn = trailblaze.trailhead<{ persona: string }>(
   {
-    trailhead: {
-      to: "fixture/home_signed_in",
-      async teardown(args, ctx, trailRun) {
-        const created = trailRun.notes.flatMap((n) => (n.created ? [n.created.id] : []));
-        if (trailRun.outcome !== "passed") return { reusable: false, reason: `trail ${trailRun.outcome}` };
-        return { reusable: true, reason: `signed in as ${args.persona}`, state: { leftItems: created } };
-      },
+    async teardown(args, ctx, trailRun) {
+      const created = trailRun.notes.flatMap((n) => (n.created ? [n.created.id] : []));
+      if (trailRun.outcome !== "passed") return { reusable: false, reason: `trail ${trailRun.outcome}` };
+      return { reusable: true, reason: `signed in as ${args.persona}`, state: { leftItems: created } };
     },
   },
   async (args, ctx) => {
@@ -39,6 +36,8 @@ export const fixture_signIn = trailblaze.tool<{ persona: string }>(
 /** A trail step that creates something and tells the trailhead's teardown about it. */
 export const fixture_addItem = trailblaze.tool<{ id: string }>(async (args, ctx) => {
   ctx.trailhead.note({ created: { kind: "item", id: args.id } });
+  // Committed only if this call succeeds, so `ctx.history` shows it on a passing call alone.
+  ctx.memory.set("fixture_lastItemId", args.id);
   if (ctx.memory.get("fixture_addItemThrowsCyclic") === "true") {
     // Error data that can't be serialized, so the dispatcher sends the error without it.
     const data: Record<string, unknown> = {};
@@ -61,12 +60,12 @@ export const fixture_addItem = trailblaze.tool<{ id: string }>(async (args, ctx)
 
 /**
  * A trailhead whose teardown picks its cleanup from `ctx.history`: the calls of the trail section
- * only, handed back as `state` so the test can read what teardown saw.
+ * only, handed back as `state` so the test can read what teardown saw. Written the older
+ * `trailblaze.tool({ trailhead })` way, which still has to work.
  */
 export const fixture_historyTrailhead = trailblaze.tool<{ persona: string }>(
   {
     trailhead: {
-      to: "fixture/home_signed_in",
       async teardown(_args, ctx) {
         const calls = await ctx.history.toolCalls("trail");
         return {
@@ -79,6 +78,7 @@ export const fixture_historyTrailhead = trailblaze.tool<{ persona: string }>(
               rawArgs: c.rawArgs as { [key: string]: string },
               success: c.outcome?.success ?? null,
               nested: c.calls.length,
+              memory: c.memory.map((m) => `${m.op} ${m.key}=${m.value}`),
             })),
             text: formatToolCalls(calls),
           },

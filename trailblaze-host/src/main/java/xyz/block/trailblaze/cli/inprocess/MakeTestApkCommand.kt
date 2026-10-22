@@ -146,7 +146,8 @@ class MakeTestApkCommand : Callable<Int> {
     description = [
       "Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat " +
         "for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources " +
-        "are bundled here, which needs esbuild.",
+        "are bundled here, which needs esbuild. Its surveys/, if any, is packaged for ctx.surveys, " +
+        "and bundled with esbuild too.",
     ],
   )
   var trailmapDirs: MutableList<File> = mutableListOf()

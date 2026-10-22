@@ -1621,6 +1621,49 @@ class PerTrailmapClientDtsEmitterTest {
     assertFalse(other.contains("TrailblazeHostFunctionMap"), other)
   }
 
+  @Test
+  fun `a host function two trailmaps declare surfaces in the dependents of either`() {
+    fun trailmap(id: String, dir: File, dependencies: List<String> = emptyList()) = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = id,
+        target = TrailmapTargetConfig(displayName = id),
+        dependencies = dependencies,
+      ),
+      source = TrailmapSource.Filesystem(dir),
+      target = AppTargetYamlConfig(id = id, displayName = id, tools = emptyList()),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val accountsDir = newTrailmapDir("accounts")
+    val billingDir = newTrailmapDir("billing")
+    val appDir = newTrailmapDir("storefront")
+    val lookup = "id: emitterTest_lookup\nclass: ${EmitterTestLookup::class.java.name}\n"
+    val registry = TrailblazeHostFunctionRegistry(
+      object : ConfigResourceSource {
+        override fun discoverAndLoad(directoryPath: String, suffix: String) = emptyMap<String, String>()
+        override fun discoverAndLoadRecursive(directoryPath: String, suffix: String) = mapOf(
+          "accounts/host/emitterTest_lookup.host.yaml" to lookup,
+          "billing/host/emitterTest_lookup.host.yaml" to lookup,
+        )
+      },
+    )
+
+    // storefront reaches the function only through billing, the declarer discovery meets second.
+    PerTrailmapClientDtsEmitter.emit(
+      listOf(
+        trailmap("accounts", accountsDir),
+        trailmap("billing", billingDir),
+        trailmap("storefront", appDir, listOf("billing")),
+      ),
+      workspaceRoot = null,
+      hostFunctions = registry,
+    )
+
+    val app = Files.readString(File(appDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue(app) { app.contains("    emitterTest_lookup: { args: TrailblazeHostTypes.EmitterTestLookup; ") }
+  }
+
   private fun newTrailmapDir(id: String): File {
     val parent = createTempDirectory("per-trailmap-client-dts-test").toFile()
     tempDirs += parent

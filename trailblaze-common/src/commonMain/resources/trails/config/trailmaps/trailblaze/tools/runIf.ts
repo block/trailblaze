@@ -48,6 +48,6 @@ export type { ToolCall, RunIfCondition, RunIfArgs } from "../lib/runIf";
  * entries use the `recording.tools` shape `{ <toolName>: <args> }` and may nest `runIf` two deep.
  */
 export const runIf = trailblaze.tool<RunIfArgs>(
-  { requiresContext: true, surfaceToLlm: false },
+  { surfaceToLlm: false },
   runIfHandler,
 );

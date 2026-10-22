@@ -84,7 +84,7 @@ object BundledScriptedToolAnalyzeMain {
    * time but skipped at runtime (or vice versa). There is no compile-time check that they agree.
    */
   private val TYPED_TOOL_BINDING_PATTERN =
-    Regex("""(?m)^\s*export\s+const\s+\w+\s*=\s*trailblaze\.tool\s*[<(]""")
+    Regex("""(?m)^\s*export\s+const\s+\w+\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
 
   @JvmStatic
   fun main(args: Array<String>) {

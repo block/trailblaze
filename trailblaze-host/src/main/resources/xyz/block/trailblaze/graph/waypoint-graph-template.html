@@ -3275,7 +3275,10 @@
         };
         const waypoints = data.waypoints.filter(matches);
         const wpIds = new Set(waypoints.map(wp => wp.id));
-        const trailheads = data.trailheads.filter(th => wpIds.has(th.to));
+        // Same rule as WaypointGraphBuilder.applyScope: a trailhead whose tool can't run on the
+        // scoped platform draws no launch edge there. No declared platforms means any platform.
+        const trailheads = data.trailheads.filter(th => wpIds.has(th.to) &&
+          (!selectedPlatform || !th.platforms || !th.platforms.length || th.platforms.includes(selectedPlatform)));
         return { waypoints, trailheads, generatedNote: data.generatedNote };
       }, [data, selectedTarget, selectedPlatform]);
 

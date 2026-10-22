@@ -45,8 +45,13 @@ import xyz.block.trailblaze.yaml.TrailConfig
  *
  * Subclasses can override [generateMarkdownReport] to customize
  * report generation (via [xyz.block.trailblaze.ui.TrailblazeDesktopApp.createCliReportGenerator]).
+ *
+ * @param environment the process env; a parameter so tests can stand in for a CI job. Decides
+ *   whether the JSON report carries run metadata (see [reportMetadata]).
  */
-open class CliReportGenerator {
+open class CliReportGenerator(
+  private val environment: Map<String, String> = System.getenv(),
+) {
 
   /**
    * Prints a compact pass/fail summary for the given session IDs.
@@ -465,7 +470,7 @@ open class CliReportGenerator {
     // and a JSON listing only skips would have no sibling to agree with. `trailblaze report` is a
     // report over sessions; the CI results task is what reports an all-skipped scope.
     val report = CiSummaryReport(
-      metadata = emptyMetadata(),
+      metadata = reportMetadata(),
       results = results + skips.map { it.toSessionResult() },
     )
 
@@ -620,22 +625,24 @@ open class CliReportGenerator {
   }
 
   /**
-   * Empty metadata for daemon-CLI-driven reports. The CI gradle CLI populates
-   * [CiRunMetadata] from CI provider / `GIT_*` env vars; the daemon-side surfaces
-   * intentionally do not — local devs running `trailblaze report --format json` aren't
-   * in CI, and silently inheriting a developer's stale env vars would produce
-   * misleading metadata. Subclasses can attach provenance by overriding
-   * [generateJsonReport].
+   * Run metadata for the JSON report.
+   *
+   * In CI (`BUILDKITE=true` or `CI` set, the signal the rest of the CLI uses) the report reads
+   * [CiRunMetadata.fromEnvironment] like the Gradle results task does, so a `trailblaze report`
+   * run by a CI job that exports `CONFIG_ID` / `ANDROID_BUILD_*` / `TRAIL_SOURCE_*` carries the
+   * same provenance as a report the Gradle task would have produced. Off CI the metadata is
+   * intentionally empty: local devs running `trailblaze report --format json` aren't in CI, and
+   * silently inheriting a developer's stale env vars would produce misleading metadata.
+   * Subclasses can attach other provenance by overriding [generateJsonReport].
    */
-  private fun emptyMetadata(): CiRunMetadata = CiRunMetadata(
-    target_app = "",
-    build_type = "",
-    devices = emptyList(),
-  )
+  private fun reportMetadata(): CiRunMetadata =
+    if (isCi(environment)) CiRunMetadata.fromEnvironment(environment) else CiRunMetadata()
+
+  private fun isCi(environment: Map<String, String>): Boolean =
+    environment["BUILDKITE"] == "true" || !environment["CI"].isNullOrBlank()
 
   private fun Instant.toIso8601String(): String {
     val localDateTime = this.toLocalDateTime(TimeZone.UTC)
     return "${localDateTime.date}T${localDateTime.time}Z"
   }
-
 }

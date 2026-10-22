@@ -90,12 +90,9 @@ branches grow.
 import { trailblaze } from "@trailblaze/scripting";
 
 /** Opens MyApp signed in on the home screen, from any state, on Android or iOS. */
-export const myapp_launchApp = trailblaze.tool(
+export const myapp_launchApp = trailblaze.trailhead(
   {
     supportedPlatforms: ["android", "ios"],
-    requiresContext: true,
-    // The landing waypoint differs per platform, so the cross-platform entry is `dynamic`.
-    trailhead: { dynamic: true },
   },
   async (_input, ctx) => {
     if (ctx.device.platform === "ios") return ctx.tools.myapp_ios_launchApp({});
@@ -110,7 +107,7 @@ import { trailblaze } from "@trailblaze/scripting";
 
 /** Android half of myapp_launchApp: fresh data, notifications allowed, app on screen. */
 export const myapp_android_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true, surfaceToLlm: false },
+  { supportedPlatforms: ["android"], surfaceToLlm: false },
   async (_input, ctx) => {
     const appId = "com.example.myapp";
     await ctx.tools.mobile_clearAppData({ appId });
@@ -131,12 +128,12 @@ import { trailblaze } from "@trailblaze/scripting";
 
 /** iOS half of myapp_launchApp: fresh data, location allowed, app on screen. */
 export const myapp_ios_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["ios"], requiresContext: true, surfaceToLlm: false },
+  { supportedPlatforms: ["ios"], surfaceToLlm: false },
   async (_input, ctx) => {
     const appId = "com.example.myapp";
     await ctx.tools.ios_terminate({ appId }); // clearing data does not stop a running iOS app
     await ctx.tools.mobile_clearAppData({ appId });
-    await ctx.tools.ios_grantPrivacy({ appId, services: ["location"] });
+    await ctx.tools.ios_setPermissions({ appId, grant: ["location"] });
     await ctx.tools.openApp({ appId });
     return `Opened ${appId} from cleared data.`;
   },
@@ -152,7 +149,9 @@ from the agent: trailheads call them, the agent doesn't.
 |---|---|---|
 | Wipe the app's data | `mobile_clearAppData` | `mobile_clearAppData` |
 | Stop the app (keeps data) | `android_forceStop` | `ios_terminate` |
-| Grant runtime permissions | `android_grantPermissions` | `ios_grantPrivacy` |
+| Set runtime permissions | `android_grantPermissions` (clearing app data revokes them) | `ios_setPermissions` (`reset`, `revoke`, `grant` by simctl service name; `reset: ["all"]` drops grants an earlier trail left) |
+| Allow or deny notifications | `android_grantPermissions` (`POST_NOTIFICATIONS`) | `ios_setPermissions` (`notifications`: the driver answers the alert when it appears) |
+| Sign out (clear the keychain) | — | `ios_resetKeychain` |
 | Grant special-access permissions | `android_grantAppOpsPermission` | — |
 | Anything else | `android_adbShell` | — |
 | **Open the app and wait until it is on screen** | `openApp` | `openApp` |
@@ -172,8 +171,9 @@ Rules of thumb:
 
 ## Declaring a tool as a trailhead
 
-- **TypeScript**: `trailhead: { to: "<waypoint>" }` in the tool spec, or `{ dynamic: true }` when
-  the landing screen varies (by platform or input). No sidecar file needed.
+- **TypeScript**: `trailblaze.trailhead(spec, handler)` instead of `trailblaze.tool`. No sidecar
+  file and no waypoint needed. The optional `to: "<waypoint>"` only draws the trailhead on the
+  waypoint graph; nothing checks it, so assert the landing screen in the handler if it matters.
 - **Kotlin**: `@TrailblazeToolClass(trailheadTo = "<waypoint>")`.
 - **YAML (`tools:` mode)**: a `*.trailhead.yaml` in the trailmap's `trailheads/` directory.
 

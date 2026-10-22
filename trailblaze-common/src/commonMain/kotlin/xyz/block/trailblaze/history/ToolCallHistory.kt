@@ -28,7 +28,30 @@ data class HistoryToolCall(
   val device: String?,
   /** The section open when it started, or null outside any section. */
   val sectionId: String?,
+  /**
+   * The memory changes this call committed, by key. Empty while it runs, and for a call the
+   * framework only saw in the tool log. See [ToolCallHistory.end].
+   */
+  val memory: List<HistoryMemoryChange> = emptyList(),
 )
+
+/** One memory key a call set or deleted. */
+@Serializable
+data class HistoryMemoryChange(
+  /** [SET] or [DELETE]. */
+  val op: String,
+  val key: String,
+  /**
+   * The value set; null for a delete. A sensitive key's value is its `{{key}}` token, and a
+   * sensitive memory value inside another value is masked the same way.
+   */
+  val value: String?,
+) {
+  companion object {
+    const val SET: String = "set"
+    const val DELETE: String = "delete"
+  }
+}
 
 @Serializable
 data class HistoryToolCallOutcome(
@@ -105,7 +128,7 @@ object ToolCallHistory {
   /** Most calls kept per session, so a long daemon session doesn't keep every call it ever made. */
   const val MAX_CALLS_PER_SESSION: Int = 10_000
 
-  /** Longest outcome message kept; the rest is cut. */
+  /** Longest outcome message, or memory value a call set, kept; the rest is cut. */
   const val MAX_MESSAGE_CHARS: Int = 2000
 
   /** Most sections kept per session; a reused daemon session opens a run's sections per replay. */
@@ -113,6 +136,15 @@ object ToolCallHistory {
 
   /** A started call, to pass back to [end]. */
   class CallHandle internal constructor(internal val sessionId: SessionId, internal val id: String)
+
+  /**
+   * A change as the dispatch saw it: [change] as recorded, a SHA-256 [digest] of the unmasked
+   * value (null for a delete), so changes can be compared without keeping the value itself, and
+   * the unmasked [key] that nested calls' changes are matched by.
+   */
+  internal class MemoryChange(val change: HistoryMemoryChange, val digest: String?, val key: String = change.key) {
+    fun sameAs(other: MemoryChange) = change.op == other.change.op && digest == other.digest
+  }
 
   private class CallRecord(
     val id: String,
@@ -126,8 +158,28 @@ object ToolCallHistory {
   ) {
     var outcome: HistoryToolCallOutcome? = null
     var endedAt: Long? = null
+    /** The changes it made itself, after those its nested calls made. */
+    var memoryChanges: List<MemoryChange> = emptyList()
 
-    fun snapshot() = HistoryToolCall(id, name, args, rawArgs, outcome, startedAt, endedAt, parentId, device, sectionId)
+    /**
+     * The last change the history shows for each key, reading this call and the calls nested in
+     * it: what a reader of the history takes each key to hold once the call ended.
+     */
+    var publishedChanges: Map<String, MemoryChange> = emptyMap()
+
+    /**
+     * Which memory those changes are to, as the recorder numbers them; an id rather than the
+     * memory, so the store never keeps a session's memory alive.
+     */
+    var memoryId: Long? = null
+
+    /** When it ended among the session's calls, for telling which of two changes to a key is later. */
+    var endOrder: Long = 0
+
+    fun snapshot() = HistoryToolCall(
+      id, name, args, rawArgs, outcome, startedAt, endedAt, parentId, device, sectionId,
+      memory = memoryChanges.map { it.change },
+    )
   }
 
   private class SectionRecord(
@@ -150,6 +202,7 @@ object ToolCallHistory {
     val openSections = ArrayList<SectionRecord>()
     var nextCallNumber = 1
     var nextSectionNumber = 1
+    var nextEndOrder = 1L
 
     /** Appends [record]; past [MAX_CALLS_PER_SESSION], the oldest finished call goes. */
     fun add(record: CallRecord) {
@@ -240,7 +293,26 @@ object ToolCallHistory {
   }
 
   /** Records how a call [begin] started ended. A second call for the same handle is ignored. */
-  fun end(handle: CallHandle, success: Boolean, message: String?, endedAt: Long = now()) {
+  fun end(handle: CallHandle, success: Boolean, message: String?, endedAt: Long = now()) =
+    end(handle, success, message, endedAt, memoryChanges = emptyList())
+
+  /**
+   * [memoryChanges] is how memory differs from when the call started, which includes what the
+   * calls it made changed. The call keeps only its own share: a key whose value the history of its
+   * nested calls already ends on is theirs. A key the call put back after a nested call's history
+   * showed another value is the call's own, built by [changeAtEnd] from memory as it ends. Changes
+   * are net, so a call that sets a key and then restores it, with nothing nested showing the key
+   * in between, records nothing.
+   */
+  internal fun end(
+    handle: CallHandle,
+    success: Boolean,
+    message: String?,
+    endedAt: Long,
+    memoryChanges: List<MemoryChange>,
+    memoryId: Long? = null,
+    changeAtEnd: (String) -> MemoryChange? = { null },
+  ) {
     val history = existingHistoryOf(handle.sessionId) ?: return
     withHistoryLock(history) {
       val index = history.runningCalls.indexOfLast { it.id == handle.id }
@@ -248,7 +320,51 @@ object ToolCallHistory {
       val record = history.runningCalls.removeAt(index)
       record.outcome = HistoryToolCallOutcome(success, message?.take(MAX_MESSAGE_CHARS))
       record.endedAt = endedAt
+      record.endOrder = history.nextEndOrder++
+      val nested = if (memoryId != null) history.publishedByNestedCalls(record, memoryId) else emptyMap()
+      record.memoryId = memoryId
+      record.memoryChanges = ownChanges(memoryChanges, nested, changeAtEnd)
+      record.publishedChanges = nested + record.memoryChanges.associateBy { it.key }
     }
+  }
+
+  /**
+   * The last change the history of [record]'s direct nested calls shows for each key, each already
+   * covering the calls inside it. Only nested calls that changed the same memory, [memoryId], count:
+   * one given a memory of its own (the daemon builds one per direct call) changed nothing
+   * [record]'s diff can see. Holds [this]'s lock.
+   */
+  private fun SessionHistory.publishedByNestedCalls(
+    record: CallRecord,
+    memoryId: Long,
+  ): Map<String, MemoryChange> {
+    val start = calls.indexOfLast { it === record }
+    if (start < 0) return emptyMap()
+    // Calls are stored in start order, so every call nested in [record] follows it.
+    val nested = (start + 1 until calls.size).map { calls[it] }
+      .filter { it.parentId == record.id && it.memoryId == memoryId }
+    if (nested.isEmpty()) return emptyMap()
+    val published = HashMap<String, MemoryChange>()
+    nested.sortedBy { it.endOrder }.forEach { published.putAll(it.publishedChanges) }
+    return published
+  }
+
+  /**
+   * The part of [net] a call made itself, given what its [nested] calls' history already shows,
+   * plus the keys it put back after they showed another value.
+   */
+  private fun ownChanges(
+    net: List<MemoryChange>,
+    nested: Map<String, MemoryChange>,
+    changeAtEnd: (String) -> MemoryChange?,
+  ): List<MemoryChange> {
+    if (nested.isEmpty()) return net
+    val netKeys = net.mapTo(HashSet()) { it.key }
+    val putBack = nested.filterKeys { it !in netKeys }.mapNotNull { (key, last) ->
+      changeAtEnd(key)?.takeUnless { it.sameAs(last) }
+    }
+    val own = net.filterNot { change -> nested[change.key]?.sameAs(change) == true }
+    return if (putBack.isEmpty()) own else (own + putBack).sortedBy { it.key }
   }
 
   /** Whether a call is running in [sessionId] right now. */

@@ -148,7 +148,7 @@ class RecordingTailHoldTest {
   @Test
   fun `the filter moves only the clone`() {
     assertEquals(
-      "tpad=stop_mode=clone:stop=1,setpts='if(gte(N,7),12.5/TB,PTS)'",
+      "tpad=stop_mode=clone:stop=2,select='lte(n,7)',setpts='if(gte(N,7),12.5/TB,PTS)'",
       RecordingTailHold.filter(frames = 7, untilMs = 12_500L),
     )
   }

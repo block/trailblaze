@@ -5,6 +5,7 @@ import assertk.assertions.containsExactly
 import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
+import ai.koog.agents.core.tools.ToolParameterType
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -13,6 +14,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import kotlin.test.Test
 
@@ -118,5 +120,21 @@ class SubprocessToolDescriptorsTest {
     val count = descriptor.requiredParameters.single()
     assertThat(count.type).isEqualTo("integer")
     assertThat(count.validValues).isNull()
+  }
+
+  @Test fun `an array property keeps its element type through to the LLM-facing descriptor`() {
+    val schema = ToolSchema(
+      properties = buildJsonObject {
+        putJsonObject("tags") {
+          put("type", "array")
+          putJsonObject("items") { put("type", "string") }
+        }
+      },
+      required = emptyList(),
+    )
+    val descriptor = schema.toTrailblazeToolDescriptor("tag", "Tag")
+
+    val tags = descriptor.toKoogToolDescriptor(strict = false).optionalParameters.single().type
+    assertThat(tags).isEqualTo(ToolParameterType.List(ToolParameterType.String))
   }
 }

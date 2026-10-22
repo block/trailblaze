@@ -67,6 +67,8 @@ class LazyYamlScriptedToolRegistration private constructor(
   // complete contract. See [InlineScriptToolConfig.inputSchemaExhaustive].
   override val declaresExhaustiveParameters: Boolean = toolConfig.inputSchemaExhaustive
 
+  private val declaredArgNames: Set<String>? = declaredArgNames(toolConfig)
+
   // Honor BOTH the typed [InlineScriptToolConfig] field AND the namespaced `_meta` key, combined by
   // opt-out AND (a `false` from either side wins). The typed field is the source of truth for the
   // analyzer / top-level-shortcut authoring paths, but a descriptor can also carry a raw
@@ -107,7 +109,7 @@ class LazyYamlScriptedToolRegistration private constructor(
     // QuickJS asyncFunction callback (Dispatchers.Default) to find null context and return
     // "no execution context installed" for every nested client.callTool() call.
     val serializer =
-      QuickJsToolSerializer(name, host, binding, effectiveIsRecordable, effectiveSensitiveArgs)
+      QuickJsToolSerializer(name, host, binding, effectiveIsRecordable, effectiveSensitiveArgs, declaredArgNames)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -142,6 +144,7 @@ class LazyYamlScriptedToolRegistration private constructor(
       binding = binding,
       isRecordable = effectiveIsRecordable,
       sensitiveArgs = effectiveSensitiveArgs,
+      declaredArgNames = declaredArgNames,
     )
     val inner = Json.decodeFromString(serializer, argumentsJson) as QuickJsTrailblazeTool
     // Wrap the deserialized `QuickJsTrailblazeTool` so its outer `execute(...)` sets the
@@ -796,6 +799,31 @@ class LazyYamlScriptedToolRegistration private constructor(
      */
     fun buildScriptedToolDescriptor(config: InlineScriptToolConfig): TrailblazeToolDescriptor =
       buildDescriptor(config)
+
+    /**
+     * The argument names a call to [config]'s tool may carry, or null to keep every key. Only a
+     * plain object schema that is the whole contract names them all: a root union, `$ref`,
+     * conditional, or any open-ended property rule could accept keys that `properties` doesn't
+     * list. The schema is the whole contract when its provenance says so
+     * ([InlineScriptToolConfig.inputSchemaExhaustive]) or when it closes itself with
+     * `additionalProperties: false`, which the analyzer writes and compiled target YAML keeps after
+     * the transient provenance flag is lost on load.
+     */
+    fun declaredArgNames(config: InlineScriptToolConfig): Set<String>? {
+      val schema = config.inputSchema
+      val additional = schema["additionalProperties"]
+      if (!config.inputSchemaExhaustive && additional != JsonPrimitive(false)) return null
+      if (OPEN_ENDED_SCHEMA_KEYWORDS.any { it in schema }) return null
+      if (additional != null && additional != JsonPrimitive(false)) return null
+      val type = (schema["type"] as? JsonPrimitive)?.contentOrNull
+      if (type != "object" && "properties" !in schema) return null
+      return (schema["properties"] as? JsonObject)?.keys.orEmpty()
+    }
+
+    private val OPEN_ENDED_SCHEMA_KEYWORDS = setOf(
+      "anyOf", "oneOf", "allOf", "not", "if", "then", "else", "\$ref",
+      "patternProperties", "dependentSchemas", "dependencies", "unevaluatedProperties", "propertyNames",
+    )
 
     /**
      * Builds a [TrailblazeToolDescriptor] from the YAML-declared `inputSchema:` block.

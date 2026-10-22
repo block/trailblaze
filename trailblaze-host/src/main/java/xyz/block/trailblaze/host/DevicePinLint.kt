@@ -82,6 +82,7 @@ object DevicePinLint {
    * platform or hardware families (`android`, `ios-ipad`, `lab-a`), and no device reports `driver`.
    */
   private const val DRIVER_KEY = "driver"
+  private const val DEVICES_KEY = "devices"
 
   /** `config:` declares both `driver:` and `devices:` — a pin two levels too shallow. */
   data class SessionDriverBesideDevices(
@@ -126,10 +127,13 @@ object DevicePinLint {
    * double-reporting one broken file as two failures only makes triage worse.
    */
   fun lint(trailRelPath: String, yamlText: String): Finding? {
+    // Every rule needs a `devices:` key, and most trails have none. Parsing a trail to a node tree
+    // was most of what this lint cost, so skip the parse when the key cannot be there.
+    if (DEVICES_KEY !in yamlText && !mayEscapeALetter(yamlText)) return null
     val config = childMap(rootMap(yamlText), "config") ?: return null
     // Every rule is about a `devices:` MAP. `devices:` written as a scalar or left null declares no
     // pins, so none of them has anything to say about it.
-    val devices = childMap(config, "devices") ?: return null
+    val devices = childMap(config, DEVICES_KEY) ?: return null
 
     val sessionDriver = config.entries.entries
       .firstOrNull { (key, _) -> key.content == DRIVER_KEY }
@@ -237,6 +241,23 @@ object DevicePinLint {
     }
   }
 
+  /**
+   * Whether [yamlText] could spell a key without writing it out: a hex escape (`"dev\u0069ces"`,
+   * `\x`, `\U`), or an escaped line break, which joins `"dev\` and `ices"` into one word. No other
+   * YAML escape produces a letter. Regex character classes (`\d`, `\.`) are the common backslashes
+   * in trails, and those match neither.
+   */
+  private fun mayEscapeALetter(yamlText: String): Boolean {
+    var at = yamlText.indexOf('\\')
+    while (at >= 0 && at + 1 < yamlText.length) {
+      if (yamlText[at + 1] in LETTER_ESCAPES) return true
+      at = yamlText.indexOf('\\', at + 1)
+    }
+    return false
+  }
+
+  private const val LETTER_ESCAPES = "xuU\r\n"
+
   private fun rootMap(yamlText: String): YamlMap? = try {
     Yaml.default.parseToYamlNode(yamlText) as? YamlMap
   } catch (_: Throwable) {
@@ -248,5 +269,5 @@ object DevicePinLint {
     ?.value as? YamlMap
 
   /** A named multi-device configuration: an entry whose value declares its own inner cast. */
-  private fun isConfiguration(value: YamlNode): Boolean = childMap(value as? YamlMap, "devices") != null
+  private fun isConfiguration(value: YamlNode): Boolean = childMap(value as? YamlMap, DEVICES_KEY) != null
 }

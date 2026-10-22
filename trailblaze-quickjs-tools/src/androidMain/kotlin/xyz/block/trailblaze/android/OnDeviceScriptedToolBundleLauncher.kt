@@ -66,6 +66,9 @@ object OnDeviceScriptedToolBundleLauncher {
     engineExtension: QuickJsEngineExtension?,
     assetManager: AssetManager = resolveDefaultAssetManager(),
   ): LaunchedQuickJsToolRuntime? {
+    // `ctx.surveys` in any tool launched here loads the surveys this APK packaged.
+    AndroidAssetSurveyBundles.installIfAbsent(assetManager)
+
     // Already-registered names are skipped on both routes: re-registering hard-fails
     // `addDynamicTools`'s collision guard, and target-declared tools win over toolset-delivered
     // ones on a name collision (the host-side precedence).

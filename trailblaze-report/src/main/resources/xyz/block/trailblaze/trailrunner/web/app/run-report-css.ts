@@ -1,6 +1,8 @@
 // Stylesheet for the interactive run report, emitted into the <head> of every exported report
 // document by buildMultiReportHtml (run-report-html.ts).
 import { REPORT_DESIGN_TOKENS_CSS } from './report-design-tokens';
+import { SUMMARY_CSS } from './run-report-summary-css';
+import { THEATER_CSS } from './run-report-theater-css';
 
 // Kept as a public alias for existing report embedders. The source of truth lives in the dedicated
 // design-token module shared by the run and performance reports.
@@ -1972,4 +1974,6 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 @media (pointer: coarse) {
   .cmpsel summary, .cmprunoption, .cmpswap, .cmpchip, .cmpdiffwrap > summary, .cmpeventlist .dlrow, .cmpopen, .cmpstep, .cmpsegment button, .cmponly, .cmpsearch input, .cmpstepstream select, .cmptextbtn { min-height: 44px; }
 }
+${THEATER_CSS}
+${SUMMARY_CSS}
 `;

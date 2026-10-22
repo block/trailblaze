@@ -203,12 +203,17 @@ object TrailblazeNodeSelectorGenerator {
       consider(name, TrailblazeNodeSelector.withMatch(match))
     }
 
-    val ranked = bySelector.entries
-      .map { NamedSelector(it.key, it.value) }
-      .sortedBy { selectorStabilityRank(it.selector) }
-      .take(maxResults)
-    return ranked.mapIndexed { i, named -> named.copy(isBest = i == 0) }
+    return rankByStability(bySelector.entries.map { NamedSelector(it.key, it.value) }).take(maxResults)
+      .mapIndexed { i, named -> named.copy(isBest = i == 0) }
   }
+
+  /**
+   * Orders [selectors] most-stable first, as [enumerateSelectorCandidates] does, keeping their
+   * given order within a tier. For callers that merge or filter several candidate lists.
+   * [NamedSelector.isBest] marks the first.
+   */
+  fun rankByStability(selectors: List<NamedSelector>): List<NamedSelector> =
+    selectors.sortedBy { selectorStabilityRank(it.selector) }.mapIndexed { i, named -> named.copy(isBest = i == 0) }
 
   /**
    * Finds the best **structural** selector that uniquely identifies [target] within the [root]

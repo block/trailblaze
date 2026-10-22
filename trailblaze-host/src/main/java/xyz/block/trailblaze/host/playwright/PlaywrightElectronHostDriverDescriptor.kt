@@ -209,6 +209,7 @@ class PlaywrightElectronHostDriverDescriptor(
       TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
         targetTestApp = runOnHostParams.targetTestApp,
         config = runYamlRequest.config,
+        trailFilePath = runYamlRequest.trailFilePath,
         sessionId = session.sessionId,
         deviceInfo = electronTest.trailblazeDeviceInfo,
         logsRepo = electronTest.loggingRule.logsRepo,

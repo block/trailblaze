@@ -16,6 +16,14 @@ export type HistorySection = "trailhead" | "trail" | "teardown";
 
 const SECTIONS: readonly HistorySection[] = ["trailhead", "trail", "teardown"];
 
+/**
+ * One memory key a call set or deleted. A sensitive key's `value` is its token, such as
+ * `{{password}}`, and a sensitive value inside another value is masked the same way.
+ */
+export type MemoryChange =
+  | { op: "set"; key: string; value: string }
+  | { op: "delete"; key: string; value: null };
+
 /** One tool call: a trail step, an action the AI took, or a tool another tool ran. */
 export interface ToolCall {
   name: string;
@@ -39,6 +47,12 @@ export interface ToolCall {
   device: string | null;
   /** The calls this one made, in the order they started. */
   calls: ToolCall[];
+  /**
+   * The memory changes this call committed, by key, recorded when it returned. Changes a call in
+   * `calls` made are on that call. Empty while running. A scripted tool's `ctx.memory` writes
+   * commit only if it succeeds, so a failed one has none.
+   */
+  memory: MemoryChange[];
 }
 
 export interface ToolHistory {
@@ -51,9 +65,11 @@ export interface ToolHistory {
 }
 
 /** A call as the host returns it: flat, linked to its parent by id. */
-interface RecordedToolCall extends Omit<ToolCall, "calls"> {
+interface RecordedToolCall extends Omit<ToolCall, "calls" | "memory"> {
   id: string;
   parentId: string | null;
+  /** Optional, so a test stubbing the read can leave it out. */
+  memory?: MemoryChange[];
 }
 
 type HostCall = (args: unknown) => Promise<unknown>;
@@ -97,6 +113,7 @@ function toTree(recorded: readonly RecordedToolCall[]): ToolCall[] {
       endedAt: call.endedAt,
       device: call.device,
       calls: [],
+      memory: call.memory ?? [],
     };
     byId.set(call.id, node);
     const parent = call.parentId === null ? undefined : byId.get(call.parentId);
@@ -106,12 +123,16 @@ function toTree(recorded: readonly RecordedToolCall[]): ToolCall[] {
 }
 
 /**
- * [calls] as indented text, one line per call, the calls each made indented under it:
+ * [calls] as indented text, one line per call, the calls each made indented under it, then each
+ * memory change it committed on a line starting `=`:
  *
  * ```
  * ✓ myapp_addItem(itemId: "item-1")  2.2s
  *   ✓ tapOnElement(text: "Add")  0.7s
+ *   = newItemId ← "item-1"
  * ✗ assertVisible(text: "item-1")  1.8s  Element not found
+ * ✓ myapp_reset()  0.4s
+ *   = newItemId deleted
  * … teardown()  running
  * ```
  */
@@ -126,6 +147,10 @@ export function formatToolCalls(calls: readonly ToolCall[]): string {
     const message = call.outcome && !call.outcome.success && call.outcome.message ? `  ${call.outcome.message}` : "";
     lines.push(`${"  ".repeat(depth)}${mark} ${call.name}(${args})  ${time}${message}`);
     for (const child of call.calls) add(child, depth + 1);
+    for (const change of call.memory) {
+      const state = change.op === "set" ? `← ${JSON.stringify(change.value)}` : "deleted";
+      lines.push(`${"  ".repeat(depth + 1)}= ${change.key} ${state}`);
+    }
   };
   for (const call of calls) add(call, 0);
   return lines.join("\n");

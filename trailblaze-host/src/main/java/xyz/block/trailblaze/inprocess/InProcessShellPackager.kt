@@ -7,6 +7,7 @@ import xyz.block.trailblaze.inprocess.apk.AppManifestProviders
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
+import xyz.block.trailblaze.surveys.SurveyBundles
 import java.io.File
 import java.security.MessageDigest
 
@@ -65,6 +66,12 @@ object InProcessShellPackager {
    * `inprocess-shell/build.gradle.kts`. SISTER-IMPL-TAG: runtime-tool-source-shell-capability.
    */
   private const val RUNTIME_TOOL_SOURCE_CAPABILITY_KEY = "runtimeToolSource"
+
+  /**
+   * Shell-properties key attesting the shell installs the packaged-survey source on the device.
+   * Written by `inprocess-shell/build.gradle.kts`. SISTER-IMPL-TAG: packaged-surveys-shell-capability.
+   */
+  private const val PACKAGED_SURVEYS_CAPABILITY_KEY = "packagedSurveys"
 
   /** The key as a top-level line, for telling "the caller wrote it" from "we appended it". */
   private val ALLOW_RUNTIME_TOOL_SOURCE_KEY_LINE =
@@ -144,11 +151,22 @@ object InProcessShellPackager {
     val injectedTargetConfig =
       request.targetConfig?.let { readTargetConfig(it, request.allowRuntimeToolSource) }
     val toolBundles = collectToolBundles(request)
+    // A shell built before packaged surveys would carry them and still fail every ctx.surveys call,
+    // so they are left out and the reason named. Not a failure: a trailmap's surveys are packaged
+    // implicitly, and an APK whose trails never ask for one is still a good APK.
+    val shellLoadsSurveys = shellProperties[PACKAGED_SURVEYS_CAPABILITY_KEY] == "true"
+    if (!shellLoadsSurveys && request.trailmapDirs.any { surveyFiles(File(it, "surveys")).isNotEmpty() }) {
+      warnings += "Surveys not packaged: ${request.shellApk} does not record that it loads them " +
+        "($PACKAGED_SURVEYS_CAPABILITY_KEY in $SHELL_VERSION_ENTRY), so ctx.surveys fails on the device. " +
+        "Rebuild the shell with scripts/build-inprocess-shell.sh."
+    }
+    val surveys = if (shellLoadsSurveys) collectSurveys(request, warnings) else emptyMap()
     val trailAssets = collectTrails(request.trails)
 
     val additions = LinkedHashMap<String, ByteArray>()
     injectedTargetConfig?.let { additions["$TARGETS_ASSET_DIR/${it.id}.yaml"] = it.bytes }
     additions += toolBundles
+    additions += surveys
     additions += trailAssets
 
     val staged = stagedFileFor(request.outputApk)
@@ -181,7 +199,7 @@ object InProcessShellPackager {
         signingCertificateSha256 = evidence.signingCertificateSha256,
         releaseMode = request.release,
         targetConfigId = injectedTargetConfig?.id,
-        trailmapRevision = toolBundles.takeIf { it.isNotEmpty() }?.let { contentDigest(it) },
+        trailmapRevision = (toolBundles + surveys).takeIf { it.isNotEmpty() }?.let { contentDigest(it) },
         injectedTrails = trailAssets.keys.toList(),
         injectedToolBundles = toolBundles.keys.toList(),
         // Read back out of the bytes that were injected, never from the flag a second time.
@@ -575,6 +593,67 @@ object InProcessShellPackager {
     return out
   }
 
+  /**
+   * Packages each trailmap's `surveys/` for `ctx.surveys` on the device, laid out as
+   * [SurveyBundles.PACKAGED_DIR] describes: every survey file, and beside it its bundle or why it
+   * could not be bundled. SISTER-IMPL-TAG: packaged-survey-layout — the Android Gradle plugin's
+   * `registerTrailmapSurveyBundles` writes the same layout.
+   *
+   * Never fails the run: a survey that runs only after the session may import what the sandbox
+   * lacks, and is skipped here; any other that cannot be bundled is reported to a trail that asks
+   * for it, and named in [warnings].
+   */
+  private fun collectSurveys(request: Request, warnings: MutableList<String>): Map<String, ByteArray> {
+    val out = LinkedHashMap<String, ByteArray>()
+    val bundler by lazy {
+      request.esbuildBinary?.let {
+        DaemonScriptedToolBundler(it, inProcessSdkEntryOverride = request.inProcessSdkEntry, allowLegacyEsbuildWalkup = false)
+      }
+    }
+    for (trailmapDir in request.trailmapDirs) {
+      val id = trailmapDir.canonicalFile.name
+      val surveysDir = File(trailmapDir, "surveys")
+      for (survey in surveyFiles(surveysDir)) {
+        val rel = survey.relativeTo(surveysDir).invariantSeparatorsPath
+        require(rel.split('/').none { it == ".." || it == "." }) {
+          "Survey file '$rel' in trailmap '$id' escapes surveys/. An entry path with a traversal segment inside a signed APK is not something this command emits."
+        }
+        val asset = "assets/${SurveyBundles.PACKAGED_DIR}/trailmaps/$id/surveys/$rel"
+        require(asset !in out) {
+          "Two inputs both map to $asset (the second is $survey). Trailmap ids come from the " +
+            "directory name, so passing the same trailmap twice does this."
+        }
+        val text = survey.readText()
+        out[asset] = text.toByteArray()
+        val exported = SurveyBundles.exportedSurveys(text)
+        // The device answers for a survey that runs only after the session without a bundle.
+        if (exported.isNotEmpty() && exported.all { it.requiresFinishedSession }) continue
+        val failure = when (val b = bundler) {
+          null -> "esbuild was not available when this test APK was made, so the survey file was not bundled. Pass --esbuild to make-test-apk."
+          else -> try {
+            out[asset + SurveyBundles.PACKAGED_BUNDLE_SUFFIX] = runBlocking { b.bundleSurvey(survey) }.readBytes()
+            null
+          } catch (e: Exception) {
+            e.message.orEmpty()
+          }
+        } ?: continue
+        out[asset + SurveyBundles.PACKAGED_ERROR_SUFFIX] = failure.toByteArray()
+        warnings += "Survey file $id/surveys/$rel cannot run mid-trail on the device: ${failure.lineSequence().first()}"
+      }
+    }
+    return out
+  }
+
+  /** Every survey file under [surveysDir], in path order. Mirrors the Android Gradle plugin's `surveyFiles`. */
+  private fun surveyFiles(surveysDir: File): List<File> {
+    if (!surveysDir.isDirectory) return emptyList()
+    return surveysDir.walkTopDown()
+      .onEnter { it == surveysDir || !(it.name.startsWith(".") || it.name == "node_modules") }
+      .filter { it.isFile && SurveyBundles.isSurveyFile(it.name) }
+      .sortedBy { it.relativeTo(surveysDir).invariantSeparatorsPath }
+      .toList()
+  }
+
   private fun putBundle(
     out: MutableMap<String, ByteArray>,
     trailmapId: String,
@@ -610,7 +689,7 @@ object InProcessShellPackager {
    */
   private fun inProcessToolSources(toolsDir: File): List<File> {
     val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
-    val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
+    val toolExport = Regex("""trailblaze\s*\.\s*(?:tool|trailhead)\s*[<(]""")
     return toolsDir.walkTopDown()
       .filter { f ->
         f.isFile &&
@@ -642,7 +721,8 @@ object InProcessShellPackager {
    */
   internal fun carriesTypeScriptToolSource(trailmapDirs: List<File>): Boolean =
     trailmapDirs.any { dir ->
-      File(dir, "tools").let { it.isDirectory && inProcessToolSources(it).isNotEmpty() }
+      File(dir, "tools").let { it.isDirectory && inProcessToolSources(it).isNotEmpty() } ||
+        surveyFiles(File(dir, "surveys")).isNotEmpty()
     }
 
   // --- record ---------------------------------------------------------------------------------

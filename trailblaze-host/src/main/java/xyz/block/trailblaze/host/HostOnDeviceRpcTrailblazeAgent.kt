@@ -919,8 +919,20 @@ class HostOnDeviceRpcTrailblazeAgent(
     // Mark BEFORE storing the values (mirroring `AgentMemory.storeSensitive`): a reader that
     // snapshots `variables` and filters against `sensitiveKeys` must never observe a returned
     // secret in the window before its marker lands.
-    sensitiveKeys.forEach { memory.markSensitive(it) }
-    memory.variables.putAll(deviceSnapshot)
-    deletions.forEach { memory.variables.remove(it) }
+    memory.mergeDeviceMemory(deviceSnapshot, deletions, sensitiveKeys)
   }
+}
+
+/**
+ * Merges what a device's memory held after an RPC into [this]: sensitivity markers, then values
+ * (device wins), then the keys the device explicitly deleted. See [HostOnDeviceRpcTrailblazeAgent].
+ */
+internal fun AgentMemory.mergeDeviceMemory(
+  deviceSnapshot: Map<String, String>,
+  deletions: List<String>,
+  sensitiveKeys: List<String>,
+) {
+  sensitiveKeys.forEach { markSensitive(it) }
+  variables.putAll(deviceSnapshot)
+  deletions.forEach { variables.remove(it) }
 }

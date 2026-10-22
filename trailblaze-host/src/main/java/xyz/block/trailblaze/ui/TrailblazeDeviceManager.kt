@@ -39,6 +39,7 @@ import xyz.block.trailblaze.capture.logcat.CrashEventArtifactWriter
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
+import xyz.block.trailblaze.host.axe.NotificationAlertAnswers
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.devices.HostProbe
@@ -701,6 +702,7 @@ class TrailblazeDeviceManager(
       val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
       if (isNewSession) {
         trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
+        enteredSessionLocked(trailblazeDeviceId, sessionId)
         // Every member of this device's named cast is on the session from the start; each is
         // recorded once capture has started (one running a session of its own is not, see joinSessionLocked).
         val roster = rosterContaining(trailblazeDeviceId)
@@ -1498,6 +1500,18 @@ class TrailblazeDeviceManager(
     }
   }
 
+  /**
+   * [trailblazeDeviceId] has just been moved onto [sessionId]. Call under [sessionCreationLock], so
+   * overlapping session changes reach the device in the order they happened. An iOS notifications
+   * answer belongs to the session that armed it, so a simulator forgets its answers here. Cheap: it
+   * doesn't wait on the simulator.
+   */
+  private fun enteredSessionLocked(trailblazeDeviceId: TrailblazeDeviceId, sessionId: SessionId) {
+    if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+      NotificationAlertAnswers.enterSession(trailblazeDeviceId.instanceId, sessionId.value)
+    }
+  }
+
   /** The members of [roster] tracked on [sessionId] — the ones its capture may record. Call under [sessionCreationLock]. */
   private fun membersOnSessionLocked(roster: List<BoundDeviceRosterMember>, sessionId: SessionId): List<BoundDeviceRosterMember> =
     roster.filter { _activeDeviceSessionsFlow.value[it.trailblazeDeviceId] == sessionId }
@@ -1532,6 +1546,7 @@ class TrailblazeDeviceManager(
       current == null -> {
         _activeDeviceSessionsFlow.value += (trailblazeDeviceId to sessionId)
         joinedThroughCast[trailblazeDeviceId] = sessionId
+        enteredSessionLocked(trailblazeDeviceId, sessionId)
       }
       else -> Console.log(
         "[TrailblazeDeviceManager] ${trailblazeDeviceId.instanceId} is running session $current, " +

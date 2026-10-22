@@ -228,6 +228,20 @@ class DevicePinLintTest {
   }
 
   @Test
+  fun `a devices key spelled with an escape is still scanned`() {
+    val finding = lint("config:\n  \"dev\\u0069ces\":\n    android:\n    driver: ANDROID_ONDEVICE_ACCESSIBILITY\n")
+    assertNotNull(finding)
+    assertTrue(finding.isFatal)
+  }
+
+  @Test
+  fun `a devices key split across lines by an escaped line break is still scanned`() {
+    val finding = lint("config:\n  ? \"dev\\\n    ices\"\n  : android:\n    driver: ANDROID_ONDEVICE_ACCESSIBILITY\n")
+    assertNotNull(finding)
+    assertTrue(finding.isFatal)
+  }
+
+  @Test
   fun `a space before the devices colon is still scanned`() {
     val finding = lint("config:\n  devices :\n    android: ANDROID_ONDEVICE_ACCESSIBILITY\n")
     assertNotNull(finding)

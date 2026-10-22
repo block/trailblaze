@@ -74,6 +74,15 @@ object TrailArgTokens {
 
   /** Every `args.` token occurrence in [text], in source order (duplicates preserved). */
   fun scanArgsTokens(text: String): List<ArgTokenRef> =
+    // Every result's body is a substring of [text] that starts with `args.`, so text without it has
+    // none. Most trails have none, and the regex scan is what `trailblaze check` paid for them.
+    if (ARGS_PREFIX !in text) {
+      emptyList()
+    } else {
+      scanAllArgsTokens(text)
+    }
+
+  private fun scanAllArgsTokens(text: String): List<ArgTokenRef> =
     TOKEN_REGEX.findAll(text)
       .mapNotNull { m ->
         val body = tokenBody(m) ?: return@mapNotNull null

@@ -24,6 +24,9 @@ import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTime
 import { adjacentFrameTime, clipFrameSource, FRAME_TIME_SLACK_SEC, installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
 import { formatShotClipLength, formatShotClipTime, nextShotClipSpeed, SHOT_CLIP_MIN_SEC, SHOT_CLIP_SPEED, shotClipCovers, shotClipMediaSecAt, shotClipRunSecAt, shotClipSegment, type ShotClipSegment } from './run-report-shot-clip';
 import { formatUsd, trailSourceDetails } from './report-format';
+import { mountSummary, summaryAvailable } from './run-report-summary';
+import { mountTheater, theaterAvailable } from './run-report-theater';
+import type { ReportTabHost, ReportTabMount } from './run-report-tab-host';
 import crashFormatter from '../../../report/event-formatters/crash.formatter';
 import { findAttachmentRefs, formatRows } from '../../../report/run-report-events';
 
@@ -225,6 +228,25 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // order the reader sees: Replay first, because playing the run back is what most readers open
   // this for.
   const TRAIL_TABS = ['replay', 'steps'];
+  // Theater and Summary draw and drive their own DOM (see run-report-tab-host.ts): render leaves
+  // them an empty container, mountActiveTab hands it over after wiring, and the next render
+  // disposes the mount before it rewrites the page. Each keeps its scratch in tabMountState, per
+  // session and tab, so a re-render (a theme toggle, a stream inflating) resumes where it was.
+  const MOUNTED_TABS = ['theater', 'summary'];
+  let tabMount: ReportTabMount | null = null;
+  // True while `st.tabAt` is a navigation's request (a link, history, another tab's "open this
+  // moment") rather than the mounted tab's own last write; the next mount consumes it.
+  let tabSeek = false;
+  // The session and tab the last render mounted; null after a render that mounted nothing. A mount
+  // of the same key is the same view drawn again in place (data landing, a live update).
+  let lastTabMountKey: string | null = null;
+  // lastTabMountKey as the render now running found it; render() clears the live one, so a render
+  // that mounts nothing (the run list, a comparison) breaks the chain.
+  let previousTabMountKey: string | null = null;
+  // The moment a mounted tab last named, as an epoch: a live run's first row can arrive late and move
+  // the origin `at` counts from, so the offset is recomputed from this to keep naming the same moment.
+  let tabMoment: { key: string; at: number; epochMs: number } | null = null;
+  const tabMountState: Record<string, Record<string, unknown>> = {};
   const onTrailTab = () => st.view === 'detail' && TRAIL_TABS.indexOf(st.tab) >= 0;
   // The trail projections show the SAME authored trail across runs — one lane per device, joined
   // on the authored step — so they exist only when every session names one trail (by trailId when
@@ -1448,7 +1470,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1670,6 +1692,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (firstFail < 0 && runInProgress) { const newest = newestSelectableStep(); if (newest != null) st.step = newest; }
     const selectable = selectableTimelineIndexFor(st.step);
     if (selectable >= 0) st.step = D.trace[selectable].i;
+    // A finished run opens on its Theater: the run played back is the quickest read of what
+    // happened. A live run stays on the Timeline, which follows its newest row.
+    st.tab = !runInProgress && theaterAvailable(D) ? 'theater' : 'timeline';
     if (pendingDetailRoute) {
       const r = pendingDetailRoute;
       const fromHistory = pendingDetailRouteFromHistory;
@@ -1691,6 +1716,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // go with it: hidden lanes are keyed by session index, and the playhead points at a stage that
     // no longer exists.
     st.trailLanesOff = {}; st.trailRowsOpen = {}; st.trailTracksOpen = {}; st.trailStripZoom = null; st.trailT = -1; st.trailLane = null;
+    st.tabAt = null;
     // Chunked documents hydrate on open: synchronous when the session's chunk has already
     // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
     // chunk lands, then the seed + re-render below run.
@@ -1823,7 +1849,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     if (!p.has('run') && !p.has('tab') && !p.has('step')) return null;
     return {
-      view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || 'timeline',
+      // No tab named: the run opens on its default tab (seedSessionDetail), not a fixed one.
+      view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || '',
       step: p.has('step') ? Number(p.get('step')) : null,
       kid: p.has('kid') ? Number(p.get('kid')) : null,
       at: p.has('at') ? Number(p.get('at')) : null,
@@ -1846,10 +1873,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     pendingLlmHistoryBacked = false;
     // `grid` was the Lightbox's old name; `map` was a trail tab the Grid replaced, and the viewer
     // wrote it into every URL while it was open, so shared links carry it.
-    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab === 'map' ? 'steps' : r.tab;
     // Legacy 'events' routes land on the timeline, where inline event streams now live.
-    const allowed = ['timeline', ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'strings', 'info'];
-    if (allowed.indexOf(requestedTab) >= 0) st.tab = requestedTab;
+    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab === 'map' ? 'steps' : r.tab === 'events' ? 'timeline' : r.tab;
+    const allowed = ['timeline', ...MOUNTED_TABS, ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'strings', 'info'];
+    // A mounted tab opens exactly where its nav entry renders: a shared `?tab=theater` on a run
+    // without objectives keeps the seeded default. `step` is a Timeline concept, so a hand-built
+    // link carrying it with no tab lands there rather than on the Theater default.
+    const mountedOk = requestedTab === 'theater' ? theaterAvailable(D) : requestedTab === 'summary' ? summaryAvailable(D) : true;
+    if (allowed.indexOf(requestedTab) >= 0 && mountedOk) st.tab = requestedTab;
+    else if (!requestedTab && r.step != null && MOUNTED_TABS.indexOf(st.tab) >= 0) st.tab = 'timeline';
+    // A mounted tab's position rides `at` like the Timeline's seek: ms from the run's first timestamp.
+    if (MOUNTED_TABS.indexOf(st.tab) >= 0) {
+      st.tabAt = r.at != null && Number.isFinite(r.at) ? r.at : null;
+      tabSeek = st.tabAt != null;
+    }
     // The projection IS the tab, so the tab nav and the body renderers read one value. The lanes
     // of a chunked report stream in behind the open run, so the stage is requested here and the
     // loading shell holds the tab until they land (render falls back to the timeline if the trail
@@ -2120,6 +2157,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           : routedSeek && routedSeek.step === st.step && routedSeek.kid === st.kid ? routedSeek.at : null;
         if (at != null) params.set('at', String(at));
       }
+      if (MOUNTED_TABS.indexOf(st.tab) >= 0 && st.tabAt != null) params.set('at', String(Math.round(st.tabAt)));
       if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
       if (st.tab === 'timeline') { const selected = selectedOfferedEventKinds(); if (selected.length !== offeredTimelineEventKinds().length) params.set('types', selected.length ? selected.join(',') : 'none'); }
       // The trail tabs' own settings. The tab already names the projection, so `mode` is gone;
@@ -8009,7 +8047,124 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <main class="cmpmain"><div class="indexshell trailshellwide">${missingNote}${degradedNote}${crossTrailNote}${body}</div></main>`;
   };
 
+  const disposeTabMount = () => {
+    const mount = tabMount;
+    tabMount = null;
+    if (mount) { try { mount.dispose(); } catch (_) { /* a failed teardown must not block the next render */ } }
+  };
+  // Hands the open run to the mounted tab render() left a container for. The host is the tab's
+  // whole view of the report: positions cross it as epoch ms on the capture clock, and the viewer
+  // turns them into the route's `at` (ms from the run's first timestamp), as the Timeline does.
+  // The route's `at` counts from the run's first row, which a live run can receive late. Kept as
+  // an epoch, the moment the reader is on is re-counted from the new origin, so the link still opens it.
+  const rebaseTabMoment = () => {
+    const t0 = traceT0();
+    if (st.tabAt == null || t0 == null) return;
+    const key = `${st.session}:${st.tab}`;
+    // Anchored when the offset came from elsewhere (a link, history); rebased when only the origin moved.
+    if (!tabMoment || tabMoment.key !== key || tabMoment.at !== st.tabAt) tabMoment = { key, at: st.tabAt, epochMs: t0 + st.tabAt };
+    const rebased = Math.round(tabMoment.epochMs - t0);
+    if (rebased === st.tabAt) return;
+    st.tabAt = rebased;
+    tabMoment.at = rebased;
+    writeRoute(true);
+  };
+  const mountActiveTab = () => {
+    const previousKey = previousTabMountKey;
+    if (st.view !== 'detail' || MOUNTED_TABS.indexOf(st.tab) < 0) return;
+    rebaseTabMoment();
+    const container = root.querySelector<HTMLElement>('[data-tabmount]');
+    if (!container) return;
+    const session = st.session;
+    const tab = st.tab;
+    const t0 = traceT0();
+    // Only Theater plays recordings; resolving them can decode or read whole videos.
+    const clips = tab === 'theater'
+      ? sessionRecordings(session).map((_, k) => sessionClipAt(session, k)).filter((clip): clip is VideoClip => clip != null)
+      : [];
+    const stateKey = `${session}:${tab}`;
+    lastTabMountKey = stateKey;
+    const host: ReportTabHost = {
+      session: D,
+      sessionIndex: session,
+      clips,
+      shotSrc: (file) => (file ? safeImageSrc(D.shots[file]) || null : null),
+      events: sessionEvents(D),
+      eventsPending: !eventsInflater.settled(D),
+      network: sessionNetwork(D),
+      reducedMotion: prefersReducedMotion(),
+      initialEpochMs: st.tabAt != null && t0 != null ? t0 + st.tabAt : null,
+      seek: tabSeek && st.tabAt != null,
+      inPlace: previousKey === stateKey && !tabSeek,
+      setEpochMs: (ms) => {
+        if (st.view !== 'detail' || st.session !== session || st.tab !== tab) return;
+        // Signed: recordings and event streams can start before the first trace row.
+        st.tabAt = ms == null || t0 == null || !Number.isFinite(ms) ? null : Math.round(ms - t0);
+        tabMoment = st.tabAt == null || ms == null ? null : { key: stateKey, at: st.tabAt, epochMs: ms };
+        writeRoute(true);
+      },
+      shareLink: shareLinkAvailable() ? reportLink : undefined,
+      openTab: (next, epochMs) => {
+        if (st.view !== 'detail' || st.session !== session) return;
+        stopTimeline();
+        st.tab = next;
+        st.tabAt = MOUNTED_TABS.indexOf(next) >= 0 && epochMs != null && t0 != null ? Math.round(epochMs - t0) : null;
+        tabMoment = st.tabAt == null || epochMs == null ? null : { key: `${session}:${next}`, at: st.tabAt, epochMs };
+        tabSeek = st.tabAt != null;
+        if (next === 'timeline' && epochMs != null) {
+          // The step that was running at that moment: the last selectable row started by then.
+          const rows = D.trace.filter((t) => t.ts != null && t.ts <= epochMs);
+          const row = rows.length ? rows[rows.length - 1] : D.trace[0];
+          const selectable = row ? selectableTimelineIndexFor(row.i) : -1;
+          if (selectable >= 0) { st.step = D.trace[selectable].i; st.kid = null; revealTimelineStep(st.step); }
+        }
+        writeRoute(false);
+        render();
+        if (st.tab === 'timeline') centerTimelineSelection(true);
+      },
+      state: tabMountState[stateKey] || (tabMountState[stateKey] = {}),
+    };
+    tabSeek = false;
+    try {
+      tabMount = (tab === 'theater' ? mountTheater : mountSummary)(container, host);
+    } catch (err) {
+      // A tab that cannot lay this run out says so in place; the rest of the report still works.
+      container.innerHTML = `<div class="empty">This view could not be drawn for this run.</div>`;
+      if (typeof console !== 'undefined') console.error(err);
+    }
+  };
+  // A mounted tab's control is rebuilt by every remount, so a live update would drop the reader's
+  // focus mid-typing. Named by its tag and every data attribute it carries, and by its place among
+  // controls named the same, it is found again in the new mount.
+  const tabFocusOf = (): { selector: string; nth: number; start: number | null; end: number | null } | null => {
+    const active = document.activeElement as HTMLElement | null;
+    const mount = active && active.closest ? active.closest('[data-tabmount]') : null;
+    if (!active || !mount) return null;
+    // A control whose place can move (a note an earlier event pushes down) names itself in `data-focus-key`.
+    const key = active.getAttribute('data-focus-key');
+    const attrs = Array.from(active.attributes).filter((a) => (key != null ? a.name === 'data-focus-key' : a.name.indexOf('data-') === 0));
+    if (!attrs.length) return null;
+    const quote = (value: string) => value.replace(/["\\]/g, '\\$&');
+    const selector = active.tagName.toLowerCase() + attrs.map((a) => (a.value ? `[${a.name}="${quote(a.value)}"]` : `[${a.name}]`)).join('');
+    const field = active as HTMLInputElement;
+    const typed = typeof field.selectionStart === 'number';
+    const nth = Array.from(mount.querySelectorAll(selector)).indexOf(active);
+    return { selector, nth, start: typed ? field.selectionStart : null, end: typed ? field.selectionEnd : null };
+  };
+  const restoreTabFocus = (focus: ReturnType<typeof tabFocusOf>) => {
+    const matches = focus ? root.querySelectorAll<HTMLElement>(`[data-tabmount] ${focus.selector}`) : null;
+    const target = focus && matches ? matches[focus.nth] ?? null : null;
+    if (!focus || !target || target === document.activeElement) return;
+    target.focus({ preventScroll: true });
+    if (focus.start != null && typeof (target as HTMLInputElement).setSelectionRange === 'function') {
+      try { (target as HTMLInputElement).setSelectionRange(focus.start, focus.end ?? focus.start); } catch (e) { /* not a text field */ }
+    }
+  };
   const render = (preserveTimelineScroll = false) => {
+    const tabFocus = tabFocusOf();
+    disposeTabMount();
+    previousTabMountKey = lastTabMountKey;
+    lastTabMountKey = null;
     const previousTimelineScroll = preserveTimelineScroll ? root.querySelector<HTMLElement>('.timelinescroll')?.scrollTop : null;
     const previousMainScroll = preserveTimelineScroll ? root.querySelector<HTMLElement>('main')?.scrollTop : null;
     // Sideways too: the Grid projection is a wide lane scroller, and an in-place re-render (a row
@@ -8129,6 +8284,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // holds a loading shell (the tab nav stays — the reader can leave) until every lane is here.
     const trailLanesLoading = trailTab && detailTrailScope().some((i) => unhydrated.has(i));
     const tabs = [
+      ...(theaterAvailable(D) ? [['theater', 'Theater']] : []),
+      ...(summaryAvailable(D) ? [['summary', 'Summary']] : []),
       ['timeline', 'Timeline'],
       ...trailTabs,
       ...(hasShots ? [['lightbox', `Lightbox <span class="counttoken">${lightboxStepFrameCount}</span>`]] : []),
@@ -8144,6 +8301,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const body = trailLanesLoading
       ? `<div class="runloading" role="status"><div class="tb-boot-spinner" aria-hidden="true"></div><div class="tb-boot-title">Loading the other devices…</div><div class="tb-boot-note" data-run-loading-progress>${esc(loadingProgressText())}</div></div>`
       : st.tab === 'timeline' ? renderTimeline()
+      : MOUNTED_TABS.indexOf(st.tab) >= 0 ? `<div class="tabmount" data-tabmount="${esc(st.tab)}"></div>`
       : trailTab ? renderTrailBody()
       : st.tab === 'lightbox' ? renderLightbox()
       : st.tab === 'video' ? renderVideo()
@@ -8196,10 +8354,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       </header>`;
     root.innerHTML = `
       ${header}
-      <main class="${trailLanesLoading ? '' : st.tab === 'timeline' ? 'timelinemain' : trailTab ? `trailmain${st.tab === 'replay' ? ' trailreplaymain' : ''}` : ''}">${body}</main>
+      <main class="${trailLanesLoading ? '' : MOUNTED_TABS.indexOf(st.tab) >= 0 ? 'tabmountmain' : st.tab === 'timeline' ? 'timelinemain' : trailTab ? `trailmain${st.tab === 'replay' ? ' trailreplaymain' : ''}` : ''}">${body}</main>
       ${!trailLanesLoading && st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), selectedEntryIndex()) : ''}
       ${galleryOnly ? '' : `<footer class="detailfooter"><div class="detailfootermeta" tabindex="0" aria-label="Run metadata">${footerItems}${runOn}</div></footer>`}`;
     wire();
+    mountActiveTab();
+    if (lastTabMountKey !== null && lastTabMountKey === previousTabMountKey) restoreTabFocus(tabFocus);
     // Before the scroll restores below: an expanded body is content, and clamping a scrollTop
     // against a shorter list would land the reader somewhere other than where they were.
     if (openEventKeys && openEventKeys.size) reopenTimelineEvents(openEventKeys);
@@ -10333,6 +10493,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // loop on every pass, so only the timeline's own player needs saying here.)
       stopTimeline();
       st.tab = b.dataset.tab;
+      // `at` is the position of the tab that wrote it; re-entering a mounted tab resumes its own.
+      st.tabAt = null;
       // The projection IS the tab (see TRAIL_TABS). A chunked report's other lanes may still be
       // streaming in, so the stage is requested here and the loading shell holds the tab.
       if (TRAIL_TABS.indexOf(st.tab) >= 0) { st.trailMode = st.tab; ensureScopeChunks(detailTrailScope(), detailTrailToken()); }
@@ -10893,6 +11055,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // necessarily implement removeEventListener, and a stale playback stopper closes over the previous
   // run's timers.
   disposeViewerGlobals = () => {
+    // A mounted tab owns an animation loop, media and window listeners that would outlive the report.
+    disposeTabMount();
     try { unmountStringCrops(); } catch (e) { /* stylesheet already gone */ }
     // A still from this boot's recordings that lands after it must not repaint over the next one.
     stringFramesRetired = true;

@@ -443,6 +443,8 @@ kotlin {
         // level below.
         implementation(libs.koog.agents)
         implementation(libs.koog.prompt.executor.clients)
+        // OpenAiResponsesLlmClient builds Responses API params for OpenAI's GPT models.
+        implementation(libs.koog.prompt.executor.openai)
         // Publishes the OpenTelemetry security floor to consumers of this artifact. Koog's
         // OpenTelemetry feature requests an older, vulnerable BOM, and the local override in
         // gradle/dependency-resolution.gradle.kts only applies inside this build.

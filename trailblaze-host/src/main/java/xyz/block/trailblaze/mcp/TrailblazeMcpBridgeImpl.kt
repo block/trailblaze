@@ -17,6 +17,7 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.host.mergeDeviceMemory
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -2316,9 +2317,11 @@ class TrailblazeMcpBridgeImpl(
     // run --driver IOS_AXE`), which gets real session logging that this one-shot MCP path
     // still doesn't (see warnIosNativeSessionLoggingGapOnce below).
     if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType?.hostNativeSimulatorDriver == true) {
-      // That driver's agent runs the tool without the dispatch loop that records calls.
-      val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool) {
-        executeToolViaIosNativeDriver(tool, trailblazeDeviceId)
+      // That driver's agent runs the tool without the dispatch loop that records calls. The record
+      // diffs the memory the tool runs against, so both get the same one.
+      val toolMemory = AgentMemory()
+      val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool, memory = toolMemory) {
+        executeToolViaIosNativeDriver(tool, trailblazeDeviceId, toolMemory)
       }
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
@@ -2335,11 +2338,14 @@ class TrailblazeMcpBridgeImpl(
       val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
       // The device records the call in its own history; this is the host's record of it, so a host
       // script that sent it here sees it among its calls. The session is resolved first, so the
-      // call that creates it is recorded in it rather than under the per-device fallback.
+      // call that creates it is recorded in it rather than under the per-device fallback. The
+      // daemon keeps no memory between direct calls, so [deviceMemory] only collects what the
+      // device changed, for that record.
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       val sessionResolution = openOnDeviceSession(trailblazeDeviceId, driverType)
-      val result = ToolCallHistory.recordExecution(sessionResolution.sessionId, tool) {
-        executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, driverType, sessionResolution, traceId)
+      val deviceMemory = AgentMemory()
+      val result = ToolCallHistory.recordExecution(sessionResolution.sessionId, tool, memory = deviceMemory) {
+        executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, driverType, sessionResolution, traceId, deviceMemory)
       }
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
@@ -2652,6 +2658,7 @@ class TrailblazeMcpBridgeImpl(
   private suspend fun executeToolViaIosNativeDriver(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
+    memory: AgentMemory,
   ): TrailblazeToolResult.Success {
     val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? IosNativeConnectedDevice
       ?: error("Host-native iOS execution requires an IosNativeConnectedDevice in the persistent registry; got ${persistentDevices[trailblazeDeviceId.instanceId]?.let { it::class.simpleName }}")
@@ -2661,7 +2668,7 @@ class TrailblazeMcpBridgeImpl(
     // One span for the whole call, so the context's screen state below and the tool's own
     // pre-action reads share one capture (see IosDeviceManager.shareScreenReads).
     val result = deviceManager.shareScreenReads().use {
-      runIosNativeTool(tool, deviceManager, agent, persistentDevice)
+      runIosNativeTool(tool, deviceManager, agent, persistentDevice, memory)
     }
     return when (result) {
       is TrailblazeToolResult.Success ->
@@ -2679,6 +2686,7 @@ class TrailblazeMcpBridgeImpl(
     deviceManager: IosDeviceManager,
     agent: IosDriverTrailblazeAgent,
     persistentDevice: IosNativeConnectedDevice,
+    memory: AgentMemory,
   ): TrailblazeToolResult {
     val driverType = persistentDevice.trailblazeDriverType
     // Reuse the manager built above — `persistentDevice.screenState()` constructs a second
@@ -2703,7 +2711,7 @@ class TrailblazeMcpBridgeImpl(
       screenStateProvider = { deviceManager.getScreenState() },
       androidDeviceCommandExecutor = null,
       trailblazeLogger = noOpTrailblazeLogger(),
-      memory = AgentMemory(),
+      memory = memory,
       maestroTrailblazeAgent = agent,
       nodeSelectorMode = agent.nodeSelectorMode,
     )
@@ -2952,6 +2960,7 @@ class TrailblazeMcpBridgeImpl(
     driverType: TrailblazeDriverType?,
     sessionResolution: DeviceSessionResolution,
     traceId: TraceId? = null,
+    deviceMemory: AgentMemory? = null,
   ): TrailblazeToolResult.Success {
     // The caller started the on-device agent and resolved the session, to record under it.
     val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
@@ -3055,6 +3064,9 @@ class TrailblazeMcpBridgeImpl(
           //   this dispatch path exists to remove — and no wedge could be armed from it. Fail,
           //   matching [HostOnDeviceRpcTrailblazeAgent.toToolResult], which already rejects this
           //   shape.
+          // What the device's memory held after the call, merged as the host agent merges every
+          // reply: a tool that wrote memory and then failed still changed it.
+          deviceMemory?.mergeDeviceMemory(response.memorySnapshot, response.memoryDeletions, response.sensitiveMemoryKeys)
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")

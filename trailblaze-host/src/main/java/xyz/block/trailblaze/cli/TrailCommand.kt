@@ -332,7 +332,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--llm"],
-    description = ["LLM provider/model shorthand (e.g., openai/gpt-4-1). " +
+    description = ["LLM provider/model shorthand (e.g., openai/gpt-6-luna). " +
         "Mutually exclusive with --llm-provider and --llm-model."]
   )
   var llm: String? = null
@@ -345,7 +345,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--llm-model"],
-    description = ["LLM model ID override (e.g., gemini-3-flash, gpt-4-1)"]
+    description = ["LLM model ID override (e.g., gemini-3-flash, gpt-6-luna)"]
   )
   var llmModel: String? = null
 
@@ -730,7 +730,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       } else {
         val parts = llm!!.split("/", limit = 2)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-          Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1) or 'none' for recordings-only mode.")
+          Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-6-luna) or 'none' for recordings-only mode.")
           return TrailblazeExitCode.MISUSE.code
         }
         llmProvider = parts[0]
@@ -2324,7 +2324,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       val waitStart = System.currentTimeMillis()
 
       fun readLogs(): List<xyz.block.trailblaze.logs.client.TrailblazeLog> {
-        val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+        // By name first: log files are named in write order, and the timestamp sort below is
+        // stable, so logs stamped in the same millisecond keep that order. listFiles() order is
+        // the filesystem's (unsorted on Linux), and a zero-width objective window falls back to
+        // position, so an ObjectiveComplete listed before its ObjectiveStart dropped the step's tools.
+        val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" }?.sortedBy { it.name }
+          ?: emptyList()
         return logFiles.mapNotNull { file ->
           try {
             xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -3697,10 +3702,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * Results are sorted by absolute path for stable run order and de-duplicated so passing
      * both a directory and a file under it (or two overlapping globs) doesn't run the same
      * trail twice.
+     *
+     * [readText] reads a file for scenario detection; tests pass a failing one to reach the
+     * unreadable-file branch, which a permission bit can't reach when tests run as root.
      */
     fun expandTrailFiles(
       files: List<File>,
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      readText: (File) -> String = File::readText,
     ): List<File> {
       val expanded = mutableListOf<File>()
       for (arg in files) {
@@ -3757,7 +3766,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // the legacy bucket — NL definitions, the unified `trail.yaml`, and classifier-variant
             // recordings of ONE trail — collapses to a single classifier-priority pick.
             val (namedScenarioFiles, legacyFiles) = byParent.getValue(dir)
-              .partition { isDistinctNamedScenario(it) }
+              .partition { isDistinctNamedScenario(it, readText) }
             // Each named scenario is a self-contained trail; run every one (sorted for stable
             // order). No classifier resolution or device-mismatch warning: a unified file lowers
             // its own per-classifier recording at run time, and its name is not classifier-derived.
@@ -3797,7 +3806,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * runner then surfaces the decode error against that file, rather than the expander silently
      * folding it into the legacy bucket. Unreadable files fall through to the legacy bucket.
      */
-    private fun isDistinctNamedScenario(file: File): Boolean {
+    private fun isDistinctNamedScenario(file: File, readText: (File) -> String): Boolean {
       // NL definitions are guarded by name as well as the bare `trail.yaml`: both are
       // single-trail representatives whatever their content, so neither may bypass the
       // legacy bucket's classifier resolution (an NL file that somehow carried a root
@@ -3805,7 +3814,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       // double-billing the trail).
       if (TrailRecordings.isUnifiedTrailFile(file.name)) return false
       if (TrailRecordings.isNlDefinitionFile(file.name)) return false
-      return runCatching { TrailRecordings.isUnifiedTrailContent(file.readText()) }
+      return runCatching { TrailRecordings.isUnifiedTrailContent(readText(file)) }
         .getOrDefault(false)
     }
 

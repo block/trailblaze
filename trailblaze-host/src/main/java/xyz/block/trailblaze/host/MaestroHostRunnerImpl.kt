@@ -448,8 +448,9 @@ class MaestroHostRunnerImpl(
   ): TrailblazeToolResult {
     // Use OrchestraRunner to execute commands with standardized callbacks
     return runBlocking {
+      val batchDriver = loggingDriver.forMaestroBatch(commands)
       OrchestraRunner.runCommands(
-        maestro = Maestro(loggingDriver),
+        maestro = Maestro(batchDriver),
         commands = commands,
         traceId = traceId,
         trailblazeLogger = trailblazeLogger,
@@ -459,7 +460,7 @@ class MaestroHostRunnerImpl(
           // Create Orchestra executor with standardized callbacks
           object : OrchestraRunner.OrchestraExecutor {
             override suspend fun execute(commands: List<MaestroCommand>): Boolean = Orchestra(
-              maestro = Maestro(loggingDriver),
+              maestro = Maestro(batchDriver),
               onCommandComplete = callbacks.onCommandComplete,
               onCommandFailed = { index, command, throwable ->
                 callbacks.onCommandFailed(index, command, throwable)

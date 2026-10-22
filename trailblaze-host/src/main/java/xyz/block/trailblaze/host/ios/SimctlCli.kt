@@ -55,6 +55,23 @@ object SimctlCli {
   fun getAppDataContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), timeoutSeconds)
 
+  /**
+   * The name iOS shows for [bundleId] (`CFBundleDisplayName`, else `CFBundleName`, from
+   * `simctl appinfo`), which is the name its notification alert quotes. Null when the app isn't
+   * installed or the lookup fails.
+   */
+  fun appDisplayName(udid: String, bundleId: String, timeoutSeconds: Long = 10): String? {
+    val info = run(SimctlCommand.argv("appinfo", udid, bundleId), timeoutSeconds)
+    return if (info.success) parseAppDisplayName(info.stdout) else null
+  }
+
+  /** Reads the display name out of `simctl appinfo`'s plist-style output. */
+  internal fun parseAppDisplayName(appinfo: String): String? {
+    fun field(key: String) = Regex("^\\s*$key = \"?(.*?)\"?;\\s*$", RegexOption.MULTILINE)
+      .find(appinfo)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+    return field("CFBundleDisplayName") ?: field("CFBundleName")
+  }
+
   fun openUrl(udid: String, url: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("openurl", udid, url), timeoutSeconds)
 

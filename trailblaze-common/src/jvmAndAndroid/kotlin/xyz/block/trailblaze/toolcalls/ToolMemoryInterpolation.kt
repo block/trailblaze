@@ -115,27 +115,75 @@ fun <R : TrailblazeToolResult> R.withAuthoredCommandIdentity(authored: Trailblaz
  *
  * An `args.` value that captured a secret ([AgentMemory.sensitiveArgNames]) is masked to its
  * `{{args.name}}` token too. That taint outlives the memory key it came from, so the value stays
- * masked after that key is deleted. No-op when nothing is sensitive.
+ * masked after that key is deleted. A token whose name holds a secret is masked as
+ * [REDACTED_TOOL_ARG_PLACEHOLDER] instead. No-op when nothing is sensitive.
  */
 fun scrubSensitiveValues(text: String, memory: AgentMemory): String =
   scrubSensitiveValues(text, listOf(memory))
 
-/** Match all invocation candidates against the original text; never scrub generated tokens. */
-internal fun scrubSensitiveValues(text: String, memories: List<AgentMemory>): String {
-  val replacements = memories.flatMap { memory ->
-    memory.sensitiveKeys.mapNotNull { key ->
-      memory.variables[key]?.takeIf { it.isNotEmpty() }?.let { it to "{{$key}}" }
-    } + sensitiveArgTexts(memory).map { (name, value) ->
-      value to "{{${TrailArgTokens.ARGS_PREFIX}$name}}"
-    }
-  }.flatMap { (value, token) ->
+/**
+ * Match all invocation candidates against the original text; never scrub generated tokens. Each of
+ * [declaredSecrets] (secrets a tool gives by value) is masked as [REDACTED_TOOL_ARG_PLACEHOLDER] in
+ * the same pass, so a secret overlapping another is masked whole rather than around the other's token.
+ */
+internal fun scrubSensitiveValues(
+  text: String,
+  memories: List<AgentMemory>,
+  declaredSecrets: Collection<String> = emptyList(),
+): String {
+  val replacements = (
+    memories.flatMap { memory ->
+      memory.sensitiveKeys.mapNotNull { key ->
+        memory.variables[key]?.takeIf { it.isNotEmpty() }?.let { it to "{{$key}}" }
+      } + sensitiveArgTexts(memory).map { (name, value) ->
+        value to "{{${TrailArgTokens.ARGS_PREFIX}$name}}"
+      }
+    } + declaredSecrets.filter { it.isNotBlank() }.map { it to REDACTED_TOOL_ARG_PLACEHOLDER }
+    ).flatMap { (value, token) ->
     // A secret inside a JSON string reads escaped (a quote as `\"`), so mask that form too.
     val escaped = Json.encodeToString(String.serializer(), value).removeSurrounding("\"")
     if (escaped == value) listOf(value to token) else listOf(value to token, escaped to token)
-  }.sortedByDescending { it.first.length }.distinctBy { it.first }.toMap()
+  }.sortedByDescending { it.first.length }.distinctBy { it.first }.toMap().let { byValue ->
+    // A key can be named after a secret (`token-1234` beside `pin`), so its token would show one.
+    byValue.mapValues { (_, token) -> if (byValue.keys.any { it in token }) REDACTED_TOOL_ARG_PLACEHOLDER else token }
+  }
   if (replacements.isEmpty()) return text
-  val pattern = Regex(replacements.keys.joinToString("|") { Regex.escape(it) })
-  return pattern.replace(text) { replacements.getValue(it.value) }
+  return maskMatches(text, replacements)
+}
+
+/**
+ * [text] with every occurrence of each key of [replacements] replaced by its token. Matches that
+ * intersect (`1234` and `34abcd` in `1234abcd`) are masked as one span, so neither secret shows
+ * around the other's token: the span takes the token of a match that covers it whole, else
+ * [REDACTED_TOOL_ARG_PLACEHOLDER].
+ */
+private fun maskMatches(text: String, replacements: Map<String, String>): String {
+  class Match(val start: Int, val end: Int, val token: String)
+  val matches = replacements.flatMap { (value, token) ->
+    generateSequence(text.indexOf(value).takeIf { it >= 0 }) { from ->
+      text.indexOf(value, from + 1).takeIf { it >= 0 }
+    }.map { Match(it, it + value.length, token) }.toList()
+  }.sortedWith(compareBy<Match> { it.start }.thenByDescending { it.end })
+  if (matches.isEmpty()) return text
+  return buildString {
+    var copiedTo = 0
+    var i = 0
+    while (i < matches.size) {
+      val first = matches[i]
+      var end = first.end
+      var j = i + 1
+      while (j < matches.size && matches[j].start < end) {
+        end = maxOf(end, matches[j].end)
+        j++
+      }
+      append(text, copiedTo, first.start)
+      // Sorted by start then longest, so [first] is the one match that can cover the whole span.
+      append(if (first.end == end) first.token else REDACTED_TOOL_ARG_PLACEHOLDER)
+      copiedTo = end
+      i = j
+    }
+    append(text, copiedTo, text.length)
+  }
 }
 
 /**
@@ -195,18 +243,28 @@ private fun sensitiveArgTexts(memory: AgentMemory): List<Pair<String, String>> {
 fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement =
   scrubSensitivePayload(payload, listOf(memory))
 
-internal fun scrubSensitivePayload(payload: JsonElement, memories: List<AgentMemory>): JsonElement {
-  if (memories.all { it.sensitiveKeys.isEmpty() && it.sensitiveArgNames.isEmpty() }) return payload
+/**
+ * [scrubSensitivePayload] that also masks each of [declaredSecrets] in string values, in the same
+ * pass as memory's secrets (see [scrubSensitiveValues]). Keys are scrubbed against memory only.
+ */
+internal fun scrubSensitivePayload(
+  payload: JsonElement,
+  memories: List<AgentMemory>,
+  declaredSecrets: Collection<String> = emptyList(),
+): JsonElement {
+  if (declaredSecrets.isEmpty() && memories.all { it.sensitiveKeys.isEmpty() && it.sensitiveArgNames.isEmpty() }) {
+    return payload
+  }
   return when (payload) {
     is JsonObject -> JsonObject(
       payload.entries.associate { (key, value) ->
-        scrubSensitiveValues(key, memories) to scrubSensitivePayload(value, memories)
+        scrubSensitiveValues(key, memories) to scrubSensitivePayload(value, memories, declaredSecrets)
       },
     )
-    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memories) })
+    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memories, declaredSecrets) })
     is JsonPrimitive -> {
       if (payload is JsonNull) return payload
-      val scrubbed = scrubSensitiveValues(payload.content, memories)
+      val scrubbed = scrubSensitiveValues(payload.content, memories, declaredSecrets)
       when {
         scrubbed == payload.content -> payload
         else -> JsonPrimitive(scrubbed)

@@ -42,7 +42,8 @@ class TrailmapCatalogBuilderTest {
   // A loose ambient `trailblaze` so fixtures can declare the real `trailblaze.tool<I, O>(spec, handler)`
   // shape the analyzer extracts, without needing the actual SDK resolvable from a temp dir.
   private fun declareTypedToolStub(): String =
-    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown };"
+    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown; " +
+      "trailhead: <I, O>(spec: any, handler?: (input: I) => Promise<O>) => unknown };"
 
   private fun withWorkspace(configDir: File, block: () -> Unit) {
     val previous = WorkspaceConfigDirHolder.resolver
@@ -94,6 +95,34 @@ class TrailmapCatalogBuilderTest {
         demo.trailheads.any { it.name == "demo_launchAppSignedIn" },
         "expected demo_launchAppSignedIn to also be unioned into trailheads, got ${demo.trailheads}",
       )
+    }
+  }
+
+  @Test
+  fun `a trailblaze trailhead with no to is a trailhead`() {
+    assumeAnalyzerRunnable()
+    val configDir = tempFolder.newFolder("config-trailhead-call")
+    val trailmapDir = File(configDir, "trailmaps/demo5").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: demo5
+      target:
+        display_name: Demo5
+        tools:
+          - demo5_launchApp
+      """.trimIndent(),
+    )
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "demo5_launchApp.ts").writeText(
+      """
+        |${declareTypedToolStub()}
+        |export const demo5_launchApp = trailblaze.trailhead(async () => "ok");
+      """.trimMargin(),
+    )
+
+    withWorkspace(configDir) {
+      val demo5 = TrailmapCatalogBuilder.build().single { it.id == "demo5" }
+      assertEquals(listOf("demo5_launchApp"), demo5.trailheads.map { it.name })
     }
   }
 

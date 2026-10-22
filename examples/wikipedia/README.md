@@ -115,7 +115,7 @@ export interface OpenArticleArgs {
  * Open a Wikipedia article by title and verify its heading is visible.
  */
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },  // ← spec object: gates + hints
+  { supportedPlatforms: ["web"] },  // ← spec object: gates + hints
   async (input, ctx) => {                                  // ← typed handler
     const title = nonEmptyString(input.title, "Wikipedia");
 
@@ -134,7 +134,7 @@ What the framework derives from this one file:
 | Export name `wikipedia_web_openArticle` | The dispatchable tool name + an entry on `ctx.tools` for sibling tools. |
 | TSDoc above `export const` | The LLM-facing description. |
 | The `<OpenArticleArgs>` type parameter | The tool's input JSON Schema (with per-field TSDoc carried through). |
-| The spec object `{ supportedPlatforms, requiresContext }` | Runtime registration gates and metadata hints. |
+| The spec object `{ supportedPlatforms }` | Runtime registration gates and metadata hints. |
 | The handler body | The runtime behavior. |
 
 Key conventions to copy:
@@ -170,7 +170,7 @@ TRAILMAP=examples/wikipedia/trails/config/trailmaps/wikipedia
 
 # 1. Body — what the tool does. The TSDoc on the exported `const` is what
 #    the LLM reads as the tool's description; the spec object's
-#    `supportedPlatforms` / `requiresContext` flags carry runtime hints.
+#    `supportedPlatforms` gates where it registers.
 cat > $TRAILMAP/tools/${TOOL}.ts <<'TS'
 import { trailblaze } from "@trailblaze/scripting";
 
@@ -184,7 +184,7 @@ export interface MyNewToolArgs {
  * or failure mode the LLM needs. No "Use this whenever..." phrasing lists.>
  */
 export const wikipedia_web_myNewTool = trailblaze.tool<MyNewToolArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // ... do work via ctx.tools.X(args) ...
     return "Did the thing.";

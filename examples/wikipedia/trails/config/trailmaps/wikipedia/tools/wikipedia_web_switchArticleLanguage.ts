@@ -42,7 +42,7 @@ export interface SwitchArticleLanguageArgs {
 // article header — without it, the text check could match content elsewhere on
 // a non-article page (e.g. a sister-projects portal landing).
 export const wikipedia_web_switchArticleLanguage = trailblaze.tool<SwitchArticleLanguageArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, "Albert Einstein");
     const languageCode = nonEmptyString(input.languageCode, "es").toLowerCase();

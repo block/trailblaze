@@ -31,7 +31,7 @@ export interface SearchAndOpenFirstResultArgs {
 // If the page isn't currently on any Wikipedia host, opens the main page first
 // so the header search input is reachable.
 export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndOpenFirstResultArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const query = nonEmptyString(input.query, "Trailblazer");
     const expectedHeading = nonEmptyString(input.expectedHeading, query);

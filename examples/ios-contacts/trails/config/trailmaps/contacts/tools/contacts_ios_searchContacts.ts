@@ -48,7 +48,7 @@ export interface SearchContactsArgs {
 // separate "land on list, then search" primitive keeps the gesture sequence
 // stable across composing flows.
 export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const query = nonEmptyString(input?.query, DEFAULT_QUERY);
     const rowText = nonEmptyString(input?.rowText, query);

@@ -153,7 +153,6 @@ name: myapp_login
 description: Sign into the Android MyApp target with the supplied credentials.
 _meta:
   trailblaze/supportedPlatforms: [android]
-  trailblaze/requiresContext: true
 inputSchema:
   email:
     type: string

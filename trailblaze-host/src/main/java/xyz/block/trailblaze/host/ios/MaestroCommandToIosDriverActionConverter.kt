@@ -16,6 +16,7 @@ import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
@@ -102,6 +103,7 @@ object MaestroCommandToIosDriverActionConverter {
     is KillAppCommand -> listOf(IosDriverAction.StopApp(command.appId))
     is ClearStateCommand -> listOf(IosDriverAction.ClearState(command.appId))
     is ClearKeychainCommand -> listOf(IosDriverAction.ClearKeychain)
+    is SetPermissionsCommand -> listOf(IosDriverAction.SetPermissions(command.appId, command.permissions))
     is OpenLinkCommand -> listOf(IosDriverAction.OpenLink(command.link))
     is TakeScreenshotCommand -> listOf(IosDriverAction.TakeScreenshot)
     else -> {

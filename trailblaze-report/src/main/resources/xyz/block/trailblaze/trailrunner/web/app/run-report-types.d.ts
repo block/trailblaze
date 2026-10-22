@@ -115,6 +115,18 @@ interface ActionMark {
   dh: number;
   /** AssertCondition outcome; `false` renders the red full-screen border. */
   ok?: boolean;
+  /** `false` for a not-visible assertion, whose point is only the screen's center. */
+  visible?: false;
+  /** The element a visibility assertion found, in device pixels, when the capture's tree had one
+   * centered on its point. */
+  box?: MarkBox;
+}
+
+interface MarkBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
 /** A tool the outer tool delegated to (expandable child row). */
@@ -155,6 +167,13 @@ interface TraceChild {
   captureIds?: string[];
   /** Tap/swipe/assert overlay for this dispatch's frame (see ActionMark). */
   mark?: ActionMark | null;
+  /** The instant the driver drew `mark` (see TraceStep.markTs) — later than `ts` when the dispatch
+   * waited before acting. Present ONLY when it is known and differs from `ts`; consumers fall back
+   * to `ts`. */
+  markTs?: number | null;
+  /** The device binding a successful `switchDevice` dispatch handed the session over to. Absent on
+   * every other dispatch and on a failed handover (which never moved the session). */
+  switchTo?: string | null;
   /** Live Trail Runner detail source. Deliberately omitted from the slim shared-report payload. */
   _logs?: TrailblazeLogRecord[];
 }

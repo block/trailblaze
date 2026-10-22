@@ -63,15 +63,14 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *   `target.tools:`. The referenced tool supplies description / parameters / flags; this config
  *   contributes only the trailhead metadata.
  *
- *   A scripted (`.ts`) tool has a second, sidecar-free option: declaring `trailhead: { to, dynamic }`
- *   directly in its `TrailblazeTypedToolSpec` (mirrors this [TrailheadMetadata] shape
- *   field-for-field). The build-time analyzer captures it into
+ *   A scripted (`.ts`) tool needs no sidecar: define it with `trailblaze.trailhead(spec, handler)`
+ *   instead of `trailblaze.tool`. The build-time analyzer turns that into
  *   `InlineScriptToolConfig.trailhead`, so `toolbox trailheads` and the Trail Runner picker see it
  *   without a `*.trailhead.yaml` at all — prefer this for any TS-authored trailhead.
  *
  *   ```yaml
  *   # *.trailhead.yaml — marks the already-registered scripted tool `myapp_launchAppSignedIn`
- *   # as a bootstrap trailhead landing at the given waypoint.
+ *   # as a bootstrap trailhead, drawn on the waypoint graph as landing at `to`.
  *   id: myapp_launchAppSignedIn
  *   trailhead:
  *     to: myapp/android/home_signed_in
@@ -95,9 +94,8 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  * stays loader-agnostic. Subdirectories below each top-level trailmap dir are organizational
  * only — `trailheads/android/` etc. are walked recursively.
  *
- * A tool with a populated [trailhead] block is a **trailhead** (bootstrap): it takes the
- * agent from any state to a known waypoint with no precondition. Always available.
- * Only the post-condition (lands at [TrailheadMetadata.to]) is enforced. Use trailheads for
+ * A tool with a [trailhead] block, even an empty one, is a **trailhead** (bootstrap): it takes the
+ * agent from any state to a known starting point with no precondition. Always available. Use trailheads for
  * "launch app and get to home", "force-quit and re-sign-in", and similar reset/genesis
  * moves that need to work regardless of where the agent currently is.
  *
@@ -150,12 +148,10 @@ data class ToolYamlConfig(
   @Serializable(with = ToolsListSerializer::class)
   val toolsList: List<JsonObject>? = null,
   /**
-   * When populated, marks this tool as a **trailhead** (bootstrap): a navigation primitive
-   * that takes the agent from any state to a known waypoint, with no `from` precondition.
-   * The post-condition (the [TrailheadMetadata.to] waypoint must match after execution)
-   * is what makes the trailhead trustworthy as a reusable starting move. The file-suffix
-   * loader rule separately requires the file containing a populated `trailhead:` block to be
-   * named `*.trailhead.yaml`.
+   * When present, even as `trailhead: {}`, marks this tool as a **trailhead** (bootstrap): a
+   * navigation primitive that takes the agent from any state to a known starting point, with no
+   * `from` precondition. The file-suffix loader rule separately requires the file containing a
+   * `trailhead:` block to be named `*.trailhead.yaml`.
    */
   val trailhead: TrailheadMetadata? = null,
 ) {
@@ -256,25 +252,11 @@ data class ToolYamlConfig(
         }
       }
     }
-    trailhead?.let { th ->
-      // A trailhead is a deterministic bootstrap. Most land on a single known waypoint (`to:`),
-      // but some — e.g. a deep-link launcher whose destination varies by input — have no fixed
-      // destination; those set `dynamic: true` instead of `to:`. The two are mutually exclusive:
-      // `dynamic: true` says "destination varies, don't anchor me to a waypoint."
-      val dest = th.to
-      if (th.dynamic) {
-        require(dest == null) {
-          "Tool '$id' trailhead block sets 'dynamic: true' (destination varies by input), so it " +
-            "must not also declare a 'to:' waypoint. Drop 'to:', or drop 'dynamic:' and name the " +
-            "single destination."
-        }
-      } else {
-        require(!dest.isNullOrBlank()) {
-          "Tool '$id' trailhead block must declare a non-blank 'to:' waypoint id, or set " +
-            "'dynamic: true' for a trailhead whose destination varies by input."
-        }
-        requireValidWaypointIdShape(id = id, fieldName = "trailhead.to", value = dest)
+    trailhead?.to?.let { dest ->
+      require(dest.isNotBlank()) {
+        "Tool '$id' 'trailhead.to' is blank. Omit it, or name the waypoint the trailhead lands on."
       }
+      requireValidWaypointIdShape(id = id, fieldName = "trailhead.to", value = dest)
     }
   }
 
@@ -313,19 +295,13 @@ data class ToolYamlConfig(
 
 /**
  * Marks a [ToolYamlConfig] as a **trailhead tool**: a bootstrap primitive that takes the
- * agent from any state to a known waypoint. There is no precondition — trailheads are always
- * available, regardless of whether a waypoint matches the current screen, because their job is
- * to handle the current state (whatever it is) and reach a known starting point.
+ * agent from any state to a known starting point. There is no precondition — trailheads are
+ * always available, regardless of whether a waypoint matches the current screen, because their
+ * job is to handle the current state (whatever it is) — typically by force-quitting,
+ * relaunching, and driving to the starting point.
  *
- * The framework enforces:
- *
- * - **Post-condition**: after the body runs, the current waypoint must match [to]. Mismatch
- *   is a tool failure with the same retry/recovery semantics as any other tool failure.
- *   This is what makes the trailhead trustworthy as a reusable starting move — the agent
- *   (or test author) can rely on the result without separately verifying state.
- * - **No pre-condition**: the body is invoked regardless of current state. The body is
- *   expected to handle "any state → [to]" — typically by force-quitting, relaunching, and
- *   driving to the destination.
+ * The block's presence is the marker; `trailhead: {}` is a complete trailhead. Nothing checks
+ * where it lands: a trailhead that must fail on the wrong screen asserts that in its own body.
  *
  * Reusability: a trailhead is a single packaged primitive. Trail-level setup (the trail's
  * own `trailhead.setup:` section in the v2 trail YAML) composes one or more trailhead
@@ -335,17 +311,10 @@ data class ToolYamlConfig(
 @Serializable
 data class TrailheadMetadata(
   /**
-   * The single waypoint this trailhead lands on. Required unless [dynamic] is true. Null only for
-   * [dynamic] trailheads, whose destination varies by input (e.g. a deep-link launcher).
+   * The waypoint this trailhead usually lands on, or null. Optional and never checked: it only
+   * draws this trailhead's edge on the waypoint graph.
    */
   val to: String? = null,
-  /**
-   * Marks a trailhead whose destination is not a single fixed waypoint — it varies by input, so no
-   * `to:` is specified. Mutually exclusive with [to] (enforced in [ToolYamlConfig.validate]). Such a
-   * trailhead is a real bootstrap (the `trailhead:` block's presence is what makes it a trailhead),
-   * it just isn't anchored to a waypoint in the navigation graph.
-   */
-  val dynamic: Boolean = false,
 )
 
 /**

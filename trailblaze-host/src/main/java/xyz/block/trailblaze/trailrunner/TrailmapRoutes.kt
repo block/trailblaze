@@ -323,7 +323,7 @@ internal fun trailmapComponentSkeleton(kind: String, name: String): String = whe
      * is exactly what the model sees when deciding to call this tool.
      */
     export const $id = trailblaze.tool(
-      { supportedPlatforms: ["android", "ios", "web"], requiresContext: true },
+      { supportedPlatforms: ["android", "ios", "web"] },
       async (_input, ctx) => {
         // TODO: implement. Compose other tools via ctx.tools.*, read ctx.target, etc.
         return "TODO: describe the result";
@@ -331,7 +331,7 @@ internal fun trailmapComponentSkeleton(kind: String, name: String): String = whe
     );
     """.trimIndent() + "\n"
   }
-  "trailheads" -> "description: \"\"\ntrailhead:\n  to: \"\"\ntools: []\n"
+  "trailheads" -> "description: \"\"\ntrailhead: {}\ntools: []\n"
   else -> ""
 }
 

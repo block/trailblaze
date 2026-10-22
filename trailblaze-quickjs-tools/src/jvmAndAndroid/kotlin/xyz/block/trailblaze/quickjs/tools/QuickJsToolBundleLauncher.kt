@@ -34,10 +34,13 @@ import xyz.block.trailblaze.util.Console
  *
  * @param descriptor the LLM-facing descriptor (`buildScriptedToolDescriptor(config)`).
  * @param meta the `_meta` registration gate (`QuickJsToolMeta` from the descriptor's `_meta`).
+ * @param declaredArgNames the only argument names a call may carry; others are dropped before the
+ *   tool runs or is recorded. Null keeps every key.
  */
 data class QuickJsToolAdvertisement(
   val descriptor: TrailblazeToolDescriptor,
   val meta: QuickJsToolMeta,
+  val declaredArgNames: Set<String>? = null,
 ) {
   companion object {
     /**
@@ -53,6 +56,7 @@ data class QuickJsToolAdvertisement(
       QuickJsToolAdvertisement(
         descriptor = LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config),
         meta = QuickJsToolMeta.fromSpec(buildJsonObject { config.meta?.let { put("_meta", it) } }),
+        declaredArgNames = LazyYamlScriptedToolRegistration.declaredArgNames(config),
       )
   }
 }
@@ -318,6 +322,7 @@ object QuickJsToolBundleLauncher {
             surfaceToLlm = meta.surfaceToLlm && isDeclaredTool,
             isRecordable = meta.isRecordable,
             sensitiveArgs = meta.sensitiveArgs,
+            declaredArgNames = override?.declaredArgNames,
           )
         }
       }

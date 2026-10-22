@@ -8,11 +8,13 @@ import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.axe.AxeDeviceManager
+import xyz.block.trailblaze.host.axe.NotificationAlertAnswers
 import xyz.block.trailblaze.host.ios.IosDeviceManager
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.host.screenstate.SecondaryTreeResult
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 
 /**
  * A connected device the daemon can drive.
@@ -116,6 +118,12 @@ abstract class IosNativeConnectedDevice(
 
   /** Fresh [ScreenState] for the current UI. Cheap — expensive members are lazy. */
   open fun screenState(): ScreenState = createDeviceManager().getScreenState()
+
+  /**
+   * A trail run is starting session [sessionId] here: drop state an earlier session left for its own
+   * use. The device manager may already have moved this device onto [sessionId]; that is not a second start.
+   */
+  open fun onSessionStart(sessionId: SessionId) {}
 }
 
 /**
@@ -143,11 +151,17 @@ class AxeConnectedDevice(
   udid = udid,
 ) {
 
+  /** Shared by every manager on this simulator, across connections — see [NotificationAlertAnswers]. */
+  private val notificationAlertAnswers = NotificationAlertAnswers.forSimulator(udid)
+
+  override fun onSessionStart(sessionId: SessionId) = notificationAlertAnswers.announceSession(sessionId.value)
+
   override fun createDeviceManager(templateContext: TargetTemplateContext?): IosDeviceManager =
     AxeDeviceManager(
       udid = udid,
       deviceWidth = deviceWidth,
       deviceHeight = deviceHeight,
       templateContext = templateContext,
+      notificationAlertAnswers = notificationAlertAnswers,
     )
 }

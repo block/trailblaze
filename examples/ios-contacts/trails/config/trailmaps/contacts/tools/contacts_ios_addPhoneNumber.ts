@@ -24,7 +24,7 @@ export interface AddPhoneNumberArgs {
 // The save round-trip is verified by re-asserting the contact's name on the
 // detail screen that iOS pops back to after Done.
 export const contacts_ios_addPhoneNumber = trailblaze.tool<AddPhoneNumberArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, "Trailblaze Demo");
     const phoneNumber = nonEmptyString(input?.phoneNumber, DEFAULT_PHONE);

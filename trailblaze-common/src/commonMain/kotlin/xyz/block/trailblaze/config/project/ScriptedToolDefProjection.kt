@@ -12,7 +12,6 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.TrailheadMetadata
 import xyz.block.trailblaze.scripting.ScriptedToolSchemaRefFlattener
-import xyz.block.trailblaze.util.Console
 
 /**
  * One typed tool as the analyzer (`sdks/typescript/tools/extract-tool-defs.mjs`) extracts it from an
@@ -89,7 +88,7 @@ object ScriptedToolDefProjection {
       // The analyzer read the tool's `<I>` generic, so this schema IS the complete argument
       // contract — including `properties: {}` for a genuinely no-arg tool.
       inputSchemaExhaustive = true,
-      trailhead = trailheadOf(def.name, spec),
+      trailhead = trailheadOf(spec),
     )
   }
 
@@ -119,33 +118,16 @@ object ScriptedToolDefProjection {
 
   /**
    * The spec's `trailhead` as [TrailheadMetadata], the same shape a `*.trailhead.yaml` sidecar's
-   * `trailhead:` block produces. A malformed block is logged and dropped (or, with both `to` and
-   * `dynamic: true`, treated as dynamic) rather than failing the tool.
+   * `trailhead:` block produces. Any `trailhead` object makes the tool a trailhead: the analyzer
+   * emits one for every `trailblaze.trailhead(...)` and for `trailblaze.tool({ trailhead: {...} })`.
+   * A blank or non-string `to` is dropped, and the retired `dynamic` flag is ignored.
    */
-  fun trailheadOf(toolName: String, spec: JsonObject?): TrailheadMetadata? {
+  fun trailheadOf(spec: JsonObject?): TrailheadMetadata? {
     val raw = spec?.get("trailhead") as? JsonObject ?: return null
     val to = (raw["to"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
-    val dynamic = (raw["dynamic"] as? JsonPrimitive)?.booleanOrNull ?: false
-    return when {
-      to != null && dynamic -> {
-        Console.log(
-          "[ScriptedToolDefProjection] tool '$toolName': spec's 'trailhead' block sets both " +
-            "'to' and 'dynamic: true' — mutually exclusive (see TrailheadMetadata). Dropping 'to' " +
-            "and treating as dynamic. Raw value: $raw",
-        )
-        TrailheadMetadata(dynamic = true)
-      }
-      to == null && !dynamic -> {
-        Console.log(
-          "[ScriptedToolDefProjection] tool '$toolName': spec declares a 'trailhead' block " +
-            "with neither a non-blank 'to' nor 'dynamic: true' — not a real bootstrap " +
-            "destination, dropping trailhead role for this tool. Raw value: $raw",
-        )
-        null
-      }
-      else -> TrailheadMetadata(to = to, dynamic = dynamic)
-    }
+    return TrailheadMetadata(to = to)
   }
+
 
   /**
    * Merges the namespaced `_meta` keys from, lowest precedence first: the `.ts` spec, the
@@ -223,7 +205,7 @@ object ScriptedToolDefProjection {
 
   private val PROJECTED_SPEC_FIELDS = listOf(
     "supportedPlatforms",
-    "requiresContext",
+    "requiresContext", // deprecated and ignored; projected until the field is removed
     "requiresHost",
     "supportedDrivers",
     "requiredClassifiers",

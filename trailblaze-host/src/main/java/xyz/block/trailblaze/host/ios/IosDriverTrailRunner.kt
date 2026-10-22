@@ -20,6 +20,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 
 /**
  * Executes [IosDriverAction]s sequentially through an [IosDeviceManager], parallel to
@@ -71,7 +72,7 @@ object IosDriverTrailRunner {
     for (action in actions) {
       // Pre-action capture so the screenshot shows the UI at the moment the action was
       // decided — and, on failure, the screen the action failed against.
-      val preScreenState = if (loggingEnabled) captureScreenStateForLogging(deviceManager) else null
+      val preScreenState = if (loggingEnabled) captureScreenStateForLogging(deviceManager, action) else null
 
       val startTime = Clock.System.now()
       val (result, executionResult) = try {
@@ -84,10 +85,14 @@ object IosDriverTrailRunner {
         // propagate, not be logged as a failed step.
         throw e
       } catch (e: Exception) {
-        Console.log("[IosDriverTrailRunner] ${action.description} FAILED: ${e.message}")
+        // A native launch failure can repeat argv in stderr even though the action's own
+        // description/toString already omit launch arguments.
+        val secrets = (action as? IosDriverAction.LaunchApp)?.launchArguments.orEmpty()
+        val error = redactSensitiveValuesIn(e.message.orEmpty(), secrets)
+        Console.log("[IosDriverTrailRunner] ${action.description} FAILED: $error")
         TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "Failed action: ${action.description}. Error: ${e.message}",
-          stackTrace = e.stackTraceToString(),
+          errorMessage = "Failed action: ${action.description}. Error: $error",
+          stackTrace = redactSensitiveValuesIn(e.stackTraceToString(), secrets),
         ) to IosDeviceManager.ExecutionResult()
       }
       val durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
@@ -128,10 +133,13 @@ object IosDriverTrailRunner {
    *
    * Capture failures are non-fatal — the action still runs, just without a driver log.
    */
-  private fun captureScreenStateForLogging(deviceManager: IosDeviceManager): ScreenState? = try {
+  private fun captureScreenStateForLogging(
+    deviceManager: IosDeviceManager,
+    action: IosDriverAction,
+  ): ScreenState? = try {
     // Shared: this capture describes the screen the action is about to act on, which is the same
     // screen the action's own first selector poll reads.
-    deviceManager.sharedScreenState().also { screenState ->
+    deviceManager.sharedScreenStateBefore(action).also { screenState ->
       screenState.screenshotBytes
       screenState.trailblazeNodeTree
     }
@@ -327,6 +335,12 @@ object IosDriverTrailRunner {
 
     IosDriverAction.ClearKeychain ->
       AgentDriverAction.OtherAction(type = AgentActionType.CLEAR_APP_STATE)
+
+    is IosDriverAction.SetPermissions ->
+      AgentDriverAction.GrantPermissions(appId = action.bundleId, permissions = action.permissions)
+
+    is IosDriverAction.AnswerNotificationsAlert ->
+      AgentDriverAction.OtherAction(type = AgentActionType.GRANT_PERMISSIONS)
 
     is IosDriverAction.OpenLink ->
       AgentDriverAction.OtherAction(type = AgentActionType.LAUNCH_APP)

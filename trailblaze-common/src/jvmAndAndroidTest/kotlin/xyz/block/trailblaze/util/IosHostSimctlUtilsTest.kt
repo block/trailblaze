@@ -1,11 +1,13 @@
 package xyz.block.trailblaze.util
 
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -395,5 +397,44 @@ class IosHostSimctlUtilsTest {
 
     val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
     assertEquals(listOf("com.example.app"), apps.map { it.appId })
+  }
+
+  @Test
+  fun `clearing a data container deletes a symlink, never what it points at`() {
+    val host = Files.createTempDirectory("host-files")
+    val hostFile = host.resolve("keep.txt").also { it.toFile().writeText("host data") }
+    val container = Files.createTempDirectory("data-container")
+    Files.createDirectories(container.resolve("Library/Caches"))
+    container.resolve("Library/Caches/session.db").toFile().writeText("stale")
+    Files.createSymbolicLink(container.resolve("Documents"), host)
+
+    val undeleted = IosHostSimctlUtils.deleteChildrenWithoutFollowingLinks(container)
+
+    assertEquals(emptyList(), undeleted)
+    assertEquals(emptyList(), Files.list(container).use { it.toList() })
+    assertEquals("host data", hostFile.toFile().readText())
+  }
+
+  @Test
+  fun `an app counts as running only while launchd lists a pid for it`() {
+    val running = listOf("45470\t0\tUIKitApplication:com.example.app[78e1][rb-legacy]")
+    val exited = listOf("-\t0\tUIKitApplication:com.example.app[78e1][rb-legacy]")
+    val otherApp = listOf("45470\t0\tUIKitApplication:com.example.app.widget[12be][rb-legacy]")
+
+    assertTrue(IosHostSimctlUtils.isAppRunning(running, "com.example.app"))
+    assertFalse(IosHostSimctlUtils.isAppRunning(exited, "com.example.app"))
+    assertFalse(IosHostSimctlUtils.isAppRunning(otherApp, "com.example.app"))
+  }
+
+  @Test
+  fun `only get_app_container's ENOENT means the app is not installed`() {
+    // Captured from `xcrun simctl get_app_container <udid> <missing bundle id> data`.
+    val notInstalled = "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2):\n" +
+      "The operation couldn\u2019t be completed. No such file or directory"
+    val otherFailure = "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=60):\n" +
+      "Operation timed out"
+
+    assertTrue(IosHostSimctlUtils.isNotInstalledContainerOutput(notInstalled))
+    assertFalse(IosHostSimctlUtils.isNotInstalledContainerOutput(otherFailure))
   }
 }

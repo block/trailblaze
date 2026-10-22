@@ -21,7 +21,7 @@ export interface IncrementCounterToValueArgs {
  * Open the counter demo, click increment repeatedly, and verify the final value.
  */
 export const playwrightSample_web_incrementCounterToValue = trailblaze.tool<IncrementCounterToValueArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, PLAYWRIGHT_SAMPLE_HOME);
     const increments = positiveInteger(args.increments, DEFAULT_INCREMENTS);

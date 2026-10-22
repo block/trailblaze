@@ -23,7 +23,7 @@ export interface AssertTextStillShownInput {
  * fail. Passes when assertNotVisibleWithText finds the text; fails when it reports the text absent.
  */
 export const sampleapp_assertTextStillShown = trailblaze.tool<AssertTextStillShownInput>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (args, ctx) => {
     const text = String(args.text ?? "");
     try {

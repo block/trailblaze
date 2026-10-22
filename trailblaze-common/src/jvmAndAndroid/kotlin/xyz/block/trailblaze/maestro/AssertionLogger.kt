@@ -11,6 +11,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 
 /**
@@ -26,6 +27,7 @@ class AssertionLogger(
   private val screenStateProvider: (() -> ScreenState)?,
   private val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
+  private val sensitiveValues: Collection<String> = emptyList(),
 ) {
 
   private val logger = LoggerFactory.getLogger(AssertionLogger::class.java)
@@ -56,7 +58,9 @@ class AssertionLogger(
     try {
       if (screenStateProvider != null) {
         val screenState = screenStateProvider.invoke()
-        val assertionFilterDescription = assertCommand.condition?.description() ?: "(unknown)"
+        val assertionFilterDescription = redactSensitiveValuesIn(
+          assertCommand.condition?.description() ?: "(unknown)", sensitiveValues,
+        )
 
         // Determine if this is a visible or notVisible assertion
         val isVisibleAssertion = assertCommand.condition?.visible != null
@@ -125,7 +129,7 @@ class AssertionLogger(
             x = elementCenterX,
             y = elementCenterY,
             isVisible = isVisibleAssertion,
-            textToDisplay = textToDisplay,
+            textToDisplay = textToDisplay?.let { redactSensitiveValuesIn(it, sensitiveValues) },
             succeeded = succeeded,
           ),
           durationMs = 0,

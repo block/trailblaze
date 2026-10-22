@@ -8,12 +8,15 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.cli.WaypointDiscovery
 import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapSource
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointLoader
 import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * A waypoint plus the source label used to display it. The source label is purely
@@ -46,6 +49,8 @@ class WaypointExample(
 internal data class WaypointLoadOutput(
   val items: List<WaypointDisplayItem>,
   val failureMessages: List<String>,
+  /** The trailmap resolution behind [items]; see [WaypointDiscovery.Result.resolvedConfig]. */
+  val resolvedConfig: TrailblazeResolvedConfig? = null,
 )
 
 /**
@@ -58,8 +63,8 @@ internal data class WaypointLoadOutput(
  */
 private const val MAX_FAILURE_MESSAGES_PER_SOURCE = 25
 
-internal fun loadWaypoints(root: File): WaypointLoadOutput {
-  val discovery = WaypointDiscovery.discover(root)
+internal fun loadWaypoints(root: File, fromPath: Path = Paths.get("")): WaypointLoadOutput {
+  val discovery = WaypointDiscovery.discover(root, fromPath)
   val idToFile = if (root.isDirectory) buildIdToFileMap(root) else emptyMap()
   val exampleFailures = mutableListOf<String>()
   val trailmapContents = collectTrailmapContents(exampleFailures)
@@ -84,7 +89,7 @@ internal fun loadWaypoints(root: File): WaypointLoadOutput {
     addAllCapped(exampleFailures, MAX_FAILURE_MESSAGES_PER_SOURCE, label = "example failures")
   }
 
-  return WaypointLoadOutput(items = items, failureMessages = failureMessages)
+  return WaypointLoadOutput(items = items, failureMessages = failureMessages, resolvedConfig = discovery.resolvedConfig)
 }
 
 /**

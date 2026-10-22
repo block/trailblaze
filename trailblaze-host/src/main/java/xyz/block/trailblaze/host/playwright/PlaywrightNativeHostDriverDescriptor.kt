@@ -240,6 +240,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
         targetTestApp = runOnHostParams.targetTestApp,
         config = runYamlRequest.config,
+        trailFilePath = runYamlRequest.trailFilePath,
         sessionId = session.sessionId,
         deviceInfo = playwrightTest.trailblazeDeviceInfo,
         logsRepo = playwrightTest.loggingRule.logsRepo,

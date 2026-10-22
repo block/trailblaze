@@ -25,7 +25,7 @@ export interface DeleteContactArgs {
 // to a swipe-to-delete: that affordance is locale-dependent and doesn't work on
 // the contact-detail screen, only on the list.
 export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_CONTACT_NAME);
 

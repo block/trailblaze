@@ -43,7 +43,7 @@ import xyz.block.trailblaze.util.isWindows
  * invocations (no `withCallerCwd` wrapping), so [callerCwd] returns `Paths.get("")`
  * which still resolves to the user's process cwd. Same as before.
  */
-internal object CliCallerContext {
+object CliCallerContext {
 
   private val callerCwdLocal = ThreadLocal<Path?>()
 
@@ -122,11 +122,30 @@ internal object CliCallerContext {
   }
 
   /**
-   * Returns the caller's cwd if pinned for this thread, else `Paths.get("")`. CLI
-   * code should call this in place of `Paths.get("")` when walking relative paths
-   * that should be anchored at the user's interactive cwd.
+   * Returns the caller's cwd if pinned for this thread, else the [LAUNCHER_CWD_ENV] the
+   * development launcher exports when it runs the CLI through Gradle (whose JVM starts in the
+   * module's directory, not the caller's), else `Paths.get("")`. CLI code should call this in
+   * place of `Paths.get("")` when walking relative paths that should be anchored at the user's
+   * interactive cwd.
    */
-  fun callerCwd(): Path = callerCwdLocal.get() ?: Paths.get("")
+  fun callerCwd(): Path = resolveCallerCwd(callerCwdLocal.get(), System.getenv(LAUNCHER_CWD_ENV))
+
+  /** [callerCwd] given the [forwarded] cwd and the [launcherCwd] env value; a blank or relative one is ignored. */
+  internal fun resolveCallerCwd(forwarded: Path?, launcherCwd: String?): Path = forwarded
+    ?: launcherCwd?.takeIf { it.isNotBlank() }?.let { Paths.get(it) }?.takeIf { it.isAbsolute }
+    ?: Paths.get("")
+
+  /** The caller's shell cwd, as `./trailblaze --gradle` exports it to the JVM Gradle starts. */
+  const val LAUNCHER_CWD_ENV = "TRAILBLAZE_CALLER_CWD"
+
+  /**
+   * Drops [LAUNCHER_CWD_ENV] from a daemon's [env] before the CLI spawns it. The daemon serves many
+   * callers, each forwarding its own cwd; inheriting this one would anchor every unforwarded
+   * relative path at the directory of whichever caller started it.
+   */
+  fun removeLauncherCwd(env: MutableMap<String, String>) {
+    env.remove(LAUNCHER_CWD_ENV)
+  }
 
   /**
    * Run [block] with the caller's [env] vars pinned to the current thread. Same

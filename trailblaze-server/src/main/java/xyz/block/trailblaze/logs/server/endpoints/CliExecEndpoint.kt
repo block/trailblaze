@@ -224,6 +224,17 @@ object CliExecEndpoint {
         return@post
       }
 
+      // A web page the user has open can POST to loopback too, and the server's CORS policy lets
+      // it read the reply, so a loopback address alone doesn't prove the caller is the user's
+      // shell. A forwarded command can read files and drive the device, and its only callers are
+      // the launcher's curl and the CLI's own client, neither of which sends these headers. A
+      // browser always does on a POST, including one from a DNS-rebound page.
+      if (call.request.headers[HttpHeaders.Origin] != null || call.request.headers["Sec-Fetch-Site"] != null) {
+        Console.log("[cli/exec] BLOCKED browser request (Origin: ${call.request.headers[HttpHeaders.Origin]})")
+        call.respond(HttpStatusCode.Forbidden, "cli/exec does not accept requests from a browser")
+        return@post
+      }
+
       val declaredLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
       if (declaredLength > MAX_REQUEST_BYTES) {
         respondJson(

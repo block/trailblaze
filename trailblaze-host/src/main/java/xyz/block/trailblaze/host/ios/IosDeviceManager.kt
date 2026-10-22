@@ -55,5 +55,8 @@ interface IosDeviceManager {
    */
   fun sharedScreenState(): ScreenState = getScreenState()
 
+  /** The [sharedScreenState] logged as the screen [action] is about to act on. */
+  fun sharedScreenStateBefore(action: IosDriverAction): ScreenState = sharedScreenState()
+
   data class ExecutionResult(val resolvedX: Int? = null, val resolvedY: Int? = null)
 }

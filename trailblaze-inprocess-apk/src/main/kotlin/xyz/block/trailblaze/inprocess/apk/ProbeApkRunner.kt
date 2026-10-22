@@ -73,7 +73,7 @@ object ProbeApkRunner {
   private val floorYaml = Yaml(configuration = YamlConfiguration(strictMode = true))
 
   fun run(options: ProbeApkOptions): ProbeApkOutcome =
-    run(options, ApkSigningCertificate::sha256OfSoleSigner)
+    run(options, certificateDigest = ApkSigningCertificate::sha256OfSoleSigner)
 
   /**
    * The same run with the signing-certificate reader supplied — [ApkProbe]'s own seam, one level up.
@@ -83,8 +83,16 @@ object ProbeApkRunner {
    * only through a probe that SUCCEEDS, and a probe reads the app's signature before anything else.
    * Signing an APK in a unit test needs a keystore and a certificate generator this module
    * deliberately does not depend on.
+   *
+   * [canRead] is a seam for the same reason: a test can't make a file unreadable to root, and CI
+   * runs as root.
    */
-  internal fun run(options: ProbeApkOptions, certificateDigest: (File) -> String): ProbeApkOutcome {
+  internal fun run(
+    options: ProbeApkOptions,
+    canRead: (File) -> Boolean = File::canRead,
+    certificateDigest: (File) -> String,
+  ): ProbeApkOutcome {
+    fun requireReadable(file: File, what: String) = requireReadable(file, what, canRead)
     requireReadable(options.appApk, "app APK")
     options.shellApk?.let { requireReadable(it, "shell APK") }
 
@@ -133,14 +141,14 @@ object ProbeApkRunner {
     }
   }.trimEnd()
 
-  private fun requireReadable(file: File, what: String) {
+  private fun requireReadable(file: File, what: String, canRead: (File) -> Boolean) {
     if (!file.isFile) {
       throw ApkReadException("No $what at ${file.path}.")
     }
     // Existence is not readability. A file the process cannot open — wrong owner, a restrictive
     // umask on a CI agent, a sandbox — would otherwise fail later inside a reader, as an IOException
     // with no explanation and the wrong exit code.
-    if (!file.canRead()) {
+    if (!canRead(file)) {
       throw ApkReadException(
         "The $what at ${file.path} exists but is not readable by this process. Check its permissions.",
       )

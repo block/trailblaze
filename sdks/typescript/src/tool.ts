@@ -23,9 +23,11 @@ import {
   TypedToolValidationError,
   type EmptyInput,
   type ToolContext,
+  type TrailblazeTrailheadSpec,
   type TrailblazeTypedToolSpec,
   type TrailheadSpec,
   type TypedToolDefinition,
+  trailheadToolSpec,
 } from "./tool-core.js";
 
 // Re-export the typed-authoring core so existing importers of `./tool.js`
@@ -36,6 +38,7 @@ export type {
   TrailblazeHost,
   EmptyInput,
   TypedToolDefinition,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
 } from "./tool-core.js";
@@ -50,7 +53,7 @@ export type {
  *
  * **For the typed declarative overload — `trailblaze.tool<I, O>(spec, handler)` —
  * use [TrailblazeTypedToolSpec] instead.** The typed spec carries structured
- * registration-gate fields (`supportedPlatforms`, `requiresContext`,
+ * registration-gate fields (`supportedPlatforms`,
  * `requiresHost`, `supportedDrivers`) plus an optional `description` (the typed
  * spec's `description`, when omitted, falls back to the TSDoc above the
  * `export const`, which the analyzer reads — see [TrailblazeTypedToolSpec] for
@@ -317,7 +320,7 @@ function specToJsonSchema(
  *
  *  - **Typed declarative — with spec.** `tool<I, O>(spec, handler)` — same as the
  *    bare-handler form, but the first positional arg is a [TrailblazeTypedToolSpec]
- *    carrying structured config (`description`, `supportedPlatforms`, `requiresContext`,
+ *    carrying structured config (`description`, `supportedPlatforms`,
  *    `requiresHost`, `supportedDrivers`). The spec is captured by the build-time
  *    analyzer for synthesizing the tool advertisement (description + `_meta`); at runtime
  *    it's discarded (the spec is a compile-time signal, not a runtime value). Use this
@@ -421,6 +424,37 @@ export function tool(
     spec: arg1 as TrailblazeToolSpec,
     handler: arg2!,
   });
+}
+
+/**
+ * Define a **trailhead**: a typed tool that takes the device from any state to a known starting
+ * point for a trail (clear data, launch, sign in). Same call shapes as the typed `tool` overloads:
+ *
+ *   export const myapp_launchApp = trailblaze.trailhead(async (_, ctx) => { ... });
+ *   export const myapp_signIn = trailblaze.trailhead<SignInInput>(
+ *     { supportedPlatforms: ["android"], teardown: async (args, ctx, run) => ({ reusable: true }) },
+ *     async (input, ctx) => { ... },
+ *   );
+ *
+ * A trailhead names no destination. To fail when the app lands on the wrong screen, assert it in
+ * the handler. The optional `to` only draws this trailhead's edge on the waypoint graph.
+ */
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  spec: TrailblazeTrailheadSpec<TInput>,
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead(arg0: unknown, arg1?: unknown): TypedToolDefinition<unknown, unknown> {
+  const [spec, handler] = typeof arg0 === "function" ? [undefined, arg0] : [arg0, arg1];
+  if (typeof handler !== "function") {
+    throw new TypeError("trailblaze.trailhead(spec, handler): handler must be a function.");
+  }
+  return tool(
+    trailheadToolSpec(spec as TrailblazeTrailheadSpec<unknown> | undefined),
+    handler as (input: unknown, ctx: ToolContext) => Promise<unknown>,
+  );
 }
 
 /**

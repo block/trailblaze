@@ -118,7 +118,7 @@ export interface OpenContactArgs {
  * screen shows the name. Fails if the contact doesn't exist.
  */
 export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },  // ← spec object: gates + hints
+  { supportedPlatforms: ["ios"] },  // ← spec object: gates + hints
   async (input, ctx) => {                                  // ← typed handler
     const name = nonEmptyString(input?.name, "John Appleseed");
     const expectedHeading = nonEmptyString(input?.expectedHeading, name);
@@ -144,7 +144,7 @@ What the framework derives from this one file:
 | Export name `contacts_ios_openContact` | The dispatchable tool name + an entry on `ctx.tools` for sibling tools. |
 | TSDoc above `export const` | The LLM-facing description. |
 | The `<OpenContactArgs>` type parameter | The tool's input JSON Schema (with per-field TSDoc carried through). |
-| The spec object `{ supportedPlatforms, requiresContext }` | Runtime registration gates and metadata hints. |
+| The spec object `{ supportedPlatforms }` | Runtime registration gates and metadata hints. |
 | The handler body | The runtime behavior. |
 
 Key conventions to copy:
@@ -195,7 +195,7 @@ export interface MyNewToolArgs {
  * or failure mode the LLM needs. No "Use this whenever..." phrasing lists.>
  */
 export const contacts_ios_myNewTool = trailblaze.tool<MyNewToolArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     // ... do work via ctx.tools.X(args) ...
     return "Did the thing.";

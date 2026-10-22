@@ -19,7 +19,7 @@ export interface OpenRandomArticleArgs {
 // Hostname check is anchored to `*.wikipedia.org` rather than a URL
 // substring to satisfy the CodeQL alert against `includes("wikipedia.org")`.
 export const wikipedia_web_openRandomArticle = trailblaze.tool<OpenRandomArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     if (input.ensureOnWikipedia !== false) {
       await ensureOn(ctx, isWikipediaHostname, WIKIPEDIA_MAIN_PAGE);

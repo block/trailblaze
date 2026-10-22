@@ -20,7 +20,7 @@ export interface OpenContactArgs {
 // Contacts pull-down-to-search interaction stays in one place — this tool just
 // states the workflow ("get me to this contact") and delegates the how.
 export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_CONTACT_NAME);
     const expectedHeading = nonEmptyString(input?.expectedHeading, name);

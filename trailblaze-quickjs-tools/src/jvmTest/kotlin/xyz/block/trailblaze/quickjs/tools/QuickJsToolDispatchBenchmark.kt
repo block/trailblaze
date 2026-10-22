@@ -8,7 +8,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
-import org.junit.Assume.assumeTrue
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -32,10 +31,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
  * production way, so the SDK's per-call wrapper is included. Every body is empty, so each number is
  * dispatch overhead.
  *
- * Opt-in, and it asserts nothing about speed — timings belong in a devlog, not a CI gate:
+ * It asserts nothing about speed — timings belong in a devlog, not a CI gate — so `jvmTest` leaves
+ * it out, and it runs on its own:
  *
- *   ./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
- *     -Dtrailblaze.benchmark=true -i
+ *   ./gradlew :trailblaze-quickjs-tools:dispatchBenchmark
  */
 class QuickJsToolDispatchBenchmark {
 
@@ -49,9 +48,8 @@ class QuickJsToolDispatchBenchmark {
 
   @Test
   fun `scripted tool dispatch overhead`() = runBlocking {
-    assumeTrue("pass -Dtrailblaze.benchmark=true to run", System.getProperty("trailblaze.benchmark") == "true")
     val sdkBundle = System.getProperty("trailblaze.test.dispatchBenchmarkBundle")?.let(::File)
-    assumeTrue("run via Gradle so the SDK fixture is bundled", sdkBundle?.isFile == true)
+    check(sdkBundle?.isFile == true) { "run via `./gradlew :trailblaze-quickjs-tools:dispatchBenchmark`" }
     val sdkJs = sdkBundle!!.readText()
 
     val sessionId = SessionId("quickjs-dispatch-benchmark")

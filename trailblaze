@@ -114,8 +114,11 @@ if [ "$BLAZE_JAR" != "1" ]; then
   # All gradle invocations run from $DEV_JAR_REPO_ROOT (set by dev-jar-cache.sh,
   # sourced above): MCP clients and IDE integrations spawn this launcher with an
   # arbitrary cwd where `./gradlew` doesn't exist. The forked app JVM's working
-  # directory is set by Gradle, not by this cd, so argument resolution for the
-  # launched CLI is unchanged.
+  # directory is set by Gradle (the module's directory), not by the caller's shell, so a
+  # foreground run exports the caller's cwd as TRAILBLAZE_CALLER_CWD for the CLI to resolve
+  # relative paths against (CliCallerContext.callerCwd). A background daemon drops it: the
+  # daemon serves many callers, each forwarding its own cwd.
+  export TRAILBLAZE_CALLER_CWD="$PWD"
   tb_gradle_args() {
     local result="" arg escaped
     for arg in "$@"; do
@@ -148,9 +151,9 @@ if [ "$BLAZE_JAR" != "1" ]; then
     mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
     tb_roll_daemon_log
     if [ -n "$gradle_args" ]; then
-      nohup bash -c 'cd "$1" && ./gradlew "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
+      tb_in_own_session nohup bash -c 'unset TRAILBLAZE_CALLER_CWD; cd "$1" && ./gradlew "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
     else
-      nohup bash -c 'cd "$1" && ./gradlew "$2:run"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
+      tb_in_own_session nohup bash -c 'unset TRAILBLAZE_CALLER_CWD; cd "$1" && ./gradlew "$2:run"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
     fi
   }
 
@@ -186,7 +189,7 @@ if [ "$BLAZE_JAR" != "1" ]; then
     gradle_args="$(tb_gradle_args "$@")"
     mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
     tb_roll_daemon_log
-    nohup bash -c 'cd "$1" && ./gradlew -q --console=plain "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
+    tb_in_own_session nohup bash -c 'unset TRAILBLAZE_CALLER_CWD; cd "$1" && ./gradlew -q --console=plain "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
   }
 fi
 

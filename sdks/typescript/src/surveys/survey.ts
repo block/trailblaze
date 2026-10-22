@@ -1,8 +1,8 @@
-// The authoring surface: `survey(spec, handler)`, or `survey(spec)` with a declarative `footprint`.
+// The authoring surface: `survey(spec, handler)`, or `survey(spec)` with a declarative `finding`.
 //
-// Mirrors `trailblaze.tool`: an author exports the return value of one call per feature, the
-// runner discovers every such export in the files it is given, and the export name becomes the
-// survey's id. Nothing is registered globally; a survey is a plain, inspectable value.
+// Mirrors `trailblaze.tool`: an author exports the return value of one call per check, the runner
+// discovers every such export in the files it is given, and the export name becomes the survey's
+// id. Nothing is registered globally; a survey is a plain, inspectable value.
 
 import type { AnalyticsQuery, DeviceLogQuery, EventQuery, NetworkQuery, ObjectiveQuery, ScreenTextQuery, ToolQuery } from "./match.js";
 import type { SurveySession } from "./session.js";
@@ -11,23 +11,22 @@ import type { FindingInput, SessionRecord, SurveySpec } from "./types.js";
 const BRAND: unique symbol = Symbol.for("trailblaze.survey");
 
 /** Passed to a handler alongside the session. `found` is the imperative alternative to returning. */
-export interface SurveyContext {
+export interface SurveyContext<D extends object = Record<string, unknown>> {
   /** Record one finding. Equivalent to returning it. */
-  found(summary: string, evidence: ReadonlyArray<SessionRecord>, extra?: Omit<FindingInput, "summary" | "evidence">): void;
+  found(summary: string, evidence: ReadonlyArray<SessionRecord>, data?: D): void;
   /** Diagnostic output; the runner forwards it to its own log, never into the report. */
   log(message: string): void;
   /**
    * Report a failure as the session's error without throwing, so the findings the handler still
-   * returns are kept: for a survey made of independent checks, one of which failed. `feature` names
-   * the check (default: the survey's own). Optional only so a context built by hand in a test needs
-   * no stub; the runner always provides it.
+   * returns are kept: for a survey made of independent checks, one of which failed. Optional only
+   * so a context built by hand in a test needs no stub; the runner always provides it.
    */
-  error?(message: string, feature?: string): void;
+  error?(message: string): void;
 }
 
-export type SurveyResult = FindingInput | ReadonlyArray<FindingInput> | undefined | null | false | void;
+export type SurveyResult<D extends object = Record<string, unknown>> = FindingInput<D> | ReadonlyArray<FindingInput<D>> | undefined | null | false | void;
 
-export type SurveyHandler = (session: SurveySession, ctx: SurveyContext) => SurveyResult | Promise<SurveyResult>;
+export type SurveyHandler<D extends object = Record<string, unknown>> = (session: SurveySession, ctx: SurveyContext<D>) => SurveyResult<D> | Promise<SurveyResult<D>>;
 
 /** What `survey()` returns. Export it; the runner does the rest. */
 export interface SurveyDefinition {
@@ -38,12 +37,17 @@ export interface SurveyDefinition {
   readonly id?: string;
 }
 
+/** How an error names a survey that has no id yet: its description, else nothing. */
+function named(spec: SurveySpec | undefined): string {
+  return spec?.description ? ` (${spec.description})` : "";
+}
+
 function define(spec: SurveySpec, handler: SurveyHandler, id?: string): SurveyDefinition {
-  if (!spec || typeof spec.feature !== "string" || spec.feature.trim() === "") {
-    throw new Error("survey(): spec.feature is required and must be a non-empty string");
+  if (!spec || typeof spec !== "object") {
+    throw new Error("survey(): the first argument must be a spec object");
   }
   if (typeof handler !== "function") {
-    throw new Error(`survey(): second argument must be a handler function (feature ${spec.feature})`);
+    throw new Error(`survey(): second argument must be a handler function${named(spec)}`);
   }
   return Object.freeze({ [BRAND]: true as const, spec, handler, id });
 }
@@ -59,18 +63,15 @@ export function withId(def: SurveyDefinition, id: string): SurveyDefinition {
 }
 
 /**
- * What a feature's footprint looks like, declaratively: every listed query must match at least
- * one record, and the footprint's evidence is the first match of each (or all matches with
- * `evidence: "all"`). Use it when a feature is "these things were observed" and nothing needs
- * computing; write a handler when something does.
+ * The finding a survey reports, declaratively: its `summary` and `data`, and the queries that prove
+ * it. Every listed query must match at least one record, and the finding's evidence is the first
+ * match of each (or all matches with `evidence: "all"`). Use it when the check is "these things were
+ * observed" and nothing needs computing; write a handler when something does.
  */
-export interface FootprintSpec {
-  /** One line for the footprint. Defaults to the survey description or the feature id. */
+export interface FindingSpec {
+  /** One line for the finding. Defaults to the survey's description. */
   summary?: string;
-  confidence?: FindingInput["confidence"];
-  /** Overrides the survey's `kind` for this footprint. */
-  kind?: string;
-  /** Carried into the footprint's `data`. */
+  /** Carried into the finding's `data`. */
   data?: Record<string, unknown>;
   /** Which matches to attach: the first per query (default) or every one. */
   evidence?: "first" | "all";
@@ -82,13 +83,29 @@ export interface FootprintSpec {
   screenText?: ScreenTextQuery | ReadonlyArray<ScreenTextQuery>;
   deviceLog?: DeviceLogQuery | ReadonlyArray<DeviceLogQuery>;
   /**
-   * Queries that must NOT match. A feature that is "checkout completed with no card decline" lists
+   * Queries that must NOT match. A check that is "checkout completed with no card decline" lists
    * the decline here.
    */
-  absent?: FootprintQueries;
+  absent?: FindingQueries;
 }
 
-export type FootprintQueries = Pick<FootprintSpec, "network" | "analytics" | "events" | "tools" | "objectives" | "screenText" | "deviceLog">;
+export type FindingQueries = Pick<FindingSpec, "network" | "analytics" | "events" | "tools" | "objectives" | "screenText" | "deviceLog">;
+
+/** @deprecated Renamed to {@link FindingSpec}. */
+export type FootprintSpec = FindingSpec;
+/** @deprecated Renamed to {@link FindingQueries}. */
+export type FootprintQueries = FindingQueries;
+
+/**
+ * [spec]'s declarative finding, under `finding` or its old name `footprint`. Throws when both are
+ * set, since only one can be the survey's finding.
+ */
+export function findingOf(spec: SurveySpec | undefined): FindingSpec | undefined {
+  if (spec?.finding !== undefined && spec.footprint !== undefined) {
+    throw new Error(`survey()${named(spec)}: sets both \`finding\` and \`footprint\`; \`footprint\` is the old name of \`finding\`, so keep one`);
+  }
+  return spec?.finding ?? spec?.footprint;
+}
 
 const ACCESSORS = ["network", "analytics", "events", "tools", "objectives", "screenText", "deviceLog"] as const;
 
@@ -98,7 +115,7 @@ function list<T>(v: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> {
 }
 
 /** Runs every query of `queries`; returns evidence per query, or null as soon as one has no match. */
-function evaluate(session: SurveySession, queries: FootprintQueries, mode: "first" | "all"): SessionRecord[] | null {
+function evaluate(session: SurveySession, queries: FindingQueries, mode: "first" | "all"): SessionRecord[] | null {
   const evidence: SessionRecord[] = [];
   for (const key of ACCESSORS) {
     for (const q of list(queries[key] as unknown)) {
@@ -118,7 +135,7 @@ function evaluate(session: SurveySession, queries: FootprintQueries, mode: "firs
 }
 
 /** True when ANY query of `queries` matches a record. `absent` vetoes on one hit, not on all of them. */
-function anyMatches(session: SurveySession, queries: FootprintQueries): boolean {
+function anyMatches(session: SurveySession, queries: FindingQueries): boolean {
   for (const key of ACCESSORS) {
     for (const q of list(queries[key] as unknown)) {
       const records = session[key] as unknown as { find(q: unknown): SessionRecord | undefined };
@@ -129,105 +146,119 @@ function anyMatches(session: SurveySession, queries: FootprintQueries): boolean 
 }
 
 /** At least one actual query: an empty array under an accessor is no query, and would match every session. */
-function hasQueries(footprint: FootprintSpec): boolean {
-  return ACCESSORS.some((k) => list(footprint[k] as unknown).length > 0);
+function hasQueries(finding: FindingSpec): boolean {
+  return ACCESSORS.some((k) => list(finding[k] as unknown).length > 0);
 }
 
 /**
- * Tests one declarative footprint against a session. Returns the evidence when every query matched
+ * Tests one declarative finding against a session. Returns the evidence when every query matched
  * and nothing under `absent` did, otherwise `undefined`. Handlers use it to mix declarative
- * footprints with computed ones.
+ * findings with computed ones.
  */
-export function matchFootprint(session: SurveySession, footprint: FootprintSpec): SessionRecord[] | undefined {
-  const evidence = evaluate(session, footprint, footprint.evidence ?? "first");
+export function matchFinding(session: SurveySession, finding: FindingSpec): SessionRecord[] | undefined {
+  const evidence = evaluate(session, finding, finding.evidence ?? "first");
   if (!evidence) return undefined;
-  if (footprint.absent && anyMatches(session, footprint.absent)) return undefined;
+  if (finding.absent && anyMatches(session, finding.absent)) return undefined;
   return evidence;
 }
 
-function toFinding(footprint: FootprintSpec, evidence: SessionRecord[], defaults: { feature?: string; summary: string }): FindingInput {
-  const out: FindingInput = { summary: footprint.summary ?? defaults.summary, evidence };
-  if (defaults.feature !== undefined) out.feature = defaults.feature;
-  if (footprint.kind !== undefined) out.kind = footprint.kind;
-  if (footprint.confidence !== undefined) out.confidence = footprint.confidence;
-  if (footprint.data !== undefined) out.data = footprint.data;
+/** @deprecated Renamed to {@link matchFinding}. */
+export const matchFootprint = matchFinding;
+
+/** Which of a finding's queries matched, as `accessor {query}` text, for a failure message. */
+export interface FindingExplanation {
+  matched: string[];
+  missed: string[];
+  /** `absent` queries that did match, ruling the finding out. */
+  vetoedBy: string[];
+}
+
+/** @deprecated Renamed to {@link FindingExplanation}. */
+export type FootprintExplanation = FindingExplanation;
+
+/** Says query by query why a finding did or did not match a session. */
+export function explainFinding(session: SurveySession, finding: FindingSpec): FindingExplanation {
+  const out: FindingExplanation = { matched: [], missed: [], vetoedBy: [] };
+  const each = (queries: FindingQueries, visit: (label: string, hit: boolean) => void) => {
+    for (const key of ACCESSORS) {
+      for (const q of list(queries[key] as unknown)) {
+        const records = session[key] as unknown as { find(q: unknown): SessionRecord | undefined };
+        visit(`${key} ${JSON.stringify(q)}`, records.find(q) !== undefined);
+      }
+    }
+  };
+  each(finding, (label, hit) => (hit ? out.matched : out.missed).push(label));
+  if (finding.absent) each(finding.absent, (label, hit) => hit && out.vetoedBy.push(label));
   return out;
 }
 
-function footprintHandler(spec: SurveySpec, footprint: FootprintSpec): SurveyHandler {
-  if (!hasQueries(footprint)) {
-    throw new Error(`survey(): feature ${spec.feature} has a footprint with no queries; at least one of ${ACCESSORS.join(", ")} is required`);
+/** @deprecated Renamed to {@link explainFinding}. */
+export const explainFootprint = explainFinding;
+
+/** Handlers `survey()` built from a finding, as opposed to ones an author wrote. */
+const DECLARATIVE = new WeakSet<SurveyHandler>();
+
+/** Whether [def]'s handler is one `survey()` built from its finding, so its reads are its queries. */
+export function isDeclarative(def: SurveyDefinition): boolean {
+  return DECLARATIVE.has(def.handler);
+}
+
+function declarative(def: SurveyDefinition): SurveyDefinition {
+  DECLARATIVE.add(def.handler);
+  return def;
+}
+
+/**
+ * Whether every finding [def] can make proves that something was seen, never that something was
+ * not: a finding with no `absent` and no predicate. Such a finding stands even when a capture lost
+ * data. A handler or a `where` an author wrote may test for absence (`r.status === undefined` holds
+ * on a request whose response was lost) in ways that cannot be read off it, so neither counts.
+ */
+export function provesOnlyPresence(def: SurveyDefinition): boolean {
+  if (!DECLARATIVE.has(def.handler)) return false;
+  const finding = findingOf(def.spec);
+  return finding !== undefined && finding.absent === undefined && !holdsFunction(finding);
+}
+
+function holdsFunction(value: unknown, seen = new Set<unknown>()): boolean {
+  if (typeof value === "function") return true;
+  if (value === null || typeof value !== "object" || value instanceof RegExp || seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((v) => holdsFunction(v, seen));
+}
+
+function findingHandler(spec: SurveySpec, finding: FindingSpec): SurveyHandler {
+  if (!hasQueries(finding)) {
+    throw new Error(`survey()${named(spec)}: the finding has no queries; at least one of ${ACCESSORS.join(", ")} is required`);
   }
+  const summary = finding.summary ?? spec.description ?? "Matched the survey's finding";
+  // A finding spec written before findings were free-form set `feature`, `kind` or `confidence`
+  // on itself; they belong to its finding's `data`, ahead of the spec-level defaults the runner folds in.
+  const legacy = Object.fromEntries(
+    (["feature", "kind", "confidence"] as const).flatMap((key) => {
+      const value = (finding as unknown as Record<string, unknown>)[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+  const data = Object.keys(legacy).length === 0 ? finding.data : { ...legacy, ...finding.data };
   return (session) => {
-    const evidence = matchFootprint(session, footprint);
+    const evidence = matchFinding(session, finding);
     if (!evidence) return undefined;
-    return toFinding(footprint, evidence, { summary: spec.description ?? spec.feature });
+    return data === undefined ? { summary, evidence } : { summary, evidence, data };
   };
-}
-
-function footprintsHandler(spec: SurveySpec, footprints: Readonly<Record<string, FootprintSpec>>): SurveyHandler {
-  const entries = Object.entries(footprints);
-  if (entries.length === 0) {
-    throw new Error(`survey(): ${spec.feature} declares footprints with no entries`);
-  }
-  for (const [feature, footprint] of entries) {
-    if (!hasQueries(footprint)) {
-      throw new Error(`survey(): ${spec.feature} footprint ${feature} has no queries; at least one of ${ACCESSORS.join(", ")} is required`);
-    }
-  }
-  return (session) => {
-    const out: FindingInput[] = [];
-    for (const [feature, footprint] of entries) {
-      const evidence = matchFootprint(session, footprint);
-      if (evidence) out.push(toFinding(footprint, evidence, { feature, summary: feature }));
-    }
-    return out;
-  };
-}
-
-/**
- * What a survey is for. A **coverage** survey says what a run exercised: the product features it
- * used, the screens it passed, the gaps a catalog has no row for. A **diagnosis** survey says how
- * the run went: why it failed (`diagnosis`), what happened to it along the way (`signal`: a crash,
- * server errors, the LLM stepping in), and where its time went (`measure`). Every other kind,
- * including one a survey invents, is coverage.
- */
-export type SurveyPurpose = "coverage" | "diagnosis";
-
-/** The finding kinds that are about how a run went rather than what it exercised. */
-export const DIAGNOSIS_KINDS: ReadonlySet<string> = new Set(["diagnosis", "signal", "measure"]);
-
-/** Which purpose a finding (or a survey, by its default kind) serves. */
-export const purposeOf = (kind: string | undefined): SurveyPurpose => (kind !== undefined && DIAGNOSIS_KINDS.has(kind) ? "diagnosis" : "coverage");
-
-/**
- * Whether `--feature <id>` picks this survey: its own feature or a declared one, or any of them
- * under `id` as a family (`platform.failure` picks the survey reporting `platform.failure.app-died`).
- */
-export function selectsFeature(spec: SurveySpec, wanted: ReadonlyArray<string>): boolean {
-  return [spec.feature, ...surveyFeatures(spec)].some((f) => wanted.some((w) => f === w || f.startsWith(`${w}.`)));
-}
-
-/** The feature ids a survey declares it can report: its `footprints` keys, else `features`, else `feature`. */
-export function surveyFeatures(spec: SurveySpec): string[] {
-  if (spec.footprints) return Object.keys(spec.footprints);
-  if (spec.features) return [...spec.features];
-  return [spec.feature];
 }
 
 /**
  * Defines a survey. With a handler, the handler inspects the session and returns zero or more
- * footprints. Without one, `spec.footprint` describes the one feature declaratively, or
- * `spec.footprints` describes many features keyed by id and the survey reports each that matches.
+ * findings. Without one, `spec.finding` describes the check declaratively. `D` types the `data`
+ * the handler's findings carry.
  */
-export function survey(spec: SurveySpec, handler?: SurveyHandler): SurveyDefinition {
-  if (handler !== undefined) return define(spec, handler);
-  if (spec?.footprint && spec.footprints) {
-    throw new Error(`survey(): ${spec.feature} gives both footprint and footprints; use one`);
-  }
-  if (spec?.footprints) return define(spec, footprintsHandler(spec, spec.footprints));
-  if (spec?.footprint) return define(spec, footprintHandler(spec, spec.footprint));
-  throw new Error(`survey(): feature ${spec?.feature} needs a handler, a footprint, or footprints`);
+export function survey<D extends object = Record<string, unknown>>(spec: SurveySpec, handler?: SurveyHandler<D>): SurveyDefinition {
+  // Read first, so a spec setting both keys fails here even with a handler, not later mid-trail.
+  const finding = findingOf(spec);
+  if (handler !== undefined) return define(spec, handler as unknown as SurveyHandler);
+  if (finding) return declarative(define(spec, findingHandler(spec, finding)));
+  throw new Error(`survey()${named(spec)}: needs a handler or a finding`);
 }
 
 /**

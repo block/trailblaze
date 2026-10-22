@@ -14,6 +14,7 @@ import xyz.block.trailblaze.android.openai.OpenAiInstrumentationArgUtil
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.http.OpenAiReasoningEffortCompatibilityPlugin
+import xyz.block.trailblaze.llm.OpenAiResponsesLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -183,13 +184,15 @@ object AndroidLlmClientResolver {
       getToken(TrailblazeLlmProvider.OPENAI)?.let { key ->
         put(
           LLMProvider.OpenAI,
-          OpenAILLMClient(
-            apiKey = key,
-            settings =
-              OpenAIClientSettings(
-                baseUrl = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
-              ),
-            httpClientFactory = httpClientFactory,
+          OpenAiResponsesLlmClient(
+            OpenAILLMClient(
+              apiKey = key,
+              settings =
+                OpenAIClientSettings(
+                  baseUrl = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
+                ),
+              httpClientFactory = httpClientFactory,
+            ),
           ),
         )
       }

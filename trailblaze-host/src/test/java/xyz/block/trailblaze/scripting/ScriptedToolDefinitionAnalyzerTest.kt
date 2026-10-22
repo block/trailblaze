@@ -4,6 +4,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -1645,7 +1649,7 @@ class ScriptedToolDefinitionAnalyzerTest {
   @Test
   fun `with-spec overload — trailhead nested object is extracted when authored`() = runBlocking {
     // `trailhead` is the one recognized `TrailblazeTypedToolSpec` field shaped as a nested
-    // object (`{ to, dynamic }`) rather than a primitive/array — pins that `literalValueOf`'s
+    // object (`{ to }`) rather than a primitive/array — pins that `literalValueOf`'s
     // new object-literal branch round-trips it into `ScriptedToolDefinition.spec["trailhead"]`
     // as a plain JSON object, same as the YAML `*.trailhead.yaml` sidecar's `trailhead:` block.
     assumeAnalyzerRunnable()
@@ -1677,10 +1681,8 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
-  fun `with-spec overload — trailhead dynamic flag is extracted when authored`() = runBlocking {
-    // Parallel coverage for the `dynamic: true` shape (a trailhead whose destination varies by
-    // input, e.g. a deep-link launcher) — the other half of the TrailheadSpec/TrailheadMetadata
-    // mutual-exclusion contract.
+  fun `with-spec overload — a retired dynamic flag still marks a trailhead, and is not forwarded`() = runBlocking {
+    // Existing `trailblaze.tool({ trailhead: { dynamic: true } })` tools stay trailheads.
     assumeAnalyzerRunnable()
     val toolsDir = tempFolder.newFolder("with-spec-trailhead-dynamic-trailmap-tools")
     writeTsFixture(
@@ -1692,29 +1694,78 @@ class ScriptedToolDefinitionAnalyzerTest {
         |interface O { y: string; }
         |
         |export const dynamicTrailheadTool = trailblaze.tool<I, O>(
-        |  { trailhead: { dynamic: true } },
+        |  { trailhead: { dynamic: true, teardown: async () => ({ reusable: false, reason: "x" }) } },
         |  async () => ({ y: "" }),
         |);
       """.trimMargin(),
     )
 
-    val def = analyzer.analyze(toolsDir).single()
-    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
-    val trailhead = spec["trailhead"]?.jsonObject
-      ?: fail("expected `trailhead` object in spec; got: $spec")
-    assertEquals(JsonPrimitive(true), trailhead["dynamic"])
-    assertNull(trailhead["to"], "expected to absent when not authored")
+    val spec = analyzer.analyze(toolsDir).single().spec ?: fail("expected non-null spec")
+    assertEquals(buildJsonObject { put("trailhead", buildJsonObject {}) }, spec)
   }
 
   @Test
-  fun `with-spec overload — a __proto__ key in a nested object is captured as a plain property`() = runBlocking {
+  fun `trailblaze trailhead — spec becomes a tool spec with a trailhead block built from to`() = runBlocking {
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("trailhead-call-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "launchApp.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |
+        |export const launchApp = trailblaze.trailhead<I>(
+        |  {
+        |    supportedPlatforms: ["android"],
+        |    to: "myapp/android/home",
+        |    teardown: async () => ({ reusable: false, reason: "x" }),
+        |  },
+        |  async () => "ok",
+        |);
+        |
+        |export const launchBare = trailblaze.trailhead(async () => "ok");
+      """.trimMargin(),
+    )
+
+    val defs = analyzer.analyze(toolsDir).associateBy { it.name }
+    assertEquals(
+      buildJsonObject {
+        put("supportedPlatforms", buildJsonArray { add(JsonPrimitive("android")) })
+        put("trailhead", buildJsonObject { put("to", "myapp/android/home") })
+      },
+      defs.getValue("launchApp").spec,
+    )
+    assertEquals(buildJsonObject { put("trailhead", buildJsonObject {}) }, defs.getValue("launchBare").spec)
+    assertEquals(false, defs.getValue("launchBare").uncapturedSpec)
+  }
+
+  @Test
+  fun `trailblaze trailhead — an unreadable spec reference is still a trailhead, flagged uncaptured`() = runBlocking {
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("trailhead-call-ref-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "launchRef.ts",
+      """
+        |${declareTypedToolStub()}
+        |const SPEC = { supportedPlatforms: ["ios"] };
+        |
+        |export const launchRef = trailblaze.trailhead(SPEC, async () => "ok");
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    assertEquals(buildJsonObject { put("trailhead", buildJsonObject {}) }, def.spec)
+    assertEquals(true, def.uncapturedSpec)
+  }
+
+  @Test
+  fun `with-spec overload — a __proto__ key in the trailhead block can't supply its to`() = runBlocking {
     // Regression test for the prototype-pollution hardening in `objectLiteralValueOf`
-    // (`Object.create(null)` instead of `{}`). Before that fix, assigning
-    // `result["__proto__"] = value` on a plain `{}` accumulator mutated the object's
-    // prototype instead of setting an own property, so `__proto__` silently vanished from
-    // `Object.keys` and never reached the JSON envelope — an author-authored `__proto__`
-    // field inside `trailhead: {...}` (or any future nested-object spec field) would be
-    // dropped without a trace. Pins that it now round-trips as an ordinary string key.
+    // (`Object.create(null)` instead of `{}`). On a plain `{}` accumulator,
+    // `result["__proto__"] = value` sets the prototype instead of an own property, so a
+    // `to` inside it would be read back as the trailhead's own `to`.
     assumeAnalyzerRunnable()
     val toolsDir = tempFolder.newFolder("with-spec-proto-key-trailmap-tools")
     writeTsFixture(
@@ -1726,24 +1777,48 @@ class ScriptedToolDefinitionAnalyzerTest {
         |interface O { y: string; }
         |
         |export const protoKeyTool = trailblaze.tool<I, O>(
-        |  { trailhead: { to: "app/home", "__proto__": { polluted: true } } },
+        |  { trailhead: { "__proto__": { to: "evil/home" }, note: "x" } },
         |  async () => ({ y: "" }),
         |);
       """.trimMargin(),
     )
 
-    val def = analyzer.analyze(toolsDir).single()
-    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
-    val trailhead = spec["trailhead"]?.jsonObject
-      ?: fail("expected `trailhead` object in spec; got: $spec")
-    assertEquals(JsonPrimitive("app/home"), trailhead["to"])
-    val proto = trailhead["__proto__"]?.jsonObject
-      ?: fail(
-        "expected '__proto__' captured as a plain own key on the trailhead object; got: $trailhead " +
-          "(if this is null, __proto__ assignment silently mutated the accumulator's prototype " +
-          "instead of setting an own property — the exact regression this test guards against)",
-      )
-    assertEquals(JsonPrimitive(true), proto["polluted"])
+    val spec = analyzer.analyze(toolsDir).single().spec ?: fail("expected non-null spec")
+    assertEquals(buildJsonObject { put("trailhead", buildJsonObject {}) }, spec)
+  }
+
+  @Test
+  fun `with-spec overload — a trailhead block wrapped in as const, satisfies or parentheses is still a trailhead`() = runBlocking {
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-wrapped-trailhead-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "wrappedTrailheads.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const asConst = trailblaze.tool<I, O>(
+        |  { trailhead: { to: "myapp/a" } as const },
+        |  async () => ({ y: "" }),
+        |);
+        |export const satisfiesType = trailblaze.tool<I, O>(
+        |  { trailhead: { to: "myapp/b" } satisfies Record<string, string> },
+        |  async () => ({ y: "" }),
+        |);
+        |export const parenthesized = trailblaze.tool<I, O>(
+        |  { trailhead: ({ to: "myapp/c" }) },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val specs = analyzer.analyze(toolsDir).associate { it.name to it.spec }
+    fun trailheadTo(to: String) = buildJsonObject { put("trailhead", buildJsonObject { put("to", to) }) }
+    assertEquals(trailheadTo("myapp/a"), specs["asConst"])
+    assertEquals(trailheadTo("myapp/b"), specs["satisfiesType"])
+    assertEquals(trailheadTo("myapp/c"), specs["parenthesized"])
   }
 
   @Test
@@ -1997,11 +2072,6 @@ class ScriptedToolDefinitionAnalyzerTest {
       dismissPlatforms.map { it.jsonPrimitive.content },
       "wikipedia_web_dismissBannerIfPresent should be web-only",
     )
-    assertEquals(
-      JsonPrimitive(true),
-      dismissSpec["requiresContext"],
-      "wikipedia_web_dismissBannerIfPresent should declare requiresContext",
-    )
 
     val openMainPage = byName["wikipedia_web_openMainPage"]
       ?: fail(
@@ -2018,11 +2088,6 @@ class ScriptedToolDefinitionAnalyzerTest {
       listOf("web"),
       openPlatforms.map { it.jsonPrimitive.content },
       "wikipedia_web_openMainPage should be web-only",
-    )
-    assertEquals(
-      JsonPrimitive(true),
-      openSpec["requiresContext"],
-      "wikipedia_web_openMainPage should declare requiresContext",
     )
   }
 
@@ -2072,7 +2137,8 @@ class ScriptedToolDefinitionAnalyzerTest {
    * extracted shape against the RECOGNIZED_SPEC_FIELDS allowlist.
    */
   private fun declareTypedToolStub(): String =
-    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown };"
+    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown; " +
+      "trailhead: <I, O>(spec: any, handler?: (input: I) => Promise<O>) => unknown };"
 
   private fun writeTsFixture(dir: File, name: String, body: String): File {
     val file = File(dir, name)
@@ -2673,61 +2739,42 @@ class ScriptedToolDefinitionAnalyzerTest {
 
   @Test
   fun `unreadable file in content key produces a distinct hash from a legitimately empty file`() {
-    // Pins the ERR sentinel contract: an unreadable `.ts` file must NOT hash
-    // identically to an empty file. Without this, a transiently-permission-
-    // denied file would cache as a 0-byte stand-in and serve stale (or worse,
-    // identical-collision) results until the file became readable again.
+    // Pins the ERR sentinel contract: a `.ts` path that can't be read must NOT hash
+    // identically to an empty file at the same path. Without it, a transiently unreadable
+    // file would cache as a 0-byte stand-in and serve stale results until it was readable.
     //
-    // Constructed without an analyzer subprocess — pure cache-key math, so
-    // this doesn't need `assumeAnalyzerRunnable`.
+    // One path throughout, since the relative path is hashed too: two different names would
+    // differ with or without the sentinel. The read fails because the path is a directory,
+    // which fails for root as well, unlike a permission bit.
     val trailmapDir = tempFolder.newFolder("err-sentinel-trailmap")
-    val emptyFile = File(trailmapDir, "empty.ts").apply { writeText("") }
-    val realFile = File(trailmapDir, "real.ts").apply { writeText("export const x = 1;") }
-
-    val emptyOnlyHash = ScriptedToolDefinitionCache.computeContentKey(
+    val tool = File(trailmapDir, "tool.ts")
+    fun key() = ScriptedToolDefinitionCache.computeContentKey(
       trailmapToolsDir = trailmapDir,
-      tsFiles = listOf(emptyFile),
+      tsFiles = listOf(tool),
       dependencyKey = "test-deps",
     )
 
-    // Make the second file unreadable. `setReadable(false)` is portable on
-    // POSIX; the test assume-skips cleanly on hosts where it can't be cleared
-    // (Windows without dev mode + some CI sandboxes can't toggle this).
-    val cleared = realFile.setReadable(false, false)
-    assumeTrue(
-      "host filesystem rejected setReadable(false) — can't exercise the ERR sentinel here",
-      cleared && !realFile.canRead(),
-    )
-    try {
-      val unreadableHash = ScriptedToolDefinitionCache.computeContentKey(
-        trailmapToolsDir = trailmapDir,
-        tsFiles = listOf(realFile),
-        dependencyKey = "test-deps",
-      )
-      assertNotEquals(
-        emptyOnlyHash,
-        unreadableHash,
-        "unreadable file collided with empty-file hash — ERR sentinel dropped?",
-      )
+    tool.writeText("")
+    val emptyHash = key()
 
-      // After restoring read permission, the hash flips again (now that the
-      // real bytes contribute), proving the sentinel was actually load-bearing
-      // for the prior digest.
-      realFile.setReadable(true, false)
-      val readableHash = ScriptedToolDefinitionCache.computeContentKey(
-        trailmapToolsDir = trailmapDir,
-        tsFiles = listOf(realFile),
-        dependencyKey = "test-deps",
-      )
-      assertNotEquals(
-        unreadableHash,
-        readableHash,
-        "hash didn't change after restoring read permission — cache won't recover from a stale ERR entry",
-      )
-    } finally {
-      // Restore so JUnit's tempFolder cleanup can delete the file.
-      realFile.setReadable(true, false)
-    }
+    tool.delete()
+    tool.mkdir()
+    val unreadableHash = key()
+
+    tool.delete()
+    tool.writeText("export const x = 1;")
+    val readableHash = key()
+
+    assertNotEquals(
+      emptyHash,
+      unreadableHash,
+      "unreadable file collided with empty-file hash — ERR sentinel dropped?",
+    )
+    assertNotEquals(
+      unreadableHash,
+      readableHash,
+      "hash didn't change once the file was readable — cache won't recover from a stale ERR entry",
+    )
   }
 
   @Test

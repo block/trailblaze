@@ -9,7 +9,7 @@ const TOOL_FLAVORS = {
     what: 'A typed .ts tool that runs on Bun - a handler over the typed ctx.tools.<name>(args) surface. One file per tool.',
     when: 'Branching, retries, async, or composition beyond a literal substitution.',
     where: '<trailmap>/tools/<name>.ts · listed in trailmap.yaml under target.tools',
-    snippet: 'export const clock_clearAlarms = trailblaze.tool(\n  { supportedPlatforms: ["android"], requiresContext: true },\n  async (input, ctx) => {\n    await ctx.tools.android_adbShell({ command: ["pm", "clear", appId] });\n    return `Cleared.`;\n  },\n);',
+    snippet: 'export const clock_clearAlarms = trailblaze.tool(\n  { supportedPlatforms: ["android"] },\n  async (input, ctx) => {\n    await ctx.tools.android_adbShell({ command: ["pm", "clear", appId] });\n    return `Cleared.`;\n  },\n);',
   },
   yaml: {
     short: 'YAML', label: 'YAML-composed', ico: 'file-text', color: 'var(--tb-running)', tag: null, lang: 'yaml',

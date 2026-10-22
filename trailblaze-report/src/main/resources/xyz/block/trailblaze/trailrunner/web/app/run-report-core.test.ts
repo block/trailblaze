@@ -1207,6 +1207,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.rebootViewer) { (opts.viewer || core.RUN_REPORT_VIEWER)(); while (rafQueue.length) rafQueue.shift()!(); }
   if (opts.toggleCell && handlers.cellToggle[opts.toggleCell]) handlers.cellToggle[opts.toggleCell]({ stopPropagation() {} });
   if (opts.session != null && handlers.session[String(opts.session)]) handlers.session[String(opts.session)]();
+  // A finished run opens on its Theater. Most of this file describes the Timeline, so a test that
+  // names no tab and no route starts there, as a reader who clicked it would.
+  if (opts.query === undefined && opts.routeStep == null && !opts.legacyHash && app._h.includes('class="active" data-tab="theater"') && handlers.tab.timeline) handlers.tab.timeline();
   if (opts.timelineScrollTop != null) timelineList.scrollTop = opts.timelineScrollTop;
   if (opts.step != null) handlers.step.get(String(opts.step))?.();
   if (opts.clickGroup != null && handlers.group[String(opts.clickGroup)]) handlers.group[String(opts.clickGroup)]();
@@ -4150,6 +4153,8 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     state.releaseChunks();
     // The viewer polls for the chunk while the document is still streaming (its own 50ms timer).
     for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).not.toContain("Loading run");
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login");
   });
 
@@ -4165,6 +4170,8 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     expect(state.readHtml()).toContain("Loading run");
     state.releaseChunks();
     for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).not.toContain("Loading run");
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login");
   });
 
@@ -4199,6 +4206,7 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     const state = renderViewerState(null, { chunks: chunksOf(html) });
     state.live()!.update(1, { deviceLog: "late poll line" } as unknown as Record<string, unknown>);
     state.openSession(1);
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login"); // trace content only the session chunk carries
   });
 
@@ -4221,6 +4229,7 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     pushed.trace = [{ i: 1, label: "Pushed step", objective: true, ok: true }];
     state.live()!.update(1, pushed);
     state.openSession(1);
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Pushed step");
     expect(state.readHtml()).not.toContain("Tap login"); // the chunk did not overwrite the push
   });
@@ -8452,6 +8461,90 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     const net = renderViewer(payload, { tab: "network" });
     expect(net).toContain('id="nlq"');
     expect(net).toContain('data-lvl="e"');
+  });
+});
+
+describe("the tab a run opens on", () => {
+  const step = { i: 1, label: "Open app", tool: null, note: null, ms: 0, ts: 500, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] };
+  const run = (status: string, trace: unknown[] = [step]) => ({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Run", status }, trace, llm: [], shots: {}, recordingYaml: null, deviceLog: null, network: null, video: null }],
+  });
+  // `query: ""` names no route, so the harness leaves the run on whatever tab it chose.
+  const activeTab = (html: string) => (html.match(/class="active" data-tab="([^"]+)"/) || [])[1];
+
+  test("a finished run opens on its Theater, listed first", () => {
+    const state = renderViewerState(run("passed"), { query: "" });
+    expect(activeTab(state.html)).toBe("theater");
+    expect(state.html).toContain('data-tabmount="theater"');
+    expect(state.html.indexOf('data-tab="theater"')).toBeLessThan(state.html.indexOf('data-tab="timeline"'));
+  });
+
+  test("a failed run opens on its Theater too", () => {
+    expect(activeTab(renderViewerState(run("failed"), { query: "" }).html)).toBe("theater");
+  });
+
+  test("a run still in progress opens on the Timeline, which follows its newest row", () => {
+    expect(activeTab(renderViewerState(run("running"), { query: "" }).html)).toBe("timeline");
+  });
+
+  test("a run with no steps has no Theater and opens on the Timeline", () => {
+    const tool = { ...step, objective: false, label: "tap" };
+    const html = renderViewerState(run("passed", [tool]), { query: "" }).html;
+    expect(html).not.toContain('data-tab="theater"');
+    expect(activeTab(html)).toBe("timeline");
+  });
+
+  test("a link that names the Timeline still opens it", () => {
+    expect(activeTab(renderViewerState(run("passed"), { query: "?run=0&tab=timeline" }).html)).toBe("timeline");
+  });
+
+  test("the Theater's position rides the link's `at`", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=theater&at=1200" });
+    expect(activeTab(state.html)).toBe("theater");
+    expect(state.route).toContain("tab=theater");
+    expect(state.route).toContain("at=1200");
+  });
+
+  test("switching tabs does not carry one tab's position into the other", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=summary&at=1200" });
+    expect(state.readRoute()).toContain("at=1200");
+    state.clickTab("theater");
+    expect(activeTab(state.readHtml())).toBe("theater");
+    expect(state.readRoute()).not.toContain("at=1200");
+  });
+
+  test("a Theater link on a run without one opens the Timeline", () => {
+    const tool = { ...step, objective: false, label: "tap" };
+    const html = renderViewerState(run("passed", [tool]), { query: "?run=0&tab=theater" }).html;
+    expect(html).not.toContain('data-tabmount="theater"');
+    expect(activeTab(html)).toBe("timeline");
+  });
+
+  test("a Theater link on a run still in progress reopens the Theater its nav offers", () => {
+    const html = renderViewerState(run("running"), { query: "?run=0&tab=theater" }).html;
+    expect(html).toContain('data-tab="theater"');
+    expect(activeTab(html)).toBe("theater");
+  });
+
+  test("a moment before the first trace row keeps its signed offset", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=summary&at=-400" });
+    expect(activeTab(state.html)).toBe("summary");
+    expect(state.route).toContain("at=-400");
+  });
+
+  test("a moment keeps naming the same instant when an earlier row arrives and moves the origin", () => {
+    // Opened at 2000ms past the first row (ts 500), i.e. epoch 2500. A late row at ts 100 moves the
+    // origin back 400ms, so the same instant is now 2400ms in.
+    const state = renderViewerState(run("running"), { query: "?run=0&tab=summary&at=2000" });
+    expect(state.route).toContain("at=2000");
+    const earlier = { ...step, i: 1, ts: 100, label: "Earlier" };
+    state.live()!.update(0, run("running", [earlier, { ...step, i: 2 }]).sessions[0]);
+    expect(state.readRoute()).toContain("at=2400");
+  });
+
+  test("a link that picks a step but no tab opens the Timeline at that step", () => {
+    expect(activeTab(renderViewerState(run("passed"), { query: "?run=0&step=1" }).html)).toBe("timeline");
   });
 });
 

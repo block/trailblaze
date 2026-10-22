@@ -71,6 +71,12 @@ class QuickJsToolRegistration(
    * [QuickJsToolBundleLauncher].
    */
   internal val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
+  /**
+   * The only argument names a call may carry, from the tool's YAML schema
+   * ([QuickJsToolAdvertisement.declaredArgNames]); other keys are dropped before the tool runs or
+   * is recorded. Null keeps every key.
+   */
+  internal val declaredArgNames: Set<String>? = null,
 ) : DynamicTrailblazeToolRegistration {
 
   override val name: ToolName = ToolName(spec.name)
@@ -85,7 +91,7 @@ class QuickJsToolRegistration(
     // doesn't model today (`array`, `object`, etc.) — those fall back to String rather than
     // crashing session startup. Same posture the legacy MCP-bundle registration takes.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs)
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs, declaredArgNames)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -105,7 +111,7 @@ class QuickJsToolRegistration(
     // still fires — a wrapper would let a non-recordable same-bundle compose bypass the guard and
     // deadlock the host's non-reentrant evalMutex. The tool's `toolMetadata` carries the opt-out so
     // the recording gate (`getIsRecordableFromAnnotation`) skips it.
-    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs)
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs, declaredArgNames)
     return Json.decodeFromString(serializer, argumentsJson)
   }
 }

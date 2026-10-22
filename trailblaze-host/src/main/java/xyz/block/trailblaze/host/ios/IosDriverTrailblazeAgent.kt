@@ -129,6 +129,15 @@ class IosDriverTrailblazeAgent(
     sessionProvider = sessionProvider,
   )
 
+  override suspend fun answerNotificationsAlert(appId: String, allow: Boolean?, traceId: TraceId?): TrailblazeToolResult =
+    IosDriverTrailRunner.runActions(
+      actions = listOf(IosDriverAction.AnswerNotificationsAlert(appId, allow)),
+      traceId = traceId,
+      deviceManager = deviceManager,
+      trailblazeLogger = driverActionLogger,
+      sessionProvider = sessionProvider,
+    )
+
   /** Select-all + delete: two key events, where erasing by count costs one AXe process per character. */
   override suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult =
     IosDriverTrailRunner.runActions(

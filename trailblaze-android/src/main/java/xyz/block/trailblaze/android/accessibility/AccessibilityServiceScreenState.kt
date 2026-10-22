@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.filterImportantForAccessibility
 import android.graphics.Bitmap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit

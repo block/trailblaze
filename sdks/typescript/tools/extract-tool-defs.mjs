@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Static-analysis shim invoked by `ScriptedToolDefinitionAnalyzer` (Kotlin) to extract
-// the input/output JSON Schemas of every `export const X = trailblaze.tool<I, O>({...})`
-// declaration in a set of `.ts` files.
+// the input/output JSON Schemas of every `export const X = trailblaze.tool<I, O>({...})` (or
+// `trailblaze.trailhead<I, O>(...)`) declaration in a set of `.ts` files.
 //
 // Usage:
 //   bun extract-tool-defs.mjs <file1.ts> [<file2.ts> ...]
@@ -25,9 +25,9 @@
 //           // the implementation below.
 //           "description": "Open the sample app.",
 //           "supportedPlatforms": ["web"],
-//           "requiresContext": true,
 //           "requiresHost": false,
 //           "supportedDrivers": ["playwright-native"],
+//           // Always present for `trailblaze.trailhead(...)`; `to` only when authored.
 //           "trailhead": { "to": "myapp/android/home_signed_in" }
 //         }
 //       },
@@ -144,7 +144,7 @@ const SPEC_RUNTIMES = ["inProcess", "subprocess"];
 const RECOGNIZED_SPEC_FIELDS = new Set([
   "description",
   "supportedPlatforms",
-  "requiresContext",
+  "requiresContext", // deprecated and ignored; still accepted so older specs compile
   "requiresHost",
   "supportedDrivers",
   "requiredClassifiers",
@@ -158,8 +158,8 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
 /**
  * Maximum recursion depth for [literalValueOf]. Most recognized
  * `TrailblazeTypedToolSpec` fields are 1-level shapes (boolean, string,
- * string array — `sensitiveArgNames` among them) — `trailhead` is the one 2-level shape (`{ to: string,
- * dynamic: boolean }`) — so depth 2 covers `supportedPlatforms: ["web"]`,
+ * string array — `sensitiveArgNames` among them) — `trailhead` is the one 2-level shape (`{ to: string }`)
+ * — so depth 2 covers `supportedPlatforms: ["web"]`,
  * `trailhead: { to: "..." }`, and friends with headroom. A pathological
  * author literal like `[[[[[[[["web"]]]]]]]]`
  * (deliberate or accidental, perhaps via `as any`) won't exhaust the JS stack
@@ -275,7 +275,10 @@ for (const arg of args) {
       if (!init || !ts.isCallExpression(init)) continue;
       const callee = init.expression;
       if (!ts.isPropertyAccessExpression(callee)) continue;
-      if (callee.name.text !== "tool") continue;
+      // `trailblaze.trailhead(...)` is a typed tool that is also a trailhead: same call shapes,
+      // and its spec becomes a tool spec with a `trailhead` block (see [extractToolSpec]).
+      const isTrailhead = callee.name.text === "trailhead";
+      if (callee.name.text !== "tool" && !isTrailhead) continue;
       // Tighten the receiver: only match when `<expr>.tool` is rooted at the
       // Trailblaze SDK's `trailblaze` export (by bare name OR an aliased
       // import we collected above). Eliminates false-positive matches against
@@ -376,7 +379,7 @@ for (const arg of args) {
       // **Inline-literal only.** Only inline JSON-compatible literals are captured
       // today:
       //
-      //   { supportedPlatforms: ["web"], requiresContext: true }    // OK — literals
+      //   { supportedPlatforms: ["web"], requiresHost: true }       // OK — literals
       //   { ...sharedDefaults, requiresHost: true }                 // partial — spread skipped
       //   { supportedPlatforms: PLATFORMS_CONST }                   // skipped — identifier
       //
@@ -394,12 +397,12 @@ for (const arg of args) {
       // behavior is unchanged, just the build-time metadata extraction lags.
       // Skipping unknown shapes lets authors use the pattern today and benefit
       // from full metadata extraction once the resolver lands.
-      const spec = extractToolSpec(init);
+      const spec = extractToolSpec(init, isTrailhead);
       // Footgun guard: the (spec, handler) overload was used but the spec arg is a non-inline
       // reference the analyzer can't read (`const SPEC = {...}` / a factory call), so the WHOLE
       // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
       // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
-      const uncapturedSpec = !spec && specArgIsUncapturedReference(init);
+      const uncapturedSpec = !capturedAnySpecField(spec) && specArgIsUncapturedReference(init);
       const runtimeError = specRuntimeError(init) ?? specRequiredClassifiersError(init);
       if (runtimeError) {
         errors.push({ file: absFile, name, message: `tool '${name}': ${runtimeError}` });
@@ -726,7 +729,8 @@ function describeGeneratorError(e) {
 }
 
 /**
- * Extract the typed-tool spec object from a `trailblaze.tool(...)` call expression.
+ * Extract the typed-tool spec object from a `trailblaze.tool(...)` or `trailblaze.trailhead(...)`
+ * call expression.
  *
  * Returns:
  *   - `null` when the call is a bare-handler form (arg 0 is a function/arrow) —
@@ -742,25 +746,20 @@ function describeGeneratorError(e) {
  *   - An object carrying each recognized field whose value at the call site is
  *     an inline JSON-compatible literal. Spread expressions, computed property
  *     names, and non-literal values are silently skipped.
+ *
+ * `trailhead` is the marker that makes a tool a trailhead, so any inline object there counts,
+ * even `{}` or one holding only a `teardown` function, and only its string `to` is kept. For
+ * [isTrailhead] (a `trailblaze.trailhead(...)` call) the marker is the call itself: the result
+ * always carries a `trailhead` block, built from the spec's top-level `to`.
  */
-function extractToolSpec(callExpression) {
-  const args = callExpression.arguments;
-  if (!args || args.length === 0) return null;
-  const arg0 = args[0];
-  // Bare-handler form: arg 0 is a function/arrow. Nothing to extract.
-  if (
-    ts.isArrowFunction(arg0) ||
-    ts.isFunctionExpression(arg0)
-  ) {
-    return null;
-  }
-  // With-spec form requires an object literal at arg 0. Anything else (identifier
-  // reference, call expression, etc.) we skip — see the inline-literal caveat at
-  // the call site.
-  if (!ts.isObjectLiteralExpression(arg0)) return null;
-
+function extractToolSpec(callExpression, isTrailhead = false) {
   const captured = {};
-  for (const prop of arg0.properties) {
+  const arg0 = callExpression.arguments?.[0];
+  // With-spec form requires an object literal at arg 0. A function/arrow is the bare-handler
+  // form; anything else (identifier reference, call expression, etc.) we skip — see the
+  // inline-literal caveat at the call site.
+  const specLiteral = arg0 && ts.isObjectLiteralExpression(arg0) ? arg0 : null;
+  for (const prop of specLiteral?.properties ?? []) {
     // Spread elements (`...sharedDefaults`) — skip. A future PR can resolve the
     // spread source through the TypeScript Program; today we accept the
     // partial-extraction outcome to keep the helper-function pattern working.
@@ -771,12 +770,46 @@ function extractToolSpec(callExpression) {
     // Both `Identifier` and `StringLiteral` AST nodes expose `.text` (the guard
     // above is what makes this safe), so no branch on the kind is needed here.
     const fieldName = prop.name.text;
+    if (isTrailhead && fieldName === "to") {
+      const to = literalValueOf(prop.initializer);
+      if (typeof to === "string") captured.trailhead = { to };
+      continue;
+    }
     if (!RECOGNIZED_SPEC_FIELDS.has(fieldName)) continue;
+    if (fieldName === "trailhead") {
+      // A `trailblaze.trailhead` spec has no `trailhead` field; its block comes from `to`.
+      const block = unwrapTypeAssertions(prop.initializer);
+      if (isTrailhead || !ts.isObjectLiteralExpression(block)) continue;
+      const to = literalValueOf(block)?.to;
+      captured.trailhead = typeof to === "string" ? { to } : {};
+      continue;
+    }
     const captured_value = literalValueOf(prop.initializer);
     if (captured_value === undefined) continue; // unresolvable value — skip
     captured[fieldName] = captured_value;
   }
+  if (isTrailhead && !captured.trailhead) captured.trailhead = {};
   return Object.keys(captured).length > 0 ? captured : null;
+}
+
+/**
+ * [node] with any parentheses, `as` and `satisfies` around it removed: `({ to: "a/b" } as const)`
+ * is the object literal it wraps.
+ */
+function unwrapTypeAssertions(node) {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    node = node.expression;
+  }
+  return node;
+}
+
+/**
+ * True when [spec] holds a field read from the call site's spec argument. A `trailblaze.trailhead`
+ * spec always holds a `trailhead` block, so that alone doesn't count.
+ */
+function capturedAnySpecField(spec) {
+  if (!spec) return false;
+  return Object.keys(spec).some((k) => k !== "trailhead") || Object.keys(spec.trailhead ?? {}).length > 0;
 }
 
 /**
@@ -882,7 +915,7 @@ function specArgIsUncapturedReference(callExpression) {
  *
  * Recognized shapes (matched against the value-shapes used by the recognized
  * `TrailblazeTypedToolSpec` fields — boolean / string / string[] for most,
- * plus the one nested-object shape `trailhead: { to, dynamic }`):
+ * plus the one nested-object shape `trailhead: { to }`):
  *   - `"text"` / `'text'` → string, including a `"a" + "b"` chain of them
  *   - `true` / `false` → boolean
  *   - `[expr, expr, ...]` → array (recursively; an element that doesn't
@@ -959,7 +992,7 @@ function literalValueOf(node, depth = 0) {
 }
 
 /**
- * Resolve a nested object literal (e.g. `trailhead: { to: "...", dynamic: true }`) into a
+ * Resolve a nested object literal (e.g. `trailhead: { to: "..." }`) into a
  * plain JSON-compatible object, or `undefined` if NOTHING on it resolved.
  *
  * **Partial-capture, unlike arrays.** A spread property, computed key, or unresolvable value

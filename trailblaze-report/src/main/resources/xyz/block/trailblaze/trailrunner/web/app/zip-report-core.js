@@ -852,7 +852,7 @@
     var inflateRaw = options.inflateRaw || null;
     var generatedAt = options.generatedAt || new Date().toLocaleString();
 
-    return loadZipSessions(zipBytes, { inflateRaw: inflateRaw }).then(function (sessions) {
+    return loadZipSessions(zipBytes, { inflateRaw: inflateRaw, render: options.render }).then(function (sessions) {
       if (!sessions.length) throw new Error('No Trailblaze session logs found in this archive.');
       var inputs = [];
       var chain = Promise.resolve();

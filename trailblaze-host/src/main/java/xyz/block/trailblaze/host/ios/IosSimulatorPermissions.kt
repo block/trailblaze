@@ -140,6 +140,18 @@ object IosSimulatorPermissions {
   private const val NOTIFICATION_ALERT_LABEL = "would like to send you notifications"
 
   /**
+   * The app a springboard notification-permission alert in [root] asks for: the name iOS quotes in
+   * its title (`“Shop” Would Like to Send You Notifications`), which is the app's display name.
+   * Null when [root] has no such alert or its title quotes no name.
+   */
+  fun notificationAlertAppName(root: TrailblazeNode): String? {
+    val title = root.findFirst { it.axLabel().contains(NOTIFICATION_ALERT_LABEL) }?.axDetail()?.label ?: return null
+    return QUOTED_APP_NAME.find(title)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
+  private val QUOTED_APP_NAME = Regex("[“\"](.+?)[”\"]")
+
+  /**
    * Center of the button that resolves a springboard notification-permission alert per [value]
    * ("allow"/"deny"), or null when no action is needed (no alert in [root], other values).
    * Mirrors Maestro's `PermissionButtonFinder.findButtonToTap`: allow prefers a button labeled

@@ -1,11 +1,19 @@
 package xyz.block.trailblaze.util
 
 import java.io.File
+import java.io.IOException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import xyz.block.trailblaze.device.InstalledApp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcessWithTimeout
@@ -160,9 +168,9 @@ object IosHostSimctlUtils {
    * (simctl exits nonzero with "found nothing to terminate" — the state the caller wanted anyway);
    * throws on any other failure.
    */
-  fun terminateApp(deviceId: String, appId: String): Boolean {
+  suspend fun terminateApp(deviceId: String, appId: String): Boolean {
     requireMacOs("simctl terminate")
-    val output = runSimctlBlocking("terminate $appId", listOf("xcrun", "simctl", "terminate", deviceId, appId))
+    val output = runSimctl("terminate $appId", listOf("xcrun", "simctl", "terminate", deviceId, appId), SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS)
     if (output.exitCode == 0) return true
     val text = output.outputLines.joinToString("\n").trim()
     if (isNotRunningTerminateOutput(text)) return false
@@ -170,19 +178,19 @@ object IosHostSimctlUtils {
   }
 
   /**
-   * `xcrun simctl privacy <deviceId> grant <service> <appId>`. simctl terminates the app if it is
-   * running when a grant changes, so grant before launching. Throws with simctl's output on failure
-   * (e.g. an unknown service name).
+   * `xcrun simctl privacy <deviceId> <action> <service> <appId>`, where [action] is `grant`,
+   * `revoke` or `reset`. simctl terminates the app if it is running when a grant changes, so set
+   * these before launching. Throws with simctl's output on failure (e.g. an unknown service name).
    */
-  fun grantPrivacy(deviceId: String, appId: String, service: String) {
+  suspend fun setPrivacy(deviceId: String, appId: String, action: String, service: String) {
     requireMacOs("simctl privacy")
-    val output = runSimctlBlocking(
-      "privacy grant $service $appId",
-      listOf("xcrun", "simctl", "privacy", deviceId, "grant", service, appId),
+    val output = runSimctl(
+      "privacy $action $service $appId",
+      listOf("xcrun", "simctl", "privacy", deviceId, action, service, appId),
       SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
     )
     check(output.exitCode == 0) {
-      "simctl privacy grant $service $appId failed (exit ${output.exitCode}): " +
+      "simctl privacy $action $service $appId failed (exit ${output.exitCode}): " +
         output.outputLines.joinToString("\n").trim()
     }
   }
@@ -225,7 +233,10 @@ object IosHostSimctlUtils {
 
   private const val SIMCTL_ACTION_TIMEOUT_SECONDS = 10L
 
-  /** Launch and privacy grant can wait on a cold simulator booting its services, as on a fresh CI agent. */
+  /**
+   * Launch, privacy grant and the app-data clear's lookup, terminate and exit wait can wait on a
+   * cold or loaded simulator, as on a fresh CI agent. Generous: it costs nothing when simctl is quick.
+   */
   private const val SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS = 120L
 
   /** simctl's wording for "that app is not running" varies across Xcode versions. */
@@ -241,19 +252,117 @@ object IosHostSimctlUtils {
     check(isMacOs()) { "$what needs a macOS host with Xcode" }
   }
 
-  fun clearAppDataContainer(deviceId: String, appId: String) {
-    if (!isMacOs()) return
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      SimctlCommand.argv("get_app_container", deviceId, appId, "data"),
-    ).runProcess {}
+  /** What [clearAppDataContainer] found. */
+  enum class ClearAppDataOutcome { CLEARED, NOT_INSTALLED }
 
-    output.outputLines.firstOrNull()?.let { dataContainerPath ->
-      val dataContainerDirectory = File(dataContainerPath)
-      if (dataContainerDirectory.exists() && dataContainerDirectory.isDirectory) {
-        Console.log("Clearing $appId data container under $dataContainerPath")
-        dataContainerDirectory.listFiles()?.forEach { it.deleteRecursively() }
+  /**
+   * Empties [appId]'s data container in place: terminates the app, waits for its process to exit
+   * (a dying app can flush state back into the container after the wipe), then deletes the
+   * container's children without following symlinks, so a link inside the container can't reach
+   * host files. Throws when the lookup or any deletion fails: a partial wipe that reports success
+   * would start the next step against stale data. The keychain and privacy grants are untouched.
+   */
+  suspend fun clearAppDataContainer(deviceId: String, appId: String): ClearAppDataOutcome {
+    requireMacOs("simctl get_app_container")
+    val lookup = runSimctl(
+      "get_app_container $appId data",
+      listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "data"),
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
+    val lookupText = lookup.outputLines.joinToString("\n").trim()
+    if (lookup.exitCode != 0) {
+      if (isNotInstalledContainerOutput(lookupText)) return ClearAppDataOutcome.NOT_INSTALLED
+      error("simctl get_app_container $appId data failed (exit ${lookup.exitCode}): $lookupText")
+    }
+    val dataPath = Paths.get(lookup.outputLines.first { it.isNotBlank() }.trim())
+
+    terminateApp(deviceId, appId)
+    awaitAppExit(deviceId, appId)
+
+    // simctl can name a container the simulator hasn't created yet (seen right after a boot); an
+    // absent container holds no data, and the next launch creates it fresh.
+    if (!Files.isDirectory(dataPath)) {
+      Console.log("$appId has no data container at $dataPath yet; nothing to clear")
+      return ClearAppDataOutcome.CLEARED
+    }
+    Console.log("Clearing $appId data container under $dataPath")
+    val undeleted = deleteChildrenWithoutFollowingLinks(dataPath)
+    check(undeleted.isEmpty()) { "failed to delete from $appId's data container: ${undeleted.joinToString(", ")}" }
+    return ClearAppDataOutcome.CLEARED
+  }
+
+  /**
+   * `simctl terminate` returns once the signal is sent. Polls the simulator's launchd until [appId]
+   * has no running process, failing after [timeoutMillis] rather than wiping under a live app.
+   */
+  private suspend fun awaitAppExit(
+    deviceId: String,
+    appId: String,
+    timeoutMillis: Long = SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS * 1_000,
+  ) {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (true) {
+      val list = runSimctl(
+        "spawn launchctl list",
+        listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "list"),
+        SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+      )
+      check(list.exitCode == 0) {
+        "simctl spawn launchctl list failed (exit ${list.exitCode}): ${list.outputLines.joinToString("\n").trim()}"
+      }
+      if (!isAppRunning(list.outputLines, appId)) return
+      check(System.currentTimeMillis() < deadline) { "$appId was still running ${timeoutMillis}ms after terminate" }
+      delay(250)
+    }
+  }
+
+  /** A `launchctl list` row for a UIKit app with a live pid (first column numeric, not `-`). */
+  internal fun isAppRunning(launchctlList: List<String>, appId: String): Boolean =
+    launchctlList.any { line ->
+      line.contains("UIKitApplication:$appId[") && line.substringBefore('\t').trim().toIntOrNull() != null
+    }
+
+  /** `get_app_container` exits with POSIX ENOENT when the app isn't installed. */
+  internal fun isNotInstalledContainerOutput(output: String): Boolean =
+    "NSPOSIXErrorDomain, code=2)" in output
+
+  /**
+   * Deletes everything under [root], leaving [root] itself. Symlinks are deleted as links, never
+   * followed. Returns the paths that could not be deleted.
+   */
+  internal fun deleteChildrenWithoutFollowingLinks(root: Path): List<String> {
+    val undeleted = mutableListOf<String>()
+    Files.newDirectoryStream(root).use { children ->
+      children.forEach { child ->
+        Files.walkFileTree(
+          child,
+          object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+              if (!tryDelete(file)) undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+              undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+              if (exc != null || !tryDelete(dir)) undeleted += dir.toString()
+              return FileVisitResult.CONTINUE
+            }
+          },
+        )
       }
     }
+    return undeleted
+  }
+
+  private fun tryDelete(path: Path): Boolean = try {
+    Files.deleteIfExists(path)
+    true
+  } catch (e: IOException) {
+    false
   }
 
   /**

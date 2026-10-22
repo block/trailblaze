@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.host.ParallelWork
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.Files
@@ -110,7 +111,7 @@ internal object TrailmapUnitTestRunner {
       Console.log(
         "── test: ${trailmap.fileName} (${testFiles.size} file${if (testFiles.size == 1) "" else "s"}) ────",
       )
-      val exit = runBunTest(toolsDir = toolsDir)
+      val exit = runBunTest(toolsDir = toolsDir, extraFlags = bunTestFlags(testFiles.size) { bunSupportsParallel })
       if (exit != 0) {
         sawFailure = true
         failedTrailmaps += trailmap.fileName.toString()
@@ -164,9 +165,9 @@ internal object TrailmapUnitTestRunner {
    * depending on invocation location. Pinning to `toolsDir` gives every trailmap's suite
    * the same deterministic cwd that a direct `(cd <trailmap>/tools && bun test)` would.
    */
-  private fun runBunTest(toolsDir: Path): Int {
+  private fun runBunTest(toolsDir: Path, extraFlags: List<String>): Int {
     val toolsDirAbs = toolsDir.toAbsolutePath()
-    val argv = listOf("bun", "test", toolsDirAbs.toString())
+    val argv = listOf("bun", "test") + extraFlags + toolsDirAbs.toString()
     val timeoutMs = resolveTestTimeoutMs()
     return try {
       val proc = ProcessBuilder(argv)
@@ -181,7 +182,11 @@ internal object TrailmapUnitTestRunner {
           "trailblaze check: bun test did not finish within ${timeoutMs}ms — " +
             "killing. Bump $TIMEOUT_MS_ENV_VAR if this is a known-slow test suite.",
         )
+        // `--parallel` workers are bun's children; list them before the kill, since once bun is
+        // gone they are orphans it no longer lists.
+        val workers = proc.descendants().toList()
         proc.destroyForcibly()
+        workers.forEach { it.destroyForcibly() }
         proc.waitFor(10, TimeUnit.SECONDS)
         EXIT_TEST_FAILURE
       }
@@ -191,6 +196,47 @@ internal object TrailmapUnitTestRunner {
           "${e.message ?: e.javaClass.simpleName}",
       )
       EXIT_TEST_FAILURE
+    }
+  }
+
+  /**
+   * Extra `bun test` flags for a trailmap with [testFileCount] test files. A suite with more files
+   * than [ParallelWork.MAX_PARALLELISM] spreads them across that many worker processes (`--parallel`,
+   * each file isolated, output merged), which roughly halves the run time of a suite with dozens of
+   * files. Smaller suites stay in one process: starting workers costs them more than it saves, and
+   * bun's default of one worker per core made a smaller suite several times slower.
+   */
+  internal fun bunTestFlags(testFileCount: Int, supportsParallel: () -> Boolean): List<String> =
+    // Size first, so a small suite never pays for the `bun test --help` probe.
+    if (testFileCount > ParallelWork.MAX_PARALLELISM && supportsParallel()) {
+      listOf("--parallel=${ParallelWork.MAX_PARALLELISM}")
+    } else {
+      emptyList()
+    }
+
+  /** True when [bunTestHelp] (the output of `bun test --help`) lists the `--parallel=<n>` option. */
+  internal fun supportsParallel(bunTestHelp: String): Boolean = bunTestHelp.contains("--parallel=")
+
+  /** Probed once per process: a bun that predates `--parallel` would reject the flag outright. */
+  private val bunSupportsParallel: Boolean by lazy {
+    // Output goes to a file, not a pipe: a help text larger than the pipe buffer would block bun
+    // before it exits, and the wait would time out.
+    val helpFile = runCatching { Files.createTempFile("trailblaze-bun-help-", ".txt") }.getOrNull()
+      ?: return@lazy false
+    try {
+      runCatching {
+        val proc = ProcessBuilder("bun", "test", "--help")
+          .redirectErrorStream(true)
+          .redirectOutput(helpFile.toFile())
+          .start()
+        if (!proc.waitFor(30, TimeUnit.SECONDS)) {
+          proc.destroyForcibly()
+          return@runCatching false
+        }
+        supportsParallel(Files.readString(helpFile))
+      }.getOrDefault(false)
+    } finally {
+      runCatching { Files.deleteIfExists(helpFile) }
     }
   }
 

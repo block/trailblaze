@@ -108,17 +108,33 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
      *    discovered schemas (e.g. subprocess MCP `tools/list` responses) where a tool with
      *    an unmappable type like `"array"` / `"object"` shouldn't abort the whole session.
      */
-    fun TrailblazeToolDescriptor.toKoogToolDescriptor(strict: Boolean): ToolDescriptor = ToolDescriptor(
-      name = name,
-      description = description.orEmpty(),
-      requiredParameters = requiredParameters.map { it.toKoogParameterDescriptor(strict) },
-      optionalParameters = optionalParameters.map { it.toKoogParameterDescriptor(strict) },
-    )
+    fun TrailblazeToolDescriptor.toKoogToolDescriptor(strict: Boolean): ToolDescriptor {
+      // The flat parameter view only knows a type NAME ("array", "object"); the full schema, when
+      // the tool carries one, knows `items` and nested `properties`. See
+      // [JsonSchemaToolParameterTypes] for why that has to reach the LLM.
+      val schemaTypes = inputSchema?.let(::JsonSchemaToolParameterTypes)
+      return ToolDescriptor(
+        name = name,
+        description = description.orEmpty(),
+        requiredParameters = requiredParameters.map { it.toKoogParameterDescriptor(strict, schemaTypes) },
+        optionalParameters = optionalParameters.map { it.toKoogParameterDescriptor(strict, schemaTypes) },
+      )
+    }
 
     fun TrailblazeToolParameterDescriptor.toKoogParameterDescriptor(strict: Boolean): ToolParameterDescriptor =
+      toKoogParameterDescriptor(strict, schemaTypes = null)
+
+    private fun TrailblazeToolParameterDescriptor.toKoogParameterDescriptor(
+      strict: Boolean,
+      schemaTypes: JsonSchemaToolParameterTypes?,
+    ): ToolParameterDescriptor =
       ToolParameterDescriptor(
         name = name,
         description = description.orEmpty(),
+        // An array or object parameter keeps its declared shape (`items`, nested `properties`) so
+        // the model sends a real list / object rather than text the tool must re-parse. Scalars
+        // (and anything the schema can't express) take the flat path below, unchanged.
+        //
         // An enum-typed parameter carries its allowed values in `validValues` regardless of the
         // `type` string — a JSON-Schema enum lowers to `type = "string"` with a sibling `enum`
         // array (captured into validValues by the scripted/MCP descriptor builders). Emit a Koog
@@ -126,8 +142,8 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
         // (`KoogToMcpExt.fillJsonSchema` renders it as `{"type":"string","enum":[…]}`), matching
         // the fidelity a Kotlin `@Serializable` enum param gets via `asToolType`. Fall through to
         // the primitive mapping when there's no enum.
-        type = validValues?.takeIf { it.isNotEmpty() }
-          ?.let { ToolParameterType.Enum(it.toTypedArray()) }
+        type = schemaTypes?.typeOfRootProperty(name)?.takeIf { it is ToolParameterType.List || it is ToolParameterType.Object }
+          ?: validValues?.takeIf { it.isNotEmpty() }?.let { ToolParameterType.Enum(it.toTypedArray()) }
           ?: parseKoogParameterType(type, strict),
       )
 
@@ -143,6 +159,20 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
           ToolParameterType.String
         }
       }
+
+    /**
+     * [toKoogParameterTypePreservingComposites] for a parameter of THIS tool: when the tool carries
+     * its full [TrailblazeToolDescriptor.inputSchema], an array or object parameter keeps its
+     * `items` / nested `properties` instead of the schema-less "list of strings" the mirror alone
+     * can name. Same rule as [toKoogToolDescriptor]; for the descriptor builders that pick their
+     * own parameter types (sampling, inner-loop analysis).
+     */
+    fun TrailblazeToolDescriptor.toKoogParameterTypePreservingComposites(
+      parameter: TrailblazeToolParameterDescriptor,
+    ): ToolParameterType =
+      inputSchema?.let(::JsonSchemaToolParameterTypes)?.typeOfRootProperty(parameter.name)
+        ?.takeIf { it is ToolParameterType.List || it is ToolParameterType.Object }
+        ?: parameter.toKoogParameterTypePreservingComposites()
 
     // Composite-aware string-mirror -> Koog type: preserves ARRAY/ENUM that parseKoogParameterType
     // flattens. ARRAY has no element type in the mirror, so it defaults to a list of strings.

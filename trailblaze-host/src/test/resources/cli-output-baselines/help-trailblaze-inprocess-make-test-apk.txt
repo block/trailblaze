@@ -80,5 +80,7 @@ startup-runtime out of the test APK.
                                and which holds a tools/ subtree. Repeat for
                                several. A tools/ of pre-built .bundle.js files
                                needs no tooling; TypeScript sources are bundled
-                               here, which needs esbuild.
+                               here, which needs esbuild. Its surveys/, if any,
+                               is packaged for ctx.surveys, and bundled with
+                               esbuild too.
   -V, --version              Print version information and exit.

@@ -5,8 +5,18 @@ provider_id: openai
 name: OpenAI
 auth:
   env_var: OPENAI_API_KEY
-default_model: gpt-5.6-terra
+default_model: gpt-6-luna
 models:
+  # First entry = the model a provider-only selection (`--llm-provider openai`, no model) picks,
+  # so it matches default_model.
+  - id: gpt-6-luna
+    context_length: 1050000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 0.10
+      output_per_million: 0.50
+      cached_input_per_million: 0.01
+
   - id: gpt-5.6-sol
     context_length: 1050000
     max_output_tokens: 128000

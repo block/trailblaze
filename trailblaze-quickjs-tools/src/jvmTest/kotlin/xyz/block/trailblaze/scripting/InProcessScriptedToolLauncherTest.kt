@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.scripting
 
+import ai.koog.serialization.kotlinx.KotlinxSerializer
+import ai.koog.serialization.kotlinx.toKoogJSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -7,6 +9,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -312,6 +317,102 @@ class InProcessScriptedToolLauncherTest {
     } finally {
       runCatching { derivedSchemaReg.dispose() }
       runCatching { exhaustiveReg.dispose() }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * The model adds a `reasoning` argument to most calls (the base prompt asks for it) and sometimes
+   * extra keys of its own. When a scripted tool's schema is its whole contract, those keys must
+   * reach neither the tool nor the recorded trail, on the repo path (replay and agent dispatch)
+   * and on Koog's own decode. A schema that isn't the whole contract keeps every key.
+   */
+  @Test
+  fun `undeclared arguments reach neither the tool nor the recording`(): Unit = runBlocking {
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl)).single()
+    val bundleJs = assertNotNull(
+      this@InProcessScriptedToolLauncherTest::class.java.classLoader
+        .getResourceAsStream(resolved.bundleResourcePath),
+    ).use { it.readBytes().decodeToString() }
+    val sessionDir = Files.createTempDirectory("inproc-undeclared-args-test").toFile()
+    val bundleFile = File(sessionDir, "openUrl.bundle.js").apply { writeText(bundleJs) }
+
+    suspend fun register(
+      exhaustive: Boolean,
+      schema: JsonObject = resolved.config.inputSchema,
+    ): Pair<TrailblazeToolRepo, LazyYamlScriptedToolRegistration> {
+      val repo = TrailblazeToolRepo.withDynamicToolSets()
+      val reg = LazyYamlScriptedToolRegistration.create(
+        toolConfig = resolved.config.copy(inputSchemaExhaustive = exhaustive, inputSchema = schema),
+        bundlePath = bundleFile,
+        toolRepo = repo,
+        sessionId = SessionId.sanitized("inproc-undeclared-args-$exhaustive-${schema.hashCode()}"),
+      )
+      repo.addDynamicTools(listOf(reg))
+      return repo to reg
+    }
+    val (exhaustiveRepo, exhaustiveReg) = register(exhaustive = true)
+    // An unknown-provenance schema that doesn't close itself may be incomplete, so it keeps every key.
+    val openSchema = JsonObject(resolved.config.inputSchema - "additionalProperties")
+    val (openRepo, openReg) = register(exhaustive = false, schema = openSchema)
+    // Compiled target YAML loses the provenance flag but keeps the analyzer's closed schema.
+    val (closedRepo, closedReg) = register(
+      exhaustive = false,
+      schema = JsonObject(openSchema + ("additionalProperties" to JsonPrimitive(false))),
+    )
+    // A root union accepts keys its top-level `properties` doesn't list, so it can't drop any.
+    val (unionRepo, unionReg) = register(
+      exhaustive = true,
+      schema = buildJsonObject { put("anyOf", JsonArray(listOf(resolved.config.inputSchema, buildJsonObject { put("type", "object") }))) },
+    )
+    val args = buildJsonObject {
+      put("url", "https://example.com")
+      put("reasoning", "Opening the page.")
+      put("modelNote", "text the model sent as a key")
+    }
+
+    try {
+      val replayed = exhaustiveRepo.toolCallToTrailblazeTool(openUrl.toolName, args.toString())
+      assertEquals(
+        setOf("url"),
+        (replayed as RawArgumentTrailblazeTool).rawToolArguments.keys,
+        "the repo path must drop keys the tool doesn't declare",
+      )
+      val recording = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(replayed)))
+      assertTrue("https://example.com" in recording, "the declared arg must be recorded; got:\n$recording")
+      assertFalse("reasoning" in recording || "modelNote" in recording, "undeclared args must not be recorded; got:\n$recording")
+
+      val fromKoog = exhaustiveReg.buildKoogTool { error("not executed") }
+        .decodeArgs(args.toKoogJSONObject(), KotlinxSerializer(Json))
+      assertEquals(
+        setOf("url"),
+        (fromKoog as RawArgumentTrailblazeTool).rawToolArguments.keys,
+        "Koog's decode must drop keys the tool doesn't declare",
+      )
+
+      assertEquals(
+        args.keys,
+        (openRepo.toolCallToTrailblazeTool(openUrl.toolName, args.toString()) as RawArgumentTrailblazeTool)
+          .rawToolArguments.keys,
+        "a schema that isn't the whole contract must keep every key",
+      )
+      assertEquals(
+        setOf("url"),
+        (closedRepo.toolCallToTrailblazeTool(openUrl.toolName, args.toString()) as RawArgumentTrailblazeTool)
+          .rawToolArguments.keys,
+        "a schema closed with additionalProperties: false must drop undeclared keys without the provenance flag",
+      )
+      assertEquals(
+        args.keys,
+        (unionRepo.toolCallToTrailblazeTool(openUrl.toolName, args.toString()) as RawArgumentTrailblazeTool)
+          .rawToolArguments.keys,
+        "a root union must keep every key",
+      )
+    } finally {
+      runCatching { exhaustiveReg.dispose() }
+      runCatching { openReg.dispose() }
+      runCatching { unionReg.dispose() }
+      runCatching { closedReg.dispose() }
       sessionDir.deleteRecursively()
     }
   }

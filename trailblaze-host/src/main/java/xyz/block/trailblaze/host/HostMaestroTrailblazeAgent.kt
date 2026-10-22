@@ -73,6 +73,13 @@ class HostMaestroTrailblazeAgent(
       traceId = traceId,
     )
 
+  // Keep the original batch together so the host logger can mask a launch credential reused
+  // by a later command. The runner still executes and logs commands one at a time.
+  override suspend fun runMaestroCommands(
+    maestroCommands: List<Command>,
+    traceId: TraceId?,
+  ): TrailblazeToolResult = executeMaestroCommands(maestroCommands, traceId)
+
   /**
    * Resolves the [nodeSelector] against the current iOS TrailblazeNode tree and taps
    * at the matched node's center point. Falls back to Maestro Orchestra if:

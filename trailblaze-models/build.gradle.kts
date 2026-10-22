@@ -116,6 +116,11 @@ trailblazeSdkDtsBundle {
   // they typecheck and run in the repo that owns the trailmap, not only in this one.
   sdkDtsSurveysBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/surveys.d.ts"))
   sdkSurveysRuntimeOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/surveys.js"))
+  // The sandbox build of the surveys subpath, for a survey bundled to run mid-trail by an
+  // install with no SDK source.
+  sdkSurveysInProcessRuntimeOutputFile.set(
+    layout.projectDirectory.file("../sdks/typescript/dist/surveys-in-process.js"),
+  )
 }
 
 configurations.all {
@@ -394,6 +399,7 @@ val copyTypescriptSdkResources by tasks.registering(Copy::class) {
   // Declaration + runtime pair for `@trailblaze/scripting/surveys`, same resolution.
   from(layout.projectDirectory.file("../sdks/typescript/dist/surveys.d.ts"))
   from(layout.projectDirectory.file("../sdks/typescript/dist/surveys.js"))
+  from(layout.projectDirectory.file("../sdks/typescript/dist/surveys-in-process.js"))
   into(layout.buildDirectory.dir("generated-resources/sdk/trails/config/sdk/typescript/dist"))
 }
 

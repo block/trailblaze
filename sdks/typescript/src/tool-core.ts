@@ -28,6 +28,7 @@ import type {
   TrailblazeTarget,
 } from "./context.js";
 import { createSessionEvents, type SessionEvents } from "./session-events.js";
+import { createSessionSurveys, type TrailblazeSurveys } from "./session-surveys.js";
 import { createToolHistory, type ToolHistory } from "./history.js";
 import type { TrailblazeSessionResources } from "./session-resources.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
@@ -121,6 +122,13 @@ export interface ToolContext {
   /** This session's event streams as they stand: query, count, wait for a record, or mark a point. */
   events: SessionEvents;
   /**
+   * The trailmaps' surveys, run over what is captured so far: `await ctx.surveys.<name>({ waitMs })`
+   * resolves on the first finding or when the time runs out, and never throws when it finds nothing:
+   * the tool decides what a result means.
+   * Lists every survey that does not set `requiresFinishedSession`.
+   */
+  surveys: TrailblazeSurveys;
+  /**
    * Every tool call and section of this session so far, recorded by the framework as they ran,
    * so complete when read. A `teardown` reads the trail section's calls to choose its cleanups.
    */
@@ -137,9 +145,8 @@ export interface EmptyInput { /* intentionally empty — see kdoc */ }
 
 /**
  * Structured-config spec for the typed `trailblaze.tool<I, O>(spec, handler)` overload. Carries
- * the namespaced framework hints (`supportedPlatforms`, `requiresContext`, `requiresHost`,
- * `supportedDrivers`) the build-time analyzer (`ScriptedToolDefinitionAnalyzer`) extracts from
- * each call site.
+ * the namespaced framework hints (`supportedPlatforms`, `requiresHost`, `supportedDrivers`) the
+ * build-time analyzer (`ScriptedToolDefinitionAnalyzer`) extracts from each call site.
  *
  * **`description` precedence — where the LLM-facing description comes from.** A typed tool's
  * description is resolved in this order, most-authoritative first:
@@ -169,7 +176,10 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
   description?: string;
   /** Platforms this tool may register on. Empty / omitted = all platforms. */
   supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
-  /** UX hint: this tool depends on a live driver context. NOT a registration filter. */
+  /**
+   * @deprecated Ignored: every handler already gets `ctx`. Delete it from your spec; it will be
+   * removed in a future release.
+   */
   requiresContext?: boolean;
   /** Host-only — skip registration on-device (Node/Bun APIs). Read before `_meta` on-device. */
   requiresHost?: boolean;
@@ -241,36 +251,36 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
    */
   inputSchema?: Record<string, unknown>;
   /**
-   * Marks this tool as a **trailhead**: a deterministic bootstrap that takes a device from a
-   * blank slate to a known app state (clear data, launch, sign in, land on a screen) — step 0 of
-   * a trail. Presence of this field is what makes the tool a trailhead; `to`/`dynamic` mirror
-   * the YAML `*.trailhead.yaml` sidecar's `trailhead:` block (`TrailheadMetadata` in
-   * `ToolYamlConfig.kt`) field-for-field, so a TS-authored tool no longer needs a companion
-   * `.trailhead.yaml` just to register its navigation metadata.
+   * Marks this tool as a **trailhead**. Prefer `trailblaze.trailhead(spec, handler)`, which needs
+   * no marker; this field stays so existing `trailblaze.tool({ trailhead: {...} }, ...)` tools
+   * keep working. Any `trailhead` object, even `{}`, makes the tool a trailhead.
    *
    * Like [description] this is a primary-descriptor field, NOT a `_meta` gate: it doesn't affect
    * registration or dispatch, so it's read directly off the analyzer-captured spec by discovery
    * surfaces (`toolbox trailheads`, the Trail Runner "Use as Trailhead" picker) rather than
    * projected into the namespaced `trailblaze/...` `_meta` keys the runtime reads to gate
    * execution.
+   *
+   * @deprecated Use `trailblaze.trailhead(spec, handler)`.
    */
   trailhead?: TrailheadSpec<TInput>;
 }
 
 /**
- * `trailhead` field shape for [TrailblazeTypedToolSpec]. 1:1 with the Kotlin
- * `TrailheadMetadata` data class (`ToolYamlConfig.kt`) that backs `*.trailhead.yaml`'s
- * `trailhead:` block — same two fields, same mutual-exclusion contract.
+ * `trailhead` field shape for [TrailblazeTypedToolSpec]. Mirrors the Kotlin `TrailheadMetadata`
+ * (`ToolYamlConfig.kt`) that backs a `*.trailhead.yaml` file's `trailhead:` block.
  */
 export interface TrailheadSpec<TInput = Record<string, unknown>> {
   /**
-   * The single waypoint this trailhead lands on. Required unless [dynamic] is true — a trailhead
-   * with neither is dropped with a warning (not a real bootstrap destination).
+   * The waypoint this trailhead usually lands on. Optional and never checked: it only draws this
+   * trailhead's edge on the waypoint graph. To fail when the app lands somewhere else, assert the
+   * waypoint in the handler.
    */
   to?: string;
   /**
-   * Marks a trailhead whose destination varies by input (e.g. a deep-link launcher), so no
-   * single `to:` waypoint applies. Mutually exclusive with [to]. Defaults to `false`.
+   * Ignored. A trailhead no longer has to name a waypoint, so there is nothing to opt out of.
+   *
+   * @deprecated Delete it.
    */
   dynamic?: boolean;
   /**
@@ -284,6 +294,35 @@ export interface TrailheadSpec<TInput = Record<string, unknown>> {
    * full setup. Never copy secrets into `reason` or `state`.
    */
   teardown?: TeardownHandler<TInput, ToolContext>;
+}
+
+/**
+ * Spec for `trailblaze.trailhead(spec, handler)`: every [TrailblazeTypedToolSpec] field, plus the
+ * trailhead's optional [to] and [teardown] at the top level.
+ *
+ * A **trailhead** is a deterministic bootstrap that takes a device from any state to a known app
+ * state (clear data, launch, sign in, land on a screen): step 0 of a trail.
+ */
+export interface TrailblazeTrailheadSpec<TInput = Record<string, unknown>>
+  extends Omit<TrailblazeTypedToolSpec<TInput>, "trailhead"> {
+  /** See [TrailheadSpec.to]: optional, graph-only, never checked. */
+  to?: string;
+  /** See [TrailheadSpec.teardown]. */
+  teardown?: TeardownHandler<TInput, ToolContext>;
+}
+
+/**
+ * The `trailblaze.tool` spec a `trailblaze.trailhead` spec stands for. Both SDK profiles build
+ * `trailblaze.trailhead` on this, so a trailhead is a typed tool with a `trailhead` block.
+ */
+export function trailheadToolSpec<TInput>(
+  spec: TrailblazeTrailheadSpec<TInput> = {},
+): TrailblazeTypedToolSpec<TInput> {
+  const { to, teardown, ...toolSpec } = spec;
+  const trailhead: TrailheadSpec<TInput> = {};
+  if (to !== undefined) trailhead.to = to;
+  if (teardown !== undefined) trailhead.teardown = teardown;
+  return { ...toolSpec, trailhead };
 }
 
 /**
@@ -425,16 +464,25 @@ export function defineTypedTool<TInput, TResult>(
     // handlers can consistently branch on `ctx.device.driverType`, even when invoked by an older
     // on-device QuickJS host that only emitted the deprecated `driver` alias.
     const trailhead = createTrailheadRecorder(legacyCtx?.previousRun);
+    const events = createSessionEvents(client.host);
+    const device = normalizeDevice(legacyCtx?.device);
     const toolContext: ToolContext = {
       tools: client.tools,
       host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
       memory,
-      device: normalizeDevice(legacyCtx?.device),
+      device,
       target: legacyCtx?.target,
       session: legacyCtx?.session,
       previousRun: trailhead.previousRun,
       trailhead: trailhead.context,
-      events: createSessionEvents(client.host),
+      events,
+      surveys: createSessionSurveys(client.host, events, {
+        sessionId: legacyCtx?.sessionId,
+        platform: device?.platform,
+        driver: device?.driverType,
+        target: legacyCtx?.target?.id,
+        appId: legacyCtx?.target?.appId,
+      }),
       history: createToolHistory(client.host),
     };
     let out: TResult;
@@ -478,16 +526,25 @@ export function defineTypedTool<TInput, TResult>(
       // `previousRun` belongs to the trailhead's own run, not its teardown, and notes written now
       // would land after the trail they describe — so teardown gets no hand-off and an inert
       // recorder whose report is discarded.
+      const events = createSessionEvents(client.host);
+      const device = normalizeDevice(legacyCtx?.device);
       const toolContext: ToolContext = {
         tools: client.tools,
         host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
         memory,
-        device: normalizeDevice(legacyCtx?.device),
+        device,
         target: legacyCtx?.target,
         session: legacyCtx?.session,
         previousRun: null,
         trailhead: createTrailheadRecorder(undefined).context,
-        events: createSessionEvents(client.host),
+        events,
+        surveys: createSessionSurveys(client.host, events, {
+          sessionId: legacyCtx?.sessionId,
+          platform: device?.platform,
+          driver: device?.driverType,
+          target: legacyCtx?.target?.id,
+          appId: legacyCtx?.target?.appId,
+        }),
         history: createToolHistory(client.host),
       };
       const result = await teardown(

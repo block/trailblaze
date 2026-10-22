@@ -1128,8 +1128,8 @@ object TrailblazeProjectConfigLoader {
   private const val TRAILMAP_SCRIPTED_TOOLS_DIR = "tools"
 
   /**
-   * Line-anchored regex matching the `export const <name> = trailblaze.tool<…>(…)` binding
-   * shape the analyzer's [extract-tool-defs.mjs] shim extracts. The `(?m)` flag scopes
+   * Line-anchored regex matching the `export const <name> = trailblaze.tool<…>(…)` (or
+   * `trailblaze.trailhead<…>(…)`) binding shape the analyzer's [extract-tool-defs.mjs] shim extracts. The `(?m)` flag scopes
    * `^` to line starts, and the optional leading whitespace lets indented modules match —
    * but a `//`-prefixed comment line can't, since `//` doesn't satisfy `\s*export`. The
    * `[<(]` tail accepts both the typed (`<I>(...)`) and the untyped (`(...)`) overloads.
@@ -1140,7 +1140,7 @@ object TrailblazeProjectConfigLoader {
    * surface a "no typed declaration found" failure on every workspace compile.
    */
   private val TYPED_TOOL_BINDING_PATTERN =
-    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.tool\s*[<(]""")
+    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
 
   /**
    * Filename suffixes that mark an operational tool YAML under `<trailmap>/tools/` rather than a

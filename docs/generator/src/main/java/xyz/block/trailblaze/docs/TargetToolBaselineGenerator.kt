@@ -6,7 +6,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.config.AppTargetCompanion
@@ -23,10 +22,12 @@ import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.Header
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor as toKoogToolDescriptorForTrailblazeDescriptor
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.allToolNameStrings
@@ -522,12 +523,12 @@ class TargetToolBaselineGenerator(
         val config = detail.config
         val metaSurface = (config.meta?.get("trailblaze/surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
         if (!config.surfaceToLlm || !metaSurface) return null
-        // Top-level properties only: the runtime flattens a scripted tool's object and array params
-        // to strings (`toKoogToolDescriptor(strict = false)`), so nested descriptions never reach the LLM.
-        val properties = config.inputSchema["properties"] as? JsonObject
-        listOfNotNull(config.description) + properties.orEmpty().values.mapNotNull { property ->
-          ((property as? JsonObject)?.get("description") as? JsonPrimitive)?.contentOrNull
-        }
+        // The runtime's own projection (`toKoogToolDescriptor(strict = false)`): an array or object
+        // param keeps its element / nested field descriptions, which the LLM receives too.
+        val descriptor = LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config)
+          .toKoogToolDescriptorForTrailblazeDescriptor(strict = false)
+        listOfNotNull(config.description) +
+          (descriptor.requiredParameters + descriptor.optionalParameters).flatMap { it.descriptionTexts() }
       }
     }
     val chars = texts.sumOf { it.length }

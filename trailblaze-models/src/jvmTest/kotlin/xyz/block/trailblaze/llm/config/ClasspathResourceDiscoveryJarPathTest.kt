@@ -43,10 +43,52 @@ class ClasspathResourceDiscoveryJarPathTest {
     }
   }
 
-  private fun jarWith(dirName: String, vararg entries: String): File {
-    val dir = File(createTempDirectory("classpath-jar-path-test").toFile().also { tempDirs += it }, dirName)
-    dir.mkdirs()
-    val jar = File(dir, "trailblaze.jar")
+  @Test
+  fun `a scan finds only the directory it names, and only files`() {
+    val jar = jarWith(
+      dirName = "tools",
+      "trails/config/trailmaps/clock/trailmap.yaml",
+      "trails/config/trailmaps/clock/waypoints/home.waypoint.yaml",
+      "trails/config/trailmaps-old/wikipedia/trailmap.yaml",
+      "trails/config/trailmap.yaml",
+    )
+
+    withClasspath(jar) {
+      assertEquals(
+        setOf("clock/trailmap.yaml", "clock/waypoints/home.waypoint.yaml"),
+        ClasspathResourceDiscovery.discoverFilenamesRecursive("trails/config/trailmaps", ""),
+      )
+    }
+  }
+
+  @Test
+  fun `a jar rewritten in place is scanned again`() {
+    val jar = jarWith(dirName = "tools", "trails/config/toolsets/web_core.toolset.yaml")
+    withClasspath(jar) {
+      assertEquals(
+        setOf("web_core.toolset.yaml"),
+        ClasspathResourceDiscovery.discoverFilenames("trails/config/toolsets", ".toolset.yaml"),
+      )
+    }
+
+    jarWith(
+      dirName = "tools",
+      "trails/config/toolsets/web_core.toolset.yaml",
+      "trails/config/toolsets/web_extra.toolset.yaml",
+      into = jar,
+    )
+    withClasspath(jar) {
+      assertEquals(
+        setOf("web_core.toolset.yaml", "web_extra.toolset.yaml"),
+        ClasspathResourceDiscovery.discoverFilenames("trails/config/toolsets", ".toolset.yaml"),
+      )
+    }
+  }
+
+  private fun jarWith(dirName: String, vararg entries: String, into: File? = null): File {
+    val jar = into ?: File(createTempDirectory("classpath-jar-path-test").toFile().also { tempDirs += it }, dirName)
+      .also { it.mkdirs() }
+      .resolve("trailblaze.jar")
     // Directory entries too, as a built JAR has them: a classloader only resolves a directory
     // resource through one.
     val dirs = entries.flatMap { name ->

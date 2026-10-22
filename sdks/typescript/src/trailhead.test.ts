@@ -3,7 +3,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { tool } from "./tool.js";
+import { trailblaze as inProcess } from "./in-process.js";
+import { trailheadToolSpec } from "./tool-core.js";
+import { tool, trailhead } from "./tool.js";
 import { TRAILHEAD_REPORT_ON_ERROR } from "./trailhead.js";
 
 type Result = { content: unknown[]; _meta?: { trailblaze?: { trailhead?: unknown; memoryDelta?: unknown } } };
@@ -25,7 +27,7 @@ function hostClient(calls: { name: string; args: unknown }[] = [], answer: unkno
 describe("ctx.previousRun and ctx.trailhead in a handler", () => {
   test("receives previousRun from the envelope and reports the reuse + notes on the result", async () => {
     let seen: { sessionId?: string; reason?: string; state?: unknown } | null = null;
-    const def = tool<{ email: string }>({ trailhead: { dynamic: true } } as never, async (_input, ctx) => {
+    const def = trailhead<{ email: string }>(async (_input, ctx) => {
       const last = ctx.previousRun;
       seen = last && { sessionId: last.sessionId, reason: last.reason, state: last.state };
       ctx.trailhead.note({ created: { kind: "item", id: "i-7" } });
@@ -173,13 +175,13 @@ describe("trailhead.teardown", () => {
   });
 
   test("a result without a reason is rejected", async () => {
-    const def = tool({ trailhead: { dynamic: true, teardown: async () => ({ reusable: true }) as never } } as never, async () => "ok");
+    const def = trailhead({ teardown: async () => ({ reusable: true }) as never }, async () => "ok");
     await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).rejects.toThrow(/reason/);
   });
 
   test("an unknown outcome from the host is rejected before teardown runs", async () => {
     let ran = false;
-    const def = tool({ trailhead: { dynamic: true, teardown: async () => { ran = true; return { reusable: false, reason: "x" }; } } } as never, async () => "ok");
+    const def = trailhead({ teardown: async () => { ran = true; return { reusable: false, reason: "x" }; } }, async () => "ok");
     await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "exploded", notes: [] })).rejects.toThrow(/outcome/);
     expect(ran).toBe(false);
   });
@@ -188,16 +190,13 @@ describe("trailhead.teardown", () => {
     const calls: { name: string; args: unknown }[] = [];
     const answer = [{ timeMs: 5, data: { url: "/v1/items" } }];
     let got: unknown;
-    const def = tool(
+    const def = trailhead(
       {
-        trailhead: {
-          dynamic: true,
-          teardown: async (_args, _ctx, trailRun) => {
-            got = await trailRun.events.query("network", { match: { method: "POST", url: /\/v1\/items/i }, limit: 5 });
-            return { reusable: false, reason: "made items" };
-          },
+        teardown: async (_args, _ctx, trailRun) => {
+          got = await trailRun.events.query("network", { match: { method: "POST", url: /\/v1\/items/i }, limit: 5 });
+          return { reusable: false, reason: "made items" };
         },
-      } as never,
+      },
       async () => "ok",
     );
     await def.teardown!({}, {} as never, hostClient(calls, answer), { outcome: "passed", notes: [] });
@@ -208,5 +207,52 @@ describe("trailhead.teardown", () => {
         args: { stream: "network", match: { method: "POST", url: { $regex: "\\/v1\\/items", $flags: "i" } }, limit: 5 },
       },
     ]);
+  });
+});
+
+describe("trailblaze.trailhead", () => {
+  const teardown = async () => ({ reusable: false, reason: "made items" });
+
+  test("is a typed tool whose spec teardown becomes the definition's teardown", async () => {
+    const def = trailhead<{ email: string }>({ supportedPlatforms: ["android"], teardown }, async ({ email }) => `hi ${email}`);
+    expect(await def({ email: "x" }, {} as never, hostClient())).toBe("hi x");
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+      reusable: false,
+      reason: "made items",
+    });
+  });
+
+  test("takes a bare handler, with no teardown member", async () => {
+    const def = trailhead(async () => "ok");
+    expect(await def({}, {} as never, hostClient())).toBe("ok");
+    expect(def.teardown).toBeUndefined();
+  });
+
+  test("stands for a tool spec with the trailhead block filled from to and teardown", () => {
+    expect(trailheadToolSpec({ supportedPlatforms: ["ios"], to: "app/home", teardown })).toEqual({
+      supportedPlatforms: ["ios"],
+      trailhead: { to: "app/home", teardown },
+    });
+    expect(trailheadToolSpec()).toEqual({ trailhead: {} });
+  });
+
+  test("rejects a spec with no handler", () => {
+    expect(() => (trailhead as (spec: unknown) => unknown)({ to: "app/home" })).toThrow(/handler must be a function/);
+  });
+
+  test("the in-process profile has it too", async () => {
+    const def = inProcess.trailhead({ teardown }, async () => "ok");
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+      reusable: false,
+      reason: "made items",
+    });
+  });
+
+  test("trailblaze.tool with a trailhead block still carries teardown", async () => {
+    const def = tool({ trailhead: { teardown } }, async () => "ok");
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+      reusable: false,
+      reason: "made items",
+    });
   });
 });

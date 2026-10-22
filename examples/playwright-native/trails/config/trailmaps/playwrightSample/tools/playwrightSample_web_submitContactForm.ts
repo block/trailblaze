@@ -22,7 +22,7 @@ export interface SubmitContactFormArgs {
  * Fill out the sample contact form, submit it, and verify the success banner.
  */
 export const playwrightSample_web_submitContactForm = trailblaze.tool<SubmitContactFormArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, PLAYWRIGHT_SAMPLE_HOME);
     const name = nonEmptyString(args.name, "Trailblaze Example");

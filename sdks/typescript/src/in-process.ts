@@ -22,9 +22,11 @@ import {
   type EmptyInput,
   type ToolContext,
   type TrailblazeHost,
+  type TrailblazeTrailheadSpec,
   type TrailblazeTypedToolSpec,
   type TrailheadSpec,
   type TypedToolDefinition,
+  trailheadToolSpec,
 } from "./tool-core.js";
 
 // Full lightweight authoring surface — re-exported so this slim entry is a drop-in for
@@ -78,6 +80,13 @@ export type {
   TrailblazeToolEntry,
   TrailblazeToolMap,
 } from "./client.js";
+export type {
+  SurveyRunFinding,
+  SurveyRunOptions,
+  SurveyRunResult,
+  TrailblazeSurveyMap,
+  TrailblazeSurveys,
+} from "./session-surveys.js";
 export {
   captureViewHierarchy,
   ConditionalActionFailedError,
@@ -162,6 +171,28 @@ export function tool(
 }
 
 /**
+ * `trailblaze.trailhead()` for the in-process profile: a typed tool that is also a trailhead.
+ * Same overloads as the full profile; see `tool.ts`.
+ */
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  spec: TrailblazeTrailheadSpec<TInput>,
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead(arg0: unknown, arg1?: unknown): TypedToolDefinition<unknown, unknown> {
+  const [spec, handler] = typeof arg0 === "function" ? [undefined, arg0] : [arg0, arg1];
+  if (typeof handler !== "function") {
+    throw new TypeError("trailblaze.trailhead(spec, handler): handler must be a function.");
+  }
+  return tool(
+    trailheadToolSpec(spec as TrailblazeTrailheadSpec<unknown> | undefined),
+    handler as (input: unknown, ctx: ToolContext) => Promise<unknown>,
+  );
+}
+
+/**
  * `trailblaze.run()` stub. The in-process runtime never starts an MCP stdio server — in-process
  * tools are registered by the synthesized bundle wrapper, not by `run()`. Throws so an author who
  * copied a subprocess toolset's `await trailblaze.run()` tail gets a clear pointer rather than a
@@ -176,11 +207,12 @@ export async function run(): Promise<void> {
 
 /**
  * Namespace bundle authors import as `trailblaze` on the in-process path. Same shape as the full
- * profile (`{ tool, run }`) so author code is profile-agnostic; the slim members just throw for
+ * profile (`{ tool, trailhead, run }`) so author code is profile-agnostic; the slim members just throw for
  * the subprocess-only forms.
  */
 export const trailblaze = {
   tool,
+  trailhead,
   run,
 };
 
@@ -195,5 +227,6 @@ export type {
   EmptyInput,
   TypedToolDefinition,
   TrailblazeTypedToolSpec,
+  TrailblazeTrailheadSpec,
   TrailheadSpec,
 };

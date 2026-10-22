@@ -256,6 +256,10 @@ object TrailblazeCli {
    * `tool web_navigate` happened to work because the JVM-side resolution
    * landed differently — the --yaml form did not.)
    *
+   * `selector` (`suggest` / `match`) only reads session logs, in about 10ms a call — JVM
+   * startup is nearly all of its cost, and it is called in loops. It resolves the log paths
+   * it's given against [CliCallerContext.callerCwd], not the daemon's cwd.
+   *
    * Some heavier commands (`step`, `verify`) are not on this list — they take
    * longer than the cold-start savings would buy, and their AI-loop state
    * (multi-turn LLM calls, streaming progress) is messier to reason about
@@ -266,7 +270,7 @@ object TrailblazeCli {
    * decodes stdout/stderr as NUL-delimited fields rather than through command
    * substitution, preserving trailing newlines and partial-line output byte-for-byte.
    */
-  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config", "tool")
+  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config", "tool", "selector")
 
   internal fun readsCallerStdin(args: List<String>): Boolean =
     args.firstOrNull() == "tool" &&
@@ -462,11 +466,19 @@ object TrailblazeCli {
     return CliExecResponse(
       stdout = transcript.textFor(CliExecStream.STDOUT),
       stderr = transcript.textFor(CliExecStream.STDERR),
-      exitCode = exitCode,
+      exitCode = exitCodeAfterCapture(exitCode, transcript.isTruncated),
       forwarded = true,
       transcript = transcript.chunks(),
     )
   }
+
+  /**
+   * A command whose output the daemon cut off at [MAX_CAPTURE_BYTES] did not deliver what it
+   * reports: a JSON document or a `--batch` answer file is unusable once the tail is gone. So a
+   * success becomes [TrailblazeExitCode.INFRA_FAILED]; a failure keeps its own code.
+   */
+  internal fun exitCodeAfterCapture(exitCode: Int, truncated: Boolean): Int =
+    if (truncated && exitCode == TrailblazeExitCode.SUCCESS.code) TrailblazeExitCode.INFRA_FAILED.code else exitCode
 
   /**
    * Cap on captured stdout/stderr per forwarded CLI invocation. A pathological
@@ -521,6 +533,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     ProfileCommand::class,
     OtelCommand::class,
     WaypointCommand::class,
+    SelectorCommand::class,
     ResultsCommand::class,
     ConfigCommand::class,
     DeviceCommand::class,
@@ -706,7 +719,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "loop", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint"),
+      listOf("run", "loop", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint", "selector"),
     ),
     Group(
       "Setup:",

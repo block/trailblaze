@@ -1,5 +1,10 @@
 package xyz.block.trailblaze.yaml
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.devices.compoundClassifier
 import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -14,6 +19,13 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+
+private fun JsonElement.hasRedactionMarker(): Boolean = when (this) {
+  is JsonArray -> any { it.hasRedactionMarker() }
+  is JsonObject -> values.any { it.hasRedactionMarker() }
+  is JsonPrimitive -> isString && content.contains(REDACTED_TOOL_ARG_PLACEHOLDER)
+  else -> false
+}
 
 /**
  * Generates a recording YAML string from a list of [TrailblazeLog] entries.
@@ -343,13 +355,31 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           // overlap, keyed on the window's start index — see [assignToolLogsToWindows]). A call that
           // failed live is never recorded: replaying it fails deterministically, even when the agent
           // recovered with a different call and the step passed.
-          val toolLogsInWindow = toolIndicesByWindow[currentLogIndex].orEmpty()
+          val assignedToolLogs = toolIndicesByWindow[currentLogIndex].orEmpty()
             .map { logs[it] as TrailblazeLog.TrailblazeToolLog }
+          val toolLogsInWindow = assignedToolLogs
             .filter { it.isRecordable && it.successful }
-          val selectedToolLogs = toolLogsInWindow
-            .filter { it.isTopLevelToolCall }
-            .ifEmpty { dropNestedToolCalls(toolLogsInWindow, deviceOffsets) }
+          val selectedToolLogs = (if (assignedToolLogs.any { it.isTopLevelToolCall }) {
+            selectDirectToolLogs(assignedToolLogs, deviceOffsets)
+          } else {
+            dropNestedToolCalls(toolLogsInWindow, deviceOffsets)
+          })
             .let { dedupeLayerDuplicates(it) }
+          // A failed batch can already have launched the app before a later command failed.
+          // Only a successful parent actually retained in the recording can cover that effect.
+          check(assignedToolLogs.none { failed ->
+            !failed.successful && failed.toolName == "mobile_maestro" &&
+              failed.authoredTrailblazeTool.raw.hasRedactionMarker() &&
+              !selectedToolLogs.coversFailedNestedLaunch(failed, assignedToolLogs, deviceOffsets)
+          }) {
+            "Cannot record a failed mobile_maestro launch with literal arguments; use memory references."
+          }
+          // A masked literal launch cannot be replayed. Refuse the session recording rather
+          // than silently saving only later taps, which would create a broken partial recording.
+          check(selectedToolLogs.none { it.toolName == "mobile_maestro" &&
+            it.authoredTrailblazeTool.raw.hasRedactionMarker() }) {
+            "Cannot record a mobile_maestro launch with literal arguments; use memory references."
+          }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.authoredTrailblazeTool, log.toolName) }
           val windowTools = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
@@ -431,7 +461,20 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           // asynchronously and land outside the objective window in the sorted log list. A tool
           // log that IS assigned to a window is consumed there and must not be re-emitted here.
           val consumedByWindow = currentLogIndex in toolWindowAssignment
+          check(consumedByWindow || currentLog.successful || currentLog.toolName != "mobile_maestro" ||
+            !currentLog.authoredTrailblazeTool.raw.hasRedactionMarker() ||
+            logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+              .filter { it.isRecordable && it.successful }
+              .coversFailedNestedLaunch(
+                currentLog, logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>(), deviceOffsets,
+              )) {
+            "Cannot record a failed mobile_maestro launch with literal arguments; use memory references."
+          }
           if (!consumedByWindow && currentLog.isRecordable && currentLog.successful) {
+            check(currentLog.toolName != "mobile_maestro" ||
+              !currentLog.authoredTrailblazeTool.raw.hasRedactionMarker()) {
+              "Cannot record a mobile_maestro launch with literal arguments; use memory references."
+            }
             val wrapper = wrapTrailblazeTool(currentLog.authoredTrailblazeTool, currentLog.toolName)
             val candidateFingerprint = if (currentLog.isVerification) {
               fingerprintForDedup(wrapper, trailblazeYaml)
@@ -698,6 +741,133 @@ private fun fingerprintForDedup(
 }
 
 /**
+ * A direct MCP step logs an outer top-level wrapper around each dispatch. Choose one replayable
+ * representation per invocation by trace and execution span, independent of log order.
+ * Native iOS Maestro has no inner log; host/Android can provide authored/resolved provenance.
+ */
+private fun selectDirectToolLogs(
+  logs: List<TrailblazeLog.TrailblazeToolLog>,
+  offsets: TrailblazeDeviceClockOffsets?,
+): List<TrailblazeLog.TrailblazeToolLog> {
+  val outers = logs.withIndex().filter { it.value.isTopLevelToolCall }
+  val innerByOuter = mutableMapOf<Int, MutableList<TrailblazeLog.TrailblazeToolLog>>()
+  for ((index, candidate) in logs.withIndex()) {
+    if (candidate.isTopLevelToolCall || !candidate.isRecordable || !candidate.successful) continue
+    val sameTrace = outers.filter { it.value.traceId == candidate.traceId }
+    val candidateTime = candidate.normalizedMs(offsets)
+    // New direct dispatches have one trace per invocation. Older saved batches reused one
+    // trace, so prefer the invocation whose execution span contains the child; a child whose
+    // device clock is slightly behind can still use the closest start as a fallback.
+    val containing = sameTrace.filter { outer ->
+      val start = outer.value.normalizedMs(offsets)
+      start <= candidateTime && start + outer.value.durationMs >= candidateTime
+    }
+    val containingFamily = containing.filter { sameDirectToolFamily(it.value.toolName, candidate.toolName) }
+    val clocksUncertain = offsets == null && (candidate.clock == null ||
+      sameTrace.any { it.value.clock == null || it.value.clock != candidate.clock })
+    val nearFamily = sameTrace.filter { outer ->
+      sameDirectToolFamily(outer.value.toolName, candidate.toolName) &&
+        kotlin.math.abs(outer.value.normalizedMs(offsets) - candidateTime) <= 20L
+    }
+    val ambiguous = clocksUncertain && containing.isNotEmpty() && nearFamily.any { it !in containing }
+    if (ambiguous) {
+      val plausible = (containing + nearFamily).distinct()
+      // A legacy executor can log an exact duplicate of an already-replayable outer action.
+      // Both outers will be saved, so that redundant inner needs no owner. Never discard an
+      // inner that carries unique args, a selector expansion, or safe launch provenance.
+      val duplicateOfSafeOuter = plausible.all { outer ->
+        outer.value.successful && outer.value.isRecordable &&
+          !outer.value.authoredTrailblazeTool.raw.hasRedactionMarker()
+      } && plausible.any { outer ->
+        outer.value.toolName == candidate.toolName &&
+          outer.value.authoredTrailblazeTool.argsFingerprint() ==
+            candidate.authoredTrailblazeTool.argsFingerprint()
+      }
+      if (duplicateOfSafeOuter) continue
+    }
+    // A shared-trace child just before one invocation can also appear inside the previous
+    // invocation when device and host clocks lack anchors. Both owners are plausible; refuse
+    // that legacy recording instead of duplicating or dropping an action. Comparable clocks
+    // need no tolerance and retain strict span ownership even for millisecond-long calls.
+    val choices = when {
+      sameTrace.size <= 1 -> sameTrace
+      ambiguous ->
+        error("Cannot record ambiguous direct tool invocations from a shared trace")
+      containingFamily.isNotEmpty() -> containingFamily
+      containing.isNotEmpty() -> containing
+      clocksUncertain && nearFamily.size == 1 -> nearFamily
+      clocksUncertain && nearFamily.size > 1 ->
+        error("Cannot record ambiguous direct tool invocations from a shared trace")
+      else -> sameTrace
+    }
+    val outer = choices.minWithOrNull(compareBy<IndexedValue<TrailblazeLog.TrailblazeToolLog>>(
+      { kotlin.math.abs(it.value.normalizedMs(offsets) - candidateTime) },
+      { if (sameDirectToolFamily(it.value.toolName, candidate.toolName)) 0 else 1 },
+      { kotlin.math.abs(it.index - index) },
+    )) ?: continue
+    innerByOuter.getOrPut(outer.index) { mutableListOf() } += candidate
+  }
+  val selected = mutableListOf<TrailblazeLog.TrailblazeToolLog>()
+  for ((index, outer) in outers) {
+    val inner = innerByOuter[index].orEmpty()
+    if (!outer.successful) {
+      selected += dropNestedToolCalls(inner.filterNot { it.isVerification }, offsets)
+      continue
+    }
+    val safeMaestro = if (outer.toolName == "mobile_maestro" &&
+      outer.authoredTrailblazeTool.raw.hasRedactionMarker()) {
+      inner.lastOrNull { it.toolName == "mobile_maestro" && it.rawTrailblazeTool != null &&
+        !it.authoredTrailblazeTool.raw.hasRedactionMarker() }
+      } else null
+    when {
+      safeMaestro != null -> selected += safeMaestro
+      outer.isRecordable -> selected += outer
+      else -> selected += dropNestedToolCalls(inner, offsets)
+    }
+  }
+  return selected
+}
+
+private fun sameDirectToolFamily(outer: String, inner: String): Boolean =
+  outer == inner || inner.startsWith(outer) || when (outer) {
+    "type" -> inner == "inputText"
+    "tap" -> inner.startsWith("tapOn")
+    "assertVisible" -> inner == "assertVisibleBySelector"
+    else -> false
+  }
+
+/** A failed nested launch is safe to omit only when its successful parent is saved instead. */
+private fun List<TrailblazeLog.TrailblazeToolLog>.coversFailedNestedLaunch(
+  failed: TrailblazeLog.TrailblazeToolLog,
+  allToolLogs: List<TrailblazeLog.TrailblazeToolLog>,
+  offsets: TrailblazeDeviceClockOffsets?,
+): Boolean {
+  val possibleParents = allToolLogs.filter { parent ->
+    parent !== failed && parent.traceId == failed.traceId &&
+      parent.durationMs > failed.durationMs
+  }
+  if (any { parent -> parent in possibleParents && run {
+      val parentStart = parent.normalizedMs(offsets)
+      val failedStart = failed.normalizedMs(offsets)
+      parentStart <= failedStart && parentStart + parent.durationMs >= failedStart + failed.durationMs
+    } }) return true
+  // Disk-fallback logs can lack host ingestion anchors. A non-recordable child with a unique
+  // recorded invocation parent still has exact trace provenance even when its device clock
+  // cannot be aligned to the host span. Ambiguous shared-trace batches fail closed.
+  val outermostParents = possibleParents.filter { candidate ->
+    possibleParents.none { other ->
+      other !== candidate && other.clock == candidate.clock &&
+        other.durationMs > candidate.durationMs &&
+        other.normalizedMs(offsets) <= candidate.normalizedMs(offsets) &&
+        other.normalizedMs(offsets) + other.durationMs >=
+          candidate.normalizedMs(offsets) + candidate.durationMs
+    }
+  }
+  return offsets == null && !failed.isRecordable && failed.traceId != null &&
+    outermostParents.singleOrNull()?.let { parent -> parent.successful && parent in this } == true
+}
+
+/**
  * Drops tool logs that are nested dispatches INSIDE another logged tool call — the `ctx.tools.*`
  * sub-calls a composite (scripted) tool makes while it runs. Only the outermost call is the
  * replayable recording: re-emitting the internals alongside it would replay every piece twice and
@@ -707,7 +877,7 @@ private fun fingerprintForDedup(
  * Detection is by execution-span containment ([TrailblazeLog.TrailblazeToolLog.timestamp] +
  * `durationMs`): a nested call's span lies inside its parent's strictly-longer span. Span math is
  * the signal because only the MCP step path stamps `isTopLevelToolCall` — runner/replay paths never
- * set it (which is why this runs on the `ifEmpty` fallback), and it also holds for logs recorded
+ * set it (which is why this runs on the no-top-level fallback), and it also holds for logs recorded
  * before any emitter stamped the flag. The strictly-longer requirement means identical spans (layer
  * duplicates, collapsed separately by [dedupeLayerDuplicates]) never drop each other.
  *

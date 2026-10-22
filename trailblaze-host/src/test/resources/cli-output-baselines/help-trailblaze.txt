@@ -39,6 +39,8 @@ Trailblaze - AI-powered device automation
                  optionally posted to an endpoint).
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
+  selector     Suggest and check element selectors against captured screens, or
+                 the device's (--live).
   results      Query the persisted test-result index for a test case.
   config       View and set configuration (target app, device defaults, AI
                  provider)

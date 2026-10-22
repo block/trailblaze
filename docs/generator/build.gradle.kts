@@ -36,6 +36,9 @@ dependencies {
   // out (or the CLI command surface gets a lighter-weight reflection home), this dep can
   // be dropped.
   implementation(project(":trailblaze-host"))
+  // Scripted tools' LLM descriptors (what the token estimate counts) are built by the same
+  // registration code the runtime uses.
+  implementation(project(":trailblaze-quickjs-tools"))
   runtimeOnly(libs.kotlin.reflect)
   implementation(libs.koog.agents.tools)
   implementation(libs.gson)

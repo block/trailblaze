@@ -225,6 +225,8 @@ internal object BundleStore {
    *  the companion recording-saved event - gate on it; the run paths ignore it). */
   @Synchronized
   fun writeVariant(dir: File, variant: String, yaml: String): File? {
+    // A refused recording renders as blank. Never replace an existing variant with it.
+    if (yaml.isBlank()) return null
     val safe = variantSlug(variant)
     // Unique tmp name per write so two concurrent re-records of the same platform each own their own
     // scratch file (a shared `.<safe>.trail.yaml.tmp` would let them interleave bytes before the move).

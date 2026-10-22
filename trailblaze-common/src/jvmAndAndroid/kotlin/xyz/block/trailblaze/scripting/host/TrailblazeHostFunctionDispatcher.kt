@@ -14,6 +14,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.events.SessionEventsHostFunctions
+import xyz.block.trailblaze.surveys.SurveyHostFunctions
 import xyz.block.trailblaze.trailhead.TrailEventsHostFunctions
 import xyz.block.trailblaze.util.Console
 
@@ -65,6 +66,7 @@ object TrailblazeHostFunctionDispatcher {
   ): Outcome {
     if (TrailEventsHostFunctions.handles(name) ||
       SessionEventsHostFunctions.handles(name) ||
+      SurveyHostFunctions.handles(name) ||
       ToolCallHistoryHostFunctions.handles(name)
     ) {
       return callFramework(name, argsJson, context)
@@ -119,7 +121,7 @@ object TrailblazeHostFunctionDispatcher {
 
   /**
    * Framework host functions ([TrailEventsHostFunctions], [SessionEventsHostFunctions],
-   * [ToolCallHistoryHostFunctions]) — answered before any trailmap's.
+   * [SurveyHostFunctions], [ToolCallHistoryHostFunctions]) — answered before any trailmap's.
    */
   private suspend fun callFramework(name: String, argsJson: String, context: TrailblazeToolExecutionContext): Outcome {
     val args = try {
@@ -128,7 +130,9 @@ object TrailblazeHostFunctionDispatcher {
       null
     } ?: return Outcome.Failure("Host function '$name' takes an object of arguments.")
     return try {
-      val value = if (SessionEventsHostFunctions.handles(name)) {
+      val value = if (SurveyHostFunctions.handles(name)) {
+        SurveyHostFunctions.call(args, context)
+      } else if (SessionEventsHostFunctions.handles(name)) {
         SessionEventsHostFunctions.call(name, args, context)
       } else if (ToolCallHistoryHostFunctions.handles(name)) {
         ToolCallHistoryHostFunctions.call(name, args, context)

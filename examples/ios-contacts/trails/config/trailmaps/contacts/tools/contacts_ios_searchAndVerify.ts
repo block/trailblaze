@@ -31,7 +31,7 @@ export interface SearchAndVerifyArgs {
 // the composition all happens inside one QuickJS invocation, no extra LLM
 // round-trip per sub-tool.
 export const contacts_ios_searchAndVerify = trailblaze.tool<SearchAndVerifyArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const query = nonEmptyString(input?.query, "John Appleseed");
     const expectedName = nonEmptyString(input?.expectedName, query);

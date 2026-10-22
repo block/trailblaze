@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.host.SurveyLint
+import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -19,8 +21,10 @@ import xyz.block.trailblaze.config.AppTargetYamlLoader
 import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.host.DevicePinLint
+import xyz.block.trailblaze.host.ParallelWork
 import xyz.block.trailblaze.host.SelectorDialectLint
 import xyz.block.trailblaze.host.TrailTargetLint
+import xyz.block.trailblaze.host.TrailCorpus
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
@@ -32,7 +36,6 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgTokens
-import xyz.block.trailblaze.yaml.TrailYamlValidator
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import java.io.File
@@ -280,11 +283,17 @@ class CheckCommand : Callable<Int> {
     // missing bundled tsc payload is fatal, because it can only mean the JAR was built without its
     // tsc resources. Treating that as a skip is what let this phase vanish from green mainline
     // builds. See [runTrailRecordingValidationPhase] and [TrailTscValidator].
+    // One walk of the workspace's trails, each read and decoded at most once, for every per-trail
+    // phase below. Lazy, so a run with all of them switched off never walks the tree.
+    val trailCorpus by lazy {
+      TrailCorpus.load(CliPathUtils.workspaceGeneratedArtifactsRoot(resolved.workspaceRoot.toPath()).toFile())
+    }
     val validationExit = if (isTrailRecordingValidationDisabled()) {
       EXIT_OK
     } else {
       runTrailRecordingValidationPhase(
         workspaceRoot = resolved.workspaceRoot,
+        corpus = trailCorpus,
         trailmaps = trailmapsToValidate,
         // Only fold in the (large) classpath-bundled validation surfaces on an all-workspace run. A
         // scoped run (`check <id>`, or from inside a trailmap dir) shouldn't pull the whole
@@ -298,7 +307,7 @@ class CheckCommand : Callable<Int> {
     // expression instead of a plain dotted path, fails the build. Pure text scan (no device / LLM /
     // subprocess), so it always runs — independent of the trail-recording tsc phase and its
     // kill-switch. See [TrailArgTokens].
-    val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot)
+    val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot, corpus = trailCorpus)
 
     // One walk of the workspace's trails, two gates over it:
     //  - Selector-dialect ([SelectorDialectLint]): a device that resolves a recording leg whose
@@ -318,15 +327,48 @@ class CheckCommand : Callable<Int> {
     // silently drop the device-pin ratchet.
     val trailLintExit = runTrailLintPhase(
       workspaceRoot = resolved.workspaceRoot,
+      corpus = { trailCorpus },
       selectorDialectGateEnabled = !isSelectorDialectGateDisabled(),
       devicePinGateEnabled = !isDevicePinGateDisabled(),
       trailTargetGateEnabled = !isTrailTargetGateDisabled(),
     )
 
+    // Surveys that run mid-trail must be able to. See [SurveyLint]. Opt out with TRAILBLAZE_DISABLE_SURVEY_GATE=1.
+    val surveyExit = if (isEnvFlagSet(SurveyLint.DISABLE_ENV_VAR)) EXIT_OK else runSurveyLintPhase(resolved.workspaceRoot)
+
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
-    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, trailLintExit)
+    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, trailLintExit, surveyExit)
+  }
+
+  /**
+   * [SurveyLint] over the workspace's survey files. Fails only on a finding; a missing
+   * toolchain skips the sandbox build and says so, and an infrastructure failure is logged.
+   */
+  internal fun runSurveyLintPhase(
+    workspaceRoot: File,
+    bundle: ((File) -> Unit)? = WorkspaceSurveyBundleSource.resolvedToolchainBundler()?.let { bundler ->
+      { file: File -> runBlocking { bundler.bundleSurvey(file) } }
+    },
+  ): Int = try {
+    val configDir = CliPathUtils.workspaceConfigDir(workspaceRoot.toPath()).toFile()
+    val findings = mutableListOf<SurveyLint.Finding>()
+    if (configDir.isDirectory) {
+      if (bundle == null && WorkspaceSurveyBundleSource.surveyFiles(configDir).isNotEmpty()) {
+        Console.log("trailblaze check: esbuild or the TypeScript SDK is unavailable, so mid-trail surveys were not test-built.")
+      }
+      findings += SurveyLint.lintSurveyFiles(configDir, bundle)
+    }
+    if (findings.isEmpty()) {
+      EXIT_OK
+    } else {
+      Console.error(SurveyLint.render(findings))
+      EXIT_TYPE_ERROR
+    }
+  } catch (e: Exception) {
+    Console.error("trailblaze check: survey phase failed (ignored): ${e.message ?: e::class.simpleName}")
+    EXIT_OK
   }
 
   /**
@@ -767,6 +809,8 @@ class CheckCommand : Callable<Int> {
     workspaceRoot: File,
     trailmaps: List<Path>,
     allWorkspaceScope: Boolean,
+    /** The workspace's trails, shared with the other per-trail phases; null walks them here. */
+    corpus: TrailCorpus? = null,
     // Injected so the fatal-vs-skip split is testable on the real phase. Driving the payload-missing
     // branch through the production resolver would mean hiding a JAR resource from the test
     // classpath, which is why that branch went unguarded long enough to hide the whole phase from
@@ -830,6 +874,7 @@ class CheckCommand : Callable<Int> {
         // the workspace but only loaded the selected trailmap's surface, so the OTHER workspace
         // targets legitimately have no surface here — treat those as out-of-scope skips, not defects.
         failOnMissingSurface = allWorkspaceScope,
+        corpus = corpus,
       )
       Console.log(TrailTscValidator.renderReport(report))
       if (report.hasFatal()) {
@@ -865,23 +910,27 @@ class CheckCommand : Callable<Int> {
    * Internal (not private) so the phase-level exit-code contract is directly testable — same
    * visibility rationale as [validateArgTokensInTrail] and the companion's exit constants.
    */
-  internal fun runArgTokenValidationPhase(workspaceRoot: File): Int {
+  internal fun runArgTokenValidationPhase(
+    workspaceRoot: File,
+    /** The workspace's trails, shared with the other per-trail phases; null walks them here. */
+    corpus: TrailCorpus? = null,
+  ): Int {
     return try {
       val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
       if (!trailsRoot.isDirectory) return EXIT_OK
-      val yaml = createTrailblazeYaml()
       var findingCount = 0
-      trailsRoot.walkTopDown()
-        .filter { it.isFile && TrailTscValidator.isTrailFile(it.name) }
-        .sortedBy { it.path }
-        .forEach { file ->
-          val errors = validateArgTokensInTrail(file.readText(), yaml)
+      // Trails are checked in parallel, findings printed in file order. The shared discovery skips
+      // `.claude/` (nested agent worktrees), `build/`, `node_modules/` and `.git/`.
+      ParallelWork.map(
+        items = (corpus ?: TrailCorpus.load(trailsRoot)).recordingTrails,
+        onResult = { trail, errors: List<String> ->
           if (errors.isNotEmpty()) {
             findingCount += errors.size
-            val rel = trailsRoot.toPath().relativize(file.toPath())
+            val rel = trailsRoot.toPath().relativize(trail.file.toPath())
             errors.forEach { Console.error("trailblaze check: $rel — $it") }
           }
-        }
+        },
+      ) { trail -> validateArgTokensInTrail(trail.text.getOrThrow(), trail.document) }
       if (findingCount > 0) {
         Console.error(
           "trailblaze check: arg-token validation FAILED — $findingCount finding(s) above. Declare " +
@@ -912,11 +961,12 @@ class CheckCommand : Callable<Int> {
   internal fun validateArgTokensInTrail(
     yamlText: String,
     yaml: xyz.block.trailblaze.yaml.TrailblazeYaml = createTrailblazeYaml(),
-  ): List<String> {
-    val declaredArgNames = try {
-      yaml.extractTrailConfig(yamlText)?.args?.keys ?: emptySet()
-    } catch (e: Exception) {
-      return emptyList()
+  ): List<String> = validateArgTokensInTrail(yamlText, runCatching { yaml.decodeTrailDocument(yamlText) })
+
+  /** [validateArgTokensInTrail] over a trail already decoded — or the failure decoding it threw. */
+  internal fun validateArgTokensInTrail(yamlText: String, document: Result<TrailDocument>): List<String> {
+    val declaredArgNames = when (val doc = document.getOrElse { return emptyList() }) {
+      is TrailDocument.Unified -> doc.trail.config.args?.keys ?: emptySet()
     }
     return TrailArgTokens.validate(yamlText, declaredArgNames)
   }
@@ -952,6 +1002,11 @@ class CheckCommand : Callable<Int> {
    */
   internal fun runTrailLintPhase(
     workspaceRoot: File,
+    /**
+     * The workspace's trails, shared with the other per-trail phases. A provider, so a phase whose
+     * gates are all off never walks; null walks them here.
+     */
+    corpus: (() -> TrailCorpus)? = null,
     selectorDialectGateEnabled: Boolean = true,
     devicePinGateEnabled: Boolean = true,
     trailTargetGateEnabled: Boolean = true,
@@ -961,7 +1016,6 @@ class CheckCommand : Callable<Int> {
     try {
       val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
       if (!trailsRoot.isDirectory) return EXIT_OK
-      val yaml = createTrailblazeYaml()
       val dialectFindings = mutableListOf<SelectorDialectLint.Finding>()
       val devicePinFindings = mutableListOf<DevicePinLint.Finding>()
       val targetFindings = mutableListOf<TrailTargetLint.Finding>()
@@ -981,26 +1035,33 @@ class CheckCommand : Callable<Int> {
       // runs. This is the same helper the repo-wide corpus gates use, so the phase and
       // DevicePinCorpusTest see one file set — it excludes workspace CONFIG `trailblaze.yaml`s
       // (anchor and content-detected alike) plus `build/`, `.git/`, `node_modules/`, `.trailblaze/`.
-      TrailYamlValidator.findAllTrailYamlFiles(trailsRoot)
-        .forEach { file ->
-          val rel = trailsRoot.toPath().relativize(file.toPath()).toString()
-          val text = try {
-            file.readText()
-          } catch (_: Throwable) {
-            return@forEach
+      // Trails are linted in parallel, one decoder per worker thread; findings fold back in file order.
+      class TrailLints(
+        val devicePin: DevicePinLint.Finding? = null,
+        val dialect: SelectorDialectLint.Finding? = null,
+        val target: TrailTargetLint.Finding? = null,
+      )
+      ParallelWork.map(
+        items = (corpus?.invoke() ?: TrailCorpus.load(trailsRoot)).trails,
+        onResult = { _, lints: TrailLints? ->
+          lints?.devicePin?.let { devicePinFindings.add(it) }
+          lints?.dialect?.let { dialectFindings.add(it) }
+          lints?.target?.let { targetFindings.add(it) }
+        },
+      ) { trail ->
+        val file = trail.file
+        val rel = trailsRoot.toPath().relativize(file.toPath()).toString()
+        val text = trail.text.getOrElse { return@map null }
+        val devicePin = if (devicePinGateEnabled) DevicePinLint.lint(rel, text) else null
+        if (!selectorDialectGateEnabled && !trailTargetGateEnabled) return@map TrailLints(devicePin = devicePin)
+        try {
+          val unified = when (val doc = trail.document.getOrThrow()) {
+            is TrailDocument.Unified -> doc.trail
           }
-          if (devicePinGateEnabled) {
-            DevicePinLint.lint(rel, text)?.let { devicePinFindings.add(it) }
-          }
-          if (!selectorDialectGateEnabled && !trailTargetGateEnabled) return@forEach
-          try {
-            val unified = when (val doc = yaml.decodeTrailDocument(text)) {
-              is TrailDocument.Unified -> doc.trail
-            }
-            if (selectorDialectGateEnabled) {
-              SelectorDialectLint.lint(rel, unified)?.let { dialectFindings.add(it) }
-            }
-            if (targetIdResolver != null) {
+          TrailLints(
+            devicePin = devicePin,
+            dialect = if (selectorDialectGateEnabled) SelectorDialectLint.lint(rel, unified) else null,
+            target = targetIdResolver?.let { resolver ->
               // Per trail, not per phase: in the standalone layout the scan root IS the workspace
               // root, so this walk can descend into a NESTED workspace, whose trails must be judged
               // against the trailmaps THEY see. One parent id set applied to everything would fail
@@ -1013,17 +1074,19 @@ class CheckCommand : Callable<Int> {
                 trailRelPath = rel,
                 workspaceLabel = owningWorkspaceRoot.path,
                 trail = unified,
-                registeredTargetIds = targetIdResolver.forWorkspace(owningWorkspaceRoot),
+                registeredTargetIds = resolver.forWorkspace(owningWorkspaceRoot),
                 trailmapsDir = CliPathUtils.workspaceTrailmapsDir(owningWorkspaceRoot.toPath()).toString(),
-              )?.let { targetFindings.add(it) }
-            }
-          } catch (_: Throwable) {
-            // Unparseable trail — the parse-level validators own that error; double-reporting is
-            // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
-            // as non-Exception Throwables (see SessionProgressHelpers / YamlEditorCommon), and one
-            // bad trail must not crash the phase.
-          }
+              )
+            },
+          )
+        } catch (_: Throwable) {
+          // Unparseable trail — the parse-level validators own that error; double-reporting is
+          // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
+          // as non-Exception Throwables (see SessionProgressHelpers / YamlEditorCommon), and one
+          // bad trail must not crash the phase.
+          TrailLints(devicePin = devicePin)
         }
+      }
       // Warnings first, so the fatal blocks are what's left on screen at the end of the phase.
       if (devicePinFindings.any { it.legacyDriverForms.isNotEmpty() }) {
         Console.log(DevicePinLint.renderDeprecationWarnings(devicePinFindings))
@@ -1378,29 +1441,38 @@ class CheckCommand : Callable<Int> {
     // process exits USAGE so the operator knows the compile phase didn't materialize it.
     // A final summary names every failed trailmap so the operator doesn't have to scan
     // the full log on `--all`.
+    //
+    // Trailmaps type-check in parallel; each one's output is captured and printed under its header
+    // in trailmap order, so the log reads the same as a serial run.
     var sawTypeError = false
     var sawMissingTsconfig = false
     val failedTrailmaps = mutableListOf<String>()
-    for (trailmap in typecheckable) {
+    ParallelWork.map(
+      items = typecheckable,
+      onResult = { trailmap, run: TscRun? ->
+        if (run == null) {
+          Console.error(
+            "trailblaze check: trailmap '${trailmap.fileName}' has no tools/tsconfig.json. " +
+              "The compile phase should have emitted it — re-run `trailblaze check`.",
+          )
+          sawMissingTsconfig = true
+          failedTrailmaps += trailmap.fileName.toString()
+        } else {
+          Console.log("── typecheck: ${trailmap.fileName} ────")
+          if (run.output.isNotBlank()) Console.log(run.output.trimEnd())
+          run.error?.let { Console.error(it) }
+        }
+        if (run != null && run.exit != 0) {
+          // Normalize tsc's specific exit value (which drifted from `1` in 5.x to `2`
+          // in 6.x for the same diagnostics) to a single [EXIT_TYPE_ERROR] so shell
+          // consumers see a stable contract regardless of tsc version.
+          sawTypeError = true
+          failedTrailmaps += trailmap.fileName.toString()
+        }
+      },
+    ) { trailmap ->
       val tsconfig = trailmap.resolve("tools").resolve("tsconfig.json")
-      if (!Files.isRegularFile(tsconfig)) {
-        Console.error(
-          "trailblaze check: trailmap '${trailmap.fileName}' has no tools/tsconfig.json. " +
-            "The compile phase should have emitted it — re-run `trailblaze check`.",
-        )
-        sawMissingTsconfig = true
-        failedTrailmaps += trailmap.fileName.toString()
-        continue
-      }
-      Console.log("── typecheck: ${trailmap.fileName} ────")
-      val exit = runTsc(jsRuntime = jsRuntime, tscJs = tscJs, tsconfig = tsconfig)
-      if (exit != 0) {
-        // Normalize tsc's specific exit value (which drifted from `1` in 5.x to `2`
-        // in 6.x for the same diagnostics) to a single [EXIT_TYPE_ERROR] so shell
-        // consumers see a stable contract regardless of tsc version.
-        sawTypeError = true
-        failedTrailmaps += trailmap.fileName.toString()
-      }
+      if (Files.isRegularFile(tsconfig)) runTsc(jsRuntime = jsRuntime, tscJs = tscJs, tsconfig = tsconfig) else null
     }
     if (failedTrailmaps.isNotEmpty() && typecheckable.size > 1) {
       // One-line summary on multi-trailmap runs so a CI consumer can grep the tail of the
@@ -1572,17 +1644,22 @@ class CheckCommand : Callable<Int> {
     return null
   }
 
+  /** One trailmap's `tsc` run: its exit code, its captured output, and an error line to print, if any. */
+  internal data class TscRun(val exit: Int, val output: String, val error: String? = null)
+
   /**
-   * Spawn `<jsRuntime> <tscJs> --pretty --noEmit --project <tsconfig>` against [tsconfig]
-   * and pipe the output to the caller's terminal verbatim. `--pretty` keeps tsc's
-   * coloring; `--noEmit` is the standard "check only" flag that matches what the IDE's
-   * language server does on save. We pass `--project` explicitly so tsc anchors its
-   * include globs at the trailmap's `tools/` dir rather than the cwd.
+   * Spawn `<jsRuntime> <tscJs> --pretty --noEmit --project <tsconfig>` against [tsconfig].
+   * `--pretty` keeps tsc's coloring; `--noEmit` is the standard "check only" flag that matches
+   * what the IDE's language server does on save. We pass `--project` explicitly so tsc anchors its
+   * include globs at the trailmap's `tools/` dir rather than the cwd. tsc itself exits `0` for
+   * success and `1` for type errors, which propagate upstream as [EXIT_TYPE_ERROR].
    *
-   * Returns the spawned process's exit code — tsc itself uses `0` for success and `1`
-   * for type errors, which propagate upstream as [EXIT_TYPE_ERROR].
+   * Captures to a temp file rather than inheriting the terminal: trailmaps type-check in parallel,
+   * and [runTypecheckPhase] prints each one's output under its own header. Errors, including a
+   * temp file that can't be created, come back as [TscRun.error] for the same reason, so one
+   * trailmap's failure never aborts the others.
    */
-  private fun runTsc(jsRuntime: String, tscJs: Path, tsconfig: Path): Int {
+  private fun runTsc(jsRuntime: String, tscJs: Path, tsconfig: Path): TscRun {
     val argv = listOf(
       jsRuntime,
       tscJs.toAbsolutePath().toString(),
@@ -1592,12 +1669,14 @@ class CheckCommand : Callable<Int> {
       tsconfig.toAbsolutePath().toString(),
     )
     val timeoutMs = resolveTscTimeoutMs()
+    var outputFile: Path? = null
     return try {
+      val capture = Files.createTempFile("trailblaze-tsc-", ".log").also { outputFile = it }
       val proc = ProcessBuilder(argv)
         .redirectErrorStream(true)
         // No `directory(...)` — `tsc --project <abs>` reads its include set from the
         // resolved tsconfig anchor, not the cwd.
-        .inheritIO()
+        .redirectOutput(capture.toFile())
         .start()
       // Default cap is 5 minutes. tsc is usually well under 5 seconds even on cold
       // caches; a 5-minute ceiling catches pathological misconfigurations (infinite
@@ -1605,21 +1684,25 @@ class CheckCommand : Callable<Int> {
       // Override via [TIMEOUT_MS_ENV_VAR] when working with codebases that have known
       // pathological cyclic types — see [resolveTscTimeoutMs] for clamp behavior.
       if (proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
-        proc.exitValue()
+        TscRun(exit = proc.exitValue(), output = Files.readString(capture))
       } else {
-        Console.error(
-          "trailblaze check: tsc did not finish within ${timeoutMs}ms — killing. " +
-            "Bump $TIMEOUT_MS_ENV_VAR if this is a known-slow codebase.",
-        )
         proc.destroyForcibly()
         proc.waitFor(10, TimeUnit.SECONDS)
-        EXIT_TYPE_ERROR
+        TscRun(
+          exit = EXIT_TYPE_ERROR,
+          output = Files.readString(capture),
+          error = "trailblaze check: tsc did not finish within ${timeoutMs}ms — killed it. " +
+            "Bump $TIMEOUT_MS_ENV_VAR if this is a known-slow codebase.",
+        )
       }
     } catch (e: Exception) {
-      Console.error(
-        "trailblaze check: failed to spawn $jsRuntime: ${e.message ?: e.javaClass.simpleName}",
+      TscRun(
+        exit = EXIT_TYPE_ERROR,
+        output = "",
+        error = "trailblaze check: failed to run $jsRuntime tsc: ${e.message ?: e.javaClass.simpleName}",
       )
-      EXIT_TYPE_ERROR
+    } finally {
+      outputFile?.let { runCatching { Files.deleteIfExists(it) } }
     }
   }
 

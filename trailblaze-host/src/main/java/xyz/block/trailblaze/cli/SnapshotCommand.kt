@@ -63,7 +63,6 @@ class SnapshotCommand : Callable<Int>, QuietUnlessVerbose {
       webHeadless = headlessOption.resolve(),
       verb = "Snapshot",
     ) { client ->
-      val yaml = "- takeSnapshot:\n    screenName: \"snap\""
       val details = buildList {
         if (bounds) add("BOUNDS")
         if (offscreen) add("OFFSCREEN")
@@ -74,7 +73,7 @@ class SnapshotCommand : Callable<Int>, QuietUnlessVerbose {
       val needsFullCapture = bounds || offscreen || screenshot || all
       val args = mutableMapOf<String, Any?>(
         "objective" to "Capture screen state",
-        "tools" to yaml,
+        "tools" to SNAPSHOT_TOOLS_YAML,
         "fast" to !needsFullCapture,
       )
       if (details != null) args["snapshotDetails"] = details
@@ -83,5 +82,10 @@ class SnapshotCommand : Callable<Int>, QuietUnlessVerbose {
       formatBlazeResultAgent(result)
       blazeExitCode(result)
     }
+  }
+
+  companion object {
+    /** The `step` tools that take the daemon's snapshot path; `selector --live` captures through it too. */
+    internal const val SNAPSHOT_TOOLS_YAML = "- takeSnapshot:\n    screenName: \"snap\""
   }
 }

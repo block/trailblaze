@@ -67,7 +67,7 @@ internal fun TrailblazeToolDescriptor.toMcpToolSchema(): ToolSchema {
     val required = (schema["required"] as? JsonArray)
       ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
       ?: emptyList()
-    return ToolSchema(properties = properties, required = required)
+    return ToolSchema(properties = properties, required = required, defs = schema["\$defs"] as? JsonObject)
   }
   return toKoogToolDescriptor(strict = false).toMcpToolSchema()
 }

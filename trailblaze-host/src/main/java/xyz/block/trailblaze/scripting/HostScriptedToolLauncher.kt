@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.scripting
 
+import xyz.block.trailblaze.surveys.SurveyBundles
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -103,6 +104,8 @@ object HostScriptedToolLauncher {
   suspend fun launch(
     targetTestApp: TrailblazeHostAppTarget?,
     config: TrailblazeConfig,
+    /** The trail file this session runs, whose workspace `ctx.surveys` loads surveys from. */
+    trailFilePath: String? = null,
     sessionId: SessionId,
     deviceInfo: TrailblazeDeviceInfo,
     logsRepo: LogsRepo,
@@ -119,6 +122,10 @@ object HostScriptedToolLauncher {
     additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
+    // `ctx.surveys` builds a survey on first use, from the trail's own workspace:
+    // a daemon serves trails from many workspaces, and its cwd is none of them. Released with the
+    // returned runtime, or here when the launch returns none.
+    val surveyConfigDir by lazy { WorkspaceSurveyBundleSource.configDirFor(trailFilePath, targetTestApp) }
     // A `--no-logging` run's repo hands back a session path it deliberately never created, and the
     // launchers below would create it and write QuickJS bundles and `inline-script-tools/` wrappers
     // there — so "no session files" would hold for everything except a trail that uses scripted
@@ -133,8 +140,9 @@ object HostScriptedToolLauncher {
     } else {
       null
     }
-    var tempWorkDirHandedOff = false
+    var handedOff = false
     try {
+      SurveyBundles.register(sessionId, WorkspaceSurveyBundleSource(configDir = { surveyConfigDir }))
       val sessionDir = tempWorkDir ?: logsRepo.getSessionDir(sessionId)
 
       // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
@@ -268,15 +276,19 @@ object HostScriptedToolLauncher {
       // If neither path produced anything actionable, no cleanup needed.
       if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
 
-      tempWorkDirHandedOff = true
+      handedOff = true
       return LaunchedScriptingRuntime(
         subprocessRuntime = subprocessRuntime,
         inlineRegistrations = inlineRegistrations,
         toolRepo = toolRepo,
         tempWorkDir = tempWorkDir,
+        onShutdown = { SurveyBundles.unregister(sessionId) },
       )
     } finally {
-      if (!tempWorkDirHandedOff) tempWorkDir?.deleteRecursively()
+      if (!handedOff) {
+        tempWorkDir?.deleteRecursively()
+        SurveyBundles.unregister(sessionId)
+      }
     }
   }
 

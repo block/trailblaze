@@ -24,13 +24,13 @@ import xyz.block.trailblaze.util.Console
 class TrailblazeHostFunctionRegistry(private val resourceSource: ConfigResourceSource) {
 
   /**
-   * One registered host function, with the trailmap whose `host/` directory declares it. Both
+   * One registered host function, with every trailmap whose `host/` directory declares it. Both
    * serializers are resolved at discovery, so a class that can't decode its arguments or encode its
    * result is skipped there instead of failing every call.
    */
   data class Entry(
     val name: String,
-    val trailmapId: String,
+    val trailmapIds: Set<String>,
     val functionClass: KClass<out TrailblazeHostFunction<*>>,
     val annotation: TrailblazeHostFunctionClass,
     val argsSerializer: KSerializer<out TrailblazeHostFunction<*>>,
@@ -65,10 +65,16 @@ class TrailblazeHostFunctionRegistry(private val resourceSource: ConfigResourceS
         return@forEach
       }
       val existing = found[entry.name]
+      // Two trailmaps may declare the same function for their own scripts. It is one function, so
+      // it belongs to both, and either one's dependants see it.
+      if (existing != null && existing.functionClass == entry.functionClass) {
+        found[entry.name] = existing.copy(trailmapIds = existing.trailmapIds + entry.trailmapIds)
+        return@forEach
+      }
       if (existing != null) {
         Console.log(
-          "Warning: Host function '${entry.name}' is declared by both '${existing.trailmapId}' and " +
-            "'${entry.trailmapId}'; keeping '${existing.trailmapId}'.",
+          "Warning: Host function '${entry.name}' is declared with different classes by " +
+            "${existing.trailmapIds} and ${entry.trailmapIds}; keeping ${existing.trailmapIds}'s.",
         )
         return@forEach
       }
@@ -98,7 +104,7 @@ class TrailblazeHostFunctionRegistry(private val resourceSource: ConfigResourceS
     @Suppress("UNCHECKED_CAST")
     return Entry(
       name = descriptor.id,
-      trailmapId = trailmapId,
+      trailmapIds = setOf(trailmapId),
       functionClass = functionClass,
       annotation = annotation,
       // `serializer()` throws for a class that isn't @Serializable — skipped by the caller.

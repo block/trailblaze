@@ -4,11 +4,15 @@ import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.waypoint.resolveFor
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -65,7 +69,7 @@ object WaypointGraphBuilder {
     targetFilter: String? = null,
     platformFilter: String? = null,
   ): WaypointGraphData {
-    val output = loadWaypoints(root)
+    val output = loadWaypoints(root, fromPath)
 
     val nodes = output.items.map { item ->
       val def = item.definition
@@ -132,16 +136,17 @@ object WaypointGraphBuilder {
       emptyMap()
     }
 
-    val trailheads = toolConfigs.mapNotNull { (toolName, config) ->
+    val yamlTrailheads = toolConfigs.mapNotNull { (toolName, config) ->
       config.trailhead?.let { meta ->
         WaypointGraphTrailhead(
           id = toolName.toolName,
           description = config.description,
           to = meta.to,
-          dynamic = meta.dynamic,
+          dynamic = meta.to == null,
         )
       }
     }
+    val trailheads = disambiguateTrailheads(yamlTrailheads + scriptedTrailheads(output.resolvedConfig))
 
     val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
     val scopeSuffix = listOfNotNull(
@@ -195,8 +200,55 @@ object WaypointGraphBuilder {
       targetOk && platformOk
     }
     val keptIds = keptWaypoints.mapTo(mutableSetOf()) { it.id }
-    val keptTrailheads = trailheads.filter { it.to in keptIds }
+    // A trailhead whose tool can't run on the scoped platform draws no launch edge there, even
+    // when its destination waypoint is cross-platform. No declared platforms means any platform.
+    val keptTrailheads = trailheads.filter { th ->
+      th.to in keptIds && (platformFilter == null || th.platforms.isEmpty() || platformFilter in th.platforms)
+    }
     return Pair(keptWaypoints, keptTrailheads)
+  }
+
+  /**
+   * Trailheads written as scripted (`.ts`) tools, which declare `trailhead:` in their spec rather
+   * than in a `*.trailhead.yaml`. Read off the targets of the same resolution that produced the
+   * graph's waypoints, so the workspace's own `targets:` selection applies and a failed analysis
+   * isn't re-run. Without the analyzer (no `bun` on the host), the spec isn't read and the list is
+   * empty; the graph still renders.
+   */
+  private fun scriptedTrailheads(resolved: TrailblazeResolvedConfig?): List<WaypointGraphTrailhead> =
+    resolved?.targets.orEmpty()
+      .flatMap { it.tools.orEmpty() }
+      .mapNotNull { tool ->
+        tool.trailhead?.let { meta ->
+          WaypointGraphTrailhead(
+            id = tool.name,
+            description = tool.description,
+            to = meta.to,
+            dynamic = meta.to == null,
+            platforms = (tool.meta?.get(META_SUPPORTED_PLATFORMS) as? JsonArray)
+              ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
+              .orEmpty(),
+          )
+        }
+      }
+
+  /** `_meta` key carrying a scripted tool's supported platforms (values are case-insensitive). */
+  private const val META_SUPPORTED_PLATFORMS = "trailblaze/supportedPlatforms"
+
+  /**
+   * One entry per distinct (name, destination). An exported trailhead appears on every consuming
+   * target, so identical copies collapse. A consumer can also override an exported tool with its
+   * own, so one name can land on different waypoints; those keep a suffixed id so each draws as its
+   * own node (the page keys nodes by id) and survives `--target` scoping, which filters on `to`.
+   *
+   * `internal` so the test suite can drive it with synthetic trailheads.
+   */
+  internal fun disambiguateTrailheads(trailheads: List<WaypointGraphTrailhead>): List<WaypointGraphTrailhead> {
+    val distinct = trailheads.distinctBy { listOf(it.id, it.to, it.dynamic, it.platforms) }
+    val sharedNames = distinct.groupingBy { it.id }.eachCount().filterValues { it > 1 }.keys
+    return distinct.map { th ->
+      if (th.id in sharedNames) th.copy(id = "${th.id} → ${th.to ?: "dynamic"}") else th
+    }
   }
 
   /**

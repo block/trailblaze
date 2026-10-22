@@ -27,7 +27,7 @@ export interface OpenArticleArgs {
 // on a search-results snippet or sidebar listing that happens to repeat the
 // title elsewhere on the page.
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, DEFAULT_TITLE);
     const expectedHeading = nonEmptyString(input.expectedHeading, title);

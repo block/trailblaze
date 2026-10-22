@@ -8,8 +8,7 @@ import { trailblaze } from "@trailblaze/scripting";
 //
 // The doc comment above the `export const` is the LLM-facing description — typed tools
 // carry it there, not in a `.yaml` manifest. The spec object only carries registration
-// gates (`supportedPlatforms`, `requiresContext`); because `requiresContext: true`, the
-// runtime guarantees `ctx` is present before the handler runs, so there's no `if (!ctx)`
+// gates (`supportedPlatforms`); the runtime always passes `ctx`, so there's no `if (!ctx)`
 // guard. We still optional-chain `ctx.target` because a target-less session (web-only,
 // scratch tool, unit-test fixture) leaves it undefined.
 //
@@ -40,14 +39,11 @@ import { trailblaze } from "@trailblaze/scripting";
 // (returns non-zero even on successful launches), and the host shell command path strictly
 // checks exit-code-zero for success — it would otherwise surface the launch as a failure
 // even when the app opened correctly.
-export const clock_android_launchApp = trailblaze.tool(
+export const clock_android_launchApp = trailblaze.trailhead(
   {
     supportedPlatforms: ["android"],
-    requiresContext: true,
-    // Declares this tool a trailhead landing on the Clock tab — the inline equivalent of a
-    // `*.trailhead.yaml` sidecar (#4404). `to` is the waypoint launching the app lands on, so this
-    // tool shows up under `toolbox trailheads` / the "Use as Trailhead" picker with no sidecar file.
-    trailhead: { to: "clock/android/clock_tab" },
+    // The waypoint launching the app lands on; it draws this trailhead's edge on the waypoint graph.
+    to: "clock/android/clock_tab",
   },
   async (_input, ctx) => {
     const appId = ctx.target?.resolveAppId({ defaultAppId: "com.android.deskclock" });

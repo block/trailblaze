@@ -683,14 +683,14 @@ class LocalLlmSamplingSource(
         requiredParameters = requiredParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = param.toKoogParameterTypePreservingComposites(),
+            type = toKoogParameterTypePreservingComposites(param),
             description = param.description ?: "",
           )
         },
         optionalParameters = optionalParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = param.toKoogParameterTypePreservingComposites(),
+            type = toKoogParameterTypePreservingComposites(param),
             description = param.description ?: "",
           )
         },

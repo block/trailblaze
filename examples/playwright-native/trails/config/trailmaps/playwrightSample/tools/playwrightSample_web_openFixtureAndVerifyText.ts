@@ -18,7 +18,7 @@ export interface OpenFixtureAndVerifyTextArgs {
  * Open the Playwright sample page and verify its heading.
  */
 export const playwrightSample_web_openFixtureAndVerifyText = trailblaze.tool<OpenFixtureAndVerifyTextArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, PLAYWRIGHT_SAMPLE_HOME);
     const heading = nonEmptyString(args.heading, DEFAULT_HEADING);

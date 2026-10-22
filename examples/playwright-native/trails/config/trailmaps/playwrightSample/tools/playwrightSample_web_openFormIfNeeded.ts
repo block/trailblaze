@@ -19,7 +19,7 @@ export interface OpenFormIfNeededArgs {
  * Open the sample form section only when it is not already visible.
  */
 export const playwrightSample_web_openFormIfNeeded = trailblaze.tool<OpenFormIfNeededArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, PLAYWRIGHT_SAMPLE_HOME);
     const formHeading = nonEmptyString(args.formHeading, DEFAULT_FORM_HEADING);

@@ -9,7 +9,17 @@ class TrailblazeSpotlessPlugin : Plugin<Project> {
     val spotless = project.extensions.getByType(SpotlessExtension::class.java)
     spotless.kotlin { kotlin ->
       kotlin.target("**/*.kt", "**/*.kts")
-      kotlin.targetExclude("**/dependencies/*.txt", "**/build/**")
+      // Exclude with a file tree, never patterns: Spotless walks each pattern as its own tree of
+      // the whole project dir, build/ included, and a file another task deletes mid-walk fails
+      // this task. This tree skips build dirs as it walks; the target already leaves them out.
+      // Keep the exclude: subtracting it stops Gradle reading the project dir as this task's
+      // input, which overlaps dependencyGuard's output and fails task validation.
+      kotlin.targetExclude(
+        project.fileTree(project.projectDir) { tree ->
+          tree.include("**/dependencies/*.txt")
+          tree.exclude("**/build", "**/.gradle", ".git")
+        }
+      )
       kotlin.ktfmt().googleStyle() // 2-space indent to match IntelliJ
 
       // Use Console.log() / Console.error() instead of println().

@@ -206,6 +206,29 @@ sealed interface IosDriverAction {
     override val description get() = "Clear state for $bundleId"
   }
 
+  /**
+   * Standalone `setPermissions:` (no launch) — the same permissions map [LaunchApp] applies, with
+   * the same semantics (see [IosSimulatorPermissions]): `simctl privacy`
+   * for every service it supports, and it replaces the notification-alert answer, as Maestro's
+   * runner replaces its stored map.
+   */
+  data class SetPermissions(val bundleId: String, val permissions: Map<String, String>) : IosDriverAction {
+    override val description get() = "Set permissions for $bundleId: $permissions"
+  }
+
+  /**
+   * `ios_setPermissions`' `notifications`: how the driver answers [bundleId]'s notifications alert whenever a
+   * screen read sees it. [allow] true taps Allow, false taps Don't Allow, null leaves the alert to
+   * the trail. iOS has no privacy service for notifications, so the alert tap is the only answer.
+   */
+  data class AnswerNotificationsAlert(val bundleId: String, val allow: Boolean?) : IosDriverAction {
+    override val description get() = when (allow) {
+      true -> "Answer $bundleId's notifications alert: Allow"
+      false -> "Answer $bundleId's notifications alert: Don't Allow"
+      null -> "Leave $bundleId's notifications alert unanswered"
+    }
+  }
+
   /** Standalone `clearKeychain:` (no launch) — resets the whole simulator keychain. */
   data object ClearKeychain : IosDriverAction {
     override val description get() = "Clear keychain"

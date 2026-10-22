@@ -86,6 +86,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `profile` | Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory. |
 | `otel` | Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint). |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
+| `selector` | Suggest and check element selectors against captured screens, or the device's (--live). |
 | `results` | Query the persisted test-result index for a test case. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
@@ -319,9 +320,9 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config. | - |
 | `--headless`, `--no-headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
-| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
+| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-6-luna). Mutually exclusive with --llm-provider and --llm-model. | - |
 | `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
-| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
+| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-6-luna) | - |
 | `--memory` | Pre-populate trail memory with KEY=VAL before any step runs. Repeatable (`--memory user=sam --memory accountTier=PRO`). Overrides any value with the same key in the trail YAML's `config.memory:` block. Values are strings; keys must be non-empty. Visible to `{{name}}` interpolation and to scripted tools via `ctx.memory.get(name)`. Values are logged in cleartext and persisted into the session-start snapshot — use --secret for passwords, tokens, or other sensitive data. | - |
 | `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
 | `--arg` | Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable (`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are declared and typed: the value is coerced to the arg's declared type, a missing required arg fails before the run starts, and an undeclared arg is rejected. Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file entry with the same key. The value is always a string here; declaration-driven coercion turns `retries=3` into a number for an `integer` arg. Use --args-file for structured (array/object) values. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
@@ -380,9 +381,9 @@ trailblaze loop [OPTIONS] [<<trailFile>>]
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config. | - |
 | `--headless`, `--no-headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
-| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
+| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-6-luna). Mutually exclusive with --llm-provider and --llm-model. | - |
 | `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
-| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
+| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-6-luna) | - |
 | `--memory` | Pre-populate trail memory with KEY=VAL before any step runs. Repeatable (`--memory user=sam --memory accountTier=PRO`). Overrides any value with the same key in the trail YAML's `config.memory:` block. Values are strings; keys must be non-empty. Visible to `{{name}}` interpolation and to scripted tools via `ctx.memory.get(name)`. Values are logged in cleartext and persisted into the session-start snapshot — use --secret for passwords, tokens, or other sensitive data. | - |
 | `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
 | `--arg` | Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable (`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are declared and typed: the value is coerced to the arg's declared type, a missing required arg fails before the run starts, and an undeclared arg is rejected. Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file entry with the same key. The value is always a string here; declaration-driven coercion turns `retries=3` into a number for an `integer` arg. Use --args-file for structured (array/object) values. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
@@ -888,7 +889,6 @@ trailblaze waypoint list
 trailblaze waypoint locate
 trailblaze waypoint validate
 trailblaze waypoint capture-example
-trailblaze waypoint suggest-selector
 trailblaze waypoint migrate-trail
 trailblaze waypoint segment
 trailblaze waypoint graph
@@ -1012,38 +1012,6 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 | `--logs-dir` | Override the directory containing per-session log dirs. Defaults to the running daemon's resolved logsDir. | - |
 | `--force` | Overwrite an existing example pair without prompting. | - |
 | `--device-classifier` | Device classifier (e.g. android-phone, android-tablet, ios-iphone, ios-ipad) to label this example, so one waypoint can keep a per-form-factor example SET. Written into the filename (`<base>.example.<classifier>.json` + screenshot) and the example's `deviceClassifier` field. Selectors stay per-platform (one waypoint file) — only the snapshot is classifier-keyed, since a phone and tablet share accessibility identity but render differently. If omitted, falls back to the source log's classifier if it records one, else writes the unlabeled default example (`<base>.example.json`). | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze waypoint suggest-selector`
-
-Suggest selector YAML for a specific element ref in a captured screen — the whole menu. Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching session log to translate ref → selector. Prints EVERY strategy that computes a selector resolving to the target (resource id, text, structural, childOf, containsChild, spatial, index-qualified variants, plus a run-variable-wildcarded text variant), each with its strategy name + live match count, ranked most-stable first. Nothing computable is hidden.
-
-**Synopsis:**
-
-```
-trailblaze waypoint suggest-selector [OPTIONS] [<<positionalLogFile>>]
-```
-
-**Arguments:**
-
-| Argument | Description | Required |
-|----------|-------------|----------|
-| `<<positionalLogFile>>` | Path to a *_TrailblazeLlmRequestLog.json (required unless --session/--step given). Same shape as the input to `waypoint validate`. | No |
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--ref` | Element ref from the captured tree (e.g. 'a812'). Mutually exclusive with --at; exactly one must be provided. | - |
-| `--at` | Screen-coordinate pair `x,y` (in device pixels) identifying the target element. The frontmost interactive node whose bounds contain the point is selected via the same hit-test the runtime uses for taps. Useful for the deterministic Maestro-selector → accessibility-selector migration: resolve the Maestro selector to a center coordinate, then ask this command for an accessibility selector that covers the same node. Mutually exclusive with --ref / --maestro-selector. | - |
-| `--maestro-selector` | Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like `textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the shape used by the older Maestro-driver tap recordings. The selector is resolved against the captured `viewHierarchy` (Maestro tree) using the same matcher the runtime taps use; the resulting node's CENTER coordinate is then hit-tested against the captured `trailblazeNodeTree` (accessibility tree) to find the accessibility node that covers the same on-screen element. The output is the same selector cascade as `--ref` / `--at`, but starting from a Maestro selector. This is the deterministic Maestro→accessibility migration primitive. Mutually exclusive with --ref / --at. | - |
-| `--session` | Session log directory (containing *_TrailblazeLlmRequestLog.json files) | - |
-| `--step` | 1-based step within --session (default: last step) | - |
-| `--max` | Maximum candidate selectors to print (default: 25 — enough to show them all) | - |
-| `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1196,6 +1164,98 @@ trailblaze waypoint propose [OPTIONS]
 
 ---
 
+### `trailblaze selector`
+
+Suggest and check element selectors against captured screens, or the device's (--live).
+
+**Synopsis:**
+
+```
+trailblaze selector [OPTIONS]
+trailblaze selector suggest
+trailblaze selector match
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze selector suggest`
+
+Suggest selectors for one element of a captured screen, or the device's (--live) — the whole menu. Name the element by --ref (from `trailblaze snapshot --all`), by --at x,y, or by a legacy --maestro-selector. Prints EVERY strategy that computes a selector resolving to the element, each with its strategy name + live match count, ranked most-stable first.
+
+**Synopsis:**
+
+```
+trailblaze selector suggest [OPTIONS] [<<positionalLogFile>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<positionalLogFile>>` | Path to a *_TrailblazeLlmRequestLog.json (required unless --session or --batch is given). | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--ref` | Element ref from the captured tree (e.g. 'a812'). Exactly one of --ref, --at, or --maestro-selector must be provided. | - |
+| `--at`, `--xy` | Screen-coordinate pair `x,y` (in device pixels) identifying the target element. The frontmost interactive node whose bounds contain the point is selected via the same hit-test the runtime uses for taps. Useful for the deterministic Maestro-selector → accessibility-selector migration: resolve the Maestro selector to a center coordinate, then ask this command for an accessibility selector that covers the same node. Mutually exclusive with --ref / --maestro-selector. | - |
+| `--maestro-selector` | Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like `textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the shape used by the older Maestro-driver tap recordings. The selector is resolved against the captured `viewHierarchy` (Maestro tree) using the same matcher the runtime taps use; the resulting node's CENTER coordinate is then hit-tested against the captured `trailblazeNodeTree` (accessibility tree) to find the accessibility node that covers the same on-screen element. The output is the same selector cascade as `--ref` / `--at`, but starting from a Maestro selector. This is the deterministic Maestro→accessibility migration primitive. Mutually exclusive with --ref / --at. | - |
+| `--session` | Session log directory. Steps count every screen capture in it that has an element tree, oldest first. | - |
+| `--step` | 1-based step within --session (default: last step) | - |
+| `--live` | Read the connected device's current screen instead of a log: the screen `trailblaze snapshot --all` shows, so its refs resolve here. With --batch, lets lines read it with `live: true`. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `--max` | Maximum candidate selectors to print (default: 25 — enough to show them all) | - |
+| `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
+| `--json` | Print the menu as one JSON object instead of commented YAML. | - |
+| `--batch` | Answer many questions in one call. Each line is a JSON object with the same keys as the flags: `log` (or `session` + optional `step`, or `live: true` with --live), one of `ref` / `at` / `maestroSelector`, and optional `max` / `anchor` (defaulting to this command's --max / --anchor). Prints one JSON object per line, in order; a line that can't be answered prints {"line":N,"error":...} and the rest still run (exit 3 at the end, 2 if it failed unexpectedly). | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze selector match`
+
+Show what a selector matches on one or more captured screens, or the device's (--live). Pass several captures of the same screen (other runs, locales, devices) to check that a selector survives them. --expect unique|present|absent exits 1 if any screen fails.
+
+**Synopsis:**
+
+```
+trailblaze selector match [OPTIONS] [<<log>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<log>>` | Screen-state logs to match against (*_TrailblazeLlmRequestLog.json, *_TrailblazeSnapshotLog.json or *_AgentDriverLog.json). | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--selector` | The selector, as YAML or JSON — the same body a waypoint or `tool tap --selector` takes, or a `selector` value from `selector suggest --json`. | - |
+| `--selector-file` | Read the selector from a YAML or JSON file instead of --selector. | - |
+| `--session` | Session log directory to match against (repeatable). Uses --step, else its last step. | - |
+| `--step` | 1-based step within each --session (default: last step) | - |
+| `--live` | Also match against the connected device's current screen (the one `trailblaze snapshot --all` shows). Combines with log files and --session. With --batch, lets lines read it with `live: true`. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `--expect` | Check every screen: unique (exactly 1 match), present (1 or more), absent (none). Exits 1 if any screen fails. Without it, the command only reports. present and absent match the way a waypoint does; unique and no --expect check the selector as a tap, and refuse a web selector that web replay would locate differently. | - |
+| `--migration-tree` | Match against a dual-tree capture's accessibility migration tree instead of the primary tree. Its nodes have no refs. | - |
+| `--json` | Print the result as one JSON object. | - |
+| `--batch` | Answer many questions in one call. Each line is a JSON object: `selector` (an object or a YAML string), `logs` (an array), `session` + optional `step`, and/or `live: true` (needs --live), and optional `expect` (defaulting to this command's --expect). Prints one JSON object per line, in order. Exit 1 if any line fails its expectation; a line that can't be answered prints {"line":N,"error":...} and makes the exit 3 (2 if it failed unexpectedly). | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
 ### `trailblaze results`
 
 Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand.
@@ -1289,9 +1349,9 @@ trailblaze config reset
 
 | Key | Description | Valid Values |
 |-----|-------------|-------------|
-| `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) or 'none' to disable |
+| `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-6-luna, anthropic/claude-sonnet-4-20250514) or 'none' to disable |
 | `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. or 'none' to disable |
-| `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
+| `llm-model` | LLM model ID | e.g., gpt-6-luna, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
 | `target` | Target app for device connections and custom tools | App target ID. Run 'trailblaze config target' to see all. |
 | `android-driver` | Android driver type | accessibility, in-process |
 | `ios-driver` | iOS driver type | host, axe |
@@ -1731,7 +1791,7 @@ trailblaze inprocess make-test-apk [OPTIONS]
 | `--release` | Allow a non-debuggable target. Off by default because the usual cause of one is the wrong APK, not a deliberate release target. Signature equality is what actually gates attach, so a release build signed with the SAME key this command signs with is attachable and --release is the explicit override for it. A release build signed with a production key you do not hold stays unattachable no matter what you pass here. | - |
 | `--allow-runtime-tool-source` | Bake `allow_runtime_tool_source: true` into the injected --target-config, letting this APK load scripted-tool bundles pushed to /data/local/tmp at run time instead of the ones packaged in it. Off by default, and written before signing either way, so the signature records the choice and a key-ceremony APK cannot be turned into one by omission. | - |
 | `--target-config` | Target config to inject (`id:`, `display_name:`, `platforms:`, `tools:`). Without one the APK runs framework primitives only — no scripted tools. | - |
-| `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. | - |
+| `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. Its surveys/, if any, is packaged for ctx.surveys, and bundled with esbuild too. | - |
 | `--trail` | A *.trail.yaml to inject. Repeat for several. The shell discovers them at run time and reports one test per trail. | - |
 | `--esbuild` | esbuild binary, when --trailmap carries TypeScript and esbuild is not on PATH. | - |
 | `-h`, `--help` | Show this help message and exit. | - |

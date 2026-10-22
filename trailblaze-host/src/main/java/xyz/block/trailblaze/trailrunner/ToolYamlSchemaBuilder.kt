@@ -97,11 +97,10 @@ object ToolYamlSchemaBuilder {
       putJsonObject("requires_host") { put("type", "boolean"); put("description", "Host-only execution. TOOLS mode only; null defaults to false.") }
       putJsonObject("is_verification") { put("type", "boolean"); put("description", "Marks the tool as a read-only assertion. TOOLS mode only; null defaults to false.") }
       putJsonObject("trailhead") {
-        put("type", "object"); put("description", "METADATA mode: a trailhead (bootstrap to a waypoint, no `from`). File must be *.trailhead.yaml.")
+        put("type", "object"); put("description", "Marks the tool as a trailhead (bootstrap from any state, no `from`); `{}` is enough. File must be *.trailhead.yaml.")
         put("additionalProperties", true)
         putJsonObject("properties") {
-          putJsonObject("to") { put("type", "string"); put("description", "Waypoint that must match after the trailhead runs.") }
-          putJsonObject("dynamic") { put("type", "boolean"); put("description", "Whether the trailhead resolves its destination dynamically at runtime.") }
+          putJsonObject("to") { put("type", "string"); put("description", "Optional. The waypoint it usually lands on, drawn on the waypoint graph. Never checked.") }
         }
       }
     }

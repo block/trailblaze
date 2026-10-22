@@ -548,7 +548,12 @@ class TrailblazeTrailmapManifestLoaderTest {
       )
       assertEquals("ios_primitives", toolset.id)
       assertEquals(
-        listOf("ios_grantPrivacy", "ios_openUrl", "ios_resetKeychain", "ios_terminate"),
+        listOf(
+          "ios_openUrl",
+          "ios_resetKeychain",
+          "ios_setPermissions",
+          "ios_terminate",
+        ),
         toolset.tools,
       )
       // Always-enabled for the same reason as android_primitives: nothing activates a toolset the

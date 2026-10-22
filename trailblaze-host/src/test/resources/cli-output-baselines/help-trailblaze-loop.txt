@@ -193,10 +193,10 @@ every pass into the trail.
                                surface a visible window. Equivalent to
                                --show-browser when negated.
       --llm=<llm>            LLM provider/model shorthand (e.g.,
-                               openai/gpt-4-1). Mutually exclusive with
+                               openai/gpt-6-luna). Mutually exclusive with
                                --llm-provider and --llm-model.
       --llm-model=<llmModel> LLM model ID override (e.g., gemini-3-flash,
-                               gpt-4-1)
+                               gpt-6-luna)
       --llm-provider=<llmProvider>
                              LLM provider override (e.g., openai, anthropic,
                                google)

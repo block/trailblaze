@@ -65,8 +65,18 @@ object TrailEventsHostFunctions {
   internal fun streamFileFor(sessionDir: File, stream: String, context: TrailblazeToolExecutionContext): File? =
     streamFile(sessionDir, stream, context)
 
-  /** One stream line as a record: its order key, and what a match runs against. */
-  internal class ParsedRecord(val timeMs: Long, val data: JsonElement)
+  /**
+   * One stream line as a record: its order key, and what a match runs against. [deviceClock] is
+   * true when [timeMs] is a device stamp that couldn't be moved onto the host clock.
+   */
+  internal class ParsedRecord(val timeMs: Long, val data: JsonElement, val deviceClock: Boolean = false) {
+    /** `{ timeMs, data }`, plus `clock: "device"` when [timeMs] is still on the device clock. */
+    fun toJson(): JsonObject = buildJsonObject {
+      put(SessionEvents.TIME_FIELD, timeMs)
+      put("data", data)
+      if (deviceClock) put(SessionEvents.CLOCK_FIELD, TrailblazeClockDomain.DEVICE.wireName)
+    }
+  }
 
   /**
    * Parses one stream [line]: `data` for a [xyz.block.trailblaze.events.SessionEvent] envelope, the
@@ -88,7 +98,10 @@ object TrailEventsHostFunctions {
     val data = if (record.containsKey("data") && record.containsKey(SessionEvents.TIME_FIELD)) record["data"]!! else record
     val bindings = context.deviceBindings?.takeIf { it.names.size > 1 }
     if (bindings != null && isAnotherDevices(data, bindings)) return null
-    return ParsedRecord(hostTimeOf(record, clockTrack), data)
+    val timeMs = timeOf(record)
+    if (clockOf(record) != TrailblazeClockDomain.DEVICE.wireName) return ParsedRecord(timeMs, data)
+    val hostMs = clockTrack?.toHostMs(timeMs)
+    return ParsedRecord(hostMs ?: timeMs, data, deviceClock = hostMs == null)
   }
 
   private fun list(sessionDir: File?, context: TrailblazeToolExecutionContext): List<String> {
@@ -162,10 +175,7 @@ object TrailEventsHostFunctions {
       val record = parseRecord(line, context, clockTrack) ?: return@forward true
       if (record.timeMs < fromMs || record.timeMs > toMs) return@forward true
       if (match != null && !match.matches(record.data)) return@forward true
-      out += buildJsonObject {
-        put("timeMs", record.timeMs)
-        put("data", record.data)
-      }
+      out += record.toJson()
       out.size < limit
     }
     return JsonArray(out)
@@ -212,16 +222,8 @@ object TrailEventsHostFunctions {
       ?: (record[SessionEvents.LEGACY_TIME_FIELD] as? JsonPrimitive)?.longOrNull
       ?: 0L
 
-  /**
-   * [timeOf] on the host clock: a `clock: "device"` record converted through [clockTrack], or left
-   * raw when there is no measurement to convert with, which is what every record read as before.
-   */
-  private fun hostTimeOf(record: JsonObject, clockTrack: DeviceClockTrack?): Long {
-    val timeMs = timeOf(record)
-    val clock = (record[SessionEvents.CLOCK_FIELD] as? JsonPrimitive)?.contentOrNull
-    if (clock != TrailblazeClockDomain.DEVICE.wireName) return timeMs
-    return clockTrack?.toHostMs(timeMs) ?: timeMs
-  }
+  private fun clockOf(record: JsonObject): String? =
+    (record[SessionEvents.CLOCK_FIELD] as? JsonPrimitive)?.contentOrNull
 
   private fun sessionIdOf(context: TrailblazeToolExecutionContext) = context.sessionProvider.invoke().sessionId
 

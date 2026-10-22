@@ -64,7 +64,7 @@ export interface VerifyArticleStructureArgs {
 // loop scrolls *first* and verifies *second* so the final scroll's
 // freshly-rendered content gets checked before the throw.
 export const wikipedia_web_verifyArticleStructure = trailblaze.tool<VerifyArticleStructureArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const expectedHeading = typeof input.expectedHeading === "string"
       ? input.expectedHeading

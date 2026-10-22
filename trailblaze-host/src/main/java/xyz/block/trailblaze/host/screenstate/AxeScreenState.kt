@@ -35,6 +35,13 @@ class AxeScreenState(
    * read or its shared one (see [xyz.block.trailblaze.host.ios.IosDeviceManager.sharedScreenState]).
    */
   private val readTree: () -> TrailblazeNode? = { parseDescribeUi(describeUi(), "AxeScreenState") },
+  /**
+   * True when [readTree] may change the screen (it answers a notification alert): the screenshot
+   * is then taken after the tree, so both show the screen the read left behind.
+   */
+  private val readTreeBeforeScreenshot: () -> Boolean = { false },
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val captureScreenshot: () -> ByteArray? = { captureAxeScreenshot(udid) },
 ) : ScreenState {
 
   companion object {
@@ -141,18 +148,23 @@ class AxeScreenState(
   }
 
   override val screenshotBytes: ByteArray? by lazy {
-    val tmp = Files.createTempFile("axe-screen-", ".png")
-    val res = AxeCli.screenshot(udid, outputPath = tmp.toAbsolutePath().toString())
-    if (!res.success) {
-      System.err.println("[AxeScreenState] axe screenshot failed: ${res.stderr.trim()}")
-      Files.deleteIfExists(tmp)
-      null
-    } else {
-      try {
-        Files.readAllBytes(Paths.get(tmp.toAbsolutePath().toString()))
-      } finally {
-        Files.deleteIfExists(tmp)
-      }
-    }
+    if (readTreeBeforeScreenshot()) parsedTree
+    captureScreenshot()
+  }
+}
+
+/** One `axe screenshot` as PNG bytes; null (with a log line) when it fails. */
+internal fun captureAxeScreenshot(udid: String): ByteArray? {
+  val tmp = Files.createTempFile("axe-screen-", ".png")
+  val res = AxeCli.screenshot(udid, outputPath = tmp.toAbsolutePath().toString())
+  if (!res.success) {
+    System.err.println("[AxeScreenState] axe screenshot failed: ${res.stderr.trim()}")
+    Files.deleteIfExists(tmp)
+    return null
+  }
+  return try {
+    Files.readAllBytes(Paths.get(tmp.toAbsolutePath().toString()))
+  } finally {
+    Files.deleteIfExists(tmp)
   }
 }

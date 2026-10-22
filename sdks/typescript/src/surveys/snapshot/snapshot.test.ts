@@ -103,7 +103,7 @@ describe("a session read back from its snapshot", () => {
     for (const kind of ["tools", "objectives", "analytics", "screenText", "deviceLog", "trace"] as const) {
       expect({ kind, records: plain(fromSnapshot[kind].all()) }).toEqual({ kind, records: plain(fromDisk[kind].all()) });
     }
-    expect(fromSnapshot.logs.length).toBe(fromDisk.logs.length);
+    expect(fromSnapshot.trailblazeLogs.length).toBe(fromDisk.trailblazeLogs.length);
     expect(fromSnapshot.network.length).toBe(fromDisk.network.length);
     expect(fromSnapshot.events.length).toBe(fromDisk.events.length);
     expect(fromSnapshot.summary).toEqual({ ...fromDisk.summary, path: fromDisk.summary.id });
@@ -111,7 +111,7 @@ describe("a session read back from its snapshot", () => {
 
   test("keeps a tool call's log and an analytics event's raw row as the records they came from", () => {
     const tool = fromSnapshot.tools.find({ name: "tapOn" })!;
-    expect(tool.log).toBe(fromSnapshot.logs.find({ type: "TrailblazeToolLog" })!.log as never);
+    expect(tool.log).toBe(fromSnapshot.trailblazeLogs.find({ type: "TrailblazeToolLog" })!.log as never);
     const event = fromSnapshot.analytics.find({ name: "Payment Complete" })!;
     expect(event.raw).toBe(fromSnapshot.stream("app.analytics")[0]!.data);
     // So a `contains:` query, which reads `raw`, answers as it does on disk.
@@ -119,7 +119,7 @@ describe("a session read back from its snapshot", () => {
   });
 
   test("refuses a dropped view tree by name, and keeps a tree the capture recorded as absent", () => {
-    const [withTree, without] = fromSnapshot.logs.filter({ type: "MaestroDriverLog" });
+    const [withTree, without] = fromSnapshot.trailblazeLogs.filter({ type: "MaestroDriverLog" });
     expect(() => (withTree!.log as unknown as { viewHierarchy: unknown }).viewHierarchy).toThrow(NotInSnapshotError);
     expect(() => (withTree!.log as unknown as { viewHierarchy: unknown }).viewHierarchy).toThrow(/not its `viewHierarchy`/);
     expect((without!.log as unknown as { viewHierarchy: unknown }).viewHierarchy).toBeNull();
@@ -129,10 +129,10 @@ describe("a session read back from its snapshot", () => {
 
   test("a text search over logs refuses rather than misses what the snapshot left out", () => {
     // The text is only inside the dropped view tree: on disk it is found, from a snapshot it cannot be.
-    expect(fromDisk.logs.filter({ contains: "Total $5.00" })).toHaveLength(1);
-    expect(() => fromSnapshot.logs.filter({ contains: "Total $5.00" })).toThrow(NotInSnapshotError);
+    expect(fromDisk.trailblazeLogs.filter({ contains: "Total $5.00" })).toHaveLength(1);
+    expect(() => fromSnapshot.trailblazeLogs.filter({ contains: "Total $5.00" })).toThrow(NotInSnapshotError);
     // A search scoped to records that lost nothing still answers.
-    expect(fromSnapshot.logs.filter({ type: "TrailblazeToolLog", contains: "tapOn" })).toHaveLength(1);
+    expect(fromSnapshot.trailblazeLogs.filter({ type: "TrailblazeToolLog", contains: "tapOn" })).toHaveLength(1);
   });
 
   test("keeps request bodies under the limit, refuses the rest and every response body", () => {
@@ -238,7 +238,7 @@ test("a record carrying every tree and both halves of the conversation keeps non
 
   const text = JSON.stringify(snapshotOf(SurveySession.load(dir)));
   for (const k of bulk) expect(text).not.toContain(`${k}-bytes`);
-  const llm = sessionFromSnapshot(JSON.parse(text)).logs.find({ type: "TrailblazeLlmRequestLog" })!.log as unknown as Record<string, unknown>;
+  const llm = sessionFromSnapshot(JSON.parse(text)).trailblazeLogs.find({ type: "TrailblazeLlmRequestLog" })!.log as unknown as Record<string, unknown>;
   for (const k of bulk) expect(() => llm[k]).toThrow(NotInSnapshotError);
   // The model's own numbers are the reason to keep an LLM record at all, and they survive.
   expect(llm.llmRequestLabel).toBe("Screen Analyzer");

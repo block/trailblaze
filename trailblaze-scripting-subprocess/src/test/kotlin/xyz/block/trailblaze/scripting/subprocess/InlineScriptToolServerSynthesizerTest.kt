@@ -39,9 +39,6 @@ class InlineScriptToolServerSynthesizerTest {
   private val authorFile = File(tmpDir, "greet_user.js")
   private val helperFile = File(tmpDir, "shared.js")
   private val generatedDir = File(tmpDir, "generated")
-  private val realConditionalExampleFile = locateExampleFile(
-    "examples/playwright-native/trails/config/tools/playwrightSample_web_openFormIfNeeded.js",
-  )
 
   private val baseContext = McpSpawnContext(
     platform = TrailblazeDevicePlatform.ANDROID,
@@ -842,15 +839,30 @@ class InlineScriptToolServerSynthesizerTest {
     }
   }
 
-  @Test fun `registered conditional example can branch when an inner tool probe fails`() {
+  @Test fun `a tool can branch when an inner tool probe fails`() {
+    // An inner tool's `success: false` must reach the author as a throw they can catch, so a tool
+    // can probe state and branch on it. Checked through the generated wrapper and a real callback.
     runBlocking {
       assumeTrue(
         "bun must be on PATH to exercise the synthesized inline tool host path",
         runtimeAvailable(),
       )
-      assumeTrue(
-        "Playwright conditional example must exist in the repo",
-        realConditionalExampleFile.isFile,
+      val conditionalTool = File(tmpDir, "openFormIfNeeded.js")
+      conditionalTool.writeText(
+        """
+        export async function playwrightSample_web_openFormIfNeeded(args, _ctx, client) {
+          const ref = "css=a[href='#form']";
+          await client.callTool("web_navigate", { action: "GOTO", url: args.relativePath });
+          try {
+            await client.callTool("web_verifyElementVisible", { ref });
+            return "The form section was already visible.";
+          } catch {
+            await client.callTool("web_click", { ref });
+            await client.callTool("web_verifyElementVisible", { ref });
+            return "Opened the form section.";
+          }
+        }
+        """.trimIndent() + "\n",
       )
 
       val requestedTools = mutableListOf<String>()
@@ -900,7 +912,7 @@ class InlineScriptToolServerSynthesizerTest {
       val generated = InlineScriptToolServerSynthesizer.synthesize(
         tools = listOf(
           InlineScriptToolConfig(
-            script = realConditionalExampleFile.absolutePath,
+            script = conditionalTool.absolutePath,
             name = "playwrightSample_web_openFormIfNeeded",
             description = "Conditional example tool.",
             inputSchema = buildJsonObject {
@@ -1013,23 +1025,6 @@ class InlineScriptToolServerSynthesizerTest {
     true
   } catch (_: NoBunRuntimeException) {
     false
-  }
-
-  private fun locateExampleFile(relative: String): File {
-    // Walk up from the JVM working directory looking for the example file. Also peeks
-    // one level into immediate child directories so the test still resolves when run
-    // from a parent workspace root that nests this checkout one level deeper.
-    var dir: File? = File(System.getProperty("user.dir"))
-    while (dir != null) {
-      val direct = File(dir, relative)
-      if (direct.isFile) return direct
-      dir.listFiles { f -> f.isDirectory }?.forEach { child ->
-        val nested = File(child, relative)
-        if (nested.isFile) return nested
-      }
-      dir = dir.parentFile
-    }
-    return File(System.getProperty("user.dir"), relative)
   }
 
   private fun callbackSuccess(textContent: String): String =

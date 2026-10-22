@@ -50,7 +50,7 @@ function logOf(record: ReturnType<SurveySession["logs"]["all"]>[number]): Snapsh
 }
 
 export function snapshotOf(session: SurveySession): SessionSnapshot {
-  const logs = session.logs.all();
+  const logs = session.trailblazeLogs.all();
   const logIndex = new Map<unknown, number>(logs.map((r, i) => [r.log, i]));
   const events = session.events.all();
   const eventIndex = new Map<unknown, number>(events.map((e, i) => [e.data, i]));

@@ -86,7 +86,7 @@ interface InteractionToolFactory {
 
   /**
    * Returns the alternative selectors the recording UI can offer the author for the tap at
-   * (x, y) — same primitive as `./trailblaze waypoint suggest-selector` runs against a
+   * (x, y) — same primitive as `./trailblaze selector suggest` runs against a
    * captured log. The first entry has [TrailblazeNodeSelectorGenerator.NamedSelector.isBest]
    * set and matches the selector [createTapTool] emitted by default.
    *

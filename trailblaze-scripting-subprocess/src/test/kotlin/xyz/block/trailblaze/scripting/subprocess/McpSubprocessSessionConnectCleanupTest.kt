@@ -198,13 +198,13 @@ class McpSubprocessSessionConnectCleanupTest {
    * lever would leave them green — this one goes red.
    *
    * The fixture works by DELAYING the organic path, not removing it. [STDIO_HOLDING_EXIT]
-   * exits immediately, so `onExit()` fires at once, but the backgrounded grandchild inherits the
-   * stdout pipe's write end and holds it open — so for the next 2s the process is dead with no EOF in
-   * sight, `initialize` is never answered, and the await just parks. The grandchild holds the stdin
-   * pipe too, through fd 3: a non-interactive shell gives a background job `/dev/null` for stdin, so
-   * once `sh` exits nothing reads the pipe, and the client's `initialize` write fails with a broken
-   * pipe before the lever's grace is up. dash (Linux's `/bin/sh`) applies that `/dev/null` before the
-   * job's own redirections, so a plain `<&0` would copy `/dev/null`; the pipe is saved on fd 3 first.
+   * exits as soon as it has read the client's `initialize`, so `onExit()` fires then, but the
+   * backgrounded grandchild inherits the stdout pipe's write end and holds it open — so for the
+   * next 2s the process is dead with no EOF in sight, `initialize` is never answered, and the await
+   * just parks. Exiting only after that read is load-bearing: once the child exits, the JDK closes
+   * the parent's stdin and drains stdout unless a read is already blocked on it, so a child that
+   * exits before the client has written and started reading fails the connect with "Connection
+   * closed" instead. Exiting at once lost that race on every attempt on a busy Linux CI agent.
    * The lever claims that park after its ~250ms grace, roughly 8x sooner than the deferred EOF at
    * 2s, which makes [McpSubprocessExitedDuringHandshakeException] the outcome and pins the exit code
    * (0 — a clean exit that never served MCP) too. Verified by mutation: disable the lever and this is the only test in
@@ -351,8 +351,8 @@ class McpSubprocessSessionConnectCleanupTest {
      */
     const val FIXTURE_ATTEMPTS = 5
 
-    /** Exits at once, leaving a grandchild that holds the stdin and stdout pipes open for 2s. */
-    const val STDIO_HOLDING_EXIT = "exec 3<&0; sleep 2 <&3 & exit 0"
+    /** Exits once it reads one line, leaving a grandchild that holds stdout open for 2s. */
+    const val STDIO_HOLDING_EXIT = "sleep 2 & read -r _; exit 0"
 
     /** First of [candidates] that exists and is executable, or null if none (e.g. Windows). */
     fun firstExecutable(vararg candidates: String): File? =

@@ -19,7 +19,6 @@ import { join } from "node:path";
 import { discoverSessions, loadSurveys, type LoadedSurvey } from "./discover.js";
 import { renderMarkdown, renderSummaryLines } from "./report.js";
 import { runSurveys } from "./runner.js";
-import { selectsFeature } from "./survey.js";
 import { loadTargetCatalog, sessionMatchesTarget, type TargetCatalog } from "./targets.js";
 import type { SessionSummary } from "./types.js";
 import { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
@@ -38,7 +37,7 @@ Options:
       --format <fmt>        stdout format: markdown (default without --out), summary (default with --out), json, none
       --no-evidence         Omit evidence lines from the markdown report
       --extract-dir <dir>   Where zips are unpacked (default: a temp dir)
-      --feature <id>        Only run surveys for this feature (repeatable)
+      --survey <name>       Only run the survey exported under this name (repeatable)
       --tag <tag>           Only run surveys carrying this tag (repeatable)
       --platform <p>        Only sessions on this platform: android, ios, web, ... (repeatable)
       --device <classifier> Only sessions whose device carries this classifier: iphone, ipad, tablet, ... (repeatable)
@@ -64,7 +63,7 @@ async function main(argv: string[]): Promise<number> {
       format: { type: "string" },
       "no-evidence": { type: "boolean" },
       "extract-dir": { type: "string" },
-      feature: { type: "string", multiple: true },
+      survey: { type: "string", multiple: true },
       tag: { type: "string", multiple: true },
       platform: { type: "string", multiple: true },
       device: { type: "string", multiple: true },
@@ -107,8 +106,7 @@ async function main(argv: string[]): Promise<number> {
   let surveys = loaded.map((l) => l.definition);
   // A survey scoped to another target would only report every session as skipped.
   if (values.target?.length) surveys = surveys.filter((c) => !c.spec.targets || c.spec.targets.some((t) => values.target!.includes(t)));
-  // A catalog survey's own `feature` is a family name; `--feature refunds` must find the survey that reports it.
-  if (values.feature?.length) surveys = surveys.filter((c) => selectsFeature(c.spec, values.feature!));
+  if (values.survey?.length) surveys = surveys.filter((c) => c.id !== undefined && values.survey!.includes(c.id));
   if (values.tag?.length) surveys = surveys.filter((c) => c.spec.tags?.some((t) => values.tag!.includes(t)));
   if (surveys.length === 0) {
     process.stderr.write(`No surveys found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);

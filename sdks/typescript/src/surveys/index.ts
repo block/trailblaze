@@ -1,26 +1,32 @@
-// `@trailblaze/scripting/surveys` — detect known features in finished sessions.
+// `@trailblaze/scripting/surveys` — named checks over sessions, each finding pinned to the records that prove it.
 //
 //   import { trailblaze } from "@trailblaze/scripting/surveys";
 //
 //   export const giftCardCheckout = trailblaze.survey(
-//     { feature: "checkout.gift-card", description: "A sale was tendered with a gift card" },
+//     { description: "A sale was tendered with a gift card" },
 //     (session) => {
 //       const tender = session.network.find({ method: "POST", path: /\/payments$/, requestBody: "GIFT_CARD", status: "ok" });
 //       if (!tender) return;
 //       const receipt = session.analytics.find({ name: "Payment Complete" });
-//       return { summary: "Gift card tender accepted", evidence: [tender, receipt].filter(Boolean) };
+//       return { summary: "Gift card tender accepted", evidence: [tender, receipt].filter(Boolean), data: { amount: tender.detail } };
 //     },
 //   );
 //
-// Export one survey per feature from a `*.survey.ts` file, then run them over any number of
-// sessions with the CLI in `cli.ts` or `runSurveys()` from code. Each session yields the list of
-// features it exercised, each backed by the records that prove it.
+// Export surveys from a `*.survey.ts` file; each one's name is its export name. Run them over any
+// number of finished sessions with the CLI in `cli.ts` or `runSurveys()` from code, or from a tool
+// while the trail runs (`ctx.surveys.<name>()`). A finding is a summary, the records that prove it,
+// and whatever `data` its survey chose to carry.
 
-export { DIAGNOSIS_KINDS, survey, isSurvey, matchFootprint, purposeOf, surveyFeatures, withId } from "./survey.js";
-export type { SurveyPurpose, SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult, FootprintSpec, FootprintQueries } from "./survey.js";
+export { survey, explainFinding, explainFootprint, isSurvey, matchFinding, matchFootprint, withId } from "./survey.js";
+export type { SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult, FindingExplanation, FindingSpec, FindingQueries, FootprintExplanation, FootprintSpec, FootprintQueries } from "./survey.js";
+// Running a survey while the trail runs, over `ctx.events`. Also the only part a survey bundle sees
+// in the sandbox (`./in-process.ts`).
+export { FinishedSessionRequiredError, LiveSessionReader, runNamedLiveSurvey, runLiveSurvey } from "./live.js";
+export type { LiveSurveyOptions, LiveSurveyResult, LiveEventSource, LiveRead, LiveSessionOptions, LiveSurveyOutcome } from "./live.js";
 export { SurveySession, isSessionDirectory, parseIsoMs } from "./session.js";
 export type { LogQuery } from "./session.js";
 export { Records } from "./match.js";
+export type { LogRecords, Predicate, TrailblazeLogOf, TrailblazeLogType } from "./match.js";
 export type {
   AnalyticsQuery,
   ContainsMatch,
@@ -35,7 +41,7 @@ export type {
   ValueMatch,
 } from "./match.js";
 export { compactRecord, runSurvey, runSurveys } from "./runner.js";
-export type { SurveyReport, FeatureSummary, RunOptions, SessionResult } from "./runner.js";
+export type { SurveyReport, SurveySummary, RunOptions, SessionResult, SurveyError } from "./runner.js";
 export { discoverSessions, loadSurveys } from "./discover.js";
 export { findTrailmapFiles, loadTargetCatalog, sessionMatchesTarget, targetFromTrailmap, targetsOf } from "./targets.js";
 export type { TargetCatalog, TargetDefinition } from "./targets.js";

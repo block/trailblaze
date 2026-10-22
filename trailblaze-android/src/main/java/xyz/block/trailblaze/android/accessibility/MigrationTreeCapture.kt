@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.filterImportantForAccessibility
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.util.Console
 

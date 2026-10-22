@@ -80,7 +80,7 @@ object IosHostUtils {
     return result
   }
 
-  fun clearAppDataContainer(deviceId: String, appId: String) {
+  suspend fun clearAppDataContainer(deviceId: String, appId: String) {
     IosHostSimctlUtils.clearAppDataContainer(deviceId = deviceId, appId = appId)
   }
 

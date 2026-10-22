@@ -16,7 +16,11 @@ import xyz.block.trailblaze.agent.RecommendationContext
 import xyz.block.trailblaze.agent.ScreenAnalysis
 import xyz.block.trailblaze.agent.ScreenAnalyzer
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.api.CompactScreenElements
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -38,12 +42,14 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.toolcalls.toOtherTrailblazeToolPayload
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedTrailItems
@@ -342,6 +348,174 @@ class StepToolSetDirectToolsTest {
     assertTrue(toolLogs.single().isTopLevelToolCall)
     assertTrue(toolLogs.single().isRecordable)
     assertContains(result, "OK")
+  }
+
+  @Test
+  fun `direct tools give each invocation a distinct trace shared with its executor`() = runTest {
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val executorTraces = mutableListOf<TraceId?>()
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> dummyScreenState },
+      rawToolExecutor = { _, traceId -> executorTraces += traceId; "OK" },
+      logEmitter = LogEmitter { emittedLogs += it },
+      sessionIdProvider = { SessionId("invocation-traces") },
+    )
+
+    toolSet.step(
+      objective = "Tap twice",
+      tools = "- tapOnPoint: {x: 1, y: 2}\n- tapOnPoint: {x: 3, y: 4}",
+    )
+
+    val outerTraces = emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+      .filter { it.isTopLevelToolCall }.map { it.traceId }
+    assertEquals(2, outerTraces.distinct().size)
+    assertEquals(executorTraces, outerTraces)
+  }
+
+  @Test
+  fun `direct Maestro chooses safe inner launch provenance beside a sibling tap`() = runTest {
+    val sessionId = SessionId("maestro-recording-session")
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val emitter = LogEmitter { emittedLogs += it }
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> dummyScreenState },
+      rawToolExecutor = { tool, traceId ->
+        when (tool) {
+          is MaestroTrailblazeTool -> emitter.emit(TrailblazeLog.TrailblazeToolLog(
+            trailblazeTool = tool.toLogPayload(),
+            rawTrailblazeTool = tool.toOtherTrailblazeToolPayload(),
+            toolName = "mobile_maestro",
+            successful = true,
+            traceId = traceId,
+            durationMs = 1L,
+            session = sessionId,
+            timestamp = Clock.System.now(),
+            isRecordable = true,
+          ))
+          is AssertVisibleTrailblazeTool -> emitter.emit(TrailblazeLog.TrailblazeToolLog(
+            trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
+              nodeSelector = TrailblazeNodeSelector.withMatch(
+                DriverNodeMatch.AndroidAccessibility(textRegex = "Battery percentage"),
+              ),
+            ).toLogPayload(),
+            toolName = "assertVisibleBySelector",
+            successful = true,
+            traceId = traceId,
+            durationMs = 1L,
+            session = sessionId,
+            timestamp = Clock.System.now(),
+            isRecordable = true,
+          ))
+          else -> assertTrue(tool is TapOnPointTrailblazeTool)
+        }
+        "OK"
+      },
+      logEmitter = emitter,
+      sessionIdProvider = { sessionId },
+    )
+
+    toolSet.step(
+      objective = "Launch and tap",
+      tools = """
+        - mobile_maestro:
+            commands:
+              - launchApp:
+                  appId: com.example.app
+                  arguments:
+                    credential: '{{token}}'
+        - tapOnPoint:
+            x: 100
+            y: 200
+        - assertVisible:
+            ref: k138
+      """.trimIndent(),
+    )
+
+    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
+    assertEquals(listOf("mobile_maestro", "tapOnPoint", "assertVisibleBySelector"), recording?.tools?.map { it.name })
+    assertContains(recording.toString(), "{{token}}")
+
+    // Persisted logs may be sorted by start timestamp rather than emission order; the outer
+    // wrapper starts before its inner dispatch even though it is emitted afterward.
+    val reordered = emittedLogs.toMutableList()
+    val innerIndex = reordered.indexOfFirst { it is TrailblazeLog.TrailblazeToolLog &&
+      it.toolName == "mobile_maestro" && !it.isTopLevelToolCall }
+    val outerIndex = reordered.indexOfFirst { it is TrailblazeLog.TrailblazeToolLog &&
+      it.toolName == "mobile_maestro" && it.isTopLevelToolCall }
+    val inner = reordered[innerIndex]
+    reordered[innerIndex] = reordered[outerIndex]
+    reordered[outerIndex] = inner
+    val reorderedRecording = reordered.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
+    assertEquals(listOf("mobile_maestro", "tapOnPoint", "assertVisibleBySelector"), reorderedRecording?.tools?.map { it.name })
+  }
+
+  @Test
+  fun `direct Maestro without an inner log keeps its outer action`() = runTest {
+    val sessionId = SessionId("maestro-no-inner-session")
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> dummyScreenState },
+      rawToolExecutor = { _, _ -> "OK" },
+      logEmitter = LogEmitter { emittedLogs += it },
+      sessionIdProvider = { sessionId },
+    )
+
+    toolSet.step(
+      objective = "Enter a value",
+      tools = """
+        - mobile_maestro:
+            commands:
+              - inputText: Hello
+      """.trimIndent(),
+    )
+
+    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
+    assertEquals(listOf("mobile_maestro"), recording?.tools?.map { it.name })
+  }
+
+  @Test
+  fun `failed direct wrapper retains a successful inner action`() = runTest {
+    val sessionId = SessionId("failed-wrapper-session")
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val emitter = LogEmitter { emittedLogs += it }
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> dummyScreenState },
+      rawToolExecutor = { _, traceId ->
+        emitter.emit(TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = TapOnPointTrailblazeTool(x = 10, y = 20).toLogPayload(),
+          toolName = "tapOnPoint",
+          successful = true,
+          traceId = traceId,
+          durationMs = 1L,
+          session = sessionId,
+          timestamp = Clock.System.now(),
+          isRecordable = true,
+        ))
+        error("A later composite action failed")
+      },
+      logEmitter = emitter,
+      sessionIdProvider = { sessionId },
+    )
+
+    toolSet.step(
+      objective = "Attempt two actions",
+      tools = "- tapOnPoint:\n    x: 100\n    y: 200",
+    )
+
+    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
+    assertEquals(listOf("tapOnPoint"), recording?.tools?.map { it.name })
   }
 
   @Test
@@ -1176,6 +1350,67 @@ class StepToolSetDirectToolsTest {
       screenStateInvocations,
       "takeSnapshot must consume the captured screen state — pre-validation should be skipped, awaitScreenState should run.",
     )
+  }
+
+  /**
+   * `selector suggest --live --ref` resolves the refs `snapshot --all` printed. Those come from a
+   * compact list rebuilt with ALL_ELEMENTS, which names containers the capture's own refs leave
+   * out, so the screen JSON must carry the rebuilt refs, not the captured ones.
+   */
+  @Test
+  fun `takeSnapshot screenJson carries exactly the refs the same snapshot prints`() = runTest {
+    fun node(id: Long, className: String, text: String? = null, clickable: Boolean = false, top: Int = 0,
+             children: List<TrailblazeNode> = emptyList()) = TrailblazeNode(
+      nodeId = id,
+      bounds = TrailblazeNode.Bounds(left = 0, top = top, right = 1080, bottom = top + 200),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        className = className, text = text, isClickable = clickable, isVisibleToUser = true, isEnabled = true,
+      ),
+      children = children,
+    )
+    val raw = node(
+      1, "android.widget.FrameLayout",
+      children = listOf(
+        node(
+          2, "android.widget.LinearLayout",
+          children = listOf(
+            node(3, "android.widget.TextView", text = "Balance", top = 0),
+            node(4, "android.widget.Button", text = "Pay", clickable = true, top = 400),
+          ),
+        ),
+      ),
+    )
+    // Captured the way the Android screen states do it: refs from the default compact list.
+    val captured = CompactScreenElements.buildForAndroid(raw, screenHeight = 2400, screenWidth = 1080)
+    val screen = object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth = 1080
+      override val deviceHeight = 2400
+      override val viewHierarchy = ViewHierarchyTreeNode()
+      override val trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+      override val deviceClassifiers = emptyList<TrailblazeDeviceClassifier>()
+      // Every node starts with a ref, so one the rebuild omits would keep a ref nothing printed.
+      override val trailblazeNodeTree = captured.applyRefsToTree(raw.withRefs((1L..4L).associateWith { "q$it" }))
+      override val viewHierarchyTextRepresentation = captured.buildTextRepresentation("com.example")
+    }
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> screen },
+    )
+
+    val printed = toolSet.step(objective = "snap", tools = "- takeSnapshot: {}", snapshotDetails = "ALL_ELEMENTS")
+    val json = toolSet.step(
+      objective = "snap", tools = "- takeSnapshot: {}", snapshotDetails = "ALL_ELEMENTS", screenJson = true,
+    )
+
+    val printedRefs = Regex("""\[([a-z]\d+)]""").findAll(printed).map { it.groupValues[1] }.toSet()
+    val treeRefs = SessionLogScreenState.decode(json).trailblazeNodeTree!!.aggregate().mapNotNull { it.ref }.toSet()
+    val capturedRefs = screen.trailblazeNodeTree.aggregate().mapNotNull { it.ref }.toSet()
+    assertTrue((printedRefs - capturedRefs).isNotEmpty(), "fixture must print a ref the capture lacks: $printed")
+    assertEquals(emptySet(), printedRefs - treeRefs, "printed refs missing from the screen JSON:\n$printed")
+    assertTrue((capturedRefs - printedRefs).isNotEmpty(), "fixture must have a captured ref the snapshot omits: $printed")
+    assertEquals(emptySet(), treeRefs - printedRefs, "the screen JSON carries refs the snapshot never printed")
   }
 
   @Test

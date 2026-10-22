@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.waypoint
 
 import java.io.File
+import kotlinx.datetime.Instant
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -174,6 +175,101 @@ class SessionLogScreenStateTest {
       logs.map { it.name },
       "logs must order chronologically by JSON timestamp regardless of hex-hash filename order",
     )
+  }
+
+  @Test
+  fun `listScreenStateLogs compares timestamps as instants, not strings`() {
+    // As strings, "10:00:00.500Z" < "10:00:00Z" ('.' sorts before 'Z'), which would put the
+    // later capture first.
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "aaa_AgentDriverLog.json", """{"timestamp":"2026-05-08T10:00:00.500Z"}""")
+    writeLog(sessionDir, "bbb_AgentDriverLog.json", """{"timestamp":"2026-05-08T10:00:00Z"}""")
+
+    val logs = SessionLogScreenState.listScreenStateLogs(sessionDir)
+    assertEquals(listOf("bbb_AgentDriverLog.json", "aaa_AgentDriverLog.json"), logs.map { it.name })
+  }
+
+  @Test
+  fun `listScreenStateLogs orders a device-stamped capture on the host clock`() {
+    // The device's clock runs 60s ahead: its tool log, stamped 10:01:00 by the device, reached the
+    // host at 10:00:00.100. Its driver capture stamped 10:01:10 was taken at about 10:00:10 host
+    // time, before the host-stamped LLM request at 10:00:30, which is the session's last screen.
+    val sessionDir = newTempDir()
+    writeLog(
+      sessionDir,
+      "001_TrailblazeToolLog.json",
+      """{"class":"xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog",""" +
+        """"trailblazeTool":{"toolName":"tap","raw":{}},"toolName":"tap","successful":true,""" +
+        """"traceId":"tool-1","durationMs":0,"session":"s","timestamp":"2026-05-08T10:01:00Z",""" +
+        """"clock":"device","hostReceivedAt":"2026-05-08T10:00:00.100Z"}""",
+    )
+    writeLog(
+      sessionDir,
+      "aaa_AgentDriverLog.json",
+      """{"timestamp":"2026-05-08T10:01:10Z","clock":"device","hostReceivedAt":"2026-05-08T10:00:10.200Z"}""",
+    )
+    writeLog(sessionDir, "bbb_TrailblazeLlmRequestLog.json", """{"timestamp":"2026-05-08T10:00:30Z"}""")
+
+    val logs = SessionLogScreenState.listScreenStateLogs(sessionDir)
+
+    assertEquals(listOf("aaa_AgentDriverLog.json", "bbb_TrailblazeLlmRequestLog.json"), logs.map { it.name })
+  }
+
+  @Test
+  fun `listScreenStateLogs reads only a log's own clock, not one nested in its body`() {
+    // The LLM request is host-stamped; only a tool argument inside it says "device". Shifting it by
+    // the device's -60s offset would put it before the capture and make the capture the last screen.
+    val sessionDir = newTempDir()
+    writeAnchoredToolLog(sessionDir)
+    writeLog(
+      sessionDir,
+      "aaa_AgentDriverLog.json",
+      """{"timestamp":"2026-05-08T10:01:10Z","clock":"device","hostReceivedAt":"2026-05-08T10:00:10.200Z"}""",
+    )
+    writeLog(
+      sessionDir,
+      "bbb_TrailblazeLlmRequestLog.json",
+      """{"actions":[{"name":"tap","args":{"clock":"device","timestamp":"2026-05-08T09:00:00Z"}}],""" +
+        """"timestamp":"2026-05-08T10:00:30Z","clock":"host"}""",
+    )
+
+    val logs = SessionLogScreenState.listScreenStateLogs(sessionDir)
+
+    assertEquals(listOf("aaa_AgentDriverLog.json", "bbb_TrailblazeLlmRequestLog.json"), logs.map { it.name })
+  }
+
+  @Test
+  fun `listScreenStateLogsOnHostClock puts each session's captures on the host clock for comparing sessions`() {
+    // Session A's device runs 60s ahead; its capture stamped 10:01:10 was taken at 10:00:10 host
+    // time (shifted by the -59.9s offset its tool log gives), before session B's host-stamped capture at 10:00:30.
+    val sessionA = newTempDir()
+    writeAnchoredToolLog(sessionA)
+    writeLog(
+      sessionA,
+      "aaa_AgentDriverLog.json",
+      """{"timestamp":"2026-05-08T10:01:10Z","clock":"device","hostReceivedAt":"2026-05-08T10:00:10.200Z"}""",
+    )
+    val sessionB = newTempDir()
+    writeLog(sessionB, "bbb_TrailblazeLlmRequestLog.json", """{"timestamp":"2026-05-08T10:00:30Z"}""")
+
+    val a = SessionLogScreenState.listScreenStateLogsOnHostClock(sessionA).single().second!!
+    val b = SessionLogScreenState.listScreenStateLogsOnHostClock(sessionB).single().second!!
+
+    assertEquals(Instant.parse("2026-05-08T10:00:10.100Z"), a)
+    assertTrue(a < b)
+  }
+
+  @Test
+  fun `listScreenStateLogs keeps a device stamp as written when the session has no anchor to shift it by`() {
+    // Device logs pulled off the device after a run never reached the host, so nothing says how far
+    // the device's clock is off; the stamps are compared as written.
+    val sessionDir = newTempDir()
+    writeLog(sessionDir, "aaa_AgentDriverLog.json", """{"timestamp":"2026-05-08T10:01:10Z","clock":"device"}""")
+    writeLog(sessionDir, "bbb_TrailblazeLlmRequestLog.json", """{"timestamp":"2026-05-08T10:00:30Z"}""")
+
+    val logs = SessionLogScreenState.listScreenStateLogs(sessionDir)
+
+    assertEquals(listOf("bbb_TrailblazeLlmRequestLog.json", "aaa_AgentDriverLog.json"), logs.map { it.name })
   }
 
   @Test
@@ -352,6 +448,16 @@ class SessionLogScreenStateTest {
   // Test infrastructure.
   // ==========================================================================
 
+  /** A tool log from a device 60s ahead of the host: stamped 10:01:00, received at 10:00:00.100. */
+  private fun writeAnchoredToolLog(sessionDir: File) = writeLog(
+    sessionDir,
+    "001_TrailblazeToolLog.json",
+    """{"class":"xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog",""" +
+      """"trailblazeTool":{"toolName":"tap","raw":{}},"toolName":"tap","successful":true,""" +
+      """"traceId":"tool-1","durationMs":0,"session":"s","timestamp":"2026-05-08T10:01:00Z",""" +
+      """"clock":"device","hostReceivedAt":"2026-05-08T10:00:00.100Z"}""",
+  )
+
   private fun newTempDir(): File {
     val dir = createTempDirectory(prefix = "sls-test-").toFile()
     tempDirs += dir
@@ -360,4 +466,13 @@ class SessionLogScreenStateTest {
 
   private fun writeLog(sessionDir: File, name: String, json: String): File =
     File(sessionDir, name).apply { writeText(json) }
+
+  @Test
+  fun `a capture known to have lost nodes still says so after encode and decode`() {
+    val partial = SessionLogScreenState.decode("""{"deviceWidth":1080,"deviceHeight":2400,"droppedNodeFetches":4}""")
+    assertEquals(4, partial.droppedNodeFetches)
+    assertEquals(4, SessionLogScreenState.decode(SessionLogScreenState.encode(partial)).droppedNodeFetches)
+    // A log that never recorded it stays unknown, not complete.
+    assertNull(SessionLogScreenState.decode("""{"deviceWidth":1080,"deviceHeight":2400}""").droppedNodeFetches)
+  }
 }

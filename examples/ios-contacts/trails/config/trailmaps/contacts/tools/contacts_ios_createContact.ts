@@ -22,7 +22,7 @@ export interface CreateContactArgs {
 // descriptor — iOS Contacts mounts the fields lazily as the user scrolls, and a
 // positional selector would otherwise tap the wrong row when the form is mid-scroll.
 export const contacts_ios_createContact = trailblaze.tool<CreateContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const firstName = nonEmptyString(input?.firstName, DEFAULT_FIRST_NAME);
     const lastName = nonEmptyString(input?.lastName, DEFAULT_LAST_NAME);

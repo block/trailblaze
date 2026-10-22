@@ -967,7 +967,7 @@ data class ScriptedToolDefinition(
    *
    * Captured by the analyzer's inline-literal extraction — keys are the
    * `TrailblazeTypedToolSpec` field names (`description`, `supportedPlatforms`,
-   * `requiresContext`, `requiresHost`, `supportedDrivers`, `trailhead`) and values are the
+   * `requiresHost`, `supportedDrivers`, `trailhead`) and values are the
    * JSON-compatible literals the author wrote at the call site (strings, string arrays,
    * booleans, and — for `trailhead` — a nested `{to, dynamic}` object).
    *

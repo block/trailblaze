@@ -190,14 +190,14 @@ class InnerLoopScreenAnalyzer(
         ToolParameterDescriptor(
           name = param.name,
           description = param.description ?: "",
-          type = param.toKoogParameterTypePreservingComposites(),
+          type = tool.toKoogParameterTypePreservingComposites(param),
         )
       }
       val originalOptional = tool.optionalParameters.map { param ->
         ToolParameterDescriptor(
           name = param.name,
           description = param.description ?: "",
-          type = param.toKoogParameterTypePreservingComposites(),
+          type = tool.toKoogParameterTypePreservingComposites(param),
         )
       }
 

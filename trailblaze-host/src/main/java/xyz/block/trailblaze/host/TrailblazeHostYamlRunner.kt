@@ -202,6 +202,8 @@ object TrailblazeHostYamlRunner {
   internal suspend fun launchSubprocessMcpServersIfAny(
     targetTestApp: TrailblazeHostAppTarget?,
     config: TrailblazeConfig,
+    /** The trail file this session runs, whose workspace `ctx.surveys` loads surveys from. */
+    trailFilePath: String? = null,
     sessionId: SessionId,
     deviceInfo: TrailblazeDeviceInfo,
     logsRepo: xyz.block.trailblaze.report.utils.LogsRepo,
@@ -212,6 +214,7 @@ object TrailblazeHostYamlRunner {
   ): LaunchedScriptingRuntime? = HostScriptedToolLauncher.launch(
     targetTestApp = targetTestApp,
     config = config,
+    trailFilePath = trailFilePath,
     sessionId = sessionId,
     deviceInfo = deviceInfo,
     logsRepo = logsRepo,
@@ -1079,6 +1082,7 @@ object TrailblazeHostYamlRunner {
         launchSubprocessMcpServersIfAny(
           targetTestApp = planTarget,
           config = runYamlRequest.config,
+          trailFilePath = runYamlRequest.trailFilePath,
           sessionId = session.sessionId,
           deviceInfo = deviceInfoProvider(),
           logsRepo = loggingRule.logsRepo,
@@ -1590,7 +1594,10 @@ object TrailblazeHostYamlRunner {
         return null
       }
 
-      val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+      // By name first so same-millisecond logs keep write order under the stable timestamp sort;
+      // listFiles() order is the filesystem's. See TrailCommand.generateRecordingForSession.
+      val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" }?.sortedBy { it.name }
+        ?: emptyList()
       val logs = logFiles.mapNotNull { file ->
         try {
           TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(file.readText())
