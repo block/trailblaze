@@ -26,10 +26,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 class IosSetPermissionsTrailblazeToolTest {
 
   /** A driver with no answer of its own (ios-host): the answer goes to Maestro's runner. */
-  private open class RecordingAgent(private val result: TrailblazeToolResult = TrailblazeToolResult.Success()) :
+  private open class RecordingAgent(
+    private val result: TrailblazeToolResult = TrailblazeToolResult.Success(),
+    deviceInfo: TrailblazeDeviceInfo = iosDevice,
+  ) :
     MaestroTrailblazeAgent(
       trailblazeLogger = TrailblazeLogger.createNoOp(),
-      trailblazeDeviceInfoProvider = { iosDevice },
+      trailblazeDeviceInfoProvider = { deviceInfo },
       sessionProvider = sessionProvider,
     ) {
     val commands = mutableListOf<Command>()
@@ -41,7 +44,7 @@ class IosSetPermissionsTrailblazeToolTest {
   }
 
   /** A driver that answers the alert itself (ios-axe). */
-  private class AnsweringAgent : RecordingAgent() {
+  private class AnsweringAgent(deviceInfo: TrailblazeDeviceInfo = iosDevice) : RecordingAgent(deviceInfo = deviceInfo) {
     val answers = mutableListOf<Pair<String, Boolean?>>()
 
     override suspend fun answerNotificationsAlert(appId: String, allow: Boolean?, traceId: TraceId?): TrailblazeToolResult {
@@ -187,6 +190,125 @@ class IosSetPermissionsTrailblazeToolTest {
   }
 
   @Test
+  fun `camera changes retain the notification answer established by grantAll`() {
+    val agent = RecordingAgent()
+    val result = run(null, agent, revoke = listOf("camera"), grantAll = true)
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(listOf<Command>(
+      SetPermissionsCommand(APP_ID, mapOf("all" to "allow")),
+      SetPermissionsCommand(APP_ID, mapOf("camera" to "deny", "notifications" to "allow")),
+    ), agent.commands)
+  }
+
+  @Test
+  fun `camera cannot erase an unspecified earlier notification policy`() {
+    val agent = RecordingAgent()
+    run("deny", agent)
+    val before = agent.commands.toList()
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(run(null, agent, grant = listOf("camera")))
+
+    assertTrue("notifications" in error.errorMessage)
+    assertEquals(before, agent.commands)
+  }
+
+  @Test
+  fun `an explicit notification override follows camera changes after grantAll`() {
+    val agent = RecordingAgent()
+    val result = run("deny", agent, revoke = listOf("camera"), grantAll = true)
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(listOf<Command>(
+      SetPermissionsCommand(APP_ID, mapOf("all" to "allow")),
+      SetPermissionsCommand(APP_ID, mapOf("camera" to "deny", "notifications" to "allow")),
+      SetPermissionsCommand(APP_ID, mapOf("notifications" to "deny")),
+    ), agent.commands)
+  }
+
+  @Test
+  fun `camera grant includes its explicit notification policy without a broad grant`() {
+    val agent = RecordingAgent()
+    val result = run("deny", agent, grant = listOf("camera"))
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(listOf<Command>(
+      SetPermissionsCommand(APP_ID, mapOf("camera" to "allow", "notifications" to "deny")),
+      SetPermissionsCommand(APP_ID, mapOf("notifications" to "deny")),
+    ), agent.commands)
+  }
+
+  @Test
+  fun `camera reset revoke and grant retain their ordering`() {
+    val agent = RecordingAgent()
+    val result = run("deny", agent, reset = listOf("camera"), revoke = listOf("camera"), grant = listOf("camera"))
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals<List<Command>>(listOf("unset", "deny", "allow").map {
+      SetPermissionsCommand(APP_ID, mapOf("camera" to it, "notifications" to "deny"))
+    } + SetPermissionsCommand(APP_ID, mapOf("notifications" to "deny")), agent.commands)
+  }
+
+  @Test
+  fun `AXe camera reset is rejected without dispatching a permission command`() {
+    val agent = RecordingAgent(deviceInfo = iosAxeDevice)
+    val result = run(null, agent, reset = listOf("camera"), driverType = TrailblazeDriverType.IOS_AXE)
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertTrue("camera" in error.errorMessage && "IOS_HOST" in error.errorMessage, error.errorMessage)
+    assertEquals(emptyList(), agent.commands)
+  }
+
+  @Test
+  fun `AXe camera revoke is rejected without dispatching a permission command`() {
+    val agent = RecordingAgent(deviceInfo = iosAxeDevice)
+    val result = run(null, agent, revoke = listOf("camera"), driverType = TrailblazeDriverType.IOS_AXE)
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertTrue("camera" in error.errorMessage && "IOS_HOST" in error.errorMessage, error.errorMessage)
+    assertEquals(emptyList(), agent.commands)
+  }
+
+  @Test
+  fun `AXe camera grant is rejected without dispatching a permission command`() {
+    val agent = RecordingAgent(deviceInfo = iosAxeDevice)
+    val result = run(null, agent, grant = listOf("camera"), driverType = TrailblazeDriverType.IOS_AXE)
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertTrue("camera" in error.errorMessage && "IOS_HOST" in error.errorMessage, error.errorMessage)
+    assertEquals(emptyList(), agent.commands)
+  }
+
+  @Test
+  fun `AXe camera rejection precedes grantAll privacy changes and notification answers`() {
+    val agent = AnsweringAgent(iosAxeDevice)
+    run("allow", agent, driverType = TrailblazeDriverType.IOS_AXE)
+
+    val result = run(
+      "deny",
+      agent,
+      reset = listOf("microphone"),
+      grant = listOf("camera"),
+      grantAll = true,
+      driverType = TrailblazeDriverType.IOS_AXE,
+    )
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertTrue("camera" in error.errorMessage && "IOS_HOST" in error.errorMessage, error.errorMessage)
+    assertEquals(emptyList(), agent.commands)
+    assertEquals(listOf<Pair<String, Boolean?>>(APP_ID to true), agent.answers)
+  }
+
+  @Test
+  fun `failed camera setup prevents a later notification change`() {
+    val failure = TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "camera unavailable")
+    val agent = RecordingAgent(failure)
+
+    assertEquals(failure, run("allow", agent, grant = listOf("camera")))
+    assertEquals(listOf<Command>(SetPermissionsCommand(APP_ID, mapOf("camera" to "allow", "notifications" to "allow"))), agent.commands)
+  }
+
+  @Test
   fun `Android is refused and pointed at POST_NOTIFICATIONS`() {
     val agent = RecordingAgent()
     val result = run(notifications = "allow", agent, platform = TrailblazeDevicePlatform.ANDROID)
@@ -202,12 +324,15 @@ class IosSetPermissionsTrailblazeToolTest {
     platform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
     revoke: List<String> = emptyList(),
     grantAll: Boolean = false,
+    reset: List<String> = emptyList(),
+    grant: List<String> = emptyList(),
+    driverType: TrailblazeDriverType = TrailblazeDriverType.IOS_HOST,
   ): TrailblazeToolResult = runBlocking {
-    IosSetPermissionsTrailblazeTool(appId = APP_ID, revoke = revoke, notifications = notifications, grantAll = grantAll).execute(
+    IosSetPermissionsTrailblazeTool(appId = APP_ID, reset = reset, revoke = revoke, grant = grant, notifications = notifications, grantAll = grantAll).execute(
       TrailblazeToolExecutionContext(
         screenState = null,
         traceId = null,
-        trailblazeDeviceInfo = if (platform == TrailblazeDevicePlatform.IOS) iosDevice else androidDevice,
+        trailblazeDeviceInfo = if (platform == TrailblazeDevicePlatform.IOS) iosDevice.copy(trailblazeDriverType = driverType) else androidDevice,
         sessionProvider = sessionProvider,
         trailblazeLogger = TrailblazeLogger.createNoOp(),
         memory = AgentMemory(),
@@ -232,6 +357,8 @@ class IosSetPermissionsTrailblazeToolTest {
       widthPixels = 1179,
       heightPixels = 2556,
     )
+
+    val iosAxeDevice = iosDevice.copy(trailblazeDriverType = TrailblazeDriverType.IOS_AXE)
 
     val androidDevice = TrailblazeDeviceInfo(
       trailblazeDeviceId = TrailblazeDeviceId(

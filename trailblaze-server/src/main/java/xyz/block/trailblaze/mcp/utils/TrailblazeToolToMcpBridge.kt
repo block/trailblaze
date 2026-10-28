@@ -29,6 +29,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.toolDecodeFailureReason
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 import kotlin.reflect.full.starProjectedType
@@ -57,7 +59,7 @@ class McpToolExecutionException(message: String) : Exception(message)
  * Scripted (`.ts`) tools carry their full JSON Schema on [TrailblazeToolDescriptor.inputSchema]
  * (a body property — NOT carried by `copy()`, so callers must not have copied the descriptor) —
  * use it verbatim so nested object/array shapes survive. Descriptors without a schema
- * (YAML-defined tools) fall back to the flat parameter view via [toMcpToolSchema] on the Koog
+ * fall back to the flat parameter view via [toMcpToolSchema] on the Koog
  * descriptor — the same conversion class-backed registration uses.
  */
 internal fun TrailblazeToolDescriptor.toMcpToolSchema(): ToolSchema {
@@ -220,8 +222,8 @@ class TrailblazeToolToMcpBridge(
   }
 
   /**
-   * Registers descriptor-backed tools (scripted `.ts` tools and YAML-defined tools — the two
-   * backings without a Kotlin [KClass]) as first-class MCP tools, with their real JSON Schemas.
+   * Registers descriptor-backed tools (scripted `.ts` tools — the backing without a Kotlin
+   * [KClass]) as first-class MCP tools, with their real JSON Schemas.
    *
    * Execution routes through [executeDescriptorTool] — the caller supplies the dispatch (schema
    * validation + name→tool resolution + the same host-local/bridge routing recorded replay uses).
@@ -374,7 +376,9 @@ class TrailblazeToolToMcpBridge(
 
     // Convert request arguments to JsonObject
     val argumentsJsonObject = request.arguments ?: JsonObject(emptyMap())
-    Console.log("  Arguments JSON: ${argumentsLogPreview(argumentsJsonObject)}")
+    // Only names until the tool is decoded: its log payload is what masks the values it declares
+    // secret, and a call that fails to decode has no tool to mask them.
+    Console.log("  Argument names: ${argumentsJsonObject.keys.joinToString()}")
 
     // Deserialize arguments into the TrailblazeTool instance
     val tool: TrailblazeTool = try {
@@ -382,18 +386,18 @@ class TrailblazeToolToMcpBridge(
       val serializer = serializer(toolClass.starProjectedType)
       TrailblazeJsonInstance.decodeFromJsonElement(serializer, argumentsJsonObject) as TrailblazeTool
     } catch (e: Exception) {
-      Console.error("ERROR deserializing arguments for tool $toolName: ${e.message}")
-      e.printStackTrace()
+      val reason = toolDecodeFailureReason(e, argumentsJsonObject)
+      Console.error("ERROR deserializing arguments for tool $toolName: $reason")
       return CallToolResult(
         content = mutableListOf(
-          TextContent("Error deserializing arguments: ${e.message}"),
+          TextContent("Error deserializing arguments: $reason"),
         ),
         isError = true,
       )
     }
 
     Console.log("Executing TrailblazeTool: $toolName")
-    Console.log("  Tool instance: $tool")
+    Console.log("  Arguments JSON: ${argumentsLogPreview(tool.toLogPayload().raw)}")
 
     // Execute tool via the bridge (which delegates to the device)
     return try {

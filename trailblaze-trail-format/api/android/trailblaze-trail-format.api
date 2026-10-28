@@ -290,6 +290,7 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field INSTANCE Lxyz/block/trailblaze/toolcalls/CoreTools;
 	public static final field LAUNCH_APP Ljava/lang/String;
 	public static final field LONG_PRESS Ljava/lang/String;
+	public static final field MOBILE_NETWORK_CONNECTION Ljava/lang/String;
 	public static final field NAVIGATE_BACK Ljava/lang/String;
 	public static final field NETWORK_CONNECTION Ljava/lang/String;
 	public static final field OBJECTIVE_STATUS Ljava/lang/String;
@@ -303,6 +304,7 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field SWIPE Ljava/lang/String;
 	public static final field TAP Ljava/lang/String;
 	public static final field TAP_ON_ELEMENT Ljava/lang/String;
+	public static final field TAP_ON_PERCENT Ljava/lang/String;
 	public static final field TAP_ON_POINT Ljava/lang/String;
 	public static final field WAIT Ljava/lang/String;
 	public static final field WAIT_FOR_CHANGE Ljava/lang/String;
@@ -755,6 +757,7 @@ public class xyz/block/trailblaze/yaml/TrailFormatYaml {
 	public final fun hasActionableSteps (Ljava/util/List;)Z
 	public final fun hasRecordedSteps (Ljava/lang/String;)Z
 	public final fun hasRecordedSteps (Ljava/util/List;)Z
+	public final fun isBareToolEnvelope (Ljava/lang/String;)Z
 	public final fun requiresHostRefusal (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Ljava/lang/String;
 }
 
@@ -1368,7 +1371,10 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailConfig {
 	public final fun getTitle ()Ljava/lang/String;
 	public fun hashCode ()I
 	public final fun implicitMultiDeviceConfigurationName (Z)Ljava/lang/String;
+	public final fun implicitMultiDeviceConfigurationName (ZLjava/util/Set;)Ljava/lang/String;
+	public final fun multiDeviceConfigurationBoundBy (Ljava/util/Set;)Ljava/lang/String;
 	public final fun requiresExplicitMultiDeviceConfiguration (Z)Z
+	public final fun requiresExplicitMultiDeviceConfiguration (ZLjava/util/Set;)Z
 	public fun toString ()Ljava/lang/String;
 }
 

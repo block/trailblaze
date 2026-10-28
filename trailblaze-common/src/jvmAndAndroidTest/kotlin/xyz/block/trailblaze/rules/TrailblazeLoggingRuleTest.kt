@@ -46,6 +46,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -360,6 +361,19 @@ class TrailblazeLoggingRuleTest {
 
     assertEquals(emptyList(), written, "a suppressed run must not write a trace to disk")
     assertTrue(captured.isEmpty(), "a suppressed run emits nothing either")
+  }
+
+  @Test
+  fun `a no-logging run writes no screenshot`() {
+    // With logging off the server reads as unavailable, which is the condition that sends a
+    // screenshot to the disk fallback.
+    val written = mutableListOf<TrailblazeScreenStateLog>()
+    val rule = TestLoggingRule(writeScreenshotToDisk = { written += it }, noLogging = true)
+    rule.failureScreenStateProvider = { FakeScreenState }
+
+    rule.captureFailureScreenshot(session())
+
+    assertEquals(emptyList(), written, "a suppressed run must not write a screenshot to disk")
   }
 
   @Test
@@ -864,6 +878,7 @@ class TrailblazeLoggingRuleTest {
     override val useDeviceClock: Boolean = false,
     writeLogToDisk: ((SessionId, TrailblazeLog) -> Unit) = { _, _ -> },
     writeTraceToDisk: ((SessionId, String) -> Unit) = { _, _ -> },
+    writeScreenshotToDisk: ((TrailblazeScreenStateLog) -> Unit) = { _ -> },
     noLogging: Boolean = false,
     logsBaseUrl: String = "http://127.0.0.1:1",
     override val logServerRetryAfterMs: Long = LogServerAvailability.DEFAULT_INITIAL_RETRY_AFTER_MS,
@@ -872,6 +887,7 @@ class TrailblazeLoggingRuleTest {
     additionalLogEmitter = additionalLogEmitter,
     writeLogToDisk = writeLogToDisk,
     writeTraceToDisk = writeTraceToDisk,
+    writeScreenshotToDisk = writeScreenshotToDisk,
     noLogging = noLogging,
   ) {
     override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {

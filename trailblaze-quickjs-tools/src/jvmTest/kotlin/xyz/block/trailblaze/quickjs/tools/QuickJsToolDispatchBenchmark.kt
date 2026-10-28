@@ -57,7 +57,6 @@ class QuickJsToolDispatchBenchmark {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "bench",
         toolClasses = setOf(NoopTool::class),
-        yamlToolNames = emptySet(),
       ),
     )
     val binding = SessionScopedHostBinding(repo, sessionId)

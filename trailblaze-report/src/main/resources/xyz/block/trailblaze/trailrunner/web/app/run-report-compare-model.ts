@@ -693,6 +693,8 @@ function comparisonEventStreamsOf(session: { events?: EventStream[] | null; netw
  */
 export function timedEventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, TimedEventObject[]> {
   const byStream = new Map<string, TimedEventObject[]>();
+  // A multi-device session writes each device's network capture as `network.<device>`.
+  const isNetworkStream = (name: string) => name === 'network' || name.startsWith('network.');
   comparisonEventStreamsOf(session).forEach(({ name, stream }) => {
     const objects: TimedEventObject[] = stream.comparisonValues && stream.comparisonValues.length
       // Match the parsed network side-channel: its reduced records have no trustworthy event
@@ -708,9 +710,10 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
       // test here made a stream of `{"timeMs":1,"d":"ready"}` records read as empty.
       : (stream.events || []).map((event) => {
         try {
+          const value = JSON.parse(event.d) as unknown;
           return {
             t: typeof event.t === 'number' && Number.isFinite(event.t) ? event.t : null,
-            value: JSON.parse(event.d) as unknown,
+            value: isNetworkStream(name) ? withoutTrailPhase(value) : value,
           };
         } catch { return null; }
       }).filter((o): o is TimedEventObject => o != null);
@@ -718,10 +721,18 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
   });
   if (session.network && session.network.length) {
     // Parsed network side-channel records do not carry the event-stream clock. They remain fully
-    // diffable by content, but assigning them to a trail step would invent a relationship.
-    byStream.set('network', session.network.map((value) => ({ t: null, value })));
+    // diffable by content, but assigning them to a trail step would invent a relationship. The
+    // trail phase is a label on when, like the clock, so it is left out: older captures and the
+    // records a plugin formatter projects carry none, and identical traffic must not read as changed.
+    byStream.set('network', session.network.map((value) => ({ t: null, value: withoutTrailPhase(value) })));
   }
   return byStream;
+}
+
+function withoutTrailPhase(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('trailPhase' in value)) return value;
+  const { trailPhase: _trailPhase, ...rest } = value as Record<string, unknown>;
+  return rest;
 }
 
 export function eventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, unknown[]> {

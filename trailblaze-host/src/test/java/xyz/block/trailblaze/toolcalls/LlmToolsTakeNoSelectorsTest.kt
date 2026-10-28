@@ -18,7 +18,7 @@ import kotlin.test.fail
  * A tool the LLM sees may still carry a selector param, as long as the LLM's schema of it leaves
  * that param out. This test holds that for the class-backed tools on
  * this classpath, by param type ([TrailblazeNodeSelector], [TrailblazeElementSelector]). It does not
- * see YAML-composed, scripted, or MCP tools, or a selector passed as some other type.
+ * see scripted or MCP tools, or a selector passed as some other type.
  */
 class LlmToolsTakeNoSelectorsTest {
 

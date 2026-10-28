@@ -14,6 +14,7 @@ import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher.toEn
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toolDecodeFailureReason
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -31,16 +32,15 @@ import xyz.block.trailblaze.util.Console
  *
  * 1. Look up the named tool via
  *    [TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered] — this bypasses the
- *    `surfaceToLlm = false` filter that hides YAML-defined building-block tools from the LLM
+ *    `surfaceToLlm = false` filter that hides building-block tools from the LLM
  *    descriptor list. Class-backed tools were already reachable through the dispatch path
  *    (see `TrailblazeToolRepo.toolCallToTrailblazeTool` line 257-269); the unfiltered
- *    variant extends the bypass to YAML-defined tools that exist globally on the classpath
+ *    variant extends the bypass to tools that exist globally on the classpath
  *    but aren't in this session's registered set.
  * 2. Execute the tool against the [TrailblazeToolExecutionContext] snapshotted in
  *    [ToolExecutionContextThreadLocal] at the outer `runTrailblazeTools` boundary. Both
  *    [ExecutableTrailblazeTool] (single execute) and [DelegatingTrailblazeTool] (expand to
- *    a sequence of executables and run them in order) are supported. The latter is what a
- *    YAML-defined tool resolves to.
+ *    a sequence of executables and run them in order) are supported.
  * 3. Serialize the resulting [TrailblazeToolResult] to JSON via [TrailblazeJsonInstance]
  *    and return the string for QuickJS to `JSON.parse`.
  *
@@ -51,7 +51,7 @@ import xyz.block.trailblaze.util.Console
  * `{"isError":true,"error":"<message>"}` so the awaiting handler sees a well-formed
  * response on the JS side instead of an opaque transport error. Failure cases:
  *
- *  - Unknown tool name (no class-backed, dynamic, or YAML-defined match).
+ *  - Unknown tool name (no class-backed or dynamic match).
  *  - No execution context installed in the [ToolExecutionContextThreadLocal] — caller forgot to call
  *    [installContext] at the dispatch boundary.
  *  - Tool resolved but not executable (neither [ExecutableTrailblazeTool] nor
@@ -176,8 +176,8 @@ class SessionScopedHostBinding(
       // Preserved as a distinct catch so the log line distinguishes "args didn't decode"
       // from "lookup itself failed" (e.g. a custom KSerializer threw an unchecked
       // exception). The Throwable branch below catches the unchecked-exception case.
-      // Only the first line: kotlinx appends `JSON input: <the args>`, which can carry credentials.
-      val reason = e.message.orEmpty().lineSequence().first()
+      // The args can carry credentials and no tool exists yet to mask them.
+      val reason = toolDecodeFailureReason(e, argsJson)
       Console.log(
         "[SessionScopedHostBinding] CALL_DECODE_FAIL tool=$name session=${sessionId.value} " +
           "reason=$reason",
@@ -192,12 +192,13 @@ class SessionScopedHostBinding(
       // (NPE, IllegalArgumentException, NumberFormatException, …). The HostBinding contract
       // is JSON-on-every-path; a propagated unchecked throw would surface to the JS side as
       // an opaque transport error.
+      val reason = toolDecodeFailureReason(e, argsJson)
       Console.log(
         "[SessionScopedHostBinding] CALL_LOOKUP_FAIL tool=$name session=${sessionId.value} " +
-          "reason=${e::class.simpleName}: ${e.message}",
+          "reason=$reason",
       )
       return dispatchErrorEnvelope(
-        "trailblaze.call('$name'): tool lookup failed — ${e.message ?: e::class.simpleName}",
+        "trailblaze.call('$name'): tool lookup failed — $reason",
       )
     }
 
@@ -232,7 +233,7 @@ class SessionScopedHostBinding(
     }
 
     // Cycle guard. A tool in another host that is already waiting further up this call path (e.g.
-    // `runIf` → `block_runIf` → `runIf`) would wait on that host's evalMutex forever.
+    // tool A → tool B → tool A) would wait on that host's evalMutex forever.
     val targetHost = resolved.quickJsHost()
     if (targetHost != null && QuickJsToolHost.isOnCurrentCallPath(targetHost)) {
       Console.log(
@@ -281,7 +282,7 @@ class SessionScopedHostBinding(
 
   /**
    * Execute the resolved tool against [context]. Handles both single-execute tools
-   * ([ExecutableTrailblazeTool]) and YAML-defined / scripted compositions
+   * ([ExecutableTrailblazeTool]) and delegating tools
    * ([DelegatingTrailblazeTool]). For delegating tools, each expanded executable runs in
    * order; the first error short-circuits and is returned; otherwise the last success
    * (or default `Success`) is returned.

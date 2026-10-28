@@ -17,8 +17,8 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  *   (`am broadcast -a clipper.set`). Reaches the device through the same multi-platform
  *   executor surface every other Android tool uses, so the tool composes correctly on
  *   both host-dispatched and on-device-dispatched scripted-tool paths.
- * - **iOS**: uses `xcrun simctl pasteboard set <udid>` via [IosHostSimctlUtils.setPasteboard]
- *   (host-only — iOS only runs from a Mac host).
+ * - **iOS**: uses `simctl pbcopy <udid>` via [IosHostSimctlUtils.setPasteboard], which reads the
+ *   value back before returning (host-only — iOS only runs from a Mac host).
  */
 @Serializable
 @TrailblazeToolClass(

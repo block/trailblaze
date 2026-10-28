@@ -15,14 +15,8 @@
 //        async (input, ctx) => "ok",
 //      );
 //
-// 2. Add the export name to the trailmap manifest at `../trailmap.yaml` under
-//    `target.tools:`:
-//
-//      target:
-//        tools:
-//          - playwrightSample_web_openFixtureAndVerifyText
-//          - ...
-//          - myTool      # ← add this line
+// 2. That's it — no `trailmap.yaml` entry is needed. Every `.ts` in this
+//    folder with a `trailblaze.tool` export is on the target.
 //
 // No sibling YAML descriptor is required — the loader auto-discovers any
 // `.ts` with a `trailblaze.tool` export and the analyzer fills in name +

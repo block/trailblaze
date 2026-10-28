@@ -221,6 +221,73 @@ function normalizedToHostClock(logs: TrailblazeLogRecord[]): TrailblazeLogRecord
   });
 }
 
+/**
+ * A browser driver logs the action it took before the tool that took it, under the same trace id;
+ * a device driver logs it after. In a session with a browser, an action that ran before the next
+ * tool's start, and not within the span of the tool logged just before it, is that next tool's:
+ * it moves after that tool, so it folds into the tool's row (or, in a batch, that dispatch's child)
+ * as a device driver's does, instead of standing as a row of its own ("Enter text" before "Type").
+ * An action inside the earlier tool's span is that tool's and keeps its place, so a capture already
+ * following its dispatch, or a native device's dispatch in a mixed cast, is never handed on. A
+ * moved action keeps its own instant: it ran on the tool's clock, just before the tool's start
+ * stamp, which the span test would otherwise reject as another clock.
+ */
+const actedBeforeTool = new WeakSet<TrailblazeLogRecord>();
+
+function hasBrowser(logs: TrailblazeLogRecord[]): boolean {
+  return logs.some((log) => log && log.sessionStatus && log.sessionStatus.trailblazeDeviceInfo?.trailblazeDeviceId?.trailblazeDevicePlatform === 'WEB');
+}
+
+/** A log's stamp in ms, keeping the digits past the millisecond: a capture can land inside one. */
+function stampOf(log: TrailblazeLogRecord | null | undefined): number {
+  const ms = log ? parseLogTimestamp(log.timestamp) : null;
+  if (ms == null) return NaN;
+  const sub = /\.\d{3}(\d+)/.exec(log!.timestamp as string);
+  return sub ? ms + Number(`0.${sub[1]}`) : ms;
+}
+
+/** Whether a driver run is the next tool's: logged no later than its start, outside the last tool's span. */
+function ranBeforeTool(run: TrailblazeLogRecord[], tool: TrailblazeLogRecord, previous: TrailblazeLogRecord | null): boolean {
+  const toolStart = stampOf(tool);
+  if (!Number.isFinite(toolStart)) return false;
+  const previousStart = previous && previous.traceId === tool.traceId ? stampOf(previous) : NaN;
+  const previousEnd = previousStart + ((previous && previous.durationMs) || 0);
+  return run.every((log) => {
+    const at = stampOf(log);
+    return Number.isFinite(at) && at <= toolStart && !(at >= previousStart && at <= previousEnd);
+  });
+}
+
+function driverActionsAfterTheirTool(logs: TrailblazeLogRecord[]): TrailblazeLogRecord[] {
+  if (!hasBrowser(logs)) return logs;
+  const isTool = (log: TrailblazeLogRecord | undefined) => !!log && typeof log.toolName === 'string' && !!log.toolName;
+  const out: TrailblazeLogRecord[] = [];
+  let previousTool: TrailblazeLogRecord | null = null;
+  for (let i = 0; i < logs.length; i++) {
+    const log = logs[i];
+    const traceId = log && logClass(log) === 'MaestroDriverLog' && log.action ? log.traceId : null;
+    if (!traceId) {
+      out.push(log);
+      if (isTool(log)) previousTool = log;
+      continue;
+    }
+    let end = i;
+    while (end + 1 < logs.length && logs[end + 1] && logClass(logs[end + 1]) === 'MaestroDriverLog' && logs[end + 1].traceId === traceId) end++;
+    const next = logs[end + 1];
+    const run = logs.slice(i, end + 1);
+    if (isTool(next) && next.traceId === traceId && ranBeforeTool(run, next, previousTool)) {
+      for (const action of run) actedBeforeTool.add(action);
+      out.push(next, ...run);
+      previousTool = next;
+      i = end + 1;
+    } else {
+      out.push(...run);
+      i = end;
+    }
+  }
+  return out;
+}
+
 function logClass(log: TrailblazeLogRecord): string {
   const cls = log.class || '';
   const last = cls.split('.').pop();
@@ -459,7 +526,8 @@ const sameClockCueTs = (
 // When a capture was actually taken: the END of the record that carries it. A driver screenshots
 // once its action has completed, so the record's start — the `ts`/`shotTs` cues Replay places a
 // still by — is up to that record's whole duration early (seconds, for a wait or a polled
-// assertion). The latest carrier wins, as it does for a fold's screenshotFile.
+// assertion). The latest carrier wins, as it does for a fold's screenshotFile. A picture that is a
+// capture id (a saved frame, no screenshot file) is found by that id.
 //
 // A tool row folds driver records that may be on another clock, so its carrier is held to the
 // same test as a cue: the row's own record passes, and a folded driver record passes only when
@@ -471,14 +539,15 @@ const captureEndTs = (
   logs: TrailblazeLogRecord[] | null | undefined,
   file: string | null | undefined,
   span: { start: number | null | undefined; end: number | null | undefined } | null,
+  captureId?: string,
 ): number | null => {
-  if (!file || !logs) return null;
+  if ((!file && !captureId) || !logs) return null;
   for (let j = logs.length - 1; j >= 0; j--) {
     const l: any = logs[j];
-    if (!l || l.screenshotFile !== file) continue;
+    if (!l || (file ? l.screenshotFile !== file : l.screenshotFile || l.captureId !== captureId)) continue;
     const at = l.timestamp ? Date.parse(l.timestamp) : NaN;
     if (!Number.isFinite(at)) return null;
-    const onRowClock = !span || at === span.start || sameClockCueTs(span.start, span.end, at) != null;
+    const onRowClock = !span || at === span.start || actedBeforeTool.has(l) || sameClockCueTs(span.start, span.end, at) != null;
     return onRowClock ? at + (l.durationMs || 0) : null;
   }
   return null;
@@ -488,7 +557,7 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
   // One timeline, one clock. Every stamp below is compared against another — to fold a batch, to
   // place a step on the recording's host-clock window — so a device-stamped log has to be shifted
   // before any of that. Idempotent, so a payload a Kotlin reader already normalized is untouched.
-  const logs = normalizedToHostClock(rawLogs || []);
+  const logs = driverActionsAfterTheirTool(normalizedToHostClock(rawLogs || []));
   // Trailblaze writes several log records per logical step; the timeline collapses
   // them so each user-meaningful step shows once:
   //  - an objective logs both a Start and a Complete carrying the same promptStep —
@@ -665,7 +734,7 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
       // selector before it acted would otherwise place both cues seconds early — invisible in the
       // timeline, but Replay draws them over a synchronized recording where early is simply wrong.
       // sameClockCueTs decides whether this driver log's instant can be believed at all.
-      const cueTs = sameClockCueTs(group.ts, group._cueEnd, ts);
+      const cueTs = actedBeforeTool.has(log) ? ts : sameClockCueTs(group.ts, group._cueEnd, ts);
       if (!group.screenshotFile && screenshotFile) { group.screenshotFile = screenshotFile; group.shotTs = cueTs; }
       if (!group.viewHierarchy && viewHierarchy) group.viewHierarchy = viewHierarchy;
       if (!group.viewport && viewport) group.viewport = viewport;
@@ -939,6 +1008,7 @@ function toolChildren(r: any): TraceChild[] | null {
     const spanStart = logs[from] && logs[from].timestamp ? Date.parse(logs[from].timestamp) : null;
     const span = { start: spanStart, end: spanStart == null || !Number.isFinite(spanStart) ? null : spanStart + ((logs[from] && logs[from].durationMs) || 0) };
     let shotEndTs = screenshotFile ? captureEndTs([logs[from]], screenshotFile, span) : null;
+    if (!screenshotFile && captureIds.length) shotEndTs = captureEndTs(logs.slice(from, to), null, span, captureIds[0]);
     let mark: ActionMark | null = null;
     let markTs: number | null = null;
     for (let j = from + 1; j < to && !(screenshotFile && mark); j++) {
@@ -951,7 +1021,7 @@ function toolChildren(r: any): TraceChild[] | null {
         // The instant the driver acted, as the row's own markTs is: a dispatch that waited before
         // acting would otherwise draw its tap at its start.
         const at = mark && l.timestamp ? Date.parse(l.timestamp) : NaN;
-        if (mark) markTs = sameClockCueTs(span.start, span.end, Number.isFinite(at) ? at : null);
+        if (mark) markTs = actedBeforeTool.has(l) && Number.isFinite(at) ? at : sameClockCueTs(span.start, span.end, Number.isFinite(at) ? at : null);
       }
     }
     return { screenshotFile, shotEndTs, mark, markTs, captureIds };
@@ -1008,7 +1078,7 @@ function toolChildren(r: any): TraceChild[] | null {
     }
     // A ×N fold keeps the FIRST member's ts (set here, never advanced above) — the instant the
     // folded sequence began, which is what playback schedules its one entry on.
-    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, ...(c.screenshotFile && (c as any).shotEndTs != null ? { shotEndTs: (c as any).shotEndTs } : {}), mark: c.mark ?? null, ...(c.markTs != null && c.markTs !== c.ts ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), _logs: c._logs || [] });
+    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, ...((c.screenshotFile || c.captureIds?.length) && (c as any).shotEndTs != null ? { shotEndTs: (c as any).shotEndTs } : {}), mark: c.mark ?? null, ...(c.markTs != null && c.markTs !== c.ts ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), _logs: c._logs || [] });
     prevSig = c.sig;
   }
   return kids.length ? kids : null;
@@ -1587,7 +1657,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // so the common case where the row and its cue share a timestamp costs nothing.
     ...(t.shotTs != null && t.shotTs !== t.ts ? { shotTs: t.shotTs } : {}),
     ...(t.markTs != null && t.markTs !== t.ts ? { markTs: t.markTs } : {}),
-    ...((end) => (end != null ? { shotEndTs: end } : {}))(captureEndTs(t._logs as TrailblazeLogRecord[] | undefined, t.screenshotFile, t._cueEnd === undefined ? null : { start: t.ts, end: t._cueEnd })),
+    ...((end) => (end != null ? { shotEndTs: end } : {}))(captureEndTs(t._logs as TrailblazeLogRecord[] | undefined, t.screenshotFile, t._cueEnd === undefined ? null : { start: t.ts, end: t._cueEnd }, t.screenshotFile ? undefined : pictureFirst(screenshotlessCaptureIds(t._logs || []), t._shotCapture)[0])),
     // Full call content for the selected row's expanded detail (WASM-report parity).
     ...(t.args ? { args: t.args } : {}),
     // The row's index into the session's llm call list (extractLlmLogs order) — how the viewer
@@ -1600,7 +1670,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold,
     // full args, its own capture) — the common green declared-or-single dispatch slims to just
     // label+tool.
-    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.screenshotFile && c.shotEndTs != null ? { shotEndTs: c.shotEndTs } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), ...(c.mark ? { mark: c.mark } : {}), ...(c.markTs != null ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}) })) } : {}),
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...((c.screenshotFile || c.captureIds?.length) && c.shotEndTs != null ? { shotEndTs: c.shotEndTs } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), ...(c.mark ? { mark: c.mark } : {}), ...(c.markTs != null ? { markTs: c.markTs } : {}), ...(c.switchTo ? { switchTo: c.switchTo } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
     // Which device this row acted on (see assignTraceDevices). Only stamped on multi-device

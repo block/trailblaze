@@ -700,22 +700,18 @@
     for (var k in opts) o[k] = opts[k];
     o.wsPath = 'lsp/yaml';
     o.languageId = 'yaml';
-    // YAML schema completions are highly position-sensitive (tool-name list vs. a tool's param set),
+    // YAML schema completions are position-sensitive (which keys are valid depends on the cursor),
     // and yaml-language-server reports them complete — force re-query per keystroke to avoid Monaco
     // re-showing a cached list from a prior cursor position. See LspClient.forceIncompleteCompletions.
     o.forceIncompleteCompletions = true;
     o.connectOptionsFor = function (info) {
-      // Scope the generated schema's tool-name set to this tool's trailmap (+ framework tools).
-      var query = opts.trailmap ? ('?trailmap=' + encodeURIComponent(opts.trailmap)) : '';
       // Prefer the daemon-LOCAL schema URL when the daemon supplies one: yaml-language-server runs as
       // a daemon child and fetches this URL itself, so it must be reachable on the daemon host — not
       // `document.baseURI`, which is a proxy origin (a cloud-workstation preview proxy) the child can't reach. Fall back to
       // document.baseURI for direct localhost access (and when the daemon didn't supply a URL).
-      // `toolSchemaUrl` from the daemon is a bare path (no query string), so appending `?trailmap=…` is
-      // safe — keep it query-free server-side or this concatenation would double the `?`.
       var schemaUrl = (info && info.toolSchemaUrl)
-        ? (info.toolSchemaUrl + query)
-        : new URL('api/lsp/tool-schema.json' + query, document.baseURI).toString();
+        ? info.toolSchemaUrl
+        : new URL('api/lsp/tool-schema.json', document.baseURI).toString();
       // Associate the schema both to this exact file URI (most reliable) and to the *.tool.yaml glob.
       var globs = [];
       if (info && info.fileUri) globs.push(info.fileUri);

@@ -9,9 +9,6 @@ import assertk.assertions.isNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import org.junit.Test
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.TrailblazeConfigYaml
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -55,16 +52,6 @@ class JsScriptingCallbackArgumentValidatorTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "validator-test-toolset",
         toolClasses = classes.toSet(),
-        yamlToolNames = emptySet(),
-      ),
-    )
-
-  private fun repoWithYaml(vararg yamlNames: String): TrailblazeToolRepo =
-    TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "validator-test-yaml-toolset",
-        toolClasses = emptySet(),
-        yamlToolNames = yamlNames.map { ToolName(it) }.toSet(),
       ),
     )
 
@@ -134,9 +121,8 @@ class JsScriptingCallbackArgumentValidatorTest {
   @Test
   fun `validate enforces empty-arg contract for class-backed tools with no properties`() {
     // A `@TrailblazeToolClass` with no constructor args has an exhaustively-declared empty
-    // schema — any incoming key is unknown. Pairs with the YAML strict-on-empty fix; both
-    // author-controlled empty schemas must reject extra keys, only dynamic / subprocess
-    // schemas get the lenient "skip on empty" treatment.
+    // schema — any incoming key is unknown. Author-controlled empty schemas must reject extra
+    // keys; only dynamic / subprocess schemas get the lenient "skip on empty" treatment.
     val repo = repoWith(NoArgTool::class)
 
     val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "no_arg_tool", "{}")
@@ -257,47 +243,6 @@ class JsScriptingCallbackArgumentValidatorTest {
       error("buildKoogTool not exercised by the validator test path")
     override fun decodeToolCall(argumentsJson: String): TrailblazeTool =
       error("decodeToolCall not exercised by the validator test path")
-  }
-
-  @Test
-  fun `validate enforces empty-arg contract for YAML tools with empty parameters list`() {
-    // The other half of the strict-empty fix: YAML tools that exhaustively declare
-    // `parameters: []` must reject extra keys, not skip the gate like dynamic tools do. The
-    // class-backed `NoArgTool` test pins the same behavior for the Kotlin path; this test pins
-    // it for the YAML path so a refactor that re-introduces `.ifEmpty { null }` on the YAML
-    // branches can't slip through unnoticed. No shipped YAML tool takes zero args, so register
-    // a fixture through the workspace overlay.
-    val config = TrailblazeConfigYaml.instance.decodeFromString(
-      ToolYamlConfig.serializer(),
-      """
-      id: noArgYamlTool
-      description: No-arg YAML fixture tool.
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
-      """.trimIndent(),
-    ).also { it.validate() }
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(mapOf(ToolName("noArgYamlTool") to config))
-    try {
-      val repo = repoWithYaml("noArgYamlTool")
-
-      val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "noArgYamlTool", "{}")
-      assertThat(emptyOk).isNull()
-
-      val rejected = JsScriptingCallbackArgumentValidator.validate(
-        repo,
-        "noArgYamlTool",
-        """{"element":"hint"}""",
-      )
-      assertThat(rejected).isNotNull()
-      assertThat(rejected!!).contains("\"element\"")
-      assertThat(rejected).contains("accepts no arguments")
-      assertThat(rejected).contains("client.tools.noArgYamlTool")
-    } finally {
-      TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
-    }
   }
 
   @Test

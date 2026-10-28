@@ -115,6 +115,7 @@ class InputTextClearFirstTest {
       nodeSelector: TrailblazeNodeSelector,
       longPress: Boolean,
       tapRoute: TapRouteOverride?,
+      timeoutMs: Long?,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       nodeSelector.iosMaestro?.let { match ->

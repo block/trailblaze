@@ -339,9 +339,9 @@ afterAll(() => {
   realSetTimeoutBeforeGuard = null;
 });
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; clickNetPhase: (phase: string) => void; shownNetworkRows: () => string[]; firePopstate: (next?: string) => void } {
   retireEarlierViewers();
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; netPhase: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, netPhase: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -539,6 +539,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     set innerHTML(v: string) { this._h = v; devicePlayer.innerHTML = previewPaneSeed(v); timelineList.scrollTop = 0; renders++; progressText = null; tlEventEls.forEach((el) => { el.open = false; el.body = ""; delete el.dataset.lazyfilled; }); },
     get innerHTML() { return this._h; },
     querySelectorAll(sel: string) {
+      // Network phase chips: clicking one narrows the pane's rows (see networkPane below).
+      if (sel === "#nlbar [data-netphase]") return [...this._h.matchAll(/<button class="evchip" data-netphase="([a-z]+)">/g)].map((m: any) => {
+        const el: any = { dataset: { netphase: m[1] }, classes: new Set<string>(), classList: { toggle(c: string, on: boolean) { if (on) el.classes.add(c); else el.classes.delete(c); } } };
+        Object.defineProperty(el, "onclick", { configurable: true, set(fn: () => void) { handlers.netPhase[m[1]] = fn; } });
+        return el;
+      });
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-vdev]") return [...this._h.matchAll(/data-vdev="(\d+)"/g)].map((m: any) => ({ dataset: { vdev: m[1] }, set onclick(fn: () => void) { handlers.vdev[m[1]] = fn; } }));
@@ -1112,6 +1118,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   };
   // Hoisted so a test can read back the capture-framing marker autoplay stamps on it.
   const documentElement = { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument, cloneNode: (_deep: boolean) => cloneDocumentElement() };
+  // The Network tab's row container, as last wired: its rows carry the display the filter set, and
+  // each row's text is its request path (the row's last cell).
+  let networkPane: { children: Array<{ textContent: string; style: { display: string } }> } | null = null;
   (globalThis as Record<string, unknown>).document = {
     get activeElement() { return overlayFocus && !overlayFocus.detached ? overlayFocus : activeElement; },
     // While a held chunk is pending the document reads as still loading, so the viewer keeps
@@ -1133,6 +1142,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : id === "tlplay" ? { click: () => handlers.timelinePlay && handlers.timelinePlay(), set onclick(fn: () => void) { handlers.timelinePlay = fn; } }
       : id === "shot" && devicePlayer._h.includes('id="shot"') ? shotImg
       : id === "lightboxmode" && app._h.includes('id="lightboxmode"') ? { set onclick(fn: () => void) { handlers.gridMode = fn; } }
+      : id === "nlpane" && app._h.includes('id="nlpane"') ? (networkPane = { children: [...app._h.matchAll(/<div class="ln ([^"]*)"(?: data-netphase="([a-z]+)")?>([\s\S]*?)<\/div>/g)].map((m: any) => ({ dataset: m[2] ? { netphase: m[2] } : {}, textContent: (m[3].match(/<span>([^<]*)<\/span>$/) || ["", ""])[1], style: { display: "" }, classList: { contains: (c: string) => m[1].split(" ").includes(c) } })) })
       : id === "prev" ? prevBtn
       : id === "next" ? nextBtn
       : id === "copylocalprompt" && app._h.includes('id="copylocalprompt"') ? { textContent: "", set onclick(fn: () => void) { handlers.copyLocalPrompt = fn; } }
@@ -1372,7 +1382,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, clickNetPhase: (phase: string) => handlers.netPhase[phase]?.(), shownNetworkRows: () => (networkPane?.children || []).filter((r) => r.style.display !== "none").map((r) => r.textContent), firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -7547,6 +7557,84 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     const none = render([{ type: "previousRun", tool: "signIn", previousRun: null, reason: "this trailhead defines no teardown" }]);
     expect(none).not.toContain("phasestatus");
     expect(none).not.toContain("setupdecision");
+  });
+
+  test("the Network tab tags each request with its start phase and says where reused setup traffic is", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const trailheadStream = (records: Record<string, unknown>[]) => [{ name: "trailhead", total: records.length, truncated: false, events: records.map((d, t) => ({ t, d: JSON.stringify(d) })) }];
+    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: null, durationMs: null, urlPath, phase: "REQUEST_START", trailPhase });
+    const render = (network: unknown[] | null, records: Record<string, unknown>[]) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network, events: trailheadStream(records) }] }, { tab: "network" });
+
+    const full = render([net("/sign-in", "trailhead"), net("/checkout", "trail")], [{ type: "setup", tool: "signIn", setup: "fullSetup" }]);
+    expect(full).toContain('data-netphase="trailhead"><span class="netphase trailhead">Trailhead</span>');
+    expect(full).toContain('<button class="evchip" data-netphase="trail">Trail</button>');
+    expect(full).not.toContain("netcoverage");
+    // Network rows must not look like the Timeline's phase disclosures.
+    expect(full).not.toContain('class="ln " data-phase=');
+
+    // A third trail in a chain names the session that ran the setup, and the one that handed it on.
+    const chained = [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b", trailheadSessionId: "run_a" }];
+    const reused = render([net("/checkout", "trail")], chained);
+    expect(reused).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran (handed on by <code>run_b</code>)");
+    // One phase present: no chips to filter by.
+    expect(reused).not.toContain("data-netphase=\"trail\">Trail</button>");
+
+    // A reused trail with no traffic of its own still gets the tab and the notice.
+    const quiet = render(null, chained);
+    expect(quiet).toContain('data-tab="network"');
+    expect(quiet).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran");
+    expect(quiet).toContain("This report has no network log for this session.");
+    expect(quiet).not.toContain("No network activity captured");
+
+    // A multi-device session keeps each device's traffic in its own stream: say so, never "none".
+    const perDevice = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network: null,
+      events: [...trailheadStream(chained), { name: "network.seller", total: 3, truncated: false, events: [] }, { name: "network.buyer", total: 0, truncated: false, events: [] }] }] }, { tab: "network" });
+    expect(perDevice).toContain("captured each device's traffic separately: <code>network.seller</code> (3 events). Those requests are on the Timeline.");
+    expect(perDevice).not.toContain("has no network log");
+    expect(perDevice).not.toContain("network.buyer</code>");
+
+    // Only the tools that reused are named.
+    const mixed = render([net("/x", "trail")], [
+      { type: "setup", tool: "signIn", setup: "fullSetup" },
+      { type: "setup", tool: "seedCatalog", setup: "reused", reason: "same catalog", previousRunSessionId: "run_a", trailheadSessionId: "run_a" },
+    ]);
+    expect(mixed).toContain("<code>seedCatalog</code> reused the setup <code>run_a</code> ran, so");
+    expect(mixed).not.toContain("<code>signIn</code> reused");
+
+    // A log from before the setup's own session was recorded: the hand-off session is not credited
+    // with running it, since in a chain it did not.
+    const legacy = render([net("/x", "trail")], [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b" }]);
+    expect(legacy).toContain("<code>signIn</code> reused a setup handed on by <code>run_b</code>. This log does not record which session ran that setup");
+    expect(legacy).not.toContain("reused the setup <code>run_b</code> ran");
+
+    // Successive trails in one session: the setup's requests are earlier in this same log.
+    const sameSession = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed", sessionId: "mcp_1" }, trace, llm: [], shots: {}, network: [net("/x", "trail")],
+      events: trailheadStream([{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "mcp_1", trailheadSessionId: "mcp_1" }]) }] }, { tab: "network" });
+    expect(sameSession).toContain("an earlier trail in this session ran, so the requests that setup made are earlier in this log");
+    expect(sameSession).not.toContain("not here");
+  });
+
+  test("clicking a Network phase chip shows only that phase's requests, and a second click shows them all again", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: 200, durationMs: 5, urlPath, phase: "REQUEST_END", trailPhase });
+    const state = renderViewerState({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, events: [],
+      network: [net("/sign-in", "trailhead"), net("/checkout", "trail"), net("/sign-out", "teardown"), net("/before-any-trail", null)] }] }, { tab: "network" });
+    const shown = () => state.shownNetworkRows();
+    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
+
+    state.clickNetPhase("trail");
+    expect(shown()).toEqual(["/checkout"]);
+    state.clickNetPhase("trailhead");
+    expect(shown()).toEqual(["/sign-in"]);
+    state.clickNetPhase("trailhead");
+    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
+
+    // Only the Timeline's phase disclosures carry data-phase, so its phase toggles never bind to a
+    // network row or chip.
+    const html = state.readHtml();
+    expect((html.match(/data-phase="/g) || []).length).toBe((html.match(/class="phasecontrol" data-phase="/g) || []).length);
   });
 
   test("a failed teardown never anchors the run's failure", () => {

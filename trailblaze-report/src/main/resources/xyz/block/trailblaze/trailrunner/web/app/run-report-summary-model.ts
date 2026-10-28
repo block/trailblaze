@@ -650,7 +650,7 @@ function selectorOf(tool: string, args: Json): string | undefined {
   if (tool === 'findSelectorMatches' && Array.isArray(args.selectors)) {
     return args.selectors.filter(isRecord).map(describeSelector).join(' | ') || undefined;
   }
-  if (tool === 'block_runIf' && isRecord(args.condition)) {
+  if ((tool === 'runIf' || tool === 'block_runIf') && isRecord(args.condition)) {
     const condition = args.condition;
     const inner = isRecord(condition.tool) ? Object.values(condition.tool)[0] : undefined;
     const selector = condition.selector ?? (isRecord(inner) ? inner.nodeSelector ?? inner.selector : undefined);
@@ -663,6 +663,7 @@ function selectorOf(tool: string, args: Json): string | undefined {
 const VERBS: Record<string, [verb: string, value: (args: Json) => string | undefined]> = {
   tapOnElementBySelector: ['tap', (args) => sel(args.nodeSelector)],
   tapOn: ['tap', (args) => sel(args.selector)],
+  tapOnElementWithAccessibilityText: ['tap', (args) => str(args.accessibilityText)],
   tapOnPoint: ['tap', (args) => (args.x !== undefined && args.y !== undefined ? `(${scalarText(args.x)}, ${scalarText(args.y)})` : undefined)],
   assertVisibleBySelector: ['assert', (args) => sel(args.nodeSelector)],
   assertVisible: ['assert', (args) => str(args.expectedText)],
@@ -677,6 +678,7 @@ const VERBS: Record<string, [verb: string, value: (args: Json) => string | undef
   hideKeyboard: ['hide keyboard', () => undefined],
   clearText: ['clear', () => undefined],
   openUrl: ['open', (args) => str(args.url)],
+  runIf: ['if', runIfCondition],
   block_runIf: ['if', runIfCondition],
   block_dismissIfPresent: ['dismiss', (args) => regexText(args.dialogTextRegex)],
   android_adbShell: ['adb', (args) => words(args.command)],

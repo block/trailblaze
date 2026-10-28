@@ -43,7 +43,6 @@ class ExecuteToolsHandlerTest {
         TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "empty-for-handler-failure-test",
           toolClasses = emptySet(),
-          yamlToolNames = emptySet(),
         ),
       ),
     )

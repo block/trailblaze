@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.trailhead
 
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.JsonArray
@@ -7,7 +8,6 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -27,7 +27,7 @@ enum class TrailheadPhase {
   /** The trailhead returned; trail steps are running. */
   TRAIL,
 
-  /** The verdict is fixed and `teardown` is running. Notes are no longer collected. */
+  /** The verdict is fixed and `teardown` is running. */
   TEARDOWN,
 }
 
@@ -44,14 +44,27 @@ class TrailheadInvocation internal constructor(
    * `teardown` runs only while that device is still the active one.
    */
   val deviceName: String? = null,
+  /** The session whose trailhead ran the setup [previousRun] hands on; see [StoredHandoff.trailheadSessionId]. */
+  internal val trailheadSessionId: SessionId? = null,
 ) {
   @Volatile var reusedReason: String? = null
+    internal set
+
+  /**
+   * Every waypoint the screen matched as this invocation returned. Its setup is handed on only when
+   * that is exactly one. Null until it returned, or when nothing checked (on-device).
+   */
+  @Volatile var endWaypoints: List<String>? = null
+    internal set
+
+  /** Why a host run could not check where this invocation landed; its setup is then not handed on. */
+  @Volatile var landingUnchecked: String? = null
     internal set
 }
 
 /**
- * The trailhead state of one trail in one session: the trail markers, the notes tools wrote, and
- * the trailhead invocations `teardown` must follow. Opened by the runner when the trailhead step
+ * The trailhead state of one trail in one session: the trail markers and the trailhead
+ * invocations `teardown` must follow. Opened by the runner when the trailhead step
  * starts and closed after `teardown`; nothing in it carries over to the next trail.
  */
 class TrailheadRun internal constructor(
@@ -77,9 +90,6 @@ class TrailheadRun internal constructor(
   /** Set once teardown has dropped what earlier trails handed on; until then the runner drops them all. */
   @Volatile internal var handoffsDropped: Boolean = false
 
-  private val _notes = CopyOnWriteArrayList<TrailheadNote>()
-  val notes: List<TrailheadNote> get() = _notes.toList()
-
   private val _invocations = CopyOnWriteArrayList<TrailheadInvocation>()
   val invocations: List<TrailheadInvocation> get() = _invocations.toList()
 
@@ -87,13 +97,10 @@ class TrailheadRun internal constructor(
     _invocations += invocation
   }
 
-  internal fun addNote(note: TrailheadNote) {
-    _notes += note
-  }
-
   fun markTrailStart(timeMs: Long = System.currentTimeMillis()) {
     if (phase == TrailheadPhase.TRAILHEAD) {
       if (trailStartMs == null) trailStartMs = timeMs
+      deliverPendingEvents()
       phase = TrailheadPhase.TRAIL
     }
   }
@@ -101,13 +108,24 @@ class TrailheadRun internal constructor(
   /** A later trailhead step in the same trail (one per device in a multi-device trail). */
   internal fun addTrailheadStep(toolNames: Set<String>) {
     _trailheadToolNames += toolNames
-    if (phase == TrailheadPhase.TRAIL) phase = TrailheadPhase.TRAILHEAD
+    if (phase == TrailheadPhase.TRAIL) {
+      deliverPendingEvents()
+      phase = TrailheadPhase.TRAILHEAD
+    }
   }
 
   fun markTrailEnd(timeMs: Long = System.currentTimeMillis()) {
     trailEndMs = timeMs
+    deliverPendingEvents()
     phase = TrailheadPhase.TEARDOWN
   }
+
+  /**
+   * Captures stamp each event with the phase current when it reaches them, and a driver that hands
+   * events over only while it is called (Playwright for Java) can hold one made late in a phase
+   * until a call in the next. Delivering those first keeps them in the phase they happened in.
+   */
+  internal fun deliverPendingEvents() = SessionEventsWaitPump.deliverPending(sessionId.value)
 }
 
 /**
@@ -139,6 +157,14 @@ object TrailheadRuns {
   fun reuseEnabledFromEnv(env: (String) -> String? = System::getenv): Boolean = reuseEnabled(env(REUSE_ENV_VAR))
 
   /**
+   * A host run's reuse: what the run asked for ([requested]), or when it asked nothing, whether the
+   * process has [REUSE_ENV_VAR] on. A run that refuses reuse (the pass after a failed one) gets
+   * none whatever the process says.
+   */
+  fun reuseEnabledFor(requested: Boolean?, env: (String) -> String? = System::getenv): Boolean =
+    requested ?: reuseEnabledFromEnv(env)
+
+  /**
    * Open the session's run as a trailhead step starts, replacing any run left open by a trail that
    * never finished. [sameTrail] — the run an earlier trailhead step of this same trail opened — gains
    * this step's tools instead, while it is still the session's run.
@@ -153,6 +179,9 @@ object TrailheadRuns {
       sameTrail.addTrailheadStep(trailheadToolNames)
       return sameTrail
     }
+    // What a browser kept between trails belongs to neither trail: deliver it before this
+    // trailhead's phase applies.
+    SessionEventsWaitPump.deliverPending(sessionId.value)
     val run = TrailheadRun(sessionId, trailheadToolNames, reuseEnabled, System.currentTimeMillis())
     bySession[sessionId] = run
     return run
@@ -160,7 +189,16 @@ object TrailheadRuns {
 
   fun current(sessionId: SessionId): TrailheadRun? = bySession[sessionId]
 
+  /**
+   * The phase [sessionId]'s trail is in now, as captured events record it: `trailhead`, `trail` or
+   * `teardown`. Null while the session has no open run: a trail without a trailhead, or before its
+   * trailhead step starts.
+   */
+  fun phaseName(sessionId: String): String? = bySession[SessionId(sessionId)]?.phase?.name?.lowercase()
+
   fun close(run: TrailheadRun) {
+    // Teardown's own traffic, before the phase it is stamped with goes away.
+    if (bySession[run.sessionId] === run) run.deliverPendingEvents()
     bySession.remove(run.sessionId, run)
   }
 
@@ -202,10 +240,15 @@ object TrailheadRuns {
       stored == null -> "no result from a previous run of this trailhead on this device (first run " +
         "here, a trail in between that did not hand one on, or a crash or kill)"
       else -> stored.key.mismatchReason(key)
-        ?: if (stored.result.reusable) null else "the last run was not reusable: ${stored.result.reason}"
+        ?: (if (stored.result.reusable) null else "the last run was not reusable: ${stored.result.reason}")
     }
     val previousRun = if (absentReason == null && stored != null) {
-      PreviousRun(sessionId = stored.sessionId.value, reason = stored.result.reason, state = stored.result.state)
+      PreviousRun(
+        sessionId = stored.sessionId.value,
+        reason = stored.result.reason,
+        state = stored.result.state,
+        trailheadEndWaypoint = stored.endWaypoint,
+      )
     } else {
       null
     }
@@ -221,7 +264,8 @@ object TrailheadRuns {
         put("reason", absentReason)
       }
     }
-    return TrailheadInvocation(tool, resolvedArgs, key, previousRun, deviceNameOf(context))
+    val trailheadSessionId = stored?.trailheadSessionId?.takeIf { previousRun != null }
+    return TrailheadInvocation(tool, resolvedArgs, key, previousRun, deviceNameOf(context), trailheadSessionId)
       .also { run.addInvocation(it) }
   }
 
@@ -231,11 +275,6 @@ object TrailheadRuns {
     return TrailblazeJsonInstance.encodeToJsonElement(previousRun).jsonObject
   }
 
-  /**
-   * Called by a capable tool after its handler returned or threw, with the result's `_meta`. Records
-   * notes from any tool, and for a trailhead [invocation] logs what the handler did with the
-   * previous setup: reused it, tried to and failed ([failed] or a catch-up that threw), or ran in full.
-   */
   /**
    * Why a trailhead [invocation] whose handler returned normally still failed: its
    * `previousRun.reuse()` catch-up threw (and the handler caught it) or had not finished. Null
@@ -253,10 +292,75 @@ object TrailheadRuns {
     }
   }
 
+  /**
+   * Called once a trailhead [invocation]'s handler returned successfully: records which waypoint
+   * its setup left the screen on, which the next run's reuse is checked against. A reused setup
+   * must still match the waypoint the previous run ended on; returns why it doesn't, which fails
+   * the trailhead. Null when it does, and for every other call. Only on a lane with reuse on: the
+   * capture costs every other trail time for a hand-off nothing receives.
+   */
+  suspend fun checkLanding(
+    context: TrailblazeToolExecutionContext,
+    invocation: TrailheadInvocation?,
+    resultMeta: JsonObject?,
+  ): String? {
+    if (invocation == null || runFor(context)?.reuseEnabled != true) return null
+    val reused = (reuseOf(resultMeta)?.get("ok") as? JsonPrimitive)?.booleanOrNull == true
+    val expected = invocation.previousRun?.trailheadEndWaypoint?.takeIf { reused }
+    val landing = TrailheadLanding.locate(context, expected)
+    val name = invocation.tool.trailheadToolName
+    TrailheadEventLog.append(context, TrailheadEventStream.Type.TRAILHEAD_END) {
+      put("tool", name)
+      when (landing) {
+        is TrailheadLanding.Landing.Located -> {
+          put("waypoints", JsonArray(landing.waypoints.map(::JsonPrimitive)))
+          if (expected != null) put("expected", expected)
+          if (landing.missingExpected) put("missing", expected)
+        }
+        is TrailheadLanding.Landing.NotChecked -> {
+          put("waypoints", JsonNull)
+          put("reason", landing.reason)
+        }
+      }
+    }
+    val sessionId = invocation.previousRun?.sessionId
+    return when (landing) {
+      is TrailheadLanding.Landing.Located -> {
+        invocation.endWaypoints = landing.waypoints
+        if (!landing.missingExpected) {
+          null
+        } else {
+          "$name reused session $sessionId's setup but the screen is not on $expected, " +
+            "where that run's trailhead ended (matched now: ${landing.waypoints.joinToString().ifEmpty { "none" }})"
+        }
+      }
+      is TrailheadLanding.Landing.NotChecked -> if (expected == null) {
+        if (landing.onHost) invocation.landingUnchecked = landing.reason
+        null
+      } else {
+        "$name reused session $sessionId's setup but could not check it landed on $expected: " +
+          landing.reason
+      }
+    }
+  }
+
+  /** Why a landing that matched [waypoints] can't be handed on: it must name exactly one; null when it does. */
+  private fun unidentifiedLanding(waypoints: List<String>): String? = when (waypoints.size) {
+    1 -> null
+    0 -> "its trailhead ended on no known waypoint, so nothing can check that a reused setup lands in the same place"
+    else -> "its trailhead ended on more than one waypoint (${waypoints.joinToString()}), so no one of them " +
+      "says where it landed"
+  }
+
   private fun reuseOf(resultMeta: JsonObject?): JsonObject? =
     ((resultMeta?.get("trailblaze") as? JsonObject)?.get(TeardownWire.META_KEY_TRAILHEAD) as? JsonObject)
       ?.get("reuse") as? JsonObject
 
+  /**
+   * Called by a capable tool after its handler returned or threw, with the result's `_meta`. For a
+   * trailhead [invocation], logs what the handler did with the previous setup: reused it, tried to
+   * and failed ([failed] or a catch-up that threw), or ran in full.
+   */
   fun completeInvocation(
     context: TrailblazeToolExecutionContext,
     toolName: String,
@@ -264,18 +368,6 @@ object TrailheadRuns {
     resultMeta: JsonObject?,
     failed: Boolean = false,
   ) {
-    val report = (resultMeta?.get("trailblaze") as? JsonObject)?.get(TeardownWire.META_KEY_TRAILHEAD) as? JsonObject
-    val run = runFor(context)
-    if (run != null && run.phase != TrailheadPhase.TEARDOWN) {
-      (report?.get("notes") as? JsonArray)?.forEach { raw -> parseNote(raw, toolName)?.let { note ->
-        run.addNote(note)
-        TrailheadEventLog.append(context, TrailheadEventStream.Type.NOTE, note.timestamp) {
-          put("tool", note.tool)
-          putIfNotNull("invalidates", note.invalidates)
-          note.created?.let { put("created", buildJsonObject { put("kind", it.kind); put("id", it.id) }) }
-        }
-      } }
-    }
     if (invocation == null) return
     val reuse = reuseOf(resultMeta)
     val reuseReason = (reuse?.get("reason") as? JsonPrimitive)?.contentOrNull
@@ -292,21 +384,10 @@ object TrailheadRuns {
         (reuse?.get("startedAtMs") as? JsonPrimitive)?.longOrNull?.let { put("reuseStartedAtMs", it) }
         putIfNotNull("error", (reuse?.get("error") as? JsonPrimitive)?.contentOrNull)
         invocation.previousRun?.let { put("previousRunSessionId", it.sessionId) }
+        invocation.trailheadSessionId?.let { put("trailheadSessionId", it.value) }
       }
       if (failed) put("failed", true)
     }
-  }
-
-  private fun parseNote(raw: kotlinx.serialization.json.JsonElement, toolName: String): TrailheadNote? {
-    val obj = raw as? JsonObject ?: return null
-    val now = System.currentTimeMillis()
-    (obj["invalidates"] as? JsonPrimitive)?.contentOrNull?.let {
-      return TrailheadNote(invalidates = it, tool = toolName, timestamp = now)
-    }
-    val created = obj["created"] as? JsonObject ?: return null
-    val kind = (created["kind"] as? JsonPrimitive)?.contentOrNull ?: return null
-    val id = (created["id"] as? JsonPrimitive)?.contentOrNull ?: return null
-    return TrailheadNote(created = TrailheadNote.Created(kind, id), tool = toolName, timestamp = now)
   }
 
   private fun runFor(context: TrailblazeToolExecutionContext): TrailheadRun? {
@@ -349,7 +430,10 @@ object TrailheadRuns {
       returned == null -> "teardown returned no result"
       outcome != TrailOutcome.PASSED -> "the trail ${outcome.wireName()}"
       else -> TeardownReuseVetoes.vetoReason(run.sessionId)
-        ?: run.notes.firstNotNullOfOrNull { it.invalidates }?.let { "a step invalidated the setup: $it" }
+        // A run that refused reuse recorded no landing, so a reuse of its setup could not be checked.
+        ?: (if (run.reuseEnabled) null else "reuse was off for this run, so where its trailhead landed was not recorded")
+        ?: invocation.landingUnchecked?.let { "where its trailhead landed could not be checked: $it" }
+        ?: invocation.endWaypoints?.let(::unidentifiedLanding)
         ?: if (oversized) "its state is over ${MAX_STATE_BYTES / 1024} KB and was dropped" else null
     }
     val result = when {
@@ -358,7 +442,17 @@ object TrailheadRuns {
         TeardownResult(reusable = false, reason = "$forcedBecause (teardown said: ${returned.reason})", state = state)
       else -> returned.copy(state = state)
     }
-    TrailheadHandoffStore.put(StoredHandoff(invocation.key, result, run.sessionId))
+    // A reused setup was run by an earlier session's trailhead; hand that one on, not the trail that reused it.
+    val trailheadSessionId = invocation.trailheadSessionId?.takeIf { invocation.reusedReason != null } ?: run.sessionId
+    TrailheadHandoffStore.put(
+      StoredHandoff(
+        key = invocation.key,
+        result = result,
+        sessionId = run.sessionId,
+        trailheadSessionId = trailheadSessionId,
+        endWaypoint = invocation.endWaypoints?.singleOrNull(),
+      ),
+    )
     TrailheadEventLog.append(context, TrailheadEventStream.Type.TEARDOWN) {
       put("tool", invocation.tool.trailheadToolName)
       put("outcome", outcome.wireName())

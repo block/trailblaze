@@ -260,6 +260,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         initialArgs = runYamlRequest.initialArgs,
         trailSourceUrl = runYamlRequest.trailSourceUrl,
+        trailheadReuse = runYamlRequest.config.trailheadReuse,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },

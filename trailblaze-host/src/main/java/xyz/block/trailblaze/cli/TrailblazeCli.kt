@@ -99,12 +99,16 @@ object TrailblazeCli {
    */
   @Volatile private var extraSubcommandsRef: () -> List<Any> = ::emptyList
 
+  /** Builds the distribution's additions to `loop`, a factory for the reason [extraSubcommandsRef] is. */
+  @Volatile private var loopExtensionsRef: () -> List<LoopExtension> = ::emptyList
+
   fun run(
     args: Array<String>,
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
     extraSubcommands: () -> List<Any> = ::emptyList,
     windowsSupported: Boolean = true,
+    loopExtensions: () -> List<LoopExtension> = ::emptyList,
   ) {
     // Every Trailblaze process is a macOS agent app (LSUIElement). Read at AWT initialization,
     // so it must be set before ANY code path loads an AWT class: a CLI command or daemon that
@@ -147,6 +151,7 @@ object TrailblazeCli {
     appProviderRef = bootstrappedAppProvider
     configProviderRef = configProvider
     extraSubcommandsRef = extraSubcommands
+    loopExtensionsRef = loopExtensions
 
     // Capture argv so any CliMcpClient created downstream sends it as
     // `X-Trailblaze-Origin`. The daemon surfaces this in the device-busy
@@ -210,9 +215,14 @@ object TrailblazeCli {
    *
    * They land in the `Other:` tail of [GroupedCommandListRenderer] rather than a named group, since
    * the groups describe the shared surface and a distribution's commands are not part of it.
+   *
+   * The distribution's [LoopExtension]s join `loop` as mixins, so their options parse as the loop's.
    */
   internal fun registerExtraSubcommands(commandLine: CommandLine) {
     extraSubcommandsRef().forEach { commandLine.addSubcommand(it) }
+    commandLine.subcommands["loop"]?.let { loop ->
+      loopExtensionsRef().forEachIndexed { i, extension -> loop.addMixin("loopExtension$i", extension) }
+    }
   }
 
   /**
@@ -529,6 +539,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     SessionCommand::class,
     ReportCommand::class,
     StringsCommand::class,
+    SurveyCommand::class,
     ViewerCommand::class,
     ProfileCommand::class,
     OtelCommand::class,
@@ -719,7 +730,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "loop", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint", "selector"),
+      listOf("run", "loop", "usages", "session", "report", "strings", "survey", "viewer", "profile", "results", "waypoint", "selector"),
     ),
     Group(
       "Setup:",

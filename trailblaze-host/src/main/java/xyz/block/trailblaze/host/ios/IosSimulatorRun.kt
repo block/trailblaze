@@ -65,13 +65,17 @@ internal suspend fun runIosSimulatorYaml(
     noLogging = runOnHostParams.noLogging,
   ) {
     override fun ensureTargetAppIsStopped() {
+      stopTargetAppForCleanup()
+    }
+
+    override fun stopTargetAppForCleanup(): Boolean {
       // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
       // membership-style Set<String>.
       val possibleAppIds = runOnHostParams.targetTestApp
         ?.getPossibleAppIdsForPlatform(runOnHostParams.trailblazeDevicePlatform)
         ?.toSet()
         ?: emptySet()
-      MobileDeviceUtils.ensureAppsAreForceStopped(
+      return MobileDeviceUtils.ensureAppsAreForceStopped(
         possibleAppIds = possibleAppIds,
         trailblazeDeviceId = trailblazeDeviceId
       )
@@ -179,6 +183,7 @@ internal suspend fun runIosSimulatorYaml(
       trailblazeDeviceId = trailblazeDeviceId,
       traceId = runYamlRequest.traceId,
       sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+      keepDeviceLanguage = runOnHostParams.keepDeviceLanguage,
       initialMemorySeeds = runYamlRequest.initialMemorySeeds,
       initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
       initialArgs = runYamlRequest.initialArgs,

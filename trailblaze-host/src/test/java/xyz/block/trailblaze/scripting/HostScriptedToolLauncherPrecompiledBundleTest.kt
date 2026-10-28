@@ -338,8 +338,8 @@ class HostScriptedToolLauncherPrecompiledBundleTest {
 
   @Test
   fun `installed tools use their shipped bundle even when an SDK source is available`() = runBlocking {
-    val tool = inlineTool("block_runIf")
-    val shipped = extractRoot.newFile("block_runIf.bundle.js")
+    val tool = inlineTool("runIf")
+    val shipped = extractRoot.newFile("runIf.bundle.js")
     val route = HostScriptedToolLauncher.planInlineToolRoute(
       listOf(tool), esbuildPresent = true, sdkSourcePresent = true,
     )

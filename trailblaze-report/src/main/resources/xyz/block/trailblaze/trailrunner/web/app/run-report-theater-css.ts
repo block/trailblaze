@@ -226,6 +226,7 @@ main.tabmountmain:has([data-tabmount="theater"]) { display: flex; flex-direction
 .storystage[data-grid] .storyframe[data-role="wall"] { opacity: 0.6; }
 
 /* The screen: the recording, else the run's screenshots on the same clock, with the marks over it. */
+.devframecontent > .storymirror { position: absolute; inset: 0; width: 100%; height: 100%; }
 .devframecontent > video, .devframecontent > .storyshotimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .devframecontent[data-source="video"] > .storyshotimg { display: none; }
 .devframecontent[data-source="shots"] > video { display: none; }

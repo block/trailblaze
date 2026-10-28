@@ -5,14 +5,11 @@ import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
-import kotlinx.serialization.json.JsonPrimitive
 import maestro.SwipeDirection
 import org.junit.Test
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.toolcalls.commands.AssertMatchCountTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
@@ -27,8 +24,8 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
+import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
@@ -295,29 +292,6 @@ trail:
     val wrapper = tools[0]
     assertThat(wrapper.name).isEqualTo("eraseText")
     assertThat(wrapper.trailblazeTool).isEqualTo(EraseTextTrailblazeTool(charactersToErase = 10))
-  }
-
-  @Test
-  fun deserializeYamlDefinedTool() {
-    // A YAML-defined (`tools:` mode) tool deserializes as a YamlDefinedTrailblazeTool rather than
-    // a KClass-backed data object.
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - ${YamlDefinedToolFixture.NAME}:
-            text: hello
-    """.trimIndent()
-
-    val tools = YamlDefinedToolFixture.registered { decodeRecordedTools(yaml, decoder = createTrailblazeYaml()) }
-    assertThat(tools.size).isEqualTo(1)
-    val wrapper = tools[0]
-    assertThat(wrapper.name).isEqualTo(YamlDefinedToolFixture.NAME)
-    val tool = wrapper.trailblazeTool as YamlDefinedTrailblazeTool
-    assertThat(tool.config.id).isEqualTo(YamlDefinedToolFixture.NAME)
-    assertThat(tool.params["text"]).isEqualTo(JsonPrimitive("hello"))
   }
 
   @Test
@@ -661,6 +635,33 @@ trail:
         ),
       ),
     )
+  }
+
+  /**
+   * Trails set `timeoutMs` on a selector tap to wait out a late-rendering target. The field used to
+   * be missing from the tool, so decoding dropped it without an error and the tap waited only the
+   * driver default.
+   */
+  @Test
+  fun tapOnElementBySelectorKeepsTimeoutMs() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: the tab row renders late
+            timeoutMs: 30000
+            nodeSelector:
+              androidAccessibility:
+                textRegex: More cart options
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    val tap = reDecoded.single().trailblazeTool as TapOnByElementSelector
+    assertThat(tap.timeoutMs).isEqualTo(30_000L)
   }
 
   @Test

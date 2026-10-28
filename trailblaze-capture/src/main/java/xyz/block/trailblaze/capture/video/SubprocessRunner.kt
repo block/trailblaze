@@ -17,7 +17,7 @@ internal data class SubprocessResult(val exitCode: Int, val output: String)
  * drain inline before [Process.waitFor] would make a wedged subprocess unkillable (the timeout
  * branch would be unreachable). Read on a side thread, and the caller can actually time out.
  *
- * On timeout:
+ * On timeout, or when the calling thread is interrupted (whose interrupt it keeps):
  *  - Closes the inputStream explicitly so a kernel-blocked reader gets EOF (some JVM/OS
  *    combinations don't unblock the reader on `destroyForcibly()` alone — leaving an orphan
  *    daemon thread holding the file handle until JVM exit).
@@ -25,8 +25,8 @@ internal data class SubprocessResult(val exitCode: Int, val output: String)
  *  - Joins the drain thread with a short cap so we don't block the caller indefinitely if the
  *    reader is wedged in native code.
  *
- * Returns `null` when the binary couldn't start at all, when the process timed out, or when an
- * unexpected exception interrupted the run. Returns a [SubprocessResult] with the exit code and
+ * Returns `null` when the binary couldn't start at all, when the process timed out or the wait was
+ * interrupted, or when an unexpected exception interrupted the run. Returns a [SubprocessResult] with the exit code and
  * the captured combined stdout/stderr otherwise — callers inspect `exitCode` to distinguish
  * success from a clean failure.
  *
@@ -66,7 +66,13 @@ internal fun runSubprocessWithTimeout(
         isDaemon = true
         start()
       }
-  val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+  var interrupted = false
+  val finished = try {
+    process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+  } catch (_: InterruptedException) {
+    interrupted = true
+    false
+  }
   if (!finished) {
     // Close the stream first so a reader blocked in native read() unblocks promptly — some
     // JVM/OS combinations don't deliver EOF to the reader on destroyForcibly() alone, which
@@ -74,6 +80,7 @@ internal fun runSubprocessWithTimeout(
     runCatching { process.inputStream.close() }
     process.destroyForcibly()
     drainThread.join(DRAIN_JOIN_TIMEOUT_MS)
+    if (interrupted) Thread.currentThread().interrupt()
     return null
   }
   // Process exited cleanly → stdout is at EOF → drain thread is guaranteed to terminate.

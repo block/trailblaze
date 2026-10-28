@@ -109,12 +109,13 @@ object SurveyBundles {
   /**
    * The entry esbuild bundles for the survey file at [importPath]: the file's exports plus the one
    * function the SDK calls. SISTER-IMPL-TAG: survey-bundle-entry — the Android Gradle plugin builds
-   * device bundles from the same three lines (`surveyBundleEntrySource`), and the two must agree.
+   * device bundles from the same entry (`surveyBundleEntrySource`), and the two must agree.
    */
   fun entrySource(importPath: String): String = buildString {
     appendLine("// Synthetic entry: one survey file, built for the scripted-tool sandbox.")
     appendLine("import * as surveys from ${jsString(importPath)};")
     appendLine("import { runNamedLiveSurvey } from \"@trailblaze/scripting/surveys\";")
+    appendLine("export { liveSurveyCapabilities as capabilities } from \"@trailblaze/scripting/surveys\";")
     appendLine("export const runLive = (name, events, options) => runNamedLiveSurvey(surveys, name, events, options);")
   }
 

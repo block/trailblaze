@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { cleanMark, markPlacer, modalOpen, openingAt, swipeSvg } from './run-report-theater';
+import { cleanMark, containIn, deviceWords, markPlacer, mirrorDue, mirrorKey, mirroredDevice, modalOpen, openingAt, swipeSvg } from './run-report-theater';
 import type { TheaterMark } from './run-report-theater-model';
 
 const swipe = (over: Record<string, unknown> = {}): TheaterMark =>
@@ -110,5 +110,56 @@ describe('modal detection', () => {
   test('is closed where there is no document', () => {
     (globalThis as { document?: unknown }).document = undefined;
     expect(modalOpen()).toBe(false);
+  });
+});
+
+describe('the wall copy of the device on the program', () => {
+  test('the device on the program gets a copy, and switching devices moves it', () => {
+    expect(mirroredDevice(2, 'seller', false)).toBe('seller');
+    expect(mirroredDevice(2, 'buyer', false)).toBe('buyer');
+  });
+
+  test('Grid and a single device have no empty cell, so no copy', () => {
+    expect(mirroredDevice(2, 'seller', true)).toBeUndefined();
+    expect(mirroredDevice(1, 'phone', false)).toBeUndefined();
+  });
+
+  const shown = (over: Partial<Parameters<typeof mirrorKey>[0]> = {}) =>
+    mirrorKey({ source: 'video', clip: 0, videoReady: true, currentTime: 2.5, imageReady: false, imageSrc: '', ...over });
+
+  test('a copy shows the recording or the screenshot the program shows, and nothing undrawable', () => {
+    expect(shown()).toBe('v0:2.5');
+    expect(shown({ source: 'shots', imageReady: true, imageSrc: 'a.webp' })).toBe('ia.webp');
+    expect(shown({ videoReady: false })).toBe('');
+    expect(shown({ source: 'shots', imageReady: false })).toBe('');
+    expect(shown({ source: 'none' })).toBe('');
+  });
+
+  test('a playing video, a new clip or a new screenshot repaints at once', () => {
+    expect(mirrorDue(shown({ currentTime: 2.6 }), shown(), 1000, 1001, 500)).toBe(true);
+    expect(mirrorDue(shown({ clip: 1 }), shown(), 1000, 1001, 500)).toBe(true);
+    expect(mirrorDue('ib.webp', 'ia.webp', 1000, 1001, 500)).toBe(true);
+  });
+
+  test('a paused video whose frame becomes drawable without moving is drawn again on the next retry', () => {
+    const paused = shown({ currentTime: 0 });
+    // Painted once before the frame could be drawn; the position has not changed since.
+    expect(mirrorDue(paused, paused, 1000, 1200, 500)).toBe(false);
+    expect(mirrorDue(paused, paused, 1000, 1500, 500)).toBe(true);
+  });
+
+  test('the picture is contained and centred in the copy\'s screen', () => {
+    expect(containIn(1920, 1080, 360, 225)).toEqual({ x: 0, y: 11.25, w: 360, h: 202.5 });
+    expect(containIn(1080, 1920, 360, 225)).toEqual({ x: 116.71875, y: 0, w: 126.5625, h: 225 });
+    expect(containIn(0, 0, 360, 225)).toBeNull();
+  });
+});
+
+describe('how a device is named on screen', () => {
+  test('Apple and platform names keep their own casing; the rest read as plain words', () => {
+    expect(deviceWords('ios-iphone')).toBe('iOS iPhone');
+    expect(deviceWords('ios ipad')).toBe('iOS iPad');
+    expect(deviceWords('android-tablet')).toBe('Android tablet');
+    expect(deviceWords('web')).toBe('Web');
   });
 });

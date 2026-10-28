@@ -381,7 +381,7 @@ class WorkspaceCompileBootstrapTest {
     writeFixtureTrailmap(trailmapsDir, "alpha")
     val toolsDir = File(trailmapsDir, "alpha/tools").apply { mkdirs() }
     val toolYaml = File(toolsDir, "myTool.yaml").apply {
-      writeText("script: ./myTool.ts\n_meta:\n  trailblaze/requiresContext: true\n")
+      writeText("script: ./myTool.ts\n_meta:\n  trailblaze/surfaceToLlm: true\n")
     }
     val toolTs = File(toolsDir, "myTool.ts").apply {
       writeText("// initial body — analyzer reads me\n")

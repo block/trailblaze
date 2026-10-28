@@ -217,6 +217,21 @@ class IosVideoCaptureTest {
   }
 
   @Test
+  fun `a slice of simctl's own mp4 keeps every frame on the time simctl gave it`() {
+    val dir = Files.createTempDirectory("ios-slice-").toFile()
+    try {
+      val (recording, expected) = simctlLikeRecording(dir)
+      val cut = File(dir, "cut.mp4")
+
+      ffmpeg(*VideoSlice.command(recording, 0, expected.last() + 100, cut, "ffmpeg").drop(1).toTypedArray())
+
+      assertEquals(expected, frameTimesMs(cut).let { times -> times.map { it - times.first() } })
+    } finally {
+      dir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `both transcodes cap the frame rate and never run past the recording window`() {
     val dir = Files.createTempDirectory("ios-transcode-").toFile()
     try {

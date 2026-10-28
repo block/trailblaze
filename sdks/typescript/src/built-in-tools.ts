@@ -5,7 +5,7 @@
 //
 // ## Split with the generated recordable surface
 //
-// Every RECORDABLE framework tool (class-backed + YAML-defined) is generated into each trailmap's /
+// Every RECORDABLE framework tool (class-backed) is generated into each trailmap's /
 // bundled target's `tools/trailblaze-client.d.ts` by `PerTrailmapClientDtsEmitter`, derived from the
 // `@TrailblazeToolClass(isRecordable = true)` source of truth (see the devlog
 // `2026-07-01-trail-recording-type-validation.md`). That generated surface is what the trail-recording

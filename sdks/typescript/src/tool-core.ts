@@ -41,7 +41,6 @@ import {
   type TeardownHandler,
   type PreviousRun,
   type TeardownResult,
-  type TrailheadContext,
 } from "./trailhead.js";
 
 /**
@@ -117,8 +116,6 @@ export interface ToolContext {
    * `null` in every other tool, in `teardown`, and whenever there is nothing to reuse.
    */
   previousRun: PreviousRun | null;
-  /** `note(...)` works in any tool and tells the trailhead's `teardown` what to clean up. */
-  trailhead: TrailheadContext;
   /** This session's event streams as they stand: query, count, wait for a record, or mark a point. */
   events: SessionEvents;
   /**
@@ -176,11 +173,6 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
   description?: string;
   /** Platforms this tool may register on. Empty / omitted = all platforms. */
   supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
-  /**
-   * @deprecated Ignored: every handler already gets `ctx`. Delete it from your spec; it will be
-   * removed in a future release.
-   */
-  requiresContext?: boolean;
   /** Host-only — skip registration on-device (Node/Bun APIs). Read before `_meta` on-device. */
   requiresHost?: boolean;
   /** Drivers this tool may register on. Empty / omitted = all drivers. */
@@ -341,7 +333,7 @@ export type TypedToolDefinition<
 ) => Promise<TResult>) & {
   /**
    * The spec's `trailhead.teardown`, adapted to the same `(args, ctx, client)` call shape plus
-   * the host's trail-result payload (`{ outcome, notes }`). Present only when the spec defines it;
+   * the host's trail-result payload (`{ outcome }`). Present only when the spec defines it;
    * the synthesized wrappers expose it to the host as the tool's `teardown` member.
    */
   teardown?: (
@@ -474,7 +466,6 @@ export function defineTypedTool<TInput, TResult>(
       target: legacyCtx?.target,
       session: legacyCtx?.session,
       previousRun: trailhead.previousRun,
-      trailhead: trailhead.context,
       events,
       surveys: createSessionSurveys(client.host, events, {
         sessionId: legacyCtx?.sessionId,
@@ -489,12 +480,11 @@ export function defineTypedTool<TInput, TResult>(
     try {
       out = await handler(validatedArgs as TInput, toolContext);
     } catch (e: unknown) {
-      // Notes written before a throw still matter: a tool that created something and then failed
-      // must still tell cleanup about it.
+      // A reuse whose handler then threw is still recorded, as a failed one.
       throw markErrorWithTrailheadReport(e, trailhead.report());
     }
     // Wrapping a result serializes a non-envelope one, which throws on a cycle or a BigInt; the
-    // notes still have to reach cleanup, so they ride the error like a handler's own throw.
+    // reuse report still has to reach the host, so it rides the error like a handler's own throw.
     let withReport: TResult;
     try {
       withReport = attachTrailheadReportToResult(out, trailhead.report()) as TResult;
@@ -523,9 +513,7 @@ export function defineTypedTool<TInput, TResult>(
         rawMemory != null && typeof (rawMemory as TrailblazeMemory).interpolate === "function"
           ? (rawMemory as TrailblazeMemory)
           : createMemory(rawMemory as Record<string, string> | undefined);
-      // `previousRun` belongs to the trailhead's own run, not its teardown, and notes written now
-      // would land after the trail they describe — so teardown gets no hand-off and an inert
-      // recorder whose report is discarded.
+      // `previousRun` belongs to the trailhead's own run, not its teardown.
       const events = createSessionEvents(client.host);
       const device = normalizeDevice(legacyCtx?.device);
       const toolContext: ToolContext = {
@@ -536,7 +524,6 @@ export function defineTypedTool<TInput, TResult>(
         target: legacyCtx?.target,
         session: legacyCtx?.session,
         previousRun: null,
-        trailhead: createTrailheadRecorder(undefined).context,
         events,
         surveys: createSessionSurveys(client.host, events, {
           sessionId: legacyCtx?.sessionId,

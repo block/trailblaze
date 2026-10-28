@@ -10,9 +10,9 @@ import kotlin.jvm.JvmInline
  *
  * Implementations may override [toolMetadata] to expose per-instance metadata that overrides the
  * class-level [TrailblazeToolClass] annotation. The default is `null`, meaning the annotation is
- * the source of truth — almost every implementation takes this path. `YamlDefinedTrailblazeTool` is
- * the one current exception: it shares a class with all other YAML-defined tools, so it overrides
- * this hook to surface its per-config flags.
+ * the source of truth — almost every implementation takes this path. A tool whose flags vary per
+ * instance (for example, an implementation class that backs many named tools) overrides this hook
+ * to surface them.
  */
 interface TrailblazeTool {
   /**

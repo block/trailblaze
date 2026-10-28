@@ -155,6 +155,15 @@ object CliDaemonCapabilities {
    */
   const val WORKSPACE_TRAILMAPS = "workspace-trailmaps"
 
+  /**
+   * The daemon reads [CliRunRequest.trailheadReuse], so `trailblaze loop --reuse-trailhead` asks
+   * for reuse, and refuses it for the pass after a failed one even with the daemon's
+   * `TRAILBLAZE_TRAILHEAD_REUSE` on. A daemon without this drops the field: the loop's reuse
+   * silently never happens, or with that env var on, a pass after a failure reuses a setup from
+   * before it.
+   */
+  const val TRAILHEAD_REUSE = "run.trailhead-reuse"
+
   /** Every capability this build honors. */
   val ALL: Set<String> = setOf(
     PER_RUN_DEVICE_BINDINGS,
@@ -164,6 +173,7 @@ object CliDaemonCapabilities {
     WEB_LOCALE,
     COMPANION,
     WORKSPACE_TRAILMAPS,
+    TRAILHEAD_REUSE,
   )
 }
 

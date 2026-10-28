@@ -43,7 +43,7 @@ class HostScriptedToolLauncherSurveyRegistrationTest {
         ),
         logsRepo = LogsRepo(logsDir = dir.resolve("logs").also { it.mkdirs() }, watchFileSystem = false),
         toolRepo = TrailblazeToolRepo(
-          trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(name = "launcher-surveys", toolClasses = emptySet(), yamlToolNames = emptySet()),
+          trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(name = "launcher-surveys", toolClasses = emptySet()),
         ),
         classLoader = javaClass.classLoader,
         logPrefix = "[test]",

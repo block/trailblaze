@@ -1436,7 +1436,7 @@ export interface ToolChoice {
   class: "ai.koog.prompt.llm.LLMCapability.ToolChoice";
 }
 
-export type ToolFlavor = "kotlin" | "yaml" | "scripted";
+export type ToolFlavor = "kotlin" | "scripted";
 
 export interface ToolParamDto {
   name: string;

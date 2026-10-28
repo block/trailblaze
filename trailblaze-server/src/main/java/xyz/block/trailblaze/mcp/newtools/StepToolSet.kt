@@ -34,7 +34,6 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValida
 import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -787,7 +786,7 @@ class StepToolSet(
 
     // Arg-shape gate for dynamic/scripted tools — the same unknown-key + missing-required
     // check the scripted-tool callback path runs (`JsScriptingCallbackArgumentValidator`).
-    // Class-backed and YAML-defined tools already fail the YAML decode above on a missing
+    // Class-backed tools already fail the YAML decode above on a missing
     // required field, but a dynamic tool's args ride through as a raw JsonObject and would
     // otherwise reach the tool's implementation unchecked — where a missing required arg
     // surfaces as a deep, misleading error (e.g. a launch tool invoked with a sibling tool's
@@ -1126,11 +1125,6 @@ class StepToolSet(
    *     [TrailblazeToolSet.DefaultLlmTrailblazeTools].
    *  3. [ToolSetCategory.ALL] — the framework-level superset of every default class subset.
    *
-   * YAML-defined verification tools aren't surfaced here yet — none exist in the catalog
-   * today (the `verification.yaml` toolset only references class-backed tools by name) —
-   * and adding them later is a strict superset change once a YAML tool wants to opt in
-   * via `is_verification: true`.
-   *
    * All reflection is wrapped defensively: if annotation reads fail at runtime (extreme
    * classpath corner cases), the call returns `false` rather than crashing the verify
    * call. Returns `false` for unknown / blank names — verify mode treats those as unsafe
@@ -1163,8 +1157,8 @@ class StepToolSet(
    * 1. If [toolClassesOverrideProvider] returns a non-null class set, use those classes
    *    (driver-specific override, e.g. Compose tools).
    * 2. Otherwise, prefer the device-specific [availableToolsProvider] which already
-   *    accounts for driver + YAML catalog.
-   * 3. Fallback (no device connected yet): full ALL-category class + YAML descriptor list.
+   *    accounts for driver + toolset catalog.
+   * 3. Fallback (no device connected yet): full ALL-category class descriptor list.
    */
   private fun selectInnerAgentTools(): List<TrailblazeToolDescriptor> {
     val overrideClasses = toolClassesOverrideProvider?.invoke()
@@ -1176,14 +1170,8 @@ class StepToolSet(
       return tools
     }
     // Fallback when no device-specific tools are available (e.g. no device connected yet).
-    // Must include YAML-defined tools (e.g. eraseText) alongside class-backed ones so the
-    // LLM sees the full toolset even in the no-device state.
-    val classDescriptors = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+    return ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
       .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
-      ToolSetCategoryMapping.getYamlToolNames(ToolSetCategory.ALL),
-    ).map { it.toTrailblazeToolDescriptor() }
-    return classDescriptors + yamlDescriptors
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

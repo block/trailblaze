@@ -378,7 +378,8 @@ internal class TrailmapTargetGenerator(
 
       // Scripted-tool DELIVERY always flows through the generated top-level `tools:` block
       // (`AppTargetYamlConfig.tools` → `getInlineScriptTools()` → the host / on-device launchers).
-      // Authors may declare each scripted tool in either of two places in the trailmap manifest:
+      // Every scripted tool under `<trailmap>/tools/` is delivered (step 2a). Authors may still name
+      // each one in either of two places in the manifest:
       //
       //   - `target.tools:`            — genuinely cross-platform tools (e.g. an android+ios tool).
       //   - `platforms.<p>.tools:`     — platform-specific tools, declared under the platform they
@@ -405,6 +406,7 @@ internal class TrailmapTargetGenerator(
       // Discover scripted-tool descriptors once per trailmap and share the registry across the
       // target-level and per-platform resolution so both see the same name-keyed view.
       val discovery = buildTrailmapScriptedToolRegistry(trailmapFile.parentFile!!, trailmapFile)
+      if (analyzerToolsJson == null) requireNoAnalyzerOnlyTools(trailmapId, trailmapFile, discovery)
       // First-seen-order, deduped-by-name accumulator for the generated top-level `tools:`.
       val mergedScriptedTools = linkedMapOf<String, Map<String, Any?>>()
       val toolDeclarationSite = linkedMapOf<String, String>()
@@ -487,6 +489,21 @@ internal class TrailmapTargetGenerator(
         }
         outPlatforms
       }
+
+      // 2a) Every other scripted tool under `<trailmap>/tools/` — a YAML descriptor or a
+      //     descriptor-less `.ts` the analyzer described — is on the target too; listing it above is
+      //     optional. Nothing is pruned: each session registers a tool only where its
+      //     `supportedPlatforms` / `supportedDrivers` allow and `excluded_tools:` doesn't remove it.
+      //     Appended in name order. Parity mirror of the same step in
+      //     `TrailblazeProjectConfigLoader.resolveTrailmapSiblings`.
+      (discovery.registry.keys + analyzerToolsByTrailmap[trailmapId]?.keys.orEmpty())
+        .filter { it !in mergedScriptedTools }
+        .distinct()
+        .sorted()
+        .forEach { toolName ->
+          resolveScriptedToolByName(toolName, discovery, trailmapId)
+            ?.forEach { cfg -> mergedScriptedTools.putIfAbsent(toolName, cfg) }
+        }
 
       // 2b) Dependency-exported scripted tools. Fold in the scripted tools this trailmap's
       //     `dependencies:` closure publishes via `exports:` so the generated top-level `tools:`
@@ -771,6 +788,13 @@ internal class TrailmapTargetGenerator(
      * Filename suffixes that mark an operational tool YAML rather than a scripted-tool
      * descriptor. Kept in lockstep with the runtime / bundler exclude lists.
      */
+    /**
+     * A `.ts` module exporting a typed tool. SISTER-IMPL-TAG: typed-tool-binding-pattern — keep in
+     * lockstep with `TrailblazeProjectConfigLoader` and `BundledScriptedToolAnalyzeMain`.
+     */
+    private val TYPED_TOOL_BINDING_PATTERN =
+      Regex("""(?m)^\s*export\s+const\s+\w+\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
+
     private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
       ".tool.yaml",
       ".trailhead.yaml",
@@ -930,6 +954,18 @@ internal class TrailmapTargetGenerator(
     trailmapId: String,
   ): List<Map<String, Any?>>? {
     discovery.registry[toolName]?.let { match ->
+      // A descriptor with a name-only entry is enriched whole from the `.ts`, as the runtime
+      // loader does; the analyzer output keeps what the YAML declares and fills the rest.
+      if (match.descriptor.partialTypedToolNames().isNotEmpty()) {
+        val cfg = analyzerToolsByTrailmap[trailmapId]?.get(toolName)
+          ?: throw GradleException(
+            "Trailmap '$trailmapId': scripted-tool descriptor '${match.toolFile.name}' declares " +
+              "a tool with no `description:` or `inputSchema:`, and the TypeScript analyzer output " +
+              "has no entry for '$toolName'. Re-run generation with the analyzer, or describe every " +
+              "tool in the YAML.",
+          )
+        return listOf(relativizeAnalyzerScript(cfg))
+      }
       val configs = trailmapScriptedToolToInlineMaps(match.descriptor, match.toolFile)
         .filter { it["name"] == toolName }
       // Defensive invariant: a registry hit means the descriptor declared [toolName] (the registry
@@ -1235,6 +1271,58 @@ internal class TrailmapTargetGenerator(
     return TrailmapScriptedToolDiscoveryResult(registry, skipped)
   }
 
+  /**
+   * Fails when `<trailmap>/tools/` holds a scripted tool only the TypeScript analyzer can describe
+   * and this generator runs without one: a `.ts` exporting `trailblaze.tool(...)` that no YAML
+   * descriptor names in `script:`, a meta-only descriptor (`script:` with no `name:` /
+   * `tools:`), or a name-only one ([partialTypedToolNames]). The runtime puts every such tool on the target, so the generated target would
+   * silently lack it. Only a descriptor [discovery] registered covers its script; one it skipped as
+   * invalid (say `name: []`) leaves the `.ts` uncovered.
+   */
+  private fun requireNoAnalyzerOnlyTools(
+    trailmapId: String,
+    trailmapFile: File,
+    discovery: TrailmapScriptedToolDiscoveryResult,
+  ) {
+    val trailmapDir = trailmapFile.parentFile ?: return
+    val toolsDir = trailmapDir.resolve(SCRIPTED_TOOLS_DIR)
+    if (!toolsDir.isDirectory) return
+    val files = toolsDir.walkTopDown().filter { it.isFile }.toList()
+    val registeredDescriptors = discovery.registry.values.mapTo(mutableSetOf()) { it.toolFile.absoluteFile }
+    val coveredScripts = mutableSetOf<File>()
+    val analyzerOnlyYamls = mutableListOf<File>()
+    files
+      .filter { it.name.endsWith(".yaml") && OPERATIONAL_TOOL_YAML_SUFFIXES.none { s -> it.name.endsWith(s) } }
+      .forEach { yamlFile ->
+        // A YAML that doesn't parse covers nothing, as in the runtime loader.
+        val node = runCatching { yaml.parseToYamlNode(yamlFile.readText()) as? YamlMap }.getOrNull()
+          ?: return@forEach
+        val keys = node.entries.keys.map { it.content }.toSet()
+        val script = (node.entries.entries.firstOrNull { it.key.content == "script" }?.value
+          as? com.charleskorn.kaml.YamlScalar)?.content ?: return@forEach
+        val isMetaOnly = "name" !in keys && "tools" !in keys
+        if (isMetaOnly || node.partialTypedToolNames().isNotEmpty()) analyzerOnlyYamls += yamlFile
+        if (!isMetaOnly && yamlFile.absoluteFile !in registeredDescriptors) return@forEach
+        coveredScripts += File(script).takeIf { it.isAbsolute }?.absoluteFile
+          ?: File(yamlFile.parentFile, script).toPath().normalize().toFile().absoluteFile
+      }
+    val bareTs = files.filter { file ->
+      val n = file.name
+      n.endsWith(".ts") && !n.endsWith(".d.ts") && !n.endsWith(".test.ts") &&
+        file.absoluteFile !in coveredScripts &&
+        TYPED_TOOL_BINDING_PATTERN.containsMatchIn(file.readText())
+    }
+    val offenders = (bareTs + analyzerOnlyYamls).map { it.relativeTo(trailmapDir).invariantSeparatorsPath }.sorted()
+    if (offenders.isEmpty()) return
+    throw GradleException(
+      "Trailmap '$trailmapId' (${trailmapFile.absolutePath}) has scripted tools only the TypeScript " +
+        "analyzer can describe: ${offenders.joinToString()}. Every tool under <trailmap>/tools/ is on " +
+        "the target, so generating without the analyzer would bake a target that lacks them. Set " +
+        "`bundledTrailblazeConfig { analyzeDescriptorlessTools.set(true) }` (with `sdkDir`), or give " +
+        "each tool a YAML descriptor with a `name:`.",
+    )
+  }
+
   private fun skippedMalformedMessage(
     toolFile: File,
     trailmapDir: File,
@@ -1306,6 +1394,9 @@ internal class TrailmapTargetGenerator(
     // File-wide defaults (apply to every entry when the entry doesn't override).
     val fileWideRequiresHost = descriptor.optionalScalarBoolean("requiresHost") ?: false
     val fileWideSupportedPlatforms = descriptor.optionalStringList("supportedPlatforms", toolFile)
+    val fileWideSurfaceToLlm = descriptor.optionalScalarBoolean("surfaceToLlm") ?: true
+    val fileWideIsRecordable = descriptor.optionalScalarBoolean("isRecordable") ?: true
+    val fileWideSensitiveArgNames = descriptor.optionalStringList("sensitiveArgNames", toolFile)
     val fileWideExplicitMeta = descriptor.optionalMap("_meta", toolFile).toExplicitMetaMap()
 
     // Multi-tool shape: presence of `tools:` toggles the multi-tool path. File-wide shortcuts
@@ -1356,6 +1447,11 @@ internal class TrailmapTargetGenerator(
           description = entryMap.optionalScalarString("description"),
           requiresHost = entryRequiresHostOverride ?: fileWideRequiresHost,
           supportedPlatforms = entrySupportedPlatformsOverride ?: fileWideSupportedPlatforms,
+          surfaceToLlm = entryMap.optionalScalarBoolean("surfaceToLlm") ?: fileWideSurfaceToLlm,
+          isRecordable = entryMap.optionalScalarBoolean("isRecordable") ?: fileWideIsRecordable,
+          // Empty inherits, as at runtime: a dropped file-wide list would leak a secret to the log.
+          sensitiveArgNames = entryMap.optionalStringList("sensitiveArgNames", toolFile)?.takeIf { it.isNotEmpty() }
+            ?: fileWideSensitiveArgNames,
           explicitMeta = mergedExplicitMeta,
           inputSchemaSource = entryMap.optionalMap("inputSchema", toolFile),
           toolFile = toolFile,
@@ -1376,6 +1472,9 @@ internal class TrailmapTargetGenerator(
         description = description,
         requiresHost = fileWideRequiresHost,
         supportedPlatforms = fileWideSupportedPlatforms,
+        surfaceToLlm = fileWideSurfaceToLlm,
+        isRecordable = fileWideIsRecordable,
+        sensitiveArgNames = fileWideSensitiveArgNames,
         explicitMeta = fileWideExplicitMeta,
         inputSchemaSource = inputSchemaSource,
         toolFile = toolFile,
@@ -1394,6 +1493,9 @@ internal class TrailmapTargetGenerator(
     description: String?,
     requiresHost: Boolean,
     supportedPlatforms: List<String>?,
+    surfaceToLlm: Boolean,
+    isRecordable: Boolean,
+    sensitiveArgNames: List<String>?,
     explicitMeta: Map<String, Any?>,
     inputSchemaSource: YamlMap?,
     toolFile: File,
@@ -1409,11 +1511,37 @@ internal class TrailmapTargetGenerator(
       explicitMeta = explicitMeta,
       supportedPlatforms = supportedPlatforms,
       requiresHost = requiresHost,
+      surfaceToLlm = surfaceToLlm,
+      isRecordable = isRecordable,
+      sensitiveArgNames = sensitiveArgNames,
     )
     if (mergedMeta.isNotEmpty()) out["_meta"] = mergedMeta
 
     out["inputSchema"] = buildJsonSchemaObject(inputSchemaSource, toolFile)
     return out
+  }
+
+  /**
+   * Names in this `.ts` descriptor that declare neither `description:` nor `inputSchema:` — the
+   * partial shapes `TrailmapScriptedToolFile.requiresEnrichment` routes through the analyzer at
+   * runtime, which fills both from the `.ts`.
+   */
+  private fun YamlMap.partialTypedToolNames(): Set<String> {
+    val script = optionalScalarString("script") ?: return emptySet()
+    if (!script.endsWith(".ts", ignoreCase = true)) return emptySet()
+    fun YamlMap.isNameOnly(): Boolean =
+      optionalScalarString("description") == null &&
+        (entries.entries.firstOrNull { it.key.content == "inputSchema" }?.value as? YamlMap)
+          ?.entries.isNullOrEmpty()
+    val toolsNode = entries.entries.firstOrNull { it.key.content == "tools" }?.value
+    if (toolsNode != null) {
+      return (toolsNode as? com.charleskorn.kaml.YamlList)?.items.orEmpty()
+        .mapNotNull { it as? YamlMap }
+        .filter { it.isNameOnly() }
+        .mapNotNullTo(mutableSetOf()) { it.optionalScalarString("name") }
+    }
+    val name = optionalScalarString("name") ?: return emptySet()
+    return if (isNameOnly()) setOf(name) else emptySet()
   }
 
   /** Convert an optional `_meta:` YamlMap into the plain-Kotlin explicit-meta map shape. */
@@ -1481,14 +1609,18 @@ internal class TrailmapTargetGenerator(
   }
 
   /**
-   * Folds the top-level shortcut fields `supportedPlatforms` and `requiresHost` into the
-   * explicit `_meta` map under their namespaced keys. Top-level wins on conflict — same rule
-   * as the runtime `mergeMetaShortcuts` in `:trailblaze-models`.
+   * Folds the top-level shortcut fields (`supportedPlatforms`, `requiresHost`, `surfaceToLlm`,
+   * `isRecordable`, `sensitiveArgNames`) into the explicit `_meta` map under their namespaced keys,
+   * each only when it differs from its default. Top-level wins on conflict — same rule as the
+   * runtime `mergeMetaShortcuts` in `:trailblaze-models`.
    */
   private fun mergeMetaShortcuts(
     explicitMeta: Map<String, Any?>,
     supportedPlatforms: List<String>?,
     requiresHost: Boolean,
+    surfaceToLlm: Boolean,
+    isRecordable: Boolean,
+    sensitiveArgNames: List<String>?,
   ): Map<String, Any?> {
     val out = linkedMapOf<String, Any?>()
     out.putAll(explicitMeta)
@@ -1498,6 +1630,9 @@ internal class TrailmapTargetGenerator(
     if (requiresHost) {
       out["trailblaze/requiresHost"] = true
     }
+    if (!surfaceToLlm) out["trailblaze/surfaceToLlm"] = false
+    if (!isRecordable) out["trailblaze/isRecordable"] = false
+    if (!sensitiveArgNames.isNullOrEmpty()) out["trailblaze/sensitiveArgNames"] = sensitiveArgNames
     return out
   }
 

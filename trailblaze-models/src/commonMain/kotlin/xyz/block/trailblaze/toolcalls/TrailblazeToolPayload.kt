@@ -33,11 +33,6 @@ import xyz.block.trailblaze.util.Console
  * - Everything else: encode via the tool's concrete `@Serializable` class serializer into
  *   `raw`, and look up `toolName` from the class's `@TrailblazeToolClass` annotation.
  *
- * **Does NOT handle [InstanceNamedTrailblazeTool] backed by a YAML-defined serializer** —
- * that path requires JVM-side reflection into `TrailblazeSerializationInitializer` (which
- * lives in JVM/Android source sets only) and is handled by
- * `trailblaze-common`'s `TrailblazeTool.toLogPayload()` extension before falling through here.
- *
  * Falls back gracefully on serialization failures: a non-`@Serializable` tool, a class
  * missing `@TrailblazeToolClass`, or a serializer that throws all produce a structurally
  * valid payload (best-available `toolName`, empty `raw`) plus a diagnostic [Console] warning

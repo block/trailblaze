@@ -140,7 +140,8 @@ object WaypointGraphBuilder {
       config.trailhead?.let { meta ->
         WaypointGraphTrailhead(
           id = toolName.toolName,
-          description = config.description,
+          // A `*.trailhead.yaml` carries no description; the class or scripted tool behind it does.
+          description = null,
           to = meta.to,
           dynamic = meta.to == null,
         )

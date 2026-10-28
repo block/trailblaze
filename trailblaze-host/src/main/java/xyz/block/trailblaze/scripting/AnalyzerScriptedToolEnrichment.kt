@@ -393,20 +393,17 @@ class AnalyzerScriptedToolEnrichment(
           )
         }
         // A meta-only descriptor (no YAML name/description/inputSchema/_meta) delegates EVERYTHING
-        // to the `.ts`. If the author used the (spec, handler) overload with a non-inline spec
-        // reference, the analyzer dropped the whole spec — there's no YAML to supply
-        // supportedPlatforms / surfaceToLlm, so the tool would silently ship un-gated. Fail loud
-        // (the general case is only a warning; here the spec is the sole metadata source). This is
-        // the safety net for agents vibe-authoring descriptor-less `.ts` tools.
+        // to the `.ts`. If the analyzer couldn't read the spec, or a gate inside it, there's no YAML
+        // to supply supportedPlatforms / surfaceToLlm, so the tool would silently ship un-gated. Fail
+        // loud (the general case is only a warning; here the spec is the sole metadata source). This
+        // is the safety net for agents vibe-authoring descriptor-less `.ts` tools.
         defs.firstOrNull { it.uncapturedSpec }?.let { def ->
           return ScriptedToolEnrichment.EnrichmentResult.Failed(
             relativePath = deferred.relativePath,
-            reason = "${scriptFile.name}: '${def.name}' called trailblaze.tool(spec, handler) with a " +
-              "non-inline spec reference (e.g. `const SPEC = {...}` or a factory call), so its " +
-              "supportedPlatforms / surfaceToLlm / requiresHost were not captured. A descriptor-less " +
-              "tool has no YAML to supply them, so this would advertise an un-gated tool. Inline the " +
-              "spec object literal at the call site: " +
-              "`trailblaze.tool<I>({ supportedPlatforms: [\"ios\"] }, async (args, ctx) => { ... })`.",
+            reason = "${scriptFile.name}: '${def.name}' ${uncapturedSpecProblem(def)}. A " +
+              "descriptor-less tool has no YAML to supply them, so this would advertise an un-gated " +
+              "tool. Inline the spec object literal at the call site, each gate a literal under a " +
+              "plain key: `trailblaze.tool<I>({ supportedPlatforms: [\"ios\"] }, async (args, ctx) => { ... })`.",
           )
         }
         // Shared with the generated `.tooldefs.json` path, so a descriptor-less tool resolves to
@@ -479,15 +476,15 @@ class AnalyzerScriptedToolEnrichment(
     val fileLevelSupportedPlatforms = descriptor.supportedPlatforms
     val effectiveSupportedPlatforms = entrySupportedPlatforms?.takeIf { it.isNotEmpty() }
       ?: fileLevelSupportedPlatforms
-    // Targeted footgun warning (noise-free): a partial descriptor whose `.ts` passed a non-inline
-    // spec reference (so the spec was dropped) AND that supplies no supportedPlatforms gate from the
-    // YAML either → the tool advertises on ALL platforms. YAML-gated tools (the common existing
-    // `const SPEC` + descriptor pattern) supply platforms here, so they stay silent.
-    if (def.uncapturedSpec && effectiveSupportedPlatforms.isNullOrEmpty()) {
+    // Targeted footgun warning (noise-free): a partial descriptor whose `.ts` spec (or a gate in it)
+    // couldn't be read AND that supplies no supportedPlatforms gate from the spec or the YAML → the
+    // tool advertises on ALL platforms. YAML-gated tools (the common existing `const SPEC` +
+    // descriptor pattern) supply platforms here, so they stay silent.
+    if (def.uncapturedSpec && effectiveSupportedPlatforms.isNullOrEmpty() && def.spec?.get("supportedPlatforms") == null) {
       Console.log(
         "[AnalyzerScriptedToolEnrichment] tool '$entryName' (${scriptFile.name}): " +
-          "trailblaze.tool(spec, handler) uses a non-inline spec reference, so its spec was dropped, " +
-          "and no supportedPlatforms gate is supplied by the spec OR the descriptor — the tool will " +
+          "${uncapturedSpecProblem(def)}, and no supportedPlatforms gate is supplied by the spec OR " +
+          "the descriptor — the tool will " +
           "be advertised on ALL platforms. If unintended, inline the spec object literal at the " +
           "`trailblaze.tool(...)` call site, or add supportedPlatforms to the descriptor.",
       )
@@ -654,6 +651,17 @@ class AnalyzerScriptedToolEnrichment(
    * `.ts` source in the trailmap tree, and the loader's `requirePathInsideTrailmap` containment
    * check (in `DaemonScriptedToolBundler`) is the relevant safety net for symlink shenanigans.
    */
+  /** What the analyzer couldn't read from [def]'s spec, as a clause following the tool name. */
+  private fun uncapturedSpecProblem(def: ScriptedToolDefinition): String =
+    if (def.uncapturedSpecFields.isEmpty()) {
+      "called trailblaze.tool(spec, handler) with a non-inline spec reference (e.g. " +
+        "`const SPEC = {...}` or a factory call), so its supportedPlatforms / surfaceToLlm / " +
+        "requiresHost were not captured"
+    } else {
+      "has spec ${def.uncapturedSpecFields.joinToString(", ") { "`$it`" }} that the analyzer can't " +
+        "read (only inline literals under plain keys), so those gates were not captured"
+    }
+
   private fun normalizePath(absolutePath: String): String =
     File(absolutePath).toPath().normalize().toString().replace('\\', '/')
 

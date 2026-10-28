@@ -101,10 +101,10 @@ camelCase inside each part, for example `playwrightSample_web_openFixtureAndVeri
 
 ## Minimal authoring loop
 
-1. Add a `.ts` file under `tools/`.
-2. Add a matching `script:` + `name:` entry under `tools:` in `targets/playwright-sample.yaml`.
-3. Stop and restart the Trailblaze daemon.
-4. Run `toolbox` or call the new tool directly.
+1. Add a `.ts` file under `trailmaps/playwrightSample/tools/` that exports a
+   `trailblaze.tool(...)`. It's on the target with no `trailmap.yaml` entry.
+2. Stop and restart the Trailblaze daemon.
+3. Run `toolbox` or call the new tool directly.
 
 ## How Registration Works
 

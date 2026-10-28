@@ -17,12 +17,11 @@ data class ToolSetCatalogEntry(
   val id: String,
   val description: String,
   override val toolClasses: Set<KClass<out TrailblazeTool>>,
-  override val yamlToolNames: Set<ToolName> = emptySet(),
   override val scriptedToolNames: Set<ToolName> = emptySet(),
   val alwaysEnabled: Boolean = false,
   val compatibleDriverTypes: Set<TrailblazeDriverType> = emptySet(),
 ) : TrailblazeToolSurface {
-  // The reference union — class-backed, YAML-defined, and scripted names together, via the single
+  // The reference union — class-backed and scripted names together, via the single
   // [allToolNames] accessor so this can't drift from how every other surface enumerates tools.
   val toolNames: List<String> by lazy { allToolNames.map { it.toolName } }
 
@@ -32,19 +31,15 @@ data class ToolSetCatalogEntry(
 
 /**
  * The result of [TrailblazeToolSetCatalog.resolve] — the Kotlin-backed tool classes plus the
- * names of YAML-defined (`tools:` mode) and scripted (`.ts` / `.js`) tools that should be
- * reachable to the LLM.
+ * names of scripted (`.ts` / `.js`) tools that should be reachable to the LLM.
  *
- * YAML-defined tools don't have a KClass because their behavior is composed from primitives in
- * a YAML file; they are identified by their `id:` string and constructed at execute time via
- * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool]. Scripted tools likewise have no
- * KClass — they're authored in TypeScript/JS and dispatched through the per-session scripted-tool
- * runtime (host bun/QuickJS, on-device QuickJS bundle). Both are advertised to the LLM by name;
- * the separation lets the bundling layer tell which names need a scripted runtime registered.
+ * Scripted tools have no KClass — they're authored in TypeScript/JS and dispatched through the
+ * per-session scripted-tool runtime (host bun/QuickJS, on-device QuickJS bundle). They are
+ * advertised to the LLM by name; the separation lets the bundling layer tell which names need a
+ * scripted runtime registered.
  */
 data class ResolvedToolSet(
   override val toolClasses: Set<KClass<out TrailblazeTool>>,
-  override val yamlToolNames: Set<ToolName> = emptySet(),
   override val scriptedToolNames: Set<ToolName> = emptySet(),
 ) : TrailblazeToolSurface
 
@@ -136,8 +131,7 @@ object TrailblazeToolSetCatalog {
     // `bundledConfigResourceSource()` is platform-aware: `ClasspathConfigResourceSource`
     // on JVM, the AssetManager-backed source on Android (where there is no workspace
     // concept on device, so the bundled view IS the platform default). Same pinning shape
-    // applied to `TrailblazeSerializationInitializer.buildYamlDefinedTools` / `buildAllTools`
-    // for the same reason.
+    // applied to `TrailblazeSerializationInitializer.buildAllTools` for the same reason.
     val bundled = bundledConfigResourceSource()
     val resolver = ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = bundled)
     ToolSetYamlLoader.discoverAndLoadAll(resolver, resourceSource = bundled)
@@ -156,7 +150,7 @@ object TrailblazeToolSetCatalog {
   // Read by [defaultEntries] which merges classpath + workspace before returning. The
   // `TrailblazeMcpServer.ensureSessionScriptToolRuntime` and inner-agent-tools-provider
   // call sites use `defaultEntries()` (directly or via `resolveForDriver` / `resolve`),
-  // so this overlay is what makes workspace-toolset-pulled YAML tool names reachable at
+  // so this overlay is what makes workspace-toolset-pulled tool names reachable at
   // dispatch time.
   @Volatile private var workspaceCatalogEntries: List<ToolSetCatalogEntry> = emptyList()
 
@@ -181,8 +175,7 @@ object TrailblazeToolSetCatalog {
    * **Override contract.** When a workspace toolset's id collides with a classpath-bundled
    * toolset's id, the overlay wins in [defaultEntries]'s merge — same precedence as the
    * filesystem resource source layering in `AppTargetDiscovery` (where workspace files
-   * override bundled framework files on filename collision) and the YAML-tool overlay in
-   * `TrailblazeSerializationInitializer.registerWorkspaceYamlTools`. Pre-filtering the input
+   * override bundled framework files on filename collision). Pre-filtering the input
    * by "not-already-in-classpath" would silently discard such overrides — don't.
    *
    * Tests that exercise multiple workspaces in a single JVM should call this with
@@ -209,7 +202,7 @@ object TrailblazeToolSetCatalog {
   fun getClasspathEntries(): List<ToolSetCatalogEntry> = defaultEntriesCache
 
   /**
-   * Resolves a set of toolset IDs to the combined set of tool classes and YAML-defined tool
+   * Resolves a set of toolset IDs to the combined set of tool classes and scripted tool
    * names. Always includes any entries marked `alwaysEnabled`.
    */
   fun resolve(
@@ -218,11 +211,9 @@ object TrailblazeToolSetCatalog {
   ): ResolvedToolSet {
     val selected = catalog.filter { it.alwaysEnabled || it.id in requestedIds }
     val toolClasses = selected.flatMap { it.toolClasses }.toSet()
-    val yamlToolNames = selected.flatMap { it.yamlToolNames }.toSet()
     val scriptedToolNames = selected.flatMap { it.scriptedToolNames }.toSet()
     return ResolvedToolSet(
       toolClasses = toolClasses,
-      yamlToolNames = yamlToolNames,
       scriptedToolNames = scriptedToolNames,
     )
   }
@@ -245,21 +236,8 @@ object TrailblazeToolSetCatalog {
   ): Set<KClass<out TrailblazeTool>> = catalog.firstOrNull { it.id == id }?.toolClasses ?: emptySet()
 
   /**
-   * Returns the YAML-defined tool names for a single catalog entry's [id], ignoring the
-   * `alwaysEnabled` auto-inclusion [resolve] performs. Symmetric with [entryToolClasses] for the
-   * `tools:` composition case — entries like `core_interaction` include YAML-only tools (e.g.
-   * `eraseText`) that have no backing [KClass].
-   *
-   * Returns an empty set if [id] is not in the catalog.
-   */
-  fun entryYamlToolNames(
-    id: String,
-    catalog: List<ToolSetCatalogEntry> = defaultEntries(),
-  ): Set<ToolName> = catalog.firstOrNull { it.id == id }?.yamlToolNames ?: emptySet()
-
-  /**
    * Returns the scripted (`.ts` / `.js`) tool names for a single catalog entry's [id], ignoring
-   * the `alwaysEnabled` auto-inclusion [resolve] performs. Symmetric with [entryYamlToolNames] for
+   * the `alwaysEnabled` auto-inclusion [resolve] performs. Symmetric with [entryToolClasses] for
    * the scripted-tool case — a toolset can list a scripted tool by bare name (resolved via
    * [xyz.block.trailblaze.config.ScriptedToolNameDiscoverer]); the per-session scripted-tool
    * runtime is responsible for bundling + dispatching it.
@@ -341,23 +319,8 @@ object TrailblazeToolSetCatalog {
     implicitScopeEntries(driverType, catalog).flatMap { it.toolClasses }.toSet()
 
   /**
-   * Returns every YAML-defined tool name from the catalog compatible with [driverType].
-   * Symmetric with [defaultToolClassesForDriver] for the class-backed case.
-   *
-   * Use this whenever a caller wants to advertise the default driver-compatible YAML tools
-   * (the ones declared under `tools:` in toolset YAML files that don't have a backing
-   * [KClass]) without having to enumerate them by name. Pairs with [defaultToolClassesForDriver]
-   * at rule/repo construction time.
-   */
-  fun defaultYamlToolNamesForDriver(
-    driverType: TrailblazeDriverType,
-    catalog: List<ToolSetCatalogEntry> = defaultEntries(),
-  ): Set<ToolName> =
-    implicitScopeEntries(driverType, catalog).flatMap { it.yamlToolNames }.toSet()
-
-  /**
    * Returns every scripted (`.ts` / `.js`) tool name from the catalog compatible with
-   * [driverType]. Symmetric with [defaultYamlToolNamesForDriver] for the scripted-tool case.
+   * [driverType]. Symmetric with [defaultToolClassesForDriver] for the scripted-tool case.
    *
    * Use this whenever a caller wants the default driver-compatible scripted tools that toolsets
    * deliver, so the per-session scripted-tool runtime can ensure each is bundled + registered.

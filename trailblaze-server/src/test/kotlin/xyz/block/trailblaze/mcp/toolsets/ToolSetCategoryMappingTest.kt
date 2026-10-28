@@ -12,8 +12,8 @@ import kotlin.test.assertTrue
  *
  * These pin the shape the production consumers (DirectMcpToolExecutor, SubagentOrchestrator,
  * inner-agent fallback in TrailblazeMcpServer) rely on — namely that
- * `resolve(...)` covers both class-backed and YAML-defined tools in one call, so a class-only
- * refactor can't silently drop the YAML half like the pressBack migration did.
+ * `resolve(...)` covers both class-backed and scripted tools in one call, so a class-only
+ * refactor can't silently drop the scripted half.
  */
 class ToolSetCategoryMappingTest {
 
@@ -27,44 +27,39 @@ class ToolSetCategoryMappingTest {
   }
 
   @Test
-  fun `resolve CORE_INTERACTION carries the entry's yaml tool names alongside its classes`() {
-    // No built-in toolset lists a YAML-defined tool, so a workspace overlay adds one.
+  fun `resolve CORE_INTERACTION carries the entry's scripted tool names alongside its classes`() {
     val coreInteraction = TrailblazeToolSetCatalog.defaultEntries().single { it.id == "core_interaction" }
-    val yamlTool = ToolName("fixture_yamlTool")
-    TrailblazeToolSetCatalog.registerWorkspaceToolSets(
-      listOf(coreInteraction.copy(yamlToolNames = coreInteraction.yamlToolNames + yamlTool)),
+    val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION)
+    assertTrue(
+      ToolName("openUrl") in resolved.scriptedToolNames,
+      "Catalog sanity: core_interaction delivers the scripted openUrl. Got: ${resolved.scriptedToolNames}",
     )
-    try {
-      val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION)
-      assertEquals(coreInteraction.yamlToolNames + yamlTool, resolved.yamlToolNames)
-      assertEquals(coreInteraction.toolClasses, resolved.toolClasses)
-    } finally {
-      TrailblazeToolSetCatalog.registerWorkspaceToolSets(emptyList())
-    }
+    assertEquals(coreInteraction.scriptedToolNames, resolved.scriptedToolNames)
+    assertEquals(coreInteraction.toolClasses, resolved.toolClasses)
   }
 
   @Test
-  fun `resolve SESSION has empty yaml tool names`() {
-    // SESSION is Koog-ToolSet-backed and intentionally empty for class + yaml paths.
+  fun `resolve SESSION has empty scripted tool names`() {
+    // SESSION is Koog-ToolSet-backed and intentionally empty for class + scripted paths.
     val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.SESSION)
-    assertEquals(emptySet(), resolved.yamlToolNames)
+    assertEquals(emptySet(), resolved.scriptedToolNames)
     assertEquals(emptySet(), resolved.toolClasses)
   }
 
   @Test
-  fun `resolve ALL yaml tool names equals flat union across catalog entries`() {
-    val expected = TrailblazeToolSetCatalog.defaultEntries().flatMap { it.yamlToolNames }.toSet()
+  fun `resolve ALL scripted tool names equals flat union across catalog entries`() {
+    val expected = TrailblazeToolSetCatalog.defaultEntries().flatMap { it.scriptedToolNames }.toSet()
     val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.ALL)
-    assertEquals(expected, resolved.yamlToolNames)
+    assertEquals(expected, resolved.scriptedToolNames)
   }
 
   @Test
-  fun `resolve combined categories unions the yaml tool names`() {
-    val navigation = ToolSetCategoryMapping.resolve(ToolSetCategory.NAVIGATION).yamlToolNames
-    val coreInteraction = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION).yamlToolNames
+  fun `resolve combined categories unions the scripted tool names`() {
+    val navigation = ToolSetCategoryMapping.resolve(ToolSetCategory.NAVIGATION).scriptedToolNames
+    val coreInteraction = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION).scriptedToolNames
     val combined = ToolSetCategoryMapping.resolve(
       setOf(ToolSetCategory.NAVIGATION, ToolSetCategory.CORE_INTERACTION),
-    ).yamlToolNames
+    ).scriptedToolNames
     assertEquals(navigation + coreInteraction, combined)
   }
 }

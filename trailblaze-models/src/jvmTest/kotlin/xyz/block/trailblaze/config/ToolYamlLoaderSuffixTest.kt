@@ -67,9 +67,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "eraseText.tool" to """
         id: eraseText
-        description: Erases characters.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
@@ -84,9 +82,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "launchAppSignedIn.trailhead" to """
         id: myapp_launchAppSignedIn
-        description: Launch the app and sign in.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
         trailhead:
           to: myapp/android/home_signed_in
       """.trimIndent(),
@@ -101,9 +97,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "launchApp.trailhead" to """
         id: myapp_launchApp
-        description: Launch the app.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
         trailhead: {}
       """.trimIndent(),
     )
@@ -116,9 +110,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "launchApp.trailhead" to """
         id: myapp_launchApp
-        description: Launch the app.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
         trailhead:
           to: ""
       """.trimIndent(),
@@ -139,9 +131,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "wrongSuffixTH.tool" to """
         id: wrong_suffix_th
-        description: Should be in a .trailhead.yaml file.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
         trailhead:
           to: a/b
       """.trimIndent(),
@@ -160,9 +150,7 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "missing_th_block.trailhead" to """
         id: missing_th_block
-        description: A tool that claims to be a trailhead but has no trailhead block.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
@@ -171,6 +159,25 @@ class ToolYamlLoaderSuffixTest {
     assertTrue(
       log.contains(".trailhead.yaml") && log.contains("missing"),
       "Expected error saying the trailhead block is missing; got: $log",
+    )
+  }
+
+  @Test
+  fun `a tools body is rejected with a pointer to TypeScript tools`() {
+    val yamlContents = mapOf(
+      "composed.tool" to """
+        id: composed
+        description: Taps a button.
+        tools:
+          - tap: { selector: "x" }
+      """.trimIndent(),
+    )
+    val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
+    assertEquals(0, parsed.size)
+    val log = capturedText()
+    assertTrue(
+      log.contains("'composed'") && log.contains("TypeScript tool") && log.contains("exports:"),
+      "Expected the retired 'tools:' body to be rejected with the TypeScript pointer; got: $log",
     )
   }
 
@@ -185,9 +192,7 @@ class ToolYamlLoaderSuffixTest {
       // named just `eraseText.yaml`, leaving the stripped key as `eraseText`.
       "eraseText" to """
         id: eraseText
-        description: ok
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
@@ -202,8 +207,8 @@ class ToolYamlLoaderSuffixTest {
   }
 
   // ----------------------------------------------------------------------
-  // Duplicate-id warning. Downstream consumers of `discoverYamlDefinedTools` /
-  // `discoverAndLoadAll` collapse same-id entries via `.associate { ... }` —
+  // Duplicate-id warning. Downstream consumers of `discoverAndLoadAll` /
+  // `discoverTrailheads` collapse same-id entries via `.associate { ... }` —
   // the second entry silently overwrites the first. The loader now emits a
   // warning when this happens, so an author who creates two files with the
   // same `id:` (e.g. forgot to rename the id when promoting a tool) gets a
@@ -215,15 +220,11 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "first.tool" to """
         id: duplicated_id
-        description: First copy.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
       "second.tool" to """
         id: duplicated_id
-        description: Second copy with the same id.
-        tools:
-          - tap: { selector: "y" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)
@@ -248,15 +249,11 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "alpha.tool" to """
         id: alpha_tool
-        description: Alpha.
-        tools:
-          - tap: { selector: "a" }
+        class: com.example.FakeTool
       """.trimIndent(),
       "beta.tool" to """
         id: beta_tool
-        description: Beta.
-        tools:
-          - tap: { selector: "b" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     ToolYamlLoader.parseAllConfigs(yamlContents)
@@ -276,23 +273,17 @@ class ToolYamlLoaderSuffixTest {
     val yamlContents = mapOf(
       "good.tool" to """
         id: good_tool
-        description: A valid tool.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
       "bad.tool" to """
         id: bad_tool
-        description: Has a stray trailhead block.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
         trailhead:
           to: a/b
       """.trimIndent(),
       "another_good.tool" to """
         id: another_good_tool
-        description: Also valid.
-        tools:
-          - tap: { selector: "x" }
+        class: com.example.FakeTool
       """.trimIndent(),
     )
     val parsed = ToolYamlLoader.parseAllConfigs(yamlContents)

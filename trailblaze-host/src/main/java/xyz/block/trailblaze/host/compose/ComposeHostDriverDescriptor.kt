@@ -45,6 +45,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgBinder
@@ -210,13 +211,17 @@ class ComposeHostDriverDescriptor(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "Compose RPC Tool Set",
         toolClasses = composeToolSet.toolClasses,
-        yamlToolNames = composeToolSet.yamlToolNames,
       ),
       // Bind the repo to the Compose driver so the KOOG tool surface matches it: COMPOSE is not in
       // KOOG_INSPECTION_DRIVERS, so the generic `requestDetailedViewHierarchy` inspection tool (which
       // a null-driver repo injects) stays off the surface — Compose's own `compose_request_details`
       // is the detail tool. KOOG-path only; the default runner's surface is unaffected.
       driverType = TrailblazeDriverType.COMPOSE,
+      // The target's own tools register later; hide the ones `excluded_tools:` opts out of here.
+      excludedScriptedToolNames = runOnHostParams.targetTestApp
+        ?.getExcludedToolSurfaceForDriver(TrailblazeDriverType.COMPOSE)
+        ?.scriptedToolNames
+        .orEmpty(),
     )
 
     // Wrap agent creation in try-catch so rpcClient is closed if setup fails before

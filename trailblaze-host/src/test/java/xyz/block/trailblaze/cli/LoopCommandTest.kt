@@ -14,8 +14,11 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.util.Console
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.PrintStream
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -148,6 +151,21 @@ class LoopCommandTest {
         completedSteps = 2,
         failure = "at \"Open the menu\": Recording failed at tapOnElementBySelector: no Menu",
       ),
+      LoopCommand.readProgress(session),
+    )
+  }
+
+  @Test
+  fun `a teardown that ran after a failed step is neither a finished step nor the failure`() {
+    val session = sessionDir(
+      DirectionStep("Launch signed in", isTrailhead = true) to null,
+      DirectionStep("Open the menu") to null,
+      VerificationStep("The menu is open") to "The menu is closed",
+      DirectionStep("Sign out", recordable = false, isTeardown = true) to null,
+    )
+
+    assertEquals(
+      LoopCommand.SessionProgress(completedSteps = 1, failure = "at \"The menu is open\": The menu is closed"),
       LoopCommand.readProgress(session),
     )
   }
@@ -351,6 +369,199 @@ class LoopCommandTest {
     assertFailsWith<IOException> { loop.call() }
 
     assertEquals(failed.absolutePath, out.readText())
+  }
+
+  @Test
+  fun `with --reuse-trailhead each pass sends the trail as written and asks for trailhead reuse`() {
+    val loop = LoopCommand().also { CommandLine(it).parseArgs("loop.trail.yaml", "-n", "3", "--reuse-trailhead") }
+
+    assertEquals(trail, loop.yamlToRun(trail))
+    val request = loop.delegatedRunRequest(
+      file = File("loop.trail.yaml"),
+      yamlContent = trail,
+      testName = "loop",
+      deviceSpec = null,
+      useRecordedSteps = true,
+      initialArgs = emptyMap(),
+      envReader = { null },
+    )
+    assertEquals(true, request.trailheadReuse)
+  }
+
+  @Test
+  fun `without --reuse-trailhead a run leaves reuse to the daemon`() {
+    for (command in listOf(LoopCommand().apply { iterations = 3 }, TrailCommand())) {
+      val request = command.delegatedRunRequest(
+        file = File("loop.trail.yaml"),
+        yamlContent = trail,
+        testName = "loop",
+        deviceSpec = null,
+        useRecordedSteps = true,
+        initialArgs = emptyMap(),
+        envReader = { null },
+      )
+      assertEquals(null, request.trailheadReuse, command::class.simpleName)
+    }
+  }
+
+  @Test
+  fun `with --reuse-trailhead the loop runs one session per pass, a failed one included, and counts reused setups`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 4
+      reuseTrailhead = true
+      onFailure = "printf '%s' >> '${out.path}'"
+    }
+    val full = passedSession(setup = "fullSetup")
+    val failed = sessionDir(
+      DirectionStep("Launch signed in", isTrailhead = true) to null,
+      DirectionStep("Open the menu") to "Recording failed at tapOnElementBySelector: no Menu",
+    ).also { writeSetup(it, "reused") }
+
+    val tally = captureConsoleInfo {
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = full)))
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "reused"))))
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = failed)))
+      assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "fullSetup"))))
+    }
+
+    assertEquals(failed.absolutePath, out.readText())
+    assertTrue(
+      "Loop: 3 of 4 pass(es) passed, 1 failed. 2 of them reused the previous pass's setup." in tally,
+      "expected the tally, got: <<$tally>>",
+    )
+    assertTrue(
+      "Pass 3/4 failed at \"Open the menu\": Recording failed at tapOnElementBySelector: no Menu" in tally,
+      "expected the failed pass, got: <<$tally>>",
+    )
+  }
+
+  @Test
+  fun `with --reuse-trailhead the pass after a failed one refuses reuse, and the next asks again`() {
+    val loop = LoopCommand().apply {
+      iterations = 4
+      reuseTrailhead = true
+    }
+    fun reuseRequest() = loop.delegatedRunRequest(
+      file = File("loop.trail.yaml"),
+      yamlContent = trail,
+      testName = "loop",
+      deviceSpec = null,
+      useRecordedSteps = true,
+      initialArgs = emptyMap(),
+      envReader = { null },
+    ).trailheadReuse
+    val failed = sessionDir(DirectionStep("Open the menu") to "no Menu")
+
+    captureConsoleInfo {
+      assertEquals(true, reuseRequest())
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = failed)))
+      // False, not null: null would let the daemon's TRAILBLAZE_TRAILHEAD_REUSE turn it back on.
+      assertEquals(false, reuseRequest())
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "fullSetup"))))
+      assertEquals(true, reuseRequest())
+    }
+  }
+
+  @Test
+  fun `with --reuse-trailhead a device that ended on a failed pass does not refuse reuse on the next device`() {
+    val loop = LoopCommand().apply {
+      iterations = 1
+      reuseTrailhead = true
+    }
+    fun reuseRequest() = loop.delegatedRunRequest(
+      file = File("loop.trail.yaml"),
+      yamlContent = trail,
+      testName = "loop",
+      deviceSpec = null,
+      useRecordedSteps = true,
+      initialArgs = emptyMap(),
+      envReader = { null },
+    ).trailheadReuse
+
+    captureConsoleInfo {
+      assertEquals(true, reuseRequest())
+      // The first device's only pass fails, which ends its loop.
+      assertFalse(
+        loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = sessionDir(DirectionStep("Open the menu") to "no Menu"))),
+      )
+      assertEquals(true, reuseRequest())
+    }
+  }
+
+  @Test
+  fun `with --reuse-trailhead the loop stops after passes in a row that fail`() {
+    val loop = LoopCommand().apply {
+      iterations = 100
+      reuseTrailhead = true
+    }
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+
+    val reruns = generateSequence { loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)) }
+      .takeWhile { it }
+      .count()
+
+    assertEquals(MAX_SESSIONS_WITHOUT_A_PASS - 1, reruns)
+  }
+
+  @Test
+  fun `with --reuse-trailhead a cancelled pass stops the loop without reporting a failure`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 5
+      reuseTrailhead = true
+      onFailure = "printf '%s' >> '${out.path}'"
+    }
+    val stopped = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null).also { cancel(it) }
+
+    assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stopped)))
+
+    assertEquals("", out.readText())
+  }
+
+  @Test
+  fun `a session's setup is its last trailhead setup record, or null without one`() {
+    assertEquals(null, LoopCommand.readSetup(sessionDir()))
+    val session = sessionDir().also {
+      writeSetup(it, "fullSetup")
+      writeSetup(it, "reused")
+    }
+    File(session, "events/trailhead.ndjson").appendText(
+      "{\"timeMs\":9,\"data\":{\"type\":\"teardown\",\"reusable\":true}}\nnot json\n",
+    )
+
+    assertEquals("reused", LoopCommand.readSetup(session))
+  }
+
+  private fun passedSession(setup: String): File = sessionDir(
+    DirectionStep("Launch signed in", isTrailhead = true) to null,
+    DirectionStep("Open the menu") to null,
+  ).also { writeSetup(it, setup) }
+
+  /** Appends a trailhead `setup` record, as the framework writes it, to [sessionDir]'s event stream. */
+  private fun writeSetup(sessionDir: File, setup: String) {
+    File(sessionDir, "events").mkdirs()
+    File(sessionDir, "events/trailhead.ndjson").appendText(
+      "{\"timeMs\":1,\"data\":{\"type\":\"setup\",\"tool\":\"sample_launchSignedIn\",\"setup\":\"$setup\"}}\n",
+    )
+  }
+
+  /** What [block] printed through `Console.info` and `Console.error`, whose JVM streams are cached at class load. */
+  private fun captureConsoleInfo(block: () -> Unit): String {
+    val buffer = ByteArrayOutputStream()
+    val stream = PrintStream(buffer, true, Charsets.UTF_8)
+    val fields = listOf("out", "userOut").map { Console::class.java.getDeclaredField(it).apply { isAccessible = true } }
+    val originals = fields.map { it.get(Console) }
+    val originalErr = System.err
+    fields.forEach { it.set(Console, stream) }
+    System.setErr(stream)
+    try {
+      block()
+    } finally {
+      fields.zip(originals).forEach { (field, original) -> field.set(Console, original) }
+      System.setErr(originalErr)
+    }
+    return buffer.toString(Charsets.UTF_8)
   }
 
   /** A session directory holding one objective-complete log per step; a non-null reason fails it. */

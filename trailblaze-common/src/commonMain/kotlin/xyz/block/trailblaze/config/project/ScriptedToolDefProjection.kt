@@ -30,7 +30,7 @@ data class GeneratedScriptedToolDef(
   val inputSchema: JsonObject = JsonObject(emptyMap()),
   /** The inline spec literal, keyed by `TrailblazeTypedToolSpec` field name. */
   val spec: JsonObject? = null,
-  /** The spec was a reference the analyzer couldn't read, so [spec] is missing even if authored. */
+  /** The analyzer couldn't read the spec or one of its gates, so [spec] may lack an authored gate. */
   val uncapturedSpec: Boolean = false,
 )
 
@@ -205,7 +205,6 @@ object ScriptedToolDefProjection {
 
   private val PROJECTED_SPEC_FIELDS = listOf(
     "supportedPlatforms",
-    "requiresContext", // deprecated and ignored; projected until the field is removed
     "requiresHost",
     "supportedDrivers",
     "requiredClassifiers",

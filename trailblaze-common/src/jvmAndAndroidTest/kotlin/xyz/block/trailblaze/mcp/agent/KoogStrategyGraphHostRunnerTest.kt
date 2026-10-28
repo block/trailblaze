@@ -11,8 +11,7 @@ import assertk.assertions.isNull
 import assertk.assertions.startsWith
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
+import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -645,17 +644,19 @@ class KoogStrategyGraphHostRunnerTest {
   }
 
   @Test
-  fun `a YAML-authored tool is recorded under its own id, not its shared class`() {
-    // Every `tools:`-authored tool is the SAME YamlDefinedTrailblazeTool class, so recording
-    // `tool::class.simpleName` would name all of them "YamlDefinedTrailblazeTool" and a failure
-    // report could not say which one broke. resolveToolName resolves the instance name first.
-    val yamlTool = YamlDefinedTrailblazeTool(config = ToolYamlConfig(id = "logInAsMerchant"), params = emptyMap())
+  fun `an instance-named tool is recorded under its own name, not its shared class`() {
+    // One implementation class can back many named tools (scripted tools all share one class), so
+    // recording `tool::class.simpleName` would give them all the same name and a failure report
+    // could not say which one broke. resolveToolName resolves the instance name first.
+    val namedTool = object : InstanceNamedTrailblazeTool {
+      override val instanceToolName: String = "logInAsMerchant"
+    }
 
-    assertThat(yamlTool.resolveToolName()).isEqualTo("logInAsMerchant")
+    assertThat(namedTool.resolveToolName()).isEqualTo("logInAsMerchant")
 
     val instrumentation = KoogRunInstrumentation()
     runBlocking {
-      describeToolDispatch(yamlTool.resolveToolName(), instrumentation) {
+      describeToolDispatch(namedTool.resolveToolName(), instrumentation) {
         TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "login timed out")
       }
     }

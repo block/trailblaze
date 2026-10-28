@@ -18,7 +18,6 @@ import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
@@ -521,12 +520,13 @@ class PerTrailmapClientDtsEmitterTest {
   }
 
   @Test
-  fun `isRecordable-derived surface injects selector + YAML tools into every binding`() {
+  fun `isRecordable-derived surface injects selector tools into every binding`() {
     // The durable fix: the surface is derived from `isRecordable`, so recordable tools that live in
     // NO tool_sets (the selector-migration pipeline's `assertVisibleBySelector` /
-    // `assertNotVisibleBySelector`, which the LLM never picks) and YAML-defined recordable tools
-    // land in EVERY binding — even a trailmap with no tool_sets and no scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
-    // HAND_CURATED_RECORDABLE tools are left to built-in-tools.ts so the two surfaces don't collide.
+    // `assertNotVisibleBySelector`, which the LLM never picks) land in EVERY binding — even a
+    // trailmap with no tool_sets and no scripted tools of its own. Selector-typed args the
+    // descriptor path strips are re-injected, and HAND_CURATED_RECORDABLE tools are left to
+    // built-in-tools.ts so the two surfaces don't collide.
     val trailmapDir = newTrailmapDir("recordable_surface_pack")
     val trailmap = ResolvedTrailmap(
       manifest = TrailblazeTrailmapManifest(
@@ -540,7 +540,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    YamlDefinedToolFixture.registered { PerTrailmapClientDtsEmitter.emit(listOf(trailmap), workspaceRoot = null) }
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), workspaceRoot = null)
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
 
     // Selector-migration tools that are in no tool_sets still appear — including
@@ -565,10 +565,6 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected tapOn in the recordable surface: $rendered") { rendered.contains("tapOn:") }
     assertTrue("expected a re-injected required selector arg on tapOn: $rendered") {
       toolEntryBlock(rendered, "tapOn").contains("selector: TrailblazeNodeSelector;")
-    }
-    // YAML-defined recordable tools flow in from their config params.
-    assertTrue("expected the YAML-defined fixture: $rendered") {
-      toolEntryBlock(rendered, YamlDefinedToolFixture.NAME).contains("text: string;")
     }
     // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
     assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {

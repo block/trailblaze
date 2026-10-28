@@ -312,6 +312,8 @@ open class GenerateTestResultsCliCommand(
             originalYaml = logs.getSessionStartedInfo()?.rawYaml,
             healedYaml = healedYaml,
             healedStepIndexes = healedStepIndexes,
+            logs = logs,
+            platform = sessionInfo.trailblazeDeviceInfo?.platform,
           )
 
         sessionResults.add(

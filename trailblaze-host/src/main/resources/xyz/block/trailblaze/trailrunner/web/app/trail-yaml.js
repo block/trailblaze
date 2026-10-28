@@ -39,10 +39,9 @@
     } catch (e) { return []; }
   }
 
-  // The tool list a trailhead run replays: the trailhead's own tools when present, else the single
-  // launch tool with its (dot-path-expanded) args filled in.
-  function trailheadRunTools(name, tools, args) {
-    if (tools && tools.length) return tools;
+  // The tool list a trailhead run replays: the trailhead tool itself, invoked by name with its
+  // (dot-path-expanded) args filled in.
+  function trailheadRunTools(name, args) {
     const filled = {};
     Object.entries(args || {}).forEach(([k, v]) => {
       const dot = k.indexOf('.');
@@ -192,12 +191,12 @@
 
   // Wrap a trailhead's tools in the runnable unified trail shape so "Go to trailhead" replays it on
   // the device. The recording is keyed by the device classifier (lowercased platform).
-  function buildTrailheadRunYaml(name, tools, args, platform) {
+  function buildTrailheadRunYaml(name, args, platform) {
     if (!window.jsyaml) return null;
     const classifier = String(platform || '').toLowerCase();
     if (!classifier) return null;
     const lines = ['config:', `  title: ${JSON.stringify('Trailhead: ' + name)}`, 'trail:', `  - step: ${JSON.stringify('Enter trailhead: ' + name)}`, '    recording:'];
-    window.jsyaml.dump({ [classifier]: trailheadRunTools(name, tools, args) }, { lineWidth: -1 }).replace(/\n+$/, '').split('\n').forEach((l) => lines.push('      ' + l));
+    window.jsyaml.dump({ [classifier]: trailheadRunTools(name, args) }, { lineWidth: -1 }).replace(/\n+$/, '').split('\n').forEach((l) => lines.push('      ' + l));
     return lines.join('\n');
   }
 

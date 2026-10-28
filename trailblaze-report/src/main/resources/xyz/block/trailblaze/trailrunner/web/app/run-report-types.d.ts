@@ -399,6 +399,8 @@ interface NetworkEvent {
   durationMs: number | null;
   urlPath: string;
   phase: string;
+  /** The trail phase the request started in (trailhead / trail / teardown); null or absent when unknown. */
+  trailPhase?: string | null;
 }
 
 /** One generic session event: offset epoch ms (or null) + pre-truncated serialized data. */

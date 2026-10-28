@@ -156,26 +156,69 @@ data class UnifiedTrailConfig(
    *   single-device legs.
    * - **Mixed** ([declaresSingleDeviceEntries]) — the configuration only when the run binds
    *   companions; otherwise an ordinary single-device session on the trail's classifier legs.
-   * - **More than one configuration** — null, and [requiresExplicitMultiDeviceConfiguration] says
-   *   whether that null is a single-device run or a refusal.
+   * - **More than one configuration** — the one [boundDeviceNames] binds exactly
+   *   ([multiDeviceConfigurationBoundBy]), else null, and
+   *   [requiresExplicitMultiDeviceConfiguration] says whether that null is a single-device run or a
+   *   refusal.
+   *
+   * [boundDeviceNames] is the names the run binds beyond its launch device, when the caller knows
+   * them. A caller that only knows whether it binds any passes none, and a trail declaring several
+   * configurations then needs an explicit selection, as it always did.
    *
    * The ONE statement of this rule: the runtime (`MultiDeviceConfigurationResolver`), MCP runs and
    * every pre-flight surface (CI `requireRecordings`/`skip:` gates, the CLI planner) call it, so a
    * surface cannot judge a trail by legs its runs never replay.
    */
   fun implicitMultiDeviceConfigurationName(bindsCompanionDevices: Boolean): String? =
-    soleMultiDeviceConfigurationName?.takeIf {
-      bindsConfigurationWhenUnnamed(bindsCompanionDevices)
-    }
+    implicitMultiDeviceConfigurationName(bindsCompanionDevices, emptySet())
+
+  /** [implicitMultiDeviceConfigurationName] for a caller that knows which names its run binds. */
+  fun implicitMultiDeviceConfigurationName(
+    bindsCompanionDevices: Boolean,
+    boundDeviceNames: Set<String>,
+  ): String? =
+    (soleMultiDeviceConfigurationName ?: multiDeviceConfigurationBoundBy(boundDeviceNames))
+      ?.takeIf { bindsConfigurationWhenUnnamed(bindsCompanionDevices) }
 
   /**
-   * Whether a run that names no configuration must name one: the trail declares several and the run
-   * would bind one of them. Such a run is refused rather than guessed at — binding the first would
-   * run a different device set than whoever declared the others expected. False for a mixed trail
-   * run without companions, which is single-device whatever it declares.
+   * Whether a run that names no configuration must name one: the trail declares several, the run
+   * would bind one of them, and [boundDeviceNames] does not pick one out. Such a run is refused
+   * rather than guessed at — binding the first would run a different device set than whoever
+   * declared the others expected. False for a mixed trail run without companions, which is
+   * single-device whatever it declares.
    */
   fun requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices: Boolean): Boolean =
-    multiDeviceConfigurationNames.size > 1 && bindsConfigurationWhenUnnamed(bindsCompanionDevices)
+    requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices, emptySet())
+
+  /**
+   * [requiresExplicitMultiDeviceConfiguration] for a caller that knows which names its run binds.
+   */
+  fun requiresExplicitMultiDeviceConfiguration(
+    bindsCompanionDevices: Boolean,
+    boundDeviceNames: Set<String>,
+  ): Boolean =
+    multiDeviceConfigurationNames.size > 1 &&
+      multiDeviceConfigurationBoundBy(boundDeviceNames) == null &&
+      bindsConfigurationWhenUnnamed(bindsCompanionDevices)
+
+  /**
+   * The one configuration whose devices beyond its start device are exactly [boundDeviceNames], or
+   * null when none is or several are.
+   *
+   * Not a guess: a session is refused for a declared device nothing binds and for a binding its
+   * configuration does not declare, so this is the only configuration the run could start at all.
+   * It is what lets one trail carry a cast per CI cell — a phone cell binding `customer`, a tablet
+   * cell binding `buyer` and `customer` — with each cell replaying its own.
+   */
+  fun multiDeviceConfigurationBoundBy(boundDeviceNames: Set<String>): String? {
+    if (boundDeviceNames.isEmpty()) return null
+    return devices
+      .orEmpty()
+      .filterValues { it.isConfiguration }
+      .filterValues { it.devices.orEmpty().keys.drop(1).toSet() == boundDeviceNames }
+      .keys
+      .singleOrNull()
+  }
 
   private fun bindsConfigurationWhenUnnamed(bindsCompanionDevices: Boolean): Boolean =
     multiDeviceConfigurationNames.isNotEmpty() &&

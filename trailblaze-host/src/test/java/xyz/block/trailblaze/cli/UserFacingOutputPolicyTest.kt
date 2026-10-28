@@ -16,11 +16,10 @@ import kotlin.test.assertTrue
  * [QuietUnlessVerbose] must not print a [Console.log] line unless the user asked for detail.
  *
  * This is the systemic version of a defect that had been fixed one site at a time. A typo'd tool
- * name used to answer with three machine lines above the two sentences that mattered:
+ * name used to answer with two machine lines above the two sentences that mattered:
  *
  * ```
  * [platformConfigResourceSource] Layering user config from: …
- * TrailblazeSerializationInitializer: discovered 2 YAML-defined tools …
  * [ToolCommand] fast-path rejected 'tpaOn' (not in local registry)
  * Unknown tool: tpaOn.
  * Tip: Run 'trailblaze toolbox …' to see what's available.

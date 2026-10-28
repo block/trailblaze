@@ -53,12 +53,6 @@ class ToolToolEdgeExtractionTest {
   }
 
   @Test
-  fun `yaml-declarative tools contribute no edges`() {
-    val source = "id: launchMyApp\nclass: some.Class\ntools:\n  - mobile_maestro: {}"
-    assertTrue(ToolCatalogBuilder.referencedToolIdsIn(ToolFlavor.YAML, source, "launchMyApp").isEmpty())
-  }
-
-  @Test
   fun `dispatches mentioned only in comments or docstrings are not edges`() {
     // Mirrors openUrl.ts: a `//` comment and a block comment each mention a ctx.tools dispatch the
     // implementation never makes; only the real call (mobile_maestro) is an edge.

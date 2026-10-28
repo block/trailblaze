@@ -70,17 +70,8 @@ myapp_launchApp               ← the trailhead; recorded under `all:` in every 
 
 Trails stay platform-free, and each platform's steps live in their own tool, so you can change one
 platform without touching the other. Put each tool in its own file under the trailmap's `tools/`
-directory, and list all three names in `trailmap.yaml`; a scripted tool the
-target doesn't list is not available to it:
-
-```yaml
-# trailmap.yaml
-target:
-  tools:
-    - myapp_launchApp
-    - myapp_android_launchApp
-    - myapp_ios_launchApp
-```
+directory. Nothing to list in `trailmap.yaml`: every scripted tool in `tools/` is on the target,
+and each tool's `supportedPlatforms` / `supportedDrivers` scope it to its platform and drivers.
 
 For a small app, a single tool with an `if` on `ctx.device.platform` works too. Split it once the
 branches grow.
@@ -155,6 +146,7 @@ from the agent: trailheads call them, the agent doesn't.
 | Grant special-access permissions | `android_grantAppOpsPermission` | — |
 | Anything else | `android_adbShell` | — |
 | **Open the app and wait until it is on screen** | `openApp` | `openApp` |
+| Open with launch arguments (cold start) | — | `ios_openApp` |
 
 Rules of thumb:
 
@@ -166,6 +158,13 @@ Rules of thumb:
 - **Grant iOS permissions before `openApp`.** simctl kills a running app when a grant changes.
 - **Want a cold start without losing sign-in?** Stop the app, then `openApp`. Clearing data signs
   the user out.
+- **iOS launch arguments** (a locale, a seeded session, a debug flag) go on `ios_openApp`, which is
+  `openApp` for iOS plus `arguments`: `ios_openApp({ appId, arguments: { AppleLanguages: "(es-US)" } })`.
+  Values are strings, numbers or booleans, passed as Maestro's `launchApp.arguments` passed them,
+  and string values are masked in logs, so a recording needs a memory reference (`{{token}}`)
+  rather than a literal. In trail YAML, `true`/`false` is always a boolean, quoted or not. They
+  only reach a cold start, so `ios_terminate` first; `ios_openApp` fails if the app is still
+  running.
 - **Only grant what the test needs.** A trailhead that grants everything hides which permissions
   the app depends on.
 
@@ -175,7 +174,6 @@ Rules of thumb:
   file and no waypoint needed. The optional `to: "<waypoint>"` only draws the trailhead on the
   waypoint graph; nothing checks it, so assert the landing screen in the handler if it matters.
 - **Kotlin**: `@TrailblazeToolClass(trailheadTo = "<waypoint>")`.
-- **YAML (`tools:` mode)**: a `*.trailhead.yaml` in the trailmap's `trailheads/` directory.
 
-`toolbox trailheads` lists all three. To author the waypoints a trailhead lands on, see
+`toolbox trailheads` lists both. To author the waypoints a trailhead lands on, see
 [`compose-agent-surface.md`](compose-agent-surface.md).

@@ -11,8 +11,8 @@ import kotlin.reflect.KClass
 
 /**
  * Loads per-tool YAML files from `trails/config/trailmaps/<id>/tools/` and resolves each
- * tool's class via reflection (for class-backed tools) or returns the parsed [ToolYamlConfig]
- * (for YAML-defined `tools:` mode tools).
+ * class-backed tool's class via reflection. A file with a retired `tools:` body fails
+ * [ToolYamlConfig.validate] and is logged and skipped like any other invalid tool YAML.
  *
  * Tool YAMLs use one of two suffixes that signal the tool's operational class:
  *
@@ -31,8 +31,8 @@ import kotlin.reflect.KClass
 object ToolYamlLoader {
 
   /**
-   * Discovers and loads class-backed tool YAMLs. YAMLs in tools-mode (no `class:` field) are
-   * silently skipped — use [discoverYamlDefinedTools] to retrieve those.
+   * Discovers and loads class-backed tool YAMLs. Metadata-only trailheads (no `class:` field)
+   * are skipped — use [discoverTrailheads] to retrieve those.
    *
    * @param resourceSource where to discover YAML files; defaults to [platformConfigResourceSource]
    *   (classpath scan on JVM, AssetManager on Android).
@@ -44,7 +44,7 @@ object ToolYamlLoader {
 
   /**
    * Loads tool definitions from already-parsed configs. Class-backed tools are returned;
-   * YAML-defined (`tools:` mode) entries are skipped.
+   * metadata-only trailheads are skipped and invalid configs are logged and skipped.
    */
   fun loadFromConfigs(
     configs: List<ToolYamlConfig>,
@@ -93,24 +93,9 @@ object ToolYamlLoader {
   }
 
   /**
-   * Discovers only the YAML-defined (`tools:` mode) tool configs on the classpath. Class-backed
-   * YAMLs are skipped. These configs are expanded into executable tools at runtime by
-   * `YamlDefinedTrailblazeTool` (in `trailblaze-common`).
-   */
-  fun discoverYamlDefinedTools(
-    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
-  ): Map<ToolName, ToolYamlConfig> =
-    discoverAllConfigs(resourceSource)
-      .filter { it.mode == ToolYamlConfig.Mode.TOOLS }
-      .associate { ToolName(it.id) to it }
-
-  /**
    * Discovers all `*.trailhead.yaml` configs — i.e. every config whose parsed content carries a
-   * [ToolYamlConfig.trailhead] metadata block. **Both `Mode.CLASS` and `Mode.TOOLS` bodies are
-   * returned** because the navigation-graph view cares about the trailhead metadata, not whether
-   * the body is implemented as Kotlin or as a YAML composition. ([discoverYamlDefinedTools]
-   * filters out class-backed configs and so silently drops class-bodied trailheads; this method
-   * is the graph view's loader of record.)
+   * [ToolYamlConfig.trailhead] metadata block, whether class-bodied or metadata-only. This
+   * method is the graph view's loader of record.
    *
    * Returned [Map] keys are [ToolName]s; the same id never appears twice because the parser's
    * duplicate-id detection runs in [discoverAllConfigs] / [parseAllConfigs] before we reach
@@ -156,7 +141,7 @@ object ToolYamlLoader {
    * top-level directory for its operational class — a stray YAML elsewhere in the trailmap
    * doesn't accidentally register.
    *
-   * This is the only discovery path for class-backed and YAML-defined tools: every tool
+   * This is the only discovery path for class-backed tools: every tool
    * YAML lives under its owning trailmap's `tools/` directory, and toolset YAMLs / trail
    * YAMLs reference them by bare id regardless of which trailmap ships them. The
    * trailmap-scoped layout is also what users author at
@@ -303,7 +288,7 @@ object ToolYamlLoader {
 
   /**
    * Logs a warning for every tool id that appears in more than one config. Downstream
-   * consumers ([discoverYamlDefinedTools], [discoverAndLoadAll]) collapse same-id entries
+   * consumers ([discoverAndLoadAll], [discoverTrailheads]) collapse same-id entries
    * via `.associate { ToolName(it.id) to it }` — the second occurrence silently
    * overwrites the first. Without this warning, an author who creates two files with
    * the same `id:` (e.g. a `.tool.yaml` and a `.trailhead.yaml` they forgot to rename

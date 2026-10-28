@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import xyz.block.trailblaze.device.InstalledApp
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
@@ -147,31 +148,47 @@ object IosHostSimctlUtils {
   }
 
   /**
-   * `xcrun simctl launch <deviceId> <appId>`: starts the app, or brings it to the front if it is
-   * already running (same pid, nothing restarted). Throws with simctl's output on failure, which for
-   * an app that is not installed names the bundle id it could not open.
+   * `xcrun simctl launch <deviceId> <appId> [arguments…]`: starts the app, or brings it to the front
+   * if it is already running (same pid, nothing restarted). [arguments] become the process's argv
+   * after its executable, so they reach only a launch that starts the process: an app already
+   * running keeps its own and silently drops these. [secrets] are masked wherever the command line
+   * or its output is logged or thrown. Throws with simctl's output on failure, which for an app that
+   * is not installed names the bundle id it could not open.
    */
-  fun launchApp(deviceId: String, appId: String) {
+  fun launchApp(
+    deviceId: String,
+    appId: String,
+    arguments: List<String> = emptyList(),
+    secrets: Collection<String> = emptyList(),
+  ) {
     requireMacOs("simctl launch")
     val output = runSimctlBlocking(
       "launch $appId",
-      listOf("xcrun", "simctl", "launch", deviceId, appId),
+      listOf("xcrun", "simctl", "launch", deviceId, appId) + arguments,
       SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+      secrets,
     )
     check(output.exitCode == 0) {
-      "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
+      redactSensitiveValuesIn(
+        "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}",
+        secrets,
+      )
     }
   }
 
   /**
    * `xcrun simctl terminate <deviceId> <appId>`. Returns false when the app was not running
    * (simctl exits nonzero with "found nothing to terminate" — the state the caller wanted anyway);
-   * throws on any other failure.
+   * throws on any other failure. simctl returns once the signal is sent, so this then waits for the
+   * process to exit: a launch right after must start a new one.
    */
   suspend fun terminateApp(deviceId: String, appId: String): Boolean {
     requireMacOs("simctl terminate")
     val output = runSimctl("terminate $appId", listOf("xcrun", "simctl", "terminate", deviceId, appId), SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS)
-    if (output.exitCode == 0) return true
+    if (output.exitCode == 0) {
+      awaitAppExit(deviceId, appId)
+      return true
+    }
     val text = output.outputLines.joinToString("\n").trim()
     if (isNotRunningTerminateOutput(text)) return false
     error("simctl terminate $appId failed (exit ${output.exitCode}): $text")
@@ -217,8 +234,9 @@ object IosHostSimctlUtils {
     what: String,
     argv: List<String>,
     timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
+    secrets: Collection<String> = emptyList(),
   ): CommandProcessResult {
-    val (output, timedOut) = TrailblazeProcessBuilderUtils.createProcessBuilder(argv)
+    val (output, timedOut) = TrailblazeProcessBuilderUtils.createProcessBuilder(argv, loggedSecrets = secrets)
       .runProcessWithTimeout(timeoutSeconds)
     check(!timedOut) { "simctl $what did not finish within ${timeoutSeconds}s" }
     return output
@@ -229,7 +247,8 @@ object IosHostSimctlUtils {
     what: String,
     argv: List<String>,
     timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
-  ): CommandProcessResult = runBlocking { runSimctl(what, argv, timeoutSeconds) }
+    secrets: Collection<String> = emptyList(),
+  ): CommandProcessResult = runBlocking { runSimctl(what, argv, timeoutSeconds, secrets) }
 
   private const val SIMCTL_ACTION_TIMEOUT_SECONDS = 10L
 
@@ -277,7 +296,6 @@ object IosHostSimctlUtils {
     val dataPath = Paths.get(lookup.outputLines.first { it.isNotBlank() }.trim())
 
     terminateApp(deviceId, appId)
-    awaitAppExit(deviceId, appId)
 
     // simctl can name a container the simulator hasn't created yet (seen right after a boot); an
     // absent container holds no data, and the next launch creates it fresh.
@@ -293,7 +311,7 @@ object IosHostSimctlUtils {
 
   /**
    * `simctl terminate` returns once the signal is sent. Polls the simulator's launchd until [appId]
-   * has no running process, failing after [timeoutMillis] rather than wiping under a live app.
+   * has no running process, failing after [timeoutMillis] rather than reporting a live app stopped.
    */
   private suspend fun awaitAppExit(
     deviceId: String,
@@ -302,18 +320,24 @@ object IosHostSimctlUtils {
   ) {
     val deadline = System.currentTimeMillis() + timeoutMillis
     while (true) {
-      val list = runSimctl(
-        "spawn launchctl list",
-        listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "list"),
-        SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
-      )
-      check(list.exitCode == 0) {
-        "simctl spawn launchctl list failed (exit ${list.exitCode}): ${list.outputLines.joinToString("\n").trim()}"
-      }
-      if (!isAppRunning(list.outputLines, appId)) return
+      if (!isAppRunning(deviceId, appId)) return
       check(System.currentTimeMillis() < deadline) { "$appId was still running ${timeoutMillis}ms after terminate" }
       delay(250)
     }
+  }
+
+  /** Whether the simulator's launchd lists a live process for [appId]. Throws if it can't be read. */
+  suspend fun isAppRunning(deviceId: String, appId: String): Boolean {
+    requireMacOs("simctl spawn launchctl list")
+    val list = runSimctl(
+      "spawn launchctl list",
+      listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "list"),
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
+    check(list.exitCode == 0) {
+      "simctl spawn launchctl list failed (exit ${list.exitCode}): ${list.outputLines.joinToString("\n").trim()}"
+    }
+    return isAppRunning(list.outputLines, appId)
   }
 
   /** A `launchctl list` row for a UIKit app with a live pid (first column numeric, not `-`). */
@@ -372,13 +396,61 @@ object IosHostSimctlUtils {
    * `pbcopy`/`pbpaste`/`pbsync` are the supported pasteboard subcommands.) Used by
    * the cross-platform `mobile_setClipboard` tool's iOS branch.
    *
-   * Pipe IO and lock acquisition share a bounded deadline. Text stays off process arguments
-   * and diagnostics; stderr is discarded rather than mixing it with clipboard contents.
+   * Text stays off process arguments and diagnostics; stderr is discarded rather than mixing it
+   * with clipboard contents.
+   *
+   * Returns only once `pbpaste` reads [text] back, and throws otherwise. While Xcode 27's
+   * DeviceHub.app syncs its pasteboard, `pbcopy` exits 0 and changes nothing; CI quits DeviceHub
+   * before booting a simulator, and anywhere else the error says to quit it. [timeoutMillis] bounds
+   * the whole write, lock included. AXe text entry uses this to stage what it pastes.
    */
-  fun setPasteboard(deviceId: String, text: String) {
+  fun setPasteboard(deviceId: String, text: String, timeoutMillis: Long = PASTEBOARD_WRITE_TIMEOUT_MS) {
     if (!isMacOs()) error("setPasteboard is only supported on macOS hosts")
-    runPasteboardCommand(SimctlCommand.argv("pbcopy", deviceId), text)
+    writePasteboardVerified(deviceId, text, timeoutMillis)
   }
+
+  /**
+   * [setPasteboard] without the macOS guard. One [timeoutMillis] deadline covers lock acquisition,
+   * every command and the readback waits. [runCommand] is [runPasteboardCommand]'s
+   * `(argv, stdin, timeoutMillis) -> stdout`, and [sleep] and [nanoTime] drive the deadline; all
+   * are replaceable for tests.
+   */
+  internal fun writePasteboardVerified(
+    deviceId: String,
+    text: String,
+    timeoutMillis: Long = PASTEBOARD_WRITE_TIMEOUT_MS,
+    runCommand: (args: List<String>, stdin: String, timeoutMillis: Long) -> String =
+      { args, stdin, timeout -> runPasteboardCommand(args, stdin, timeout) },
+    sleep: (Long) -> Unit = Thread::sleep,
+    nanoTime: () -> Long = System::nanoTime,
+  ) {
+    val deadline = nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    fun remainingMillis(): Long = TimeUnit.NANOSECONDS.toMillis(deadline - nanoTime())
+    fun run(args: List<String>, stdin: String = ""): String {
+      val remaining = remainingMillis()
+      check(remaining > 0) { "Setting the simulator pasteboard took longer than ${timeoutMillis}ms" }
+      return runCommand(args, stdin, remaining)
+    }
+
+    withPasteboardLock(
+      timeoutMillis = remainingMillis().coerceAtLeast(0),
+      onTimeout = { error("Timed out waiting for the simulator pasteboard lock") },
+    ) {
+      run(SimctlCommand.argv("pbcopy", deviceId), text)
+      repeat(PASTEBOARD_READBACK_ATTEMPTS) { attempt ->
+        if (attempt > 0) sleep(PASTEBOARD_READBACK_INTERVAL_MS.coerceAtMost(remainingMillis().coerceAtLeast(0)))
+        if (run(SimctlCommand.argv("pbpaste", deviceId)) == text) return@withPasteboardLock
+      }
+      error(
+        "simctl pbcopy exited 0 but $deviceId's pasteboard did not take the text. Xcode's DeviceHub " +
+          "(or Simulator.app) syncing its pasteboard drops these writes; quit it and retry.",
+      )
+    }
+  }
+
+  private const val PASTEBOARD_WRITE_TIMEOUT_MS = 30_000L
+  private const val PASTEBOARD_READBACK_ATTEMPTS = 10
+  private const val PASTEBOARD_READBACK_INTERVAL_MS = 100L
 
   /**
    * Reads the iOS simulator's current pasteboard (clipboard) content via

@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -56,6 +57,22 @@ object SessionEventsWaitPump {
       if (elapsed < slice) delay(slice - elapsed)
       // Real time, not the slice: a pump queued behind other work on its thread can overrun.
       left -= maxOf(elapsed, slice)
+    }
+  }
+
+  /**
+   * Has [sessionId]'s drivers hand their listeners every event they already hold, so a listener
+   * that reads session state on delivery (the trail phase) reads the state the event happened in.
+   * Called before that state changes. Blocks for at most one pump slice; a driver that cannot
+   * answer in time keeps its backlog for its next call.
+   */
+  fun deliverPending(sessionId: String) {
+    val pumps = bySession[sessionId]?.toList().orEmpty()
+    if (pumps.isEmpty()) return
+    runBlocking {
+      pumps.forEach { pump ->
+        launch { withTimeoutOrNull(MAX_PUMP_MS) { runInterruptible(Dispatchers.IO) { runCatching { pump(0) } } } }
+      }
     }
   }
 

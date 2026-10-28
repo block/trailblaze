@@ -106,7 +106,7 @@ Read the full file:
 
 | From | Becomes |
 |---|---|
-| The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name listed under `target.tools:` in `trailmap.yaml`. |
+| The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name you use in `trailmap.yaml` (`exports:`, `excluded_tools:`). |
 | The TSDoc above `export const` | The tool's LLM-facing description (and IDE hover text on `ctx.tools.wikipedia_web_openArticle(...)`). |
 | The `<I, O>` type parameters | The tool's input JSON Schema and (when O is given) typed result shape. Per-field TSDoc on each interface property becomes that field's JSON Schema `description`. |
 | The spec object (`{ supportedPlatforms, requiresHost, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
@@ -165,7 +165,7 @@ my-workspace/trails/config/
 ├── trailblaze.yaml                          # workspace anchor
 └── trailmaps/
     └── wikipedia/
-        ├── trailmap.yaml                    # target manifest (display_name, platforms, tools list)
+        ├── trailmap.yaml                    # target manifest (display_name, platforms)
         ├── wikipedia-system-prompt.md       # optional LLM tool-selection guidance
         └── tools/
             ├── wikipedia_shared.ts          # shared helpers (selectors, label constants)
@@ -174,20 +174,18 @@ my-workspace/trails/config/
             └── ...
 ```
 
-The trailmap manifest lists each tool by **bare export name** under `target.tools:`:
+The trailmap manifest doesn't need to list the tools. The loader walks `tools/` for
+every `.ts` that exports a `trailblaze.tool(...)` declaration and puts each one on the
+target; its own `supportedPlatforms` / `supportedDrivers` scope it to platforms and drivers. To
+keep a tool off — a typed demo or a work-in-progress draft — name it under
+`platforms.<p>.excluded_tools:`:
 
 ```yaml
-# examples/wikipedia/trails/config/trailmaps/wikipedia/trailmap.yaml
+# examples/wikipedia/trails/config/trailmaps/wikipedia/trailmap.yaml (excerpt)
 id: wikipedia
 target:
   display_name: Wikipedia (en)
   system_prompt_file: wikipedia-system-prompt.md
-  tools:
-    - wikipedia_web_openMainPage
-    - wikipedia_web_openArticle
-    - wikipedia_web_searchAndOpenFirstResult
-    - wikipedia_web_verifyArticleStructure
-    # … more …
   platforms:
     web:
       drivers: [playwright-native, playwright-electron]
@@ -195,22 +193,17 @@ target:
         - web_core
         - web_verification
         - memory
+      excluded_tools:
+        - wikipedia_typed_demo
+        - wikipedia_conditional_action_demo
 ```
 
-The trailmap loader walks `tools/` for every `.ts` that exports a `trailblaze.tool(...)`
-declaration; the names listed under `target.tools:` decide which of those tools are
-**advertised to the agent** for this target. Files in `tools/` that are imported as
-helpers (`wikipedia_shared.ts`) but don't export a tool are ignored by the loader. Tools
-that DO export but aren't listed under `target.tools:` (e.g. typed-demo or
-work-in-progress drafts) live in the candidate pool but stay invisible to the agent
-until you add their name to the list.
-
-When a trailmap ships **both** iOS and Android tools (or otherwise has tools that only
-make sense for one platform), declare each platform-specific tool under
-`platforms.<p>.tools:` and keep genuinely cross-platform tools at the top level under
-`target.tools:`. See
-[Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools)
-for the example shape and the single-platform validation rule.
+Files in `tools/` that are imported as helpers (`wikipedia_shared.ts`) but don't export a
+tool are ignored by the loader. `target.tools:` and `platforms.<p>.tools:` still work,
+but listing a tool there is redundant. Sharing a tool with other trailmaps stays
+explicit: list it under `exports:`. See
+[Trailmaps → Per-file scripted tools](trailmaps.md#per-file-scripted-tools) for the
+exclusion rules.
 
 See [Trailmaps](trailmaps.md) for the full manifest schema (dependencies, defaults,
 toolsets, waypoints).
@@ -287,7 +280,6 @@ in the legacy YAML descriptor. Every field is optional:
 |---|---|
 | `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
-| `requiresContext?: boolean` | **Deprecated and ignored** — every handler already gets `ctx`. Omit it; it will be removed. |
 | `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with the `runtime` field below (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
 | `requiredClassifiers?: string[]` | Registration gate on the session device's classifier. The tool registers only when the device's classifiers include every listed segment — `["rig"]` registers on a device classified `android-phone-rig`, not on `android-phone`. Use for tools that need hardware or infrastructure only some devices have. A tool listing with no connected device still shows the tool. Empty/omitted = any device. |
@@ -437,7 +429,7 @@ typed Proxy that exposes every tool reachable from this trailmap:
 
 - **Framework primitives** brought in by the trailmap's `platforms.<p>.tool_sets:`
   declarations (e.g. `web_core` → `web_navigate`, `web_click`, `web_type`).
-- **Sibling scripted tools** in this trailmap's own `target.tools:` list.
+- **Sibling scripted tools** in this trailmap's own `tools/` folder.
 - **Transitively-inherited scripted tools** that this trailmap's `dependencies:` publish
   via their own `exports:` field.
 
@@ -1052,11 +1044,11 @@ If you don't recognize yourself in those three cases, you don't need a YAML — 
 
 | Error | What's wrong |
 |---|---|
-| `Tool not registered: foo (registered tools: alpha, beta)` | The tool wasn't in the runtime registry when the dispatch fired. Either you didn't list it under `target.tools:` in `trailmap.yaml`, or the daemon hasn't been restarted since you added the file. Re-run `trailblaze check` and restart the daemon. |
+| `Tool not registered: foo (registered tools: alpha, beta)` | The tool wasn't in the runtime registry when the dispatch fired. Either an `excluded_tools:` entry in `trailmap.yaml` names it, its `supportedPlatforms` doesn't include the session's platform, or the daemon hasn't been restarted since you added the file. Re-run `trailblaze check` and restart the daemon. |
 | `ValidationError: tool 'foo' received invalid arguments — /query: must be string` | The agent sent a payload that doesn't match the interface. Often a sign the TSDoc on a field needs sharper guidance, or that a field marked required should be optional. The LLM self-corrects on the next round. |
 | `esbuild failed (exit 1) bundling scripted-tool source /path/to/foo.ts` | Syntax error or unresolved import in your `.ts`. The full esbuild stderr follows in the same message. |
-| `Trailmap '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...` | You put a pure-YAML tool path under `target.tools:`. That list is for scripted tools only. Drop the entry; the YAML tool auto-discovers. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
-| `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match what `target.tools:` is asking for. Either rename the export or update the manifest entry. |
+| `Tool '<id>' declares a 'tools:' body. YAML-composed tools are no longer supported...` | A `*.tool.yaml` / `*.trailhead.yaml` composes other tool calls in a `tools:` list. Port it to a `.ts` tool (each listed call becomes an `await ctx.tools.<name>({ ... })` line) in the trailmap's `tools/` folder. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
+| `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match the tool name the runtime is resolving (a `target.tools:` entry or a YAML descriptor's `name:`). Either rename the export or fix that entry. |
 | `ctx.tools.<X>` is a `tsc` error in the IDE | The per-trailmap `trailblaze-client.d.ts` is stale or missing. Run `trailblaze check` — the codegen rewrites bindings against the current registry. |
 
 ## Where to go next

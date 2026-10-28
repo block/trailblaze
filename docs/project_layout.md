@@ -109,7 +109,7 @@ A unified `trail.yaml` is one trail covering every platform: a device with a mat
 
 ### Device language
 
-Set `locale` on a top-level, single-device `config.devices` entry when that device must run in a particular language. The runner applies the BCP-47 language tag before it stops or launches the target app, so both app strings and system UI use the requested language. Devices without `locale` keep their current language:
+Set `locale` on a top-level, single-device `config.devices` entry when that device must run in a particular language. The runner applies the BCP-47 language tag before it stops or launches the target app, so both app strings and system UI use the requested language. `locale` belongs on the device entry, not at the top of `config:` — a top-level `config.locale:` fails to load and fails `trailblaze check`. An Android device or iOS Simulator whose entry has no `locale` runs in `en-US`, so a trail never inherits the language the previous trail left behind. A CLI or MCP prompt or tool (`blaze`, `ask`, `verify`, `tool`) drives the device by hand instead, so it keeps the device's current language:
 
 ```yaml
 config:
@@ -123,7 +123,7 @@ config:
     ios: IOS_AXE
 ```
 
-Use a language-and-region tag when the language variant matters (`fr-CA`, `es-MX`). The setting is supported on Android devices that expose `cmd locale set-device-locale`, Android emulators whose root shell can apply the documented `persist.sys.locale` fallback, and iOS Simulators. A requested locale that cannot be applied fails the run instead of silently using the device's previous language. The language remains on the device after the run, and omitting `locale` does not restore an earlier value. As with other device-global setup, don't run trails requesting different languages concurrently on the same device; the last setup wins. Named members inside a multi-device configuration reject `locale` until setup can apply it to every bound device.
+Use a language-and-region tag when the language variant matters (`fr-CA`, `es-MX`). The setting is supported on Android 10 (API 29) and newer, including on-device instrumentation runs with no host attached; on older Android emulators whose root shell can apply the `persist.sys.locale` fallback; and on iOS Simulators. An on-device run selects a locale-qualified `devices:` entry (such as `android-phone-es`) when it is given that key as the `trailblaze.deviceClassifier` instrumentation argument, and applies that device's locale from `trailblaze.deviceLocale` when the entry declares none. A requested locale that cannot be applied fails the run instead of silently using the device's previous language; the `en-US` default is best effort, so a device that cannot be switched (an older Android image, a physical phone the host has no command for) runs in its current language. The target app restarts only when the language actually changes, and an iOS Simulator's SpringBoard restarts with it (a language change adds about three seconds to the next launch). As with other device-global setup, don't run trails requesting different languages concurrently on the same device; the last setup wins. Named members inside a multi-device configuration reject `locale` until setup can apply it to every bound device.
 
 ### Host-only devices
 

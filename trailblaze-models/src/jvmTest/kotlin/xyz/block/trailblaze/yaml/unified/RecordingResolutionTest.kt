@@ -36,13 +36,13 @@ class RecordingResolutionTest {
 
   /**
    * The same four outcomes plus a trailhead, which lowers through its own path
-   * ([TrailheadDefinition.tools], not [DirectionStep.recording]). Its `block_runIf` also makes it the
+   * ([TrailheadDefinition.tools], not [DirectionStep.recording]). Its `runIf` also makes it the
    * fixture where a conditional is present.
    */
   private val fourFacesWithTrailhead =
     fourFaces.copy(
       trailhead =
-        UnifiedTrailStep(step = "boot", recordings = mapOf("android" to listOf(tool("block_runIf"))))
+        UnifiedTrailStep(step = "boot", recordings = mapOf("android" to listOf(tool("runIf"))))
     )
 
   @Test
@@ -218,7 +218,7 @@ class RecordingResolutionTest {
       trail = listOf(
         UnifiedTrailStep(
           step = "Dismiss the popup if it is visible",
-          recordings = mapOf("android-phone" to listOf(tool("block_runIf"))),
+          recordings = mapOf("android-phone" to listOf(tool("runIf"))),
         ),
         UnifiedTrailStep(step = "Tap Charge", recordings = mapOf("android-phone" to listOf(tool("tapOnElementBySelector")))),
       ),
@@ -240,7 +240,7 @@ class RecordingResolutionTest {
         UnifiedTrailStep(
           step = "Dismiss the Updates to Orders pop up if it is visible",
           recordings = mapOf(
-            "android-tablet" to listOf(tool("block_runIf")),
+            "android-tablet" to listOf(tool("runIf")),
             "android-phone" to listOf(tool("tapOnElementBySelector")),
           ),
         ),
@@ -265,7 +265,7 @@ class RecordingResolutionTest {
         UnifiedTrailStep(
           step = "Dismiss the popup if it is visible",
           recordings = mapOf(
-            "android-tablet" to listOf(tool("block_runIf")),
+            "android-tablet" to listOf(tool("runIf")),
             "android-phone" to emptyList(),
           ),
         ),
@@ -281,7 +281,7 @@ class RecordingResolutionTest {
   @Test
   fun `a self-guarding tool counts as conditional, not as a lost guard`() {
     // block_dismissIfPresent probes for its dialog and no-ops when absent, so a device recorded with
-    // it never fires blind — it just spells the condition differently than the block_runIf wrapper.
+    // it never fires blind — it just spells the condition differently than the runIf wrapper.
     // Treating only wrappers as conditional would report this device as having lost a guard it has.
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
@@ -289,7 +289,7 @@ class RecordingResolutionTest {
         UnifiedTrailStep(
           step = "Dismiss the Updates to Orders pop up if it is visible",
           recordings = mapOf(
-            "android-tablet" to listOf(tool("block_runIf")),
+            "android-tablet" to listOf(tool("runIf")),
             "android-phone" to listOf(tool("block_dismissIfPresent")),
           ),
         ),
@@ -309,7 +309,7 @@ class RecordingResolutionTest {
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
       trail = listOf(
-        UnifiedTrailStep(step = "conditional", recordings = mapOf("android-tablet" to listOf(tool("block_runIf")))),
+        UnifiedTrailStep(step = "conditional", recordings = mapOf("android-tablet" to listOf(tool("runIf")))),
       ),
     )
     val tablet = UnifiedTrailAdapter.describeRecordingResolution(unified, androidTablet)
@@ -419,7 +419,7 @@ class RecordingResolutionTest {
           step = "conditional",
           recordings = mapOf(
             "pos-pair" to listOf(tool("tapOnElement")),
-            "solo-pair" to listOf(tool("block_runIf")),
+            "solo-pair" to listOf(tool("runIf")),
           ),
         ),
       ),

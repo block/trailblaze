@@ -78,8 +78,8 @@ function isDispatchFailure(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { dispatchFailed?: unknown }).dispatchFailed === true;
 }
 
-/** Names that run as a local recursion rather than a dispatch. See the file header. */
-const CONDITIONAL_NAMES = ["runIf", "block_runIf"];
+/** The name that runs as a local recursion rather than a dispatch. See the file header. */
+const CONDITIONAL_NAME = "runIf";
 
 /**
  * Dispatch one single-key tool-call by its recorded name. A nested conditional runs locally (see
@@ -88,7 +88,7 @@ const CONDITIONAL_NAMES = ["runIf", "block_runIf"];
  */
 async function dispatchToolCall(entry: ToolCall, ctx: ToolContext): Promise<string | undefined> {
   const [name, toolArgs] = Object.entries(entry)[0];
-  if (CONDITIONAL_NAMES.includes(name)) {
+  if (name === CONDITIONAL_NAME) {
     return evaluateRunIf(toolArgs as unknown as RunIfArgs, ctx);
   }
   await (ctx.tools as unknown as Record<string, (a: unknown) => Promise<unknown>>)[name](toolArgs);
@@ -103,9 +103,9 @@ function shapeError(path: string, problem: string): Error {
 }
 
 /**
- * Check a conditional and everything nested in it before any of it runs. [name] is the name it was
- * called by (`runIf` or `block_runIf`), so key errors match the framework's validator wording for
- * that name; [depth] counts the outermost conditional as 1.
+ * Check a conditional and everything nested in it before any of it runs. [name] is the name key
+ * errors report, matching the framework's validator wording; [depth] counts the outermost
+ * conditional as 1.
  */
 function checkRunIf(name: string, args: unknown, path: string, depth: number): void {
   if (depth > MAX_NESTING) {
@@ -150,7 +150,7 @@ function checkToolCall(entry: unknown, path: string, depth: number): void {
   }
   const name = keys[0];
   const toolArgs = (entry as Record<string, unknown>)[name];
-  if (CONDITIONAL_NAMES.includes(name)) {
+  if (name === CONDITIONAL_NAME) {
     checkRunIf(name, toolArgs, `${path}.${name}`, depth + 1);
     return;
   }

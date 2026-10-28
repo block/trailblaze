@@ -66,6 +66,13 @@ class DesktopAppRunYamlParams(
   val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
+  /**
+   * Leave the device in the language it already has unless the trail declares one: set for an
+   * action wrapped in a one-step trail and sent to an app that is already running (the tool
+   * palette), and for every CLI or MCP prompt or tool, even one that opens a session. Both drive
+   * the device by hand, so they continue in whatever language it is in.
+   */
+  val keepDeviceLanguage: Boolean = false,
   /** Override capture video setting (null = default: video off, opt-in per run). */
   val captureVideo: Boolean? = null,
   /**

@@ -6,6 +6,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.util.TimeZone
 import org.junit.runner.Description
 import xyz.block.trailblaze.FileReadWriteUtil
+import xyz.block.trailblaze.devices.CatalogDeviceArgs
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -46,6 +48,11 @@ class AndroidTestLoggingRule(
    * without starting an instrumentation.
    */
   private val requestedTraceLevel: TraceLevel? = requestedTraceLevelFromArgs(),
+  /**
+   * Writes nothing and opens no reportable session. For tests of this rule's own lifecycle, which
+   * would otherwise each leave a session in the pulled logs directory that no trail named.
+   */
+  noLogging: Boolean = false,
 ) : TrailblazeLoggingRule(
   logsBaseUrl = AndroidTestInstrumentation.logsEndpoint(),
   writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
@@ -69,6 +76,7 @@ class AndroidTestLoggingRule(
       what = "trace",
     )
   },
+  noLogging = noLogging,
 ) {
 
   /** This rule runs inside the app's instrumentation, so every timestamp is the device's clock. */
@@ -203,11 +211,16 @@ class AndroidTestLoggingRule(
      * the form factor. This list IS how a unified trail picks a recording — it is joined into
      * `android-phone` and resolved up its lineage (`android-phone` → `android` → `all`). Dropping
      * the platform segment would make an `android:`-keyed recording unreachable and the step would
-     * replay as if it had never been recorded.
+     * replay as if it had never been recorded. A device farm run that names its catalog device
+     * ([CatalogDeviceArgs]) refines it, so a farm image booted for `android-phone-es` selects that
+     * device's recordings and config.
      */
-    fun defaultDeviceClassifiers(): List<TrailblazeDeviceClassifier> = listOf(
-      TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier(),
-      deviceCategory().asTrailblazeDeviceClassifier(),
+    fun defaultDeviceClassifiers(): List<TrailblazeDeviceClassifier> = DeviceClassifierKey.refine(
+      detected = listOf(
+        TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier(),
+        deviceCategory().asTrailblazeDeviceClassifier(),
+      ),
+      requested = CatalogDeviceArgs.classifiers(),
     )
 
     fun defaultDeviceInfo(): TrailblazeDeviceInfo {

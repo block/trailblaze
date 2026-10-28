@@ -28,6 +28,7 @@ import {
   budgetedClipValue,
   newMediaBudget,
   readAttachments,
+  readNetworkLog,
   readTraceFile,
   readVideo,
   remoteShotValue,
@@ -622,6 +623,22 @@ describe("session recording (readVideo)", () => {
     // escaped path as a URL rather than as bytes, which is the same leak with an extra hop.
     const linkedOut = sessionWith([{ ...webmArtifact, filename: `../${basename(outside)}` }]);
     expect(readVideo(linkedOut, (path) => `/static/${basename(path)}`)).toBeNull();
+  });
+});
+
+describe("network log", () => {
+  test("each event keeps the trail phase its request started in; older logs have none", () => {
+    const dir = mkdtempSync(join(sessionDir, "net-"));
+    writeFileSync(join(dir, "network.ndjson"), [
+      { method: "POST", urlPath: "/sign-in", phase: "RESPONSE_END", statusCode: 200, durationMs: 40, trailPhase: "trailhead" },
+      { method: "GET", urlPath: "/items", phase: "REQUEST_START", trailPhase: "trail" },
+      { method: "GET", urlPath: "/legacy", phase: "REQUEST_START" },
+    ].map((e) => JSON.stringify(e)).join("\n"));
+    expect(readNetworkLog(dir)!.map((e) => [e.urlPath, e.trailPhase])).toEqual([
+      ["/sign-in", "trailhead"],
+      ["/items", "trail"],
+      ["/legacy", null],
+    ]);
   });
 });
 

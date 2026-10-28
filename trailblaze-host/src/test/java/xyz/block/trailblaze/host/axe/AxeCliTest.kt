@@ -334,9 +334,14 @@ class AxeCliTest {
       ),
       AxeCli.pasteFromPasteboardArgs("SIM-ARGS").drop(1),
     )
+  }
+
+  @Test
+  fun `screenshot goes through simctl, not axe, so it opens no render-server client`() {
+    // See AxeCli.screenshot for why `axe screenshot` is avoided.
     assertEquals(
-      SimctlCommand.argv("pbcopy", "SIM-ARGS"),
-      AxeCli.writePasteboardArgs("SIM-ARGS"),
+      SimctlCommand.argv("io", "SIM-ARGS", "screenshot", "--type=png", "/tmp/shot.png"),
+      AxeCli.screenshotArgs("SIM-ARGS", "/tmp/shot.png"),
     )
   }
 
@@ -447,5 +452,27 @@ class AxeCliTest {
 
     repeat(3) { assertEquals(AxeCli.Availability.MISSING, cache.get()) }
     assertEquals(1, probes)
+  }
+
+  // --- multiTapXy ---
+
+  @Test
+  fun `a double-tap is one batch session with a tap step per tap, settling only after the last`() {
+    val args = AxeCli.multiTapArgs("UDID", x = 100, y = 65, count = 2, postDelaySeconds = 0.3)
+
+    assertEquals(
+      listOf(
+        "batch",
+        "--step", "tap -x 100 -y 65 --post-delay 0.0",
+        "--step", "tap -x 100 -y 65 --post-delay 0.3",
+        "--udid", "UDID",
+      ),
+      args.drop(1), // the axe binary path varies by machine
+    )
+  }
+
+  @Test
+  fun `a single tap is not a multi-tap`() {
+    assertFailsWith<IllegalArgumentException> { AxeCli.multiTapArgs("UDID", 1, 2, count = 1) }
   }
 }

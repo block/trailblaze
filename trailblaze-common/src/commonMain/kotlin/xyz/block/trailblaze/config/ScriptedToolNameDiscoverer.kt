@@ -14,7 +14,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * Discovers the NAMES of scripted (`.ts` / `.js`) tools declared by per-trailmap descriptor
  * YAMLs, so a toolset can reference a scripted tool by bare name the same way it references a
- * Kotlin class-backed or YAML-defined tool.
+ * Kotlin class-backed tool.
  *
  * ## Background
  *
@@ -48,7 +48,7 @@ import xyz.block.trailblaze.util.Console
  *
  * This is a deliberate contract: **a scripted tool that wants to be delivered by a toolset must be
  * statically nameable**, because the toolset references it by name before any analyzer runs. Such a
- * tool can still be delivered per-target via `target.tools:` (that path runs the analyzer). First-party
+ * tool is still delivered to its own trailmap's target (that path runs the analyzer). First-party
  * framework scripted tools (the ones that replace Kotlin tools in the bundled `trailblaze` trailmap)
  * always author an explicit `name:`, so they satisfy this contract.
  */
@@ -233,7 +233,7 @@ object ScriptedToolNameDiscoverer {
       // strips the leading `trails/config/trailmaps/` prefix, so relPath starts at `<id>/...`.
       val segments = relPath.split('/')
       if (segments.size < 3 || segments[1] != "tools") return@forEach
-      // The operational suffixes are owned by ToolYamlLoader (class-backed / YAML-defined
+      // The operational suffixes are owned by ToolYamlLoader (class-backed
       // tools + trailheads). Scripted descriptors use a plain `.yaml`.
       if (isOperationalToolSuffix(relPath)) return@forEach
       val descriptor = try {
@@ -327,7 +327,7 @@ object ScriptedToolNameDiscoverer {
       "ScriptedToolNameDiscoverer: skipping '$relPath' — descriptor declares no static name " +
         "(it is analyzer-derived). A scripted tool referenced by a toolset must declare an " +
         "explicit `name:` (single-tool) or `tools[].name` (multi-tool); analyzer-named tools " +
-        "can only be delivered per-target via `target.tools:`.",
+        "are only delivered to their own trailmap's target.",
     )
     return emptyList()
   }

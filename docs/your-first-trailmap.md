@@ -83,8 +83,7 @@ dependencies:
   - trailblaze                                # pulls in core_interaction, navigation, …
 target:
   display_name: MyApp
-  tools:
-    - myapp_login                             # the name your .ts exports, see Step 4
+  # No tools list: every tools/*.ts that exports a trailblaze.tool(...) is on this target.
   platforms:
     android:
       app_ids: [com.example.myapp]
@@ -97,11 +96,11 @@ Three things to notice:
 
 - `dependencies: [trailblaze]` brings the framework's standard tool sets and defaults
   into scope. Without it you get a minimal target with no built-in interaction tools.
-- `target.tools:` lists tool **names** (not file paths). The loader auto-discovers every
-  `tools/*.ts` that exports a `trailblaze.tool(...)` declaration and resolves the names
-  here into the runtime tool list. When a trailmap ships both iOS and Android tools,
-  platform-specific tools go under `platforms.<p>.tools:` instead — see
-  [Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools).
+- There is no tools list. The loader auto-discovers every `tools/*.ts` that exports a
+  `trailblaze.tool(...)` declaration and puts it on this target; each tool's own
+  `supportedPlatforms` / `supportedDrivers` scope it. To keep one off, name it under
+  `platforms.<p>.excluded_tools:` — see
+  [Trailmaps → Per-file scripted tools](trailmaps.md#per-file-scripted-tools).
 - `tool_sets:` names framework-shipped bundles of Kotlin tools to expose. `core_interaction`
   brings in primitives like `tapOnElement`, `inputText`, `swipe`; `verification` brings in
   `assertVisible` / `assertNotVisible`. See [Trailmaps → Discovery](trailmaps.md) for the
@@ -187,8 +186,9 @@ What the typed surface gives you:
   sibling trailmap-local tool, and every tool inherited via a dep's `exports:` is a
   method on it. Unknown names are `tsc` errors.
 
-The export name (`myapp_login`) is the load-bearing identifier — the manifest's
-`target.tools:` names this export and the runtime registers a tool by exactly that name.
+The export name (`myapp_login`) is the load-bearing identifier — the runtime registers a
+tool by exactly that name. There's nothing to add to `trailmap.yaml`: the tool is on the
+target once the file exists.
 See [Scripted Tools (TypeScript) — The shape](scripted-tools-typed-authoring.md#the-shape)
 for the full reference.
 

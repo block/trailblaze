@@ -3,8 +3,12 @@ package xyz.block.trailblaze.playwright.network
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.network.InflightRequestTracker
+import xyz.block.trailblaze.network.NetworkEvent
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -136,6 +140,44 @@ class WebNetworkCaptureIntegrationTest {
     assertTrue(lines[1].contains("***REDACTED***"), "set-cookie value should be the placeholder: ${lines[1]}")
     // The actual cookie value must not appear in the persisted line.
     assertFalse(lines[1].contains("sid=1"), "cookie value must not be persisted")
+  }
+
+  @Test
+  fun `each exchange is filed under the trail phase its request started in`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+    val sessionId = "phases-${System.nanoTime()}"
+
+    WebNetworkCapture.start(ctx.proxy, sessionId, dir)
+    val run = TrailheadRuns.open(SessionId(sessionId), trailheadToolNames = setOf("signIn"), reuseEnabled = false)
+    try {
+      val signIn = PlaywrightTestProxies.fakeRequest(url = "https://api.example.com/sign-in")
+      ctx.fireRequest(signIn)
+      run.markTrailStart()
+      // The trailhead's request finishes during the trail; it stays the trailhead's.
+      ctx.fireResponse(PlaywrightTestProxies.fakeResponse(signIn, status = 200, body = ByteArray(0)))
+      val checkout = PlaywrightTestProxies.fakeRequest(url = "https://api.example.com/checkout")
+      ctx.fireRequest(checkout)
+      run.markTrailEnd()
+      ctx.fireRequestFailed(checkout)
+    } finally {
+      TrailheadRuns.close(run)
+    }
+    WebNetworkCapture.stop(ctx.proxy)
+
+    val phases =
+      File(dir, "network.ndjson").readLines().filter { it.isNotBlank() }.map {
+        Json { ignoreUnknownKeys = true }.decodeFromString<NetworkEvent>(it).let { e -> "${e.urlPath} ${e.phase} ${e.trailPhase}" }
+      }
+    assertEquals(
+      listOf(
+        "/sign-in REQUEST_START trailhead",
+        "/sign-in RESPONSE_END trailhead",
+        "/checkout REQUEST_START trail",
+        "/checkout FAILED trail",
+      ),
+      phases,
+    )
   }
 
   @Test

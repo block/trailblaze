@@ -4,6 +4,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.gradle.api.GradleException
 
@@ -798,7 +799,7 @@ class TrailmapTargetGeneratorTest {
   // -------------------------------------------------------------------------
 
   @Test
-  fun `multi-tool descriptor entries resolve individually by name in target tools`() {
+  fun `multi-tool descriptor entries resolve individually, listed ones first`() {
     val trailmapsDir = newTempDir()
     val targetsDir = newTempDir()
     File(trailmapsDir, "multipack").mkdirs()
@@ -830,11 +831,8 @@ class TrailmapTargetGeneratorTest {
     val expected = generator.buildExpectedTargets()
     val (_, content) = expected.entries.single()
 
-    assertTrue(content.contains("name: keepMe"), "generated YAML should include the referenced entry; got: $content")
-    assertTrue(
-      !content.contains("name: skipMe"),
-      "generated YAML must NOT include unreferenced multi-tool entries; got: $content",
-    )
+    // The listed entry comes first; the unlisted one is on the target too, after it.
+    assertEquals(listOf("keepMe", "skipMe"), toolNames(content), "got: $content")
   }
 
   @Test
@@ -847,6 +845,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./real.ts
       name: realTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "unknownnamepack/trailmap.yaml").writeText(
@@ -881,6 +880,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./real.ts
       name: realTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "legacypack/trailmap.yaml").writeText(
@@ -911,12 +911,14 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./first.ts
       name: dupTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "duppack/tools/second.yaml").writeText(
       """
       script: ./second.ts
       name: dupTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "duppack/trailmap.yaml").writeText(
@@ -948,6 +950,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./foo.ts
       name: foo
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "dupentrypack/trailmap.yaml").writeText(
@@ -971,7 +974,7 @@ class TrailmapTargetGeneratorTest {
 
   @Test
   fun `operational tool YAMLs in tools dir are skipped during scripted-tool discovery`() {
-    // `<trailmap>/tools/foo.tool.yaml` is a pure-YAML operational tool. The scripted-tool
+    // `<trailmap>/tools/foo.tool.yaml` is a class-backed operational tool. The scripted-tool
     // discovery walk excludes it by suffix so it doesn't get decoded as a scripted-tool
     // descriptor (which would either fail to parse or shadow a legitimate scripted name).
     val trailmapsDir = newTempDir()
@@ -982,11 +985,12 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./scripted.ts
       name: scriptedTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "mixedpack/tools/legacy.tool.yaml").writeText(
       """
-      # Pure-YAML operational tool — not a scripted-tool descriptor.
+      # Class-backed operational tool — not a scripted-tool descriptor.
       id: legacyOperationalTool
       description: not a scripted tool
       """.trimIndent(),
@@ -1036,6 +1040,7 @@ class TrailmapTargetGeneratorTest {
         """
         script: ./outside.ts
         name: outsideTool
+        description: Test tool.
         """.trimIndent(),
       )
     }
@@ -1126,6 +1131,234 @@ class TrailmapTargetGeneratorTest {
   }
 
   @Test
+  fun `a name-only descriptor takes its contract from the analyzer, not an empty YAML schema`() {
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText("id: myapp\ntarget:\n  display_name: MyApp\n")
+    val tsFile = File(trailmapsDir, "myapp/tools/myTool.ts").apply {
+      writeText("export const myTool = trailblaze.tool(async () => \"ok\");\n")
+    }
+    File(trailmapsDir, "myapp/tools/myTool.yaml").writeText("script: ./myTool.ts\nname: myTool\n")
+    val analyzerJson = File(newTempDir(), "analyzer-tool-defs.json").apply {
+      writeText(
+        """
+        { "myapp": { "myTool": {
+          "script": "${tsFile.absolutePath}",
+          "name": "myTool",
+          "description": "From the ts.",
+          "_meta": { "trailblaze/supportedPlatforms": ["ios"] },
+          "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
+        } } }
+        """.trimIndent(),
+      )
+    }
+
+    val content = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = newTempDir(),
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+      analyzerToolsJson = analyzerJson,
+    ).buildExpectedTargets().values.single()
+
+    assertTrue("From the ts." in content, "analyzer description missing: $content")
+    assertTrue(Regex("""required:\n\s+- id""").containsMatchIn(content), "analyzer schema missing: $content")
+    assertTrue("trailblaze/supportedPlatforms" in content, "analyzer _meta missing: $content")
+  }
+
+  @Test
+  fun `a described sibling of a name-only entry also takes the analyzer contract`() {
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText("id: myapp\ntarget:\n  display_name: MyApp\n")
+    val tsFile = File(trailmapsDir, "myapp/tools/pair.ts").apply {
+      writeText("export const bare = trailblaze.tool(async () => \"ok\");\n")
+    }
+    File(trailmapsDir, "myapp/tools/pair.yaml").writeText(
+      """
+      script: ./pair.ts
+      tools:
+        - name: bare
+        - name: sibling
+          description: From the YAML.
+      """.trimIndent(),
+    )
+    val analyzerJson = File(newTempDir(), "analyzer-tool-defs.json").apply {
+      writeText(
+        """
+        { "myapp": {
+          "bare": { "script": "${tsFile.absolutePath}", "name": "bare", "description": "Bare from the ts." },
+          "sibling": {
+            "script": "${tsFile.absolutePath}",
+            "name": "sibling",
+            "description": "From the YAML.",
+            "inputSchema": { "type": "object", "properties": { "token": { "type": "string" } }, "required": ["token"] }
+          }
+        } }
+        """.trimIndent(),
+      )
+    }
+
+    val content = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = newTempDir(),
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+      analyzerToolsJson = analyzerJson,
+    ).buildExpectedTargets().values.single()
+
+    assertTrue("Bare from the ts." in content, "name-only entry missing analyzer description: $content")
+    assertTrue(Regex("""required:\n\s+- token""").containsMatchIn(content), "sibling lost its analyzer schema: $content")
+  }
+
+  @Test
+  fun `every scripted tool in tools dir is on the target, listed ones first`() {
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: MyApp
+        tools:
+          - listedTool
+        platforms:
+          android:
+            drivers: [android-ondevice-accessibility]
+            excluded_tools: [excludedTool, androidOnlyExcluded, iosOnlyTool]
+          ios:
+            excluded_tools: [excludedTool, partlyExcluded]
+      """.trimIndent(),
+    )
+    // A YAML-described tool nobody lists.
+    File(trailmapsDir, "myapp/tools/described.yaml").writeText(
+      """
+      script: ./described.ts
+      name: describedTool
+      description: Described by YAML.
+      """.trimIndent(),
+    )
+    // Descriptor-less `.ts` tools, described by the analyzer JSON.
+    fun tool(name: String, platforms: List<String>?, drivers: List<String>? = null): String {
+      val ts = File(trailmapsDir, "myapp/tools/$name.ts")
+      ts.writeText("export const $name = trailblaze.tool(async () => \"ok\");\n")
+      fun list(values: List<String>) = values.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+      val metaEntries = listOfNotNull(
+        platforms?.let { "\"trailblaze/supportedPlatforms\": ${list(it)}" },
+        drivers?.let { "\"trailblaze/supportedDrivers\": ${list(it)}" },
+      )
+      val meta = if (metaEntries.isEmpty()) "" else """, "_meta": { ${metaEntries.joinToString()} }"""
+      return """"$name": { "script": "${ts.absolutePath}", "name": "$name"$meta }"""
+    }
+    val analyzerJson = File(newTempDir(), "analyzer-tool-defs.json")
+    analyzerJson.writeText(
+      "{ \"myapp\": { " +
+        listOf(
+          tool("listedTool", null),
+          tool("unlistedTool", null),
+          tool("excludedTool", null),
+          tool("partlyExcluded", null),
+          tool("iosOnlyTool", listOf("ios")),
+          tool("androidOnlyExcluded", listOf("android")),
+          tool("webOnlyTool", listOf("web")),
+          tool("iosHostTool", null, drivers = listOf("ios-host")),
+          tool("instrumentationOnlyTool", listOf("android"), drivers = listOf("android-ondevice-instrumentation")),
+        ).joinToString(", ") +
+        " } }",
+    )
+
+    val content = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = targetsDir,
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+      analyzerToolsJson = analyzerJson,
+    ).buildExpectedTargets().values.single()
+
+    assertEquals(
+      listOf(
+        // Listed first, then every other tool in name order. Nothing is pruned for platform,
+        // driver or `excluded_tools:` — each session applies those gates per driver.
+        "listedTool",
+        "androidOnlyExcluded",
+        "describedTool",
+        "excludedTool",
+        "instrumentationOnlyTool",
+        "iosHostTool",
+        "iosOnlyTool",
+        "partlyExcluded",
+        "unlistedTool",
+        "webOnlyTool",
+      ),
+      toolNames(content),
+      "got: $content",
+    )
+    // A platform-scoped tool keeps its own scoping, which is what limits it to that platform.
+    assertTrue(
+      Regex("""name: iosOnlyTool\n\s+_meta:\n\s+trailblaze/supportedPlatforms:\n\s+- ios""").containsMatchIn(content),
+      "iosOnlyTool should carry supportedPlatforms [ios]; got: $content",
+    )
+  }
+
+  @Test
+  fun `an unlisted tool keeps its visibility, recording and masking shortcuts`() {
+    // A hidden helper must stay hidden, unrecorded and masked once it is on the target unlisted —
+    // the same `_meta` the runtime builds from these shortcuts.
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText("id: myapp\ntarget:\n  display_name: MyApp\n")
+    File(trailmapsDir, "myapp/tools/helper.yaml").writeText(
+      """
+      script: ./helper.ts
+      name: helperTool
+      description: Test tool.
+      surfaceToLlm: false
+      isRecordable: false
+      sensitiveArgNames: [password]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "myapp/tools/multi.yaml").writeText(
+      """
+      script: ./multi.ts
+      surfaceToLlm: false
+      sensitiveArgNames: [token]
+      tools:
+        - name: inheritsTool
+          description: Test tool.
+          sensitiveArgNames: []
+        - name: shownTool
+          description: Test tool.
+          surfaceToLlm: true
+      """.trimIndent(),
+    )
+
+    val content = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = newTempDir(),
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+    ).buildExpectedTargets().values.single()
+
+    fun metaOf(name: String): String =
+      Regex("""name: $name\n((?:\s{4,}.*\n)*)""").find(content)?.groupValues?.get(1)
+        ?: error("no $name in: $content")
+    val helper = metaOf("helperTool")
+    assertTrue("trailblaze/surfaceToLlm: false" in helper, "helperTool lost surfaceToLlm: $helper")
+    assertTrue("trailblaze/isRecordable: false" in helper, "helperTool lost isRecordable: $helper")
+    assertTrue(Regex("""trailblaze/sensitiveArgNames:\n\s+- password""").containsMatchIn(helper), "helperTool lost sensitiveArgNames: $helper")
+    // An entry inherits the file-wide shortcuts; an empty masking list still inherits.
+    val inherits = metaOf("inheritsTool")
+    assertTrue("trailblaze/surfaceToLlm: false" in inherits, "inheritsTool lost surfaceToLlm: $inherits")
+    assertTrue(Regex("""trailblaze/sensitiveArgNames:\n\s+- token""").containsMatchIn(inherits), "inheritsTool lost sensitiveArgNames: $inherits")
+    assertFalse("trailblaze/surfaceToLlm" in metaOf("shownTool"), "shownTool overrides to visible: ${metaOf("shownTool")}")
+  }
+
+  @Test
   fun `per-platform scripted tools are hoisted into top-level tools and stripped from the platform section`() {
     val trailmapsDir = newTempDir()
     val targetsDir = newTempDir()
@@ -1134,6 +1367,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./androidTool.ts
       name: ppAndroidTool
+      description: Test tool.
       supportedPlatforms: [android]
       """.trimIndent(),
     )
@@ -1141,6 +1375,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./iosTool.ts
       name: ppIosTool
+      description: Test tool.
       supportedPlatforms: [ios]
       """.trimIndent(),
     )
@@ -1188,6 +1423,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./cross.ts
       name: crossTool
+      description: Test tool.
       supportedPlatforms: [android, ios]
       """.trimIndent(),
     )
@@ -1195,6 +1431,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./a.ts
       name: aTool
+      description: Test tool.
       supportedPlatforms: [android]
       """.trimIndent(),
     )
@@ -1202,6 +1439,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./i.ts
       name: iTool
+      description: Test tool.
       supportedPlatforms: [ios]
       """.trimIndent(),
     )
@@ -1242,6 +1480,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./wide.ts
       name: wideTool
+      description: Test tool.
       supportedPlatforms: [android, ios]
       """.trimIndent(),
     )
@@ -1304,6 +1543,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./dup.ts
       name: dupTool
+      description: Test tool.
       supportedPlatforms: [android]
       """.trimIndent(),
     )
@@ -1345,6 +1585,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./shared.ts
       name: sharedTool
+      description: Test tool.
       supportedPlatforms: [android, ios]
       """.trimIndent(),
     )
@@ -1386,6 +1627,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./shared.ts
       name: sharedTool
+      description: Test tool.
       """.trimIndent(),
     )
     File(trailmapsDir, "twoplat/trailmap.yaml").writeText(
@@ -1476,6 +1718,46 @@ class TrailmapTargetGeneratorTest {
   }
 
   @Test
+  fun `without the analyzer, a tool only it can describe fails generation`() {
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp/tools/sub").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText("id: myapp\ntarget:\n  display_name: MyApp\n")
+    fun write(path: String, text: String) = File(trailmapsDir, "myapp/tools/$path").writeText(text)
+    val typed = "export const t = trailblaze.tool(async () => \"ok\");\n"
+    // Fine without the analyzer: a named descriptor, and a helper module that exports no tool.
+    write("named.ts", typed)
+    write("named.yaml", "script: ./named.ts\nname: named\ndescription: Named.\n")
+    write("helpers.ts", "export function shared() {}\n")
+    fun generate() = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = newTempDir(),
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+    ).buildExpectedTargets()
+    generate()
+
+    // Only the analyzer can name these: a bare tool or trailhead `.ts`, a meta-only descriptor,
+    // and a `.ts` whose descriptor discovery skips as invalid.
+    write("sub/bare.ts", typed)
+    write("landing.ts", "export const land = trailblaze.trailhead(async () => \"ok\");\n")
+    write("meta.ts", typed)
+    write("meta.yaml", "script: ./meta.ts\n_meta:\n  trailblaze/requiresHost: true\n")
+    write("invalid.ts", typed)
+    write("invalid.yaml", "script: ./invalid.ts\nname: []\n")
+    // A name with no description or schema: the `.ts` supplies the contract.
+    write("nameonly.ts", typed)
+    write("nameonly.yaml", "script: ./nameonly.ts\nname: nameOnly\n")
+
+    val error = assertFailsWith<GradleException> { generate() }
+    assertTrue(
+      error.message!!.contains("tools/invalid.ts, tools/landing.ts, tools/meta.yaml, tools/nameonly.yaml, tools/sub/bare.ts"),
+      "expected both undescribed tools, and nothing else, in: ${error.message}",
+    )
+    assertTrue(error.message!!.contains("analyzeDescriptorlessTools"), "expected the fix in: ${error.message}")
+  }
+
+  @Test
   fun `non-string supportedPlatforms entry in a per-platform tool fails loudly`() {
     // `validatePerPlatformScriptedTool` strict-string guard: every entry of
     // `_meta.trailblaze/supportedPlatforms` must be a string. A descriptor that ships a malformed
@@ -1492,6 +1774,7 @@ class TrailmapTargetGeneratorTest {
       """
       script: ./bad.ts
       name: badTool
+      description: Test tool.
       _meta:
         trailblaze/supportedPlatforms:
           - 123
@@ -1519,6 +1802,10 @@ class TrailmapTargetGeneratorTest {
       "error must name the violation type (non-string entry in supportedPlatforms); got: ${ex.message}",
     )
   }
+
+  /** The names under the generated target's top-level `tools:`, in order. */
+  private fun toolNames(content: String): List<String> =
+    Regex("""(?m)^    name: (\S+)$""").findAll(content).map { it.groupValues[1] }.toList()
 
   private fun newTempDir(): File =
     createTempDirectory("trailmap-target-generator-test").toFile().also { tempDirs += it }

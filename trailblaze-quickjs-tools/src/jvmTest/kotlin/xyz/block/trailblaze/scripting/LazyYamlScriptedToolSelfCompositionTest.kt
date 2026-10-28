@@ -26,7 +26,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.nio.file.Files
 
 /**
- * A host-path scripted tool that composes ITSELF by name (a nested `{ block_runIf: {...} }` entry
+ * A host-path scripted tool that composes ITSELF by name (a nested `{ runIf: {...} }` entry
  * is exactly this) lands back on its own registration's QuickJS engine while the outer call still
  * holds it. One engine per registration keeps composition across different tools safe, but not
  * self-composition. It must fail with the binding's actionable same-bundle error — naming the fix —

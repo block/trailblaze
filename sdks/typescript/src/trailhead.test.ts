@@ -1,4 +1,4 @@
-// Teardown on the typed-tool adapter: what a trailhead's handler sees as `ctx.trailhead`,
+// Teardown on the typed-tool adapter: what a trailhead's handler sees as `ctx.previousRun`,
 // what it reports back on `_meta.trailblaze.trailhead`, and how `trailhead.teardown` is called.
 
 import { describe, expect, test } from "bun:test";
@@ -24,22 +24,40 @@ function hostClient(calls: { name: string; args: unknown }[] = [], answer: unkno
   } as never;
 }
 
-describe("ctx.previousRun and ctx.trailhead in a handler", () => {
-  test("receives previousRun from the envelope and reports the reuse + notes on the result", async () => {
+describe("ctx.previousRun in a handler", () => {
+  test("receives previousRun from the envelope and reports the reuse on the result", async () => {
     let seen: { sessionId?: string; reason?: string; state?: unknown } | null = null;
     const def = trailhead<{ email: string }>(async (_input, ctx) => {
       const last = ctx.previousRun;
       seen = last && { sessionId: last.sessionId, reason: last.reason, state: last.state };
-      ctx.trailhead.note({ created: { kind: "item", id: "i-7" } });
       await last?.reuse("already signed in");
       return "ok";
     });
     const out = (await def({ email: "x" }, { previousRun } as never, hostClient())) as Result;
     expect(seen).toEqual(previousRun);
     expect(out._meta?.trailblaze?.trailhead).toEqual({
-      notes: [{ created: { kind: "item", id: "i-7" } }],
       reuse: { reason: "already signed in", startedAtMs: expect.any(Number), ok: true },
     });
+  });
+
+  test("previousRun carries the waypoint the last run's trailhead ended on", async () => {
+    let seen: string | undefined;
+    const def = trailhead(async (_input, ctx) => {
+      seen = ctx.previousRun?.trailheadEndWaypoint;
+      return "ok";
+    });
+    await def({}, { previousRun: { ...previousRun, trailheadEndWaypoint: "app/home" } } as never, hostClient());
+    expect(seen).toBe("app/home");
+  });
+
+  test("previousRun has no trailheadEndWaypoint when the host checked none", async () => {
+    let seen: unknown = "unset";
+    const def = trailhead(async (_input, ctx) => {
+      seen = ctx.previousRun?.trailheadEndWaypoint;
+      return "ok";
+    });
+    await def({}, { previousRun } as never, hostClient());
+    expect(seen).toBeUndefined();
   });
 
   test("previousRun is null when the host sent none, and the result has no trailhead report", async () => {
@@ -103,59 +121,53 @@ describe("ctx.previousRun and ctx.trailhead in a handler", () => {
     await expect(def({}, { previousRun } as never, hostClient())).rejects.toThrow(/already called/);
   });
 
-  test("notes written before a throw ride the thrown error", async () => {
+  test("a reuse the handler made before throwing rides the thrown error", async () => {
     const def = tool(async (_input, ctx) => {
-      ctx.trailhead.note({ invalidates: "changed the device locale" });
-      throw new Error("sign-in failed");
+      await ctx.previousRun!.reuse("on home");
+      throw new Error("passcode screen never appeared");
     });
     let caught: unknown;
     try {
-      await def({}, {} as never, hostClient());
+      await def({}, { previousRun } as never, hostClient());
     } catch (e) {
       caught = e;
     }
-    expect((caught as Error).message).toBe("sign-in failed");
-    expect((caught as Record<symbol, unknown>)[TRAILHEAD_REPORT_ON_ERROR]).toEqual({ notes: [{ invalidates: "changed the device locale" }] });
+    expect((caught as Error).message).toBe("passcode screen never appeared");
+    expect((caught as Record<symbol, unknown>)[TRAILHEAD_REPORT_ON_ERROR]).toEqual({
+      reuse: { reason: "on home", startedAtMs: expect.any(Number), ok: true },
+    });
   });
 
-  test("notes survive a thrown string and a frozen error", async () => {
+  test("the reuse report survives a thrown string and a frozen error", async () => {
     for (const thrown of ["sign-in failed", Object.freeze(new Error("sign-in failed"))]) {
       const def = tool(async (_input, ctx) => {
-        ctx.trailhead.note({ created: { kind: "item", id: "i-1" } });
+        await ctx.previousRun!.reuse("on home");
         throw thrown;
       });
       let caught: unknown;
       try {
-        await def({}, {} as never, hostClient());
+        await def({}, { previousRun } as never, hostClient());
       } catch (e) {
         caught = e;
       }
       expect((caught as Error).message).toBe("sign-in failed");
       expect((caught as Error).cause).toBe(thrown);
       expect((caught as Record<symbol, unknown>)[TRAILHEAD_REPORT_ON_ERROR]).toEqual({
-        notes: [{ created: { kind: "item", id: "i-1" } }],
+        reuse: { reason: "on home", startedAtMs: expect.any(Number), ok: true },
       });
     }
-  });
-
-  test("a malformed note fails loudly instead of being dropped", async () => {
-    const def = tool(async (_input, ctx) => {
-      ctx.trailhead.note({ created: { kind: "item" } } as never);
-      return "ok";
-    });
-    await expect(def({}, {} as never, hostClient())).rejects.toThrow();
   });
 });
 
 describe("trailhead.teardown", () => {
   test("rides the typed definition and receives the trailhead's args, a ctx, and the trail run", async () => {
-    let received: { args?: unknown; outcome?: unknown; notes?: unknown; previousRun?: unknown } = {};
+    let received: { args?: unknown; outcome?: unknown; previousRun?: unknown } = {};
     const def = tool<{ email: string }>(
       {
         trailhead: {
           dynamic: true,
           teardown: async (args, ctx, trailRun) => {
-            received = { args, outcome: trailRun.outcome, notes: trailRun.notes, previousRun: ctx.previousRun };
+            received = { args, outcome: trailRun.outcome, previousRun: ctx.previousRun };
             return { reusable: true, reason: "nothing to undo", state: { n: 1 } };
           },
         },
@@ -163,10 +175,9 @@ describe("trailhead.teardown", () => {
       async () => "ok",
     );
     expect(typeof def.teardown).toBe("function");
-    const notes = [{ created: { kind: "item", id: "i-7" }, tool: "makeItem", timestamp: 1 }];
-    const result = await def.teardown!({ email: "x" }, { previousRun } as never, hostClient(), { outcome: "passed", notes });
+    const result = await def.teardown!({ email: "x" }, { previousRun } as never, hostClient(), { outcome: "passed" });
     expect(result).toEqual({ reusable: true, reason: "nothing to undo", state: { n: 1 } });
-    expect(received).toEqual({ args: { email: "x" }, outcome: "passed", notes, previousRun: null });
+    expect(received).toEqual({ args: { email: "x" }, outcome: "passed", previousRun: null });
   });
 
   test("a tool without teardown has no member", () => {
@@ -176,13 +187,13 @@ describe("trailhead.teardown", () => {
 
   test("a result without a reason is rejected", async () => {
     const def = trailhead({ teardown: async () => ({ reusable: true }) as never }, async () => "ok");
-    await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).rejects.toThrow(/reason/);
+    await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "passed" })).rejects.toThrow(/reason/);
   });
 
   test("an unknown outcome from the host is rejected before teardown runs", async () => {
     let ran = false;
     const def = trailhead({ teardown: async () => { ran = true; return { reusable: false, reason: "x" }; } }, async () => "ok");
-    await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "exploded", notes: [] })).rejects.toThrow(/outcome/);
+    await expect(def.teardown!({}, {} as never, hostClient(), { outcome: "exploded" })).rejects.toThrow(/outcome/);
     expect(ran).toBe(false);
   });
 
@@ -199,7 +210,7 @@ describe("trailhead.teardown", () => {
       },
       async () => "ok",
     );
-    await def.teardown!({}, {} as never, hostClient(calls, answer), { outcome: "passed", notes: [] });
+    await def.teardown!({}, {} as never, hostClient(calls, answer), { outcome: "passed" });
     expect(got).toEqual(answer);
     expect(calls).toEqual([
       {
@@ -216,7 +227,7 @@ describe("trailblaze.trailhead", () => {
   test("is a typed tool whose spec teardown becomes the definition's teardown", async () => {
     const def = trailhead<{ email: string }>({ supportedPlatforms: ["android"], teardown }, async ({ email }) => `hi ${email}`);
     expect(await def({ email: "x" }, {} as never, hostClient())).toBe("hi x");
-    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed" })).toEqual({
       reusable: false,
       reason: "made items",
     });
@@ -242,7 +253,7 @@ describe("trailblaze.trailhead", () => {
 
   test("the in-process profile has it too", async () => {
     const def = inProcess.trailhead({ teardown }, async () => "ok");
-    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed" })).toEqual({
       reusable: false,
       reason: "made items",
     });
@@ -250,7 +261,7 @@ describe("trailblaze.trailhead", () => {
 
   test("trailblaze.tool with a trailhead block still carries teardown", async () => {
     const def = tool({ trailhead: { teardown } }, async () => "ok");
-    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed", notes: [] })).toEqual({
+    expect(await def.teardown!({}, {} as never, hostClient(), { outcome: "passed" })).toEqual({
       reusable: false,
       reason: "made items",
     });

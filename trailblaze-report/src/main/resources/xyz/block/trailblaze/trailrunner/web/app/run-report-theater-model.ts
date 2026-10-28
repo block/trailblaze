@@ -136,11 +136,19 @@ const switchOf = (kid: TraceChild): string | null => kid.switchTo
 
 const PLUMBING = /^(android_|mobile_|ios_|findSelectorMatches$|exec$|block_runIf$|runIf$|wait$|objectiveStatus$|switchDevice$|_)/;
 
+/** Text up to its first `. ` or `, `, read past any inside a "quoted" name. */
+function firstClause(text: string): string {
+  let quoted = false;
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] === '"') quoted = !quoted;
+    else if (!quoted && (text[i] === '.' || text[i] === ',') && /\s/.test(text[i + 1])) return text.slice(0, i + 1);
+  }
+  return text;
+}
+
 /** The step's first sentence, without the device it names. */
 export function headline(text: string): string {
-  const first = normalized(text)
-    .replace(/^On the [^,]+,\s*/, '')
-    .split(/(?<=[.,])\s/)[0]
+  const first = firstClause(normalized(text).replace(/^On the [^,]+,\s*/, ''))
     .replace(/[.,]+$/, '')
     .replace(/\s*\(\{\{\w+\}\}\)/, '');
   return first.slice(0, 1).toUpperCase() + first.slice(1);
@@ -158,23 +166,124 @@ export function humanizeTool(name: string): string {
   return text.slice(0, 1).toUpperCase() + text.slice(1);
 }
 
+/** A pattern split at its top-level `|`, keeping groups and escapes whole. */
+function alternatives(pattern: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') i++;
+    else if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === '|' && depth === 0) {
+      parts.push(pattern.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return [...parts, pattern.slice(start)];
+}
+
+/** Whether `(` at 0 closes at the pattern's last character, so the group wraps all of it. */
+function wrapsAll(pattern: string): boolean {
+  if (!pattern.startsWith('(') || !pattern.endsWith(')')) return false;
+  let depth = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') i++;
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i === pattern.length - 1;
+  }
+  return false;
+}
+
+const MAX_PATTERN_CHARS = 300;
+
+/** The words a text pattern matches, when it is words: `(?i).*(Tap now|Insert).*` is "Tap now",
+ * with one more it would also take. A pattern that is more than words gives null. */
+export function patternWords(pattern: string): { text: string; more: number } | null {
+  // A line label reads a pattern someone wrote by hand; a longer one is shown as written, unparsed.
+  if (pattern.length > MAX_PATTERN_CHARS) return null;
+  let rest = pattern.replace(/\\Q(.*?)\\E/g, (_, literal: string) => literal.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&'));
+  let more = 0;
+  for (let guard = 0; guard < 8; guard++) {
+    const before = rest;
+    rest = rest.replace(/^\(\?[a-z]+\)/i, '').replace(/^\^/, '').replace(/^\.\*/, '').replace(/(?<!\\)\$$/, '').replace(/(?<!\\)\.\*$/, '');
+    const options = alternatives(rest);
+    if (options.length > 1) {
+      more += options.length - 1;
+      rest = options[0];
+    }
+    if (wrapsAll(rest)) rest = rest.slice(rest.startsWith('(?:') ? 3 : 1, -1);
+    if (rest === before) break;
+  }
+  // `\d`, `\b` and their kind match classes or positions, not the letter.
+  if (/(?<!\\)[[\]()*+?{}|^$]/.test(rest) || /\\[A-Za-z0-9]/.test(rest)) return null;
+  const text = rest.replace(/\\(.)/g, '$1').trim();
+  return text ? { text, more } : null;
+}
+
+/**
+ * A YAML or JSON scalar as written: quoted values unescaped, plain ones to the end of the line.
+ * A plain null is no value, so a selector's unset field never reads as the word "null".
+ */
+function scalarValue(raw: string): string | null {
+  if (raw.startsWith('"')) {
+    const quoted = /^"((?:[^"\\]|\\.)*)"/.exec(raw)?.[0];
+    if (quoted) {
+      try {
+        return JSON.parse(quoted) as string;
+      } catch {
+        return quoted.slice(1, -1);
+      }
+    }
+  }
+  if (raw.startsWith("'")) {
+    const quoted = /^'((?:[^']|'')*)'/.exec(raw)?.[1];
+    if (quoted !== undefined) return quoted.replaceAll("''", "'");
+  }
+  return /^(?:null|Null|NULL|~)[\s,}\]]*$/.test(raw) ? null : raw;
+}
+
+/** Selector fields in the order a tool honours them: a pattern over its literal, text over ids. */
+const TEXT_FIELDS = ['textRegex', 'accessibilityTextRegex', 'contentDescriptionRegex', 'ariaNameRegex', 'text', 'accessibilityText', 'ariaName'];
+
 /** The visible text a selector looked for, from the tool's arguments or its summary. */
-function selectorText(row: TraceStep): string | null {
+function selectorText(row: TraceStep, fields: string[] = TEXT_FIELDS): { text: string; more: number } | null {
   const source = `${row.args || ''}\n${row.tool || ''}`;
-  const found = /(?:textRegex|contentDescriptionRegex|accessibilityTextRegex|text)["']?\s*:\s*["']?\^?([^\n"'$,}\\]+)/.exec(source);
-  const text = found?.[1]?.trim().replace(/\([^)]*\)\?/g, '');
-  return text || null;
+  for (const field of fields) {
+    const found = new RegExp(`(?<![A-Za-z])${field}["']?[ \\t]*:[ \\t]*([^\\n]+)`).exec(source);
+    const value = found ? (scalarValue(found[1].trim()) ?? '').trim() : '';
+    if (!value) continue;
+    const words = field.endsWith('Regex') ? patternWords(value) : null;
+    return words ?? { text: value, more: 0 };
+  }
+  return null;
 }
 
 const SHORT_NOTE_CHARS = 80;
 
+const TYPING = /^(web_type|inputText|type)$/i;
+
+/** What a tool did to the text it targeted, by tool name; the first that matches says it. */
+const PHRASES: Array<[tool: RegExp, phrase: (target: string) => string]> = [
+  [/^waitUntilNotVisible/i, (target) => `Wait for ${target} to go`],
+  [/^assertNotVisible/i, (target) => `No ${target}`],
+  [/^web_click/, (target) => `Click ${target}`],
+  [/^(tap|click)/i, (target) => `Tap ${target}`],
+  [TYPING, (target) => `Type ${target}`],
+  [/^(assert|verify|web_verify|waitUntil)/i, (target) => `See ${target}`],
+  [/^scrollUntil/, (target) => `Scroll to ${target}`],
+];
+
 /** What a script line says: a short reason as written, else what the tool did to what. */
 export function actionLabel(row: TraceStep): { label: string; detail?: string } {
   const note = (row.note || '').trim();
-  const text = selectorText(row);
   const name = row.label || '';
-  const verb = /^(tap|click)/i.test(name) ? 'Tap' : /^(assert|verify|web_verify|waitUntil)/i.test(name) ? 'See' : null;
-  const derived = verb && text ? `${verb} "${text}"` : null;
+  // Typing is described by what it typed, not by the field it typed into.
+  const text = selectorText(row, TYPING.test(name) ? ['text'] : TEXT_FIELDS);
+  const quoted = text ? `"${text.text}"${text.more ? ` or ${text.more} more` : ''}` : null;
+  const derived = quoted ? PHRASES.find(([tool]) => tool.test(name))?.[1](quoted) ?? null : null;
   const plain = /^(mobile_maestro|_)/.test(name) && row.tool ? row.tool.replace(/^./, (c) => c.toUpperCase()) : humanizeTool(name);
   const detail = note || (row.tool || undefined);
   if (note && note.length <= SHORT_NOTE_CHARS) return { label: note, ...(detail ? { detail } : {}) };

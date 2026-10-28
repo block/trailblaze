@@ -473,6 +473,9 @@ class TrailblazeDeviceManager(
     // web / Electron self-instrumented capture path, which the SessionCaptureCoordinator (and thus
     // getOrCreateSessionResolution's captureVideoOverride) skips for WEB.
     captureVideoOverride: Boolean? = null,
+    // A tool-palette action or a CLI/MCP prompt keeps the device's language; see
+    // DesktopAppRunYamlParams.keepDeviceLanguage.
+    keepDeviceLanguage: Boolean = false,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     // Load-time {{VAR}} template resolution — same contract as the daemon's /cli/run handler
@@ -579,6 +582,7 @@ class TrailblazeDeviceManager(
       onConnectionStatus = {},
       additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),
       captureVideo = captureVideoOverride,
+      keepDeviceLanguage = keepDeviceLanguage,
       onComplete = onComplete,
       // Same registry the session target resolves against above, so a multi-device configuration's
       // per-device `target:` override resolves by the same rules as `config.target`.
@@ -1791,7 +1795,7 @@ class TrailblazeDeviceManager(
    * Only clears if the session ID matches the current session for the device
    * (to avoid clearing a newer session that started after this one ended).
    */
-  private fun clearEndedSessionFromDevice(
+  internal fun clearEndedSessionFromDevice(
     trailblazeDeviceId: TrailblazeDeviceId,
     endedSessionId: SessionId
   ) {

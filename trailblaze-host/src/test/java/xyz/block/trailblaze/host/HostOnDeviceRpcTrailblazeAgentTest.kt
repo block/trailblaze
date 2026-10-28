@@ -734,6 +734,34 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(result).isNull()
   }
 
+  /**
+   * A host-run accessibility trail forwards its taps to the device as tool YAML. The device agent
+   * does the waiting, so the tap's `timeoutMs` has to survive that trip or the device waits only
+   * its default.
+   */
+  @Test
+  fun `executeNodeSelectorTap forwards the tap's timeoutMs to the device`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+
+    runBlocking {
+      createAgent().executeNodeSelectorTap(
+        nodeSelector = TrailblazeNodeSelector.withMatch(
+          DriverNodeMatch.AndroidAccessibility(textRegex = "More cart options"),
+        ),
+        longPress = false,
+        timeoutMs = 30_000,
+        traceId = null,
+      )
+    }
+
+    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
+    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
+    assertThat(yaml).contains("tapOnElementBySelector")
+    assertThat(yaml).contains("timeoutMs: 30000")
+  }
+
   /** Without the breaker a wedged emulator hangs the trail for the full per-tool RPC budget;
    *  trip early with a TrailblazeException naming the device-unhealthy state. */
   @Test
@@ -1124,7 +1152,6 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "test",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
       toolSetCatalog = null,
     ).apply { addDynamicTools(listOf(registration)) }
@@ -1156,14 +1183,13 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     // name: X" from `toolCallToTrailblazeTool`'s `error(...)` branch), the catch block falls
     // through with the original `OtherTrailblazeTool`, the `when` lands in the `else` branch,
     // and the FatalError message includes the unresolved tool's `toolName` plus the
-    // "not registered ... as a class-backed, YAML-defined, or dynamic scripted tool" hint.
+    // "not registered ... as a class-backed or dynamic scripted tool" hint.
     // Drift on either the toolName surface or the prose would make failures of this shape
     // harder to triage.
     val toolRepo = xyz.block.trailblaze.toolcalls.TrailblazeToolRepo(
       trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "test",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
       toolSetCatalog = null,
     )
@@ -1188,7 +1214,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     // toolName visible (the triage signal a triager needs).
     assertThat(message).contains("toolName='totally_unknown_tool'")
     // Precise taxonomy (matches the parallel diagnostic in `MaestroTrailblazeAgent`).
-    assertThat(message).contains("class-backed, YAML-defined, or dynamic scripted tool")
+    assertThat(message).contains("class-backed or dynamic scripted tool")
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
   }
 
@@ -1291,7 +1317,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   // *other* host-local paths this agent introduces — the `requiresHostInstance` branch in
   // `executeTool` plus the `DelegatingTrailblazeTool` sub-tool host-local expansion — so a future
   // refactor of `executeHostLocalWithLogging` can't silently regress logging for `cbot` /
-  // `dip-slot` / `requires_host: true` YAML tools.
+  // `dip-slot` / `requires_host: true` scripted tools.
 
   @Test
   fun `delegating sub-tool host-local branch emits a TrailblazeToolLog per dispatched sub-tool`() {
@@ -1435,7 +1461,11 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
 
     val captured = mutableListOf<TrailblazeLog>()
-    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    // Re-warm uses real HTTP; this checks two dispatches and log ownership, not handshake latency.
+    val agent = createAgent(
+      trailblazeLogger = capturingLogger(captured),
+      reWarmTimeoutMs = 5_000L,
+    )
     val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))

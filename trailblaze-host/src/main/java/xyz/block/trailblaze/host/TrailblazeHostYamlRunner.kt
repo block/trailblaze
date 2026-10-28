@@ -27,12 +27,14 @@ import xyz.block.trailblaze.host.golden.SnapshotBaselineSource
 import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.driver.HostRunDeps
+import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.MultiDeviceTargetBinding
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
 import xyz.block.trailblaze.logs.client.SessionMetadata
@@ -49,9 +51,16 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.host.devices.HostDeviceProfile
 import xyz.block.trailblaze.host.devices.HostProbedDeviceClassifiers
+import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
+import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
+import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
+import xyz.block.trailblaze.api.TargetTemplateContext
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.toSessionToolRepo
+import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
@@ -87,24 +96,7 @@ import xyz.block.trailblaze.report.trace.SessionTraceFile
 object TrailblazeHostYamlRunner {
 
   init {
-    // Install the analyzer-backed scripted-tool enrichment so the host-side `assertWaypoint`
-    // tool can resolve the waypoint registry even in workspaces that carry meta-only
-    // scripted-tool descriptors (whose trailmap loading would otherwise throw without
-    // enrichment). The interface lives in trailblaze-common; the analyzer that builds it is
-    // host-only, so this is the host's one-time install point. Mirrors what the retired
-    // `resolveWaypointsForRun` did inline.
-    xyz.block.trailblaze.waypoint.WaypointRegistryResolver.scriptedToolEnrichmentProvider = {
-      xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
-    }
-    // Point waypoint resolution at the SAME active-workspace dir that target/tool discovery uses
-    // (`WorkspaceConfigDirHolder`), so a workspace selected in the desktop app / Trail Runner — which
-    // installs it without changing the JVM cwd — resolves app waypoints too. The holder lives in
-    // trailblaze-models (JVM-only); this host module bridges it into the common resolver. Ensure the
-    // holder's own default delegation is installed first (idempotent).
-    xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigBootstrap.ensureInstalled()
-    xyz.block.trailblaze.waypoint.WaypointRegistryResolver.workspaceConfigDirProvider = {
-      xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder.resolver()
-    }
+    HostWaypointWiring.ensureInstalled()
   }
 
   /**
@@ -210,6 +202,8 @@ object TrailblazeHostYamlRunner {
     toolRepo: TrailblazeToolRepo,
     /** Extra session drivers beyond [deviceInfo]'s — see [HostScriptedToolLauncher.launch]. */
     additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
+    /** Drivers of the devices running [targetTestApp] — see [HostScriptedToolLauncher.launch]. */
+    targetDriverTypes: Set<TrailblazeDriverType>? = null,
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? = HostScriptedToolLauncher.launch(
     targetTestApp = targetTestApp,
@@ -222,6 +216,7 @@ object TrailblazeHostYamlRunner {
     classLoader = javaClass.classLoader,
     logPrefix = "[TrailblazeHostYamlRunner]",
     additionalDriverTypes = additionalDriverTypes,
+    targetDriverTypes = targetDriverTypes,
     onProgressMessage = onProgressMessage,
   )
 
@@ -415,6 +410,23 @@ object TrailblazeHostYamlRunner {
   internal fun RunYamlRequest.trailDirectory(): File? = trailFilePath?.let { File(it).parentFile }
 
   /**
+   * The request a bound Android device's on-device runner is sent, naming THIS device. A
+   * `deviceClassifierOverride` names the launch device, so a companion carries none and its own
+   * classifiers govern.
+   */
+  internal fun RunYamlRequest.forBoundAndroidDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
+    targetAppId: String?,
+    isLaunchDevice: Boolean,
+  ): RunYamlRequest = copy(
+    trailblazeDeviceId = trailblazeDeviceId,
+    driverType = driverType,
+    targetAppName = targetAppId ?: targetAppName,
+    deviceClassifierOverride = if (isLaunchDevice) deviceClassifierOverride else emptyList(),
+  )
+
+  /**
    * Session metadata naming the trail this request runs, so a tool can tell which trail it serves
    * through [TrailblazeSession.metadata]. Config extraction failing leaves the id null rather than
    * throwing: the run decodes the same YAML again inside the session, where its failure is logged.
@@ -426,12 +438,13 @@ object TrailblazeHostYamlRunner {
   )
 
   /**
-   * Runs the agent on the host with tool execution delegated to an
-   * on-device driver (accessibility or instrumentation) via RPC.
+   * Runs the agent on the host, dispatching each tool to the device it targets: an Android device
+   * over its on-device RPC driver (accessibility or instrumentation), an iOS simulator or a browser
+   * in-process. This is the runner for every multi-device session, whatever kind the launch is.
    *
    * The agent loop (LLM calls, tool selection) runs on the host JVM. Each individual tool
-   * call is serialized as single-step trail YAML and sent to the device. The device
-   * executes the tool via whichever driver is specified in the request's `driverType`.
+   * call to an Android device is serialized as single-step trail YAML and sent to the device,
+   * which executes it via that device's driver.
    *
    * @return The host session ID on completion. Failures and cancellations propagate
    *   as exceptions — this function does NOT swallow exceptions and return null.
@@ -439,11 +452,14 @@ object TrailblazeHostYamlRunner {
    */
   suspend fun runHostAgentWithOnDeviceRpc(
     dynamicLlmClient: DynamicLlmClient,
-    onDeviceRpc: OnDeviceRpcClient,
+    /**
+     * The device the run launched against, already connected. Its [DeviceConnection.driverType] is
+     * the session's driver, and its [DeviceConnection.targetTestApp] the session's target: the
+     * capture app ids, recorded `targetAppName` and session-start `targetAppInfo` all follow it.
+     */
+    launchDevice: DeviceConnection,
     runYamlRequest: RunYamlRequest,
-    trailblazeDeviceId: TrailblazeDeviceId,
     onProgressMessage: (String) -> Unit,
-    targetTestApp: TrailblazeHostAppTarget?,
     /**
      * Fired exactly once after the session is established (after `executeTrailSession` resolves
      * the session id), BEFORE we start dispatching trail items. Caller hooks session-scoped
@@ -456,8 +472,8 @@ object TrailblazeHostYamlRunner {
      * The multi-device configuration this session selected and bound, or null for a
      * single-device run — see [MultiDeviceSessionRpc]. The caller (DesktopYamlRunner) resolves
      * the trail's `config.devices:` configuration entry, binds the launch device to the FIRST
-     * declared name (the start device), and hands over already-connected, warmed-up RPC clients
-     * for the remaining names.
+     * declared name (the start device), and hands over already-connected, warmed-up devices for
+     * the remaining names.
      */
     multiDeviceSession: MultiDeviceSessionRpc? = null,
     /** Directory this run's session logs are written to. See [runHostYaml]. */
@@ -465,59 +481,55 @@ object TrailblazeHostYamlRunner {
     /** The run's `--no-logging` flag: no session files, no trace export. See [runHostYaml]. */
     noLogging: Boolean = false,
   ): SessionId? {
-    val driverType = runYamlRequest.driverType
-      ?: TrailblazeDriverType.DEFAULT_ANDROID
+    val driverType = launchDevice.driverType
 
     // ---- Per-device targets ----
     // A configuration's named devices may each declare their own `target:` (a paired-display trail
     // whose two displays run different apps), resolved by the caller; a device that declares none
-    // inherits the session target. Single-device sessions bind exactly one target: `targetTestApp`.
-    val startDeviceTarget: TrailblazeHostAppTarget? =
-      if (multiDeviceSession != null) multiDeviceSession.startDeviceTarget else targetTestApp
+    // inherits the session target.
+    val startDeviceTarget: TrailblazeHostAppTarget? = launchDevice.targetTestApp
     val boundTargets: List<TrailblazeHostAppTarget> = MultiDeviceTargetBinding.boundTargets(
       startDeviceTarget = startDeviceTarget,
       companionTargets = multiDeviceSession?.companions?.values.orEmpty().map { it.targetTestApp },
     )
     val customToolClasses = MultiDeviceTargetBinding.customToolClasses(boundTargets, driverType)
 
-    // A web companion brings a SECOND driver into the session: its recorded tools must decode,
-    // its framework tool surface must register on the session repo, and web-only scripted tools
-    // must spawn — all otherwise scoped to the launch device's single driver. This surface is
-    // deliberately NOT merged into `customToolClasses`, which also feeds the Android RPC agents
-    // (whose on-device decoder has no web classes).
-    val hasWebCompanion = multiDeviceSession?.companions.orEmpty().values
-      .any { it is CompanionDeviceConnection.WebBrowser }
-    val webCompanionToolSurface: ResolvedToolSet? = if (!hasWebCompanion) null else {
-      val framework = TrailblazeToolSetCatalog.resolveForDriver(
-        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-        WebToolSetIds.ALL,
-      )
-      framework.copy(
-        toolClasses = framework.toolClasses +
-          // Across every bound target, not just the start device's: a per-device `target:` can put
-          // a second target in the session, and its web tools have to decode here too.
-          MultiDeviceTargetBinding.customToolClasses(boundTargets, TrailblazeDriverType.PLAYWRIGHT_NATIVE),
-      )
-    }
-    val decodeToolClasses = customToolClasses + webCompanionToolSurface?.toolClasses.orEmpty()
+    // Drivers a companion brings beyond the launch device's own.
+    val companionDriverTypes: Set<TrailblazeDriverType> = multiDeviceSession?.companions.orEmpty().values
+      .mapTo(mutableSetOf()) { it.driverType } - driverType
+    // A bound browser's recorded tools must decode, its framework tool surface must register on
+    // the session repo, and web-only scripted tools must spawn; a target's own scope for the web
+    // driver does not carry them. This surface is deliberately NOT merged into `customToolClasses`,
+    // which also feeds the Android RPC agents (whose on-device decoder has no web classes).
+    val webCompanionToolSurface: ResolvedToolSet? =
+      if (TrailblazeDriverType.PLAYWRIGHT_NATIVE !in companionDriverTypes + driverType) null else {
+        val framework = TrailblazeToolSetCatalog.resolveForDriver(
+          TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+          WebToolSetIds.ALL,
+        )
+        framework.copy(
+          toolClasses = framework.toolClasses +
+            // Across every bound target, not just the start device's: a per-device `target:` can put
+            // a second target in the session, and its web tools have to decode here too.
+            MultiDeviceTargetBinding.customToolClasses(boundTargets, TrailblazeDriverType.PLAYWRIGHT_NATIVE),
+        )
+      }
+    val companionDriverToolSurfaces: List<ResolvedAgentToolbox> =
+      MultiDeviceTargetBinding.companionDriverToolboxes(boundTargets, companionDriverTypes)
+    val decodeToolClasses = customToolClasses + webCompanionToolSurface?.toolClasses.orEmpty() +
+      companionDriverToolSurfaces.flatMap { it.toolClasses }
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = decodeToolClasses,
     )
 
-    // Query the device's own description of itself up-front so a v3 trail can be lowered with the
-    // right closest-wins recording for THIS device. v1 trails ignore the list.
-    // Held in a reference, not a value: the device's size changes under the run (`setOrientation`
-    // swaps the axes, and orientation is derived from them), so the agent below refreshes it from
-    // every screen state this device reports. One reference per device — a companion rotating must
-    // not rewrite the launch device's size.
-    val deviceProfile = AtomicReference(queryDeviceProfile(onDeviceRpc))
-    val classifiers = runYamlRequest.deviceClassifierOverride
-      .map(::TrailblazeDeviceClassifier)
-      .ifEmpty { deviceProfile.get().classifiers }
-      .ifEmpty {
-      HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
-    }
+    // Probe the launch device up-front so a v3 trail can be lowered with the right closest-wins
+    // recording for THIS device. v1 trails ignore the list.
+    val launchProbe = probeDevice(
+      device = launchDevice,
+      classifierOverride = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
+    )
+    val classifiers = launchProbe.classifiers
 
     // Envelope-tolerant decode: single-tool MCP dispatch decodes via decodeTools, not the legacy
     // list-shape parser; trail documents are unaffected.
@@ -550,17 +562,20 @@ object TrailblazeHostYamlRunner {
       return null
     }
 
+    // A launch browser opens in the trail's or lane's language, as a single-browser run's does. Set
+    // before capture and the first navigation, since a context's locale is fixed when it is created.
+    val launchBrowser = (launchDevice as? DeviceConnection.WebBrowser)?.pageManager
+    if (runYamlRequest.config.sendSessionStartLog) {
+      (launchBrowser as? PlaywrightBrowserManager)?.applyContextLocale(
+        BasePlaywrightNativeTest.resolveBrowserLocale(
+          trailLocale = trailConfig?.locale,
+          laneLocale = System.getenv(BasePlaywrightNativeTest.WEB_LOCALE_ENV)?.takeIf { it.isNotBlank() },
+        ),
+      )
+    }
+
     val loggingRule = HostTrailblazeLoggingRule(
-      trailblazeDeviceInfoProvider = {
-        val profile = deviceProfile.get()
-        TrailblazeDeviceInfo(
-          trailblazeDeviceId = trailblazeDeviceId,
-          trailblazeDriverType = driverType,
-          widthPixels = profile.widthPixels,
-          heightPixels = profile.heightPixels,
-          classifiers = classifiers,
-        )
-      },
+      trailblazeDeviceInfoProvider = launchProbe::deviceInfo,
       logsDir = logsDir,
       noLogging = noLogging,
     )
@@ -596,14 +611,15 @@ object TrailblazeHostYamlRunner {
     )
     val toolRepo = startDeviceTarget.toSessionToolRepo(
       driverType = driverType,
-      additional = listOfNotNull(
-        companionToolAdditions,
-        webCompanionToolSurface,
-        handoverToolSurface,
-      ).let { surfaces ->
+      additional = (
+        listOfNotNull<TrailblazeToolSurface>(
+          companionToolAdditions,
+          webCompanionToolSurface,
+          handoverToolSurface,
+        ) + companionDriverToolSurfaces
+        ).let { surfaces ->
         ResolvedAgentToolbox(
           toolClasses = surfaces.flatMapTo(mutableSetOf()) { it.toolClasses },
-          yamlToolNames = surfaces.flatMapTo(mutableSetOf()) { it.yamlToolNames },
           scriptedToolNames = surfaces.flatMapTo(mutableSetOf()) { it.scriptedToolNames },
         )
       },
@@ -628,64 +644,152 @@ object TrailblazeHostYamlRunner {
       )?.let { reason -> throw TrailblazeException(reason) }
     }
 
-    // Pre-resolve the START device's target once. Surfaces `ctx.target.{id, appIds,
-    // appId}` to in-process scripted-tool handlers (e.g. Square card-reader
-    // broadcast tools) via the envelope writer. The agent threads these through
-    // `MaestroTrailblazeAgent.buildExecutionContext`, which sets
-    // `TrailblazeToolExecutionContext.resolvedTarget` / `.appId`, which
-    // `TrailblazeContextEnvelope.buildMetaTrailblaze` reads into `_meta.trailblaze.target`.
-    // Without this wiring the in-process handlers see `ctx.target` as undefined and the
-    // first `ctx.target.resolveAppId()` call throws.
-    //
-    // The app-id resolution is computed eagerly (not `by lazy`) because this path constructs a single
-    // session-scoped `HostOnDeviceRpcTrailblazeAgent` whose constructor takes a plain
-    // `String?` — there is no per-tool `toolExecutionContextProvider` lambda where a
-    // `Lazy<String?>` could defer the device query. Threading a `() -> String?` through
-    // the agent and into `MaestroTrailblazeAgent.buildExecutionContext` would gain only
-    // the ~50ms `pm list packages` shell-out on sessions that don't touch a target-aware
-    // tool, which isn't worth the surface-area change.
-    // A target with zero installed candidates surfaces as `appId = null` rather
-    // than a thrown IllegalStateException so handlers can fall back to
-    // `ctx.target?.appIds[0]` and let the launch fail downstream with a clearer message.
-    val resolvedTargetForSession: xyz.block.trailblaze.model.ResolvedTarget? =
-      MultiDeviceTargetBinding.agentResolvedTarget(startDeviceTarget, trailblazeDeviceId)
-    val appIdForSession: String? = resolvedTargetForSession?.let { resolveInstalledAppId(it) }
-
-    val agent = HostOnDeviceRpcTrailblazeAgent(
-      rpcClient = onDeviceRpc,
-      runYamlRequestTemplate = runYamlRequest,
-      trailblazeLogger = loggingRule.logger,
-      trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
-      sessionProvider = { loggingRule.session ?: error("Session not available") },
-      customToolClasses = customToolClasses,
-      requireAndroidAccessibilityServiceOnRewarm =
-        AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType),
-      trailblazeToolRepo = toolRepo,
-      resolvedTarget = resolvedTargetForSession,
-      appId = appIdForSession,
-      // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts under
-      // this session's on-host log dir through the context this agent builds.
-      sessionDirProvider = loggingRule.logsRepo::getSessionDir,
-      // The trail file's directory lets host-local tools resolve trail-relative files (e.g. a
-      // committed WAV recording) against the trail on disk. Without it, a relative hostPath resolves against the
-      // daemon's CWD, which a CI trail-source clone in /tmp never matches.
-      workingDirectory = runYamlRequest.trailDirectory(),
-      onScreenStateObserved = { response ->
-        deviceProfile.updateAndGet { it.withMeasuredSizeFrom(response) }
-      },
-    )
-
-    // Seed the agent's memory before any tool runs, via [AgentMemory.seedFrom]. The agent interpolates `{{var}}` tokens against this memory at the RPC
-    // boundary AND pushes it to the device as each dispatch's `memorySnapshot`, so on-device
-    // tools' `ctx.memory` reads the same seeded state.
-    val resolvedInitialMemory = agent.memory.seedFrom(
+    // Shared by every bound agent, so a `remember` on one device resolves on another. Seeded before
+    // any tool runs, via [AgentMemory.seedFrom]. An Android agent interpolates `{{var}}` tokens
+    // against it at the RPC boundary AND pushes it to the device as each dispatch's
+    // `memorySnapshot`, so on-device tools' `ctx.memory` reads the same seeded state.
+    val memory = AgentMemory()
+    val resolvedInitialMemory = memory.seedFrom(
       yamlDefaults = trailConfig?.memory,
       cliSeeds = runYamlRequest.initialMemorySeeds,
       cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
     )
     // Seed args after memory; the host pushes them to the device via each dispatch's argsSnapshot.
-    agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
-    val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
+    memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
+    val sensitiveMemoryKeys: Set<String> = memory.sensitiveKeys.toSet()
+
+    // The one place a bound device's agent is built, for the launch device and every companion
+    // alike, so two devices of the same kind can't be wired differently by role.
+    fun boundAgent(probe: ProbedDevice): BoundSessionAgent {
+      val sessionProvider = TrailblazeSessionProvider { loggingRule.session ?: error("Session not available") }
+      return when (val device = probe.device) {
+        is DeviceConnection.AndroidRpc -> {
+          val rpcAgent = HostOnDeviceRpcTrailblazeAgent(
+            rpcClient = device.rpcClient,
+            // The template's device id feeds per-device concerns like the stream-screenshot source,
+            // and its driver and `targetAppName` are THIS device's, so the on-device side agrees.
+            runYamlRequestTemplate = runYamlRequest.forBoundAndroidDevice(
+              trailblazeDeviceId = device.trailblazeDeviceId,
+              driverType = device.driverType,
+              targetAppId = device.targetTestApp?.id,
+              isLaunchDevice = probe === launchProbe,
+            ),
+            trailblazeLogger = loggingRule.logger,
+            trailblazeDeviceInfoProvider = probe::deviceInfo,
+            sessionProvider = sessionProvider,
+            // The union across bound targets: this set is the agent's tool SERIALIZER registry (it
+            // builds the single-step YAML each dispatch sends), not an advertisement surface, so
+            // narrowing it to this device's target would only make a cross-target call fail to
+            // serialize. Keyed on this device's driver, never the launch device's.
+            customToolClasses = MultiDeviceTargetBinding.customToolClasses(boundTargets, device.driverType),
+            requireAndroidAccessibilityServiceOnRewarm =
+              AndroidAccessibilityServiceDrivers.includes(device.driverType),
+            trailblazeToolRepo = toolRepo,
+            resolvedTarget = probe.resolvedTarget,
+            appId = probe.appId,
+            // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
+            // under this session's on-host log dir through the context this agent builds.
+            sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+            workingDirectory = runYamlRequest.trailDirectory(),
+            memory = memory,
+            onScreenStateObserved = { response ->
+              probe.profile.updateAndGet { it.withMeasuredSizeFrom(response) }
+            },
+          )
+          BoundSessionAgent(
+            agent = rpcAgent,
+            screenStateProvider = rpcAgent.screenStateProvider,
+            captureScreenState = { rpcAgent.captureScreenState() },
+            closeStreamScreenshotSource = { rpcAgent.closeStreamScreenshotSource() },
+          )
+        }
+        is DeviceConnection.WebBrowser -> {
+          val webAgent = PlaywrightTrailblazeAgent(
+            browserManager = device.pageManager,
+            trailblazeLogger = loggingRule.logger,
+            trailblazeDeviceInfoProvider = probe::deviceInfo,
+            sessionProvider = sessionProvider,
+            trailblazeToolRepo = toolRepo,
+            sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+            memory = memory,
+          ).apply { workingDirectory = runYamlRequest.trailDirectory() }
+          BoundSessionAgent(
+            agent = webAgent,
+            // Self-bridges onto the Playwright thread — safe from the session's routing thread.
+            screenStateProvider = webAgent.screenStateProvider,
+            // Logging capture, NOT the LLM-facing `getScreenState()` behind `screenStateProvider`.
+            // That one settles the page and CONSUMES the browser's pending detail requests, which
+            // are reserved for the next snapshot the agent asks for — so routing a screenshot hook
+            // through it would silently spend a step's detail request on a log entry, and pay a
+            // settle per screenshot. Bridged onto the Playwright thread for the same reason the
+            // provider is.
+            captureScreenState = {
+              device.pageManager.onPlaywrightThread {
+                device.pageManager.captureScreenStateForLogging()
+              }
+            },
+            // The browser's lifecycle (slot reuse vs owned launch) belongs to the caller that
+            // provisioned it — see [DeviceConnection.WebBrowser].
+            closeStreamScreenshotSource = {},
+          )
+        }
+        is DeviceConnection.IosSimulator -> when (val iosDevice = device.connectedDevice) {
+          is IosNativeConnectedDevice -> {
+            val iosAgent = IosDriverTrailblazeAgent(
+              deviceManager = iosDevice.createDeviceManager(
+                probe.resolvedTarget?.let { TargetTemplateContext(appId = probe.appId, appIds = it.appIds) },
+              ),
+              trailblazeLogger = loggingRule.logger,
+              trailblazeDeviceInfoProvider = probe::deviceInfo,
+              sessionProvider = sessionProvider,
+              nodeSelectorMode = runYamlRequest.config.nodeSelectorMode,
+              trailblazeToolRepo = toolRepo,
+              resolvedTarget = probe.resolvedTarget,
+              appId = probe.appId,
+              sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+              memory = memory,
+            ).apply { workingDirectory = runYamlRequest.trailDirectory() }
+            BoundSessionAgent(
+              agent = iosAgent,
+              screenStateProvider = { iosDevice.screenState() },
+              captureScreenState = { runCatching { iosDevice.screenState() }.getOrNull() },
+              closeStreamScreenshotSource = {},
+            )
+          }
+          else -> {
+            val hostRunner = MaestroHostRunnerImpl(
+              trailblazeDeviceId = device.trailblazeDeviceId,
+              trailblazeLogger = loggingRule.logger,
+              sessionProvider = sessionProvider,
+              appTarget = device.targetTestApp,
+              deviceClassifiers = probe.classifiers,
+              injectedConnectedDevice = iosDevice,
+            )
+            val iosAgent = HostMaestroTrailblazeAgent(
+              maestroHostRunner = hostRunner,
+              trailblazeLogger = loggingRule.logger,
+              trailblazeDeviceInfoProvider = probe::deviceInfo,
+              sessionProvider = sessionProvider,
+              nodeSelectorMode = runYamlRequest.config.nodeSelectorMode,
+              trailblazeToolRepo = toolRepo,
+              resolvedTarget = probe.resolvedTarget,
+              appId = probe.appId,
+              sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+              memory = memory,
+            ).apply { workingDirectory = runYamlRequest.trailDirectory() }
+            BoundSessionAgent(
+              agent = iosAgent,
+              screenStateProvider = hostRunner.screenStateProvider,
+              captureScreenState = { runCatching { hostRunner.screenStateProvider() }.getOrNull() },
+              closeStreamScreenshotSource = { hostRunner.closeStreamScreenshotSource() },
+            )
+          }
+        }
+      }
+    }
+
+    val primaryBound = boundAgent(launchProbe)
+    val agent = primaryBound.agent
 
     // ---- Multi-device wiring (a selected `config.devices:` configuration) ----
     // One additional agent per named device, sharing the launch agent's logger, session, and
@@ -695,122 +799,7 @@ object TrailblazeHostYamlRunner {
     // reads the active device through it instead of binding the launch agent directly.
     val companionAgents: Map<String, BoundSessionAgent> =
       multiDeviceSession?.companions.orEmpty().mapValues { (_, companion) ->
-        when (companion) {
-          is CompanionDeviceConnection.AndroidRpc -> {
-            // This device's own reference — see the launch device's. A companion on a dual-display
-            // pair is the display most likely to be rotated mid-trail, and sharing one reference
-            // across the pair would report whichever device captured last.
-            val companionProfile = AtomicReference(queryDeviceProfile(companion.rpcClient))
-            val companionClassifiers = companionProfile.get().classifiers.ifEmpty {
-              HostProbedDeviceClassifiers.forDevice(companion.trailblazeDeviceId)
-            }
-            // THIS device's target and app id, not the launch device's: `ctx.target` follows the
-            // device a tool runs on, so the app id is probed against this device's installed
-            // packages against this device's own target. A pair whose displays run different apps
-            // resolves a different `ctx.target.resolveAppId()` on each.
-            val companionResolvedTarget = MultiDeviceTargetBinding.agentResolvedTarget(
-              target = companion.targetTestApp,
-              deviceId = companion.trailblazeDeviceId,
-            )
-            val companionAgent = HostOnDeviceRpcTrailblazeAgent(
-              rpcClient = companion.rpcClient,
-              // The template's device id feeds per-device concerns like the stream-screenshot
-              // source; every RPC dispatch already routes through the companion's own rpcClient.
-              // `targetAppName` names THIS device's target so on-device surfaces agree with the host.
-              runYamlRequestTemplate = runYamlRequest.copy(
-                trailblazeDeviceId = companion.trailblazeDeviceId,
-                targetAppName = companion.targetTestApp?.id ?: runYamlRequest.targetAppName,
-              ),
-              trailblazeLogger = loggingRule.logger,
-              trailblazeDeviceInfoProvider = {
-                val profile = companionProfile.get()
-                TrailblazeDeviceInfo(
-                  trailblazeDeviceId = companion.trailblazeDeviceId,
-                  trailblazeDriverType = driverType,
-                  widthPixels = profile.widthPixels,
-                  heightPixels = profile.heightPixels,
-                  classifiers = companionClassifiers,
-                )
-              },
-              sessionProvider = { loggingRule.session ?: error("Session not available") },
-              // The union across bound targets, like every other agent here: this set is the agent's
-              // tool SERIALIZER registry (it builds the single-step YAML each dispatch sends to the
-              // device), not an advertisement surface. Narrowing it to this device's own target would
-              // only make a cross-target tool call fail to serialize; which app a tool acts on is
-              // carried by `resolvedTarget`/`appId` below.
-              customToolClasses = customToolClasses,
-              requireAndroidAccessibilityServiceOnRewarm =
-                AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType),
-              trailblazeToolRepo = toolRepo,
-              resolvedTarget = companionResolvedTarget,
-              appId = companionResolvedTarget?.let { resolveInstalledAppId(it) },
-              sessionDirProvider = loggingRule.logsRepo::getSessionDir,
-              // Companions run the same trail file, so trail-relative paths anchor the same way.
-              workingDirectory = runYamlRequest.trailDirectory(),
-              // Shared with the primary agent so a `remember` on one device resolves on another.
-              memory = agent.memory,
-              onScreenStateObserved = { response ->
-                companionProfile.updateAndGet { it.withMeasuredSizeFrom(response) }
-              },
-            )
-            BoundSessionAgent(
-              agent = companionAgent,
-              screenStateProvider = companionAgent.screenStateProvider,
-              captureScreenState = { companionAgent.captureScreenState() },
-              closeStreamScreenshotSource = { companionAgent.closeStreamScreenshotSource() },
-            )
-          }
-          is CompanionDeviceConnection.WebBrowser -> {
-            val webDeviceInfoProvider = {
-              TrailblazeDeviceInfo(
-                trailblazeDeviceId = companion.trailblazeDeviceId,
-                trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-                // Unmeasured, and left that way deliberately. The Android companions above report
-                // their size — and keep it current — because one RPC they already make returns it;
-                // a browser's viewport has no equivalent free read: `PlaywrightPageManager` exposes
-                // only screen-state capture, and capturing here would settle the page and spend a
-                // step's pending detail request per log entry (see `captureScreenState` below). A
-                // resize tool can change the viewport mid-session, so there is no honest snapshot
-                // to take here either.
-                // Nothing web-side keys on these: recordings fold to the bare `web` classifier and
-                // orientation is meaningless for a browser window.
-                widthPixels = HostDeviceProfile.UNMEASURED,
-                heightPixels = HostDeviceProfile.UNMEASURED,
-                // The bare platform classifier (`web`) — same fold single-device web sessions get.
-                classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
-              )
-            }
-            val webAgent = PlaywrightTrailblazeAgent(
-              browserManager = companion.pageManager,
-              trailblazeLogger = loggingRule.logger,
-              trailblazeDeviceInfoProvider = webDeviceInfoProvider,
-              sessionProvider = { loggingRule.session ?: error("Session not available") },
-              trailblazeToolRepo = toolRepo,
-              sessionDirProvider = loggingRule.logsRepo::getSessionDir,
-              // Shared with the primary agent so a `remember` on one device resolves on another.
-              memory = agent.memory,
-            )
-            BoundSessionAgent(
-              agent = webAgent,
-              // Self-bridges onto the Playwright thread — safe from the session's routing thread.
-              screenStateProvider = webAgent.screenStateProvider,
-              // Logging capture, NOT the LLM-facing `getScreenState()` behind `screenStateProvider`.
-              // That one settles the page and CONSUMES the browser's pending detail requests, which
-              // are reserved for the next snapshot the agent asks for — so routing a screenshot hook
-              // through it would silently spend a step's detail request on a log entry, and pay a
-              // settle per screenshot. Bridged onto the Playwright thread for the same reason the
-              // provider is.
-              captureScreenState = {
-                companion.pageManager.onPlaywrightThread {
-                  companion.pageManager.captureScreenStateForLogging()
-                }
-              },
-              // The browser's lifecycle (slot reuse vs owned launch) belongs to the caller that
-              // provisioned it — see [CompanionDeviceConnection.WebBrowser].
-              closeStreamScreenshotSource = {},
-            )
-          }
-        }
+        boundAgent(probeDevice(companion))
       }
     val deviceBindings: SessionDeviceBindings? = if (multiDeviceSession == null) {
       null
@@ -837,7 +826,7 @@ object TrailblazeHostYamlRunner {
           multiDeviceSession.startDeviceName to boundDevice(
             deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
             name = multiDeviceSession.startDeviceName,
-            targetId = multiDeviceSession.startDeviceTarget?.id,
+            targetId = startDeviceTarget?.id,
           ),
         ).apply {
           companionAgents.forEach { (name, bound) ->
@@ -858,28 +847,29 @@ object TrailblazeHostYamlRunner {
     }
     // `HostScriptedToolLauncher.launch` skips already-registered names, so the start device's
     // runtime wins a name both targets declare.
+    val scriptedToolCompanions: List<Triple<TrailblazeHostAppTarget?, TrailblazeDriverType, () -> TrailblazeDeviceInfo>> =
+      multiDeviceSession?.companions.orEmpty().map { (name, companion) ->
+        Triple(
+          companion.targetTestApp,
+          companion.driverType,
+          companionAgents.getValue(name).agent.trailblazeDeviceInfoProvider,
+        )
+      }
     val scriptedToolLaunchPlan: List<Pair<TrailblazeHostAppTarget?, () -> TrailblazeDeviceInfo>> =
       MultiDeviceTargetBinding.scriptedToolLaunchPlan(
         startDeviceTarget = startDeviceTarget,
+        startDeviceDriver = driverType,
         startDeviceContext = loggingRule.trailblazeDeviceInfoProvider,
-        companions = multiDeviceSession?.companions.orEmpty().map { (name, companion) ->
-          companion.targetTestApp to companionAgents.getValue(name).agent.trailblazeDeviceInfoProvider
-        },
+        companions = scriptedToolCompanions,
       )
 
-    val primaryBound = BoundSessionAgent(
-      agent = agent,
-      screenStateProvider = agent.screenStateProvider,
-      captureScreenState = { agent.captureScreenState() },
-      closeStreamScreenshotSource = { agent.closeStreamScreenshotSource() },
-    )
     val agentsByName: Map<String, BoundSessionAgent> =
       if (multiDeviceSession == null) emptyMap() else companionAgents + (multiDeviceSession.startDeviceName to primaryBound)
     fun activeAgent(): BoundSessionAgent =
       deviceBindings?.let { agentsByName.getValue(it.activeName) } ?: primaryBound
     // Screen capture must follow a `switchDevice` handover, so every screen-state consumer
-    // below reads the ACTIVE device through this indirection. Identical to
-    // `agent.screenStateProvider` for single-device sessions.
+    // below reads the ACTIVE device through this indirection. Identical to the launch device's
+    // provider for single-device sessions.
     val activeScreenStateProvider: () -> ScreenState = { activeAgent().screenStateProvider() }
     // Recorded-tool dispatch must follow the handover too (a step recorded after a `switchDevice`
     // runs on the switched-to device). Both brains take the [KoogRunnableAgent] interface, so a
@@ -958,7 +948,7 @@ object TrailblazeHostYamlRunner {
       systemPromptTemplate = TrailblazeSystemPrompt.compose(),
       alwaysShownTools = MultiDeviceTargetBinding.alwaysShownTools(
         boundTargets,
-        listOfNotNull(driverType, TrailblazeDriverType.PLAYWRIGHT_NATIVE.takeIf { hasWebCompanion }),
+        companionDriverTypes + driverType,
       ),
     ).apply {
       perStepSystemPromptContextProvider = multiDevicePromptContextProvider
@@ -1000,19 +990,21 @@ object TrailblazeHostYamlRunner {
       trailblazeRunner = runner,
       runTrailblazeTool = { tools ->
         if (deviceBindings == null) {
-          agent.runTrailblazeTools(
-            tools = tools,
-            traceId = runYamlRequest.traceId,
+          primaryBound.runRecorded {
+            agent.runTrailblazeTools(
+              tools = tools,
+              traceId = runYamlRequest.traceId,
             // No eager capture: tools on this path execute ON DEVICE against the device's own
             // live tree, so a host-side screen state is only ever read by host-local dispatches
             // (subprocess MCP / `requires_host` scripted tools). Passing null defers to the
             // context's lazy capture-on-read — an eager `screenStateProvider()` here was a full
             // screenshot RPC (~0.5-1s) per recorded tool that recorded replay never consumed,
-            // the single largest per-action cost in https://github.com/block/trailblaze/issues/210.
-            screenState = null,
-            elementComparator = elementComparator,
-            screenStateProvider = agent.screenStateProvider,
-          ).result
+              // the single largest per-action cost in https://github.com/block/trailblaze/issues/210.
+              screenState = null,
+              elementComparator = elementComparator,
+              screenStateProvider = primaryBound.screenStateProvider,
+            ).result
+          }
         } else {
           // Multi-device: dispatch one tool at a time, resolving the active agent per tool, so
           // a recorded `switchDevice` reroutes the REST of the same recording to the new device
@@ -1022,13 +1014,16 @@ object TrailblazeHostYamlRunner {
           // null` for the same lazy-capture reason as the single-device branch.
           var result: TrailblazeToolResult = TrailblazeToolResult.Success()
           for (tool in tools) {
-            result = activeAgent().agent.runTrailblazeTools(
-              tools = listOf(tool),
-              traceId = runYamlRequest.traceId,
-              screenState = null,
-              elementComparator = elementComparator,
-              screenStateProvider = activeScreenStateProvider,
-            ).result
+            val active = activeAgent()
+            result = active.runRecorded {
+              active.agent.runTrailblazeTools(
+                tools = listOf(tool),
+                traceId = runYamlRequest.traceId,
+                screenState = null,
+                elementComparator = elementComparator,
+                screenStateProvider = activeScreenStateProvider,
+              ).result
+            }
             if (!result.isSuccess()) break
           }
           result
@@ -1039,7 +1034,7 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = migrationHooks?.onBefore,
       onAfterRecordedTool = migrationHooks?.onAfter,
-      trailheadReuse = TrailheadRuns.reuseEnabledFromEnv(),
+      trailheadReuse = TrailheadRuns.reuseEnabledFor(runYamlRequest.config.trailheadReuse),
       // `sharedToolBatch` is deliberately NOT wired here, unlike the other host runners in this
       // file:
       // 1. `agent.executeToolViaRpc` sends each recorded tool as its own single-tool
@@ -1059,7 +1054,7 @@ object TrailblazeHostYamlRunner {
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
       testName = runYamlRequest.testName,
-      deviceLabel = "rpc-runner:${trailblazeDeviceId.instanceId}",
+      deviceLabel = "rpc-runner:${launchDevice.trailblazeDeviceId.instanceId}",
       sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
       onProgressMessage = onProgressMessage,
       screenshotProvider = {
@@ -1072,8 +1067,11 @@ object TrailblazeHostYamlRunner {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
             // Detach from the shared H.264 tee (no-op unless TRAILBLAZE_ANDROID_STREAM_SCREENSHOT
             // engaged) so the underlying screenrecord doesn't outlive the session.
-            agent.closeStreamScreenshotSource()
+            primaryBound.closeStreamScreenshotSource()
             companionAgents.values.forEach { it.closeStreamScreenshotSource() }
+            launchBrowser?.let { browser ->
+              runCatching { browser.onPlaywrightThread { WebConsoleCapture.stop(browser.currentPage.context()) } }
+            }
           }
         }
       },
@@ -1097,6 +1095,12 @@ object TrailblazeHostYamlRunner {
           } else {
             setOf(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
           },
+          targetDriverTypes = MultiDeviceTargetBinding.devicesRunning(
+            target = planTarget,
+            startDeviceTarget = startDeviceTarget,
+            startDeviceContext = loggingRule.trailblazeDeviceInfoProvider,
+            companions = scriptedToolCompanions.map { (target, _, context) -> target to context },
+          ).mapTo(mutableSetOf()) { it().trailblazeDriverType },
           onProgressMessage = onProgressMessage,
         )?.let { subprocessRuntimes += it }
       }
@@ -1115,9 +1119,9 @@ object TrailblazeHostYamlRunner {
               testClassName = derivedTestIdentity?.className ?: "HostOnDeviceRpcRunner",
               testMethodName = derivedTestIdentity?.methodName ?: "run",
               trailblazeDeviceInfo = deviceInfo,
-              rawYaml = runYamlRequest.yaml,
+              rawYaml = trailblazeYaml.persistedTrailYaml(runYamlRequest.yaml, trailItems),
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-              trailblazeDeviceId = trailblazeDeviceId,
+              trailblazeDeviceId = launchDevice.trailblazeDeviceId,
               trailSourceUrl = runYamlRequest.trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
@@ -1125,8 +1129,8 @@ object TrailblazeHostYamlRunner {
               // the one it launched against. Per-device attribution is separate follow-up work.
               targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
                 target = startDeviceTarget,
-                trailblazeDeviceId = trailblazeDeviceId,
-                resolvedAppId = appIdForSession,
+                trailblazeDeviceId = launchDevice.trailblazeDeviceId,
+                resolvedAppId = launchProbe.appId,
               ),
               // A configuration session's recording legs are keyed by the configuration NAME —
               // the save path reads it back from this log to key the merge.
@@ -1160,6 +1164,22 @@ object TrailblazeHostYamlRunner {
       //   network call, otherwise it can miss a freshly-opened socket — see the activator's own
       //   stale-discovery resilience for the race the order avoids.
       // Errors are swallowed so a misbehaving listener can't take down the test.
+      (listOf(launchDevice) + multiDeviceSession?.companions?.values.orEmpty()).forEach { device ->
+        val iosDevice = (device as? DeviceConnection.IosSimulator)?.connectedDevice
+        (iosDevice as? IosNativeConnectedDevice)?.onSessionStart(session.sessionId)
+      }
+      // The launch browser's console is the session's `device.log`, as in a single-browser run.
+      if (launchBrowser != null && !loggingRule.logsRepo.readOnly) {
+        runCatching {
+          launchBrowser.onPlaywrightThread {
+            WebConsoleCapture.start(
+              ctx = launchBrowser.currentPage.context(),
+              sessionId = session.sessionId.value,
+              sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId),
+            )
+          }
+        }.onFailure { Console.log("Auto-start of web console capture failed: ${it.message}") }
+      }
       try {
         onSessionStarted(session.sessionId)
       } catch (t: Throwable) {
@@ -1206,7 +1226,7 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         // Active device, not the launch device: a trail that ends on a companion should end its
-        // session log with that companion's screen. Identical to `agent.screenStateProvider` for
+        // session log with that companion's screen. Identical to the launch device's provider for
         // single-device sessions.
         loggingRule.captureFinalScreenshot(session, activeScreenStateProvider)
         loggingRule.endSession(session, isSuccess = true)
@@ -1260,12 +1280,15 @@ object TrailblazeHostYamlRunner {
   }
 
   /**
-   * An already-connected companion device for a multi-device session — see
+   * An already-connected device a session binds, the launch device or a companion — see
    * [runHostAgentWithOnDeviceRpc]. The caller owns connect/warm-up; the runner builds
-   * a per-device agent around whichever transport the companion's platform uses.
+   * a per-device agent around whichever transport the device's platform uses.
    */
-  sealed interface CompanionDeviceConnection {
+  sealed interface DeviceConnection {
     val trailblazeDeviceId: TrailblazeDeviceId
+
+    /** The driver this device runs, whatever the other devices in the session run. */
+    val driverType: TrailblazeDriverType
 
     /**
      * This device's EFFECTIVE target — its own `target:` override when the configuration declares
@@ -1276,19 +1299,19 @@ object TrailblazeHostYamlRunner {
     val targetTestApp: TrailblazeHostAppTarget?
 
     /**
-     * An Android companion driven over the on-device RPC transport. The caller runs the same
-     * connect/readiness flow the launch device gets; the runner builds a
-     * [HostOnDeviceRpcTrailblazeAgent] around the client.
+     * An Android device driven over the on-device RPC transport by [driverType]. The caller runs
+     * the connect/readiness flow; the runner builds a [HostOnDeviceRpcTrailblazeAgent] around the
+     * client.
      */
     data class AndroidRpc(
       override val trailblazeDeviceId: TrailblazeDeviceId,
       val rpcClient: OnDeviceRpcClient,
+      override val driverType: TrailblazeDriverType,
       override val targetTestApp: TrailblazeHostAppTarget? = null,
-    ) : CompanionDeviceConnection
+    ) : DeviceConnection
 
     /**
-     * A web companion driven in-process against a host-owned Playwright browser (no device, no
-     * RPC). The caller owns the browser's lifecycle — reuse of a daemon slot vs a fresh launch,
+     * A browser driven in-process against a host-owned Playwright browser (no device, no RPC). The caller owns the browser's lifecycle — reuse of a daemon slot vs a fresh launch,
      * and closing an owned browser at run end; the runner builds a [PlaywrightTrailblazeAgent]
      * around the manager.
      *
@@ -1300,7 +1323,84 @@ object TrailblazeHostYamlRunner {
       override val trailblazeDeviceId: TrailblazeDeviceId,
       val pageManager: PlaywrightPageManager,
       override val targetTestApp: TrailblazeHostAppTarget? = null,
-    ) : CompanionDeviceConnection
+    ) : DeviceConnection {
+      override val driverType: TrailblazeDriverType get() = TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    }
+
+    /**
+     * An iOS simulator driven host-side by its own simulator driver (IOS_HOST or IOS_AXE, per
+     * [connectedDevice]). The caller connects it and releases its hold at run end; the runner
+     * builds the matching iOS agent around it.
+     */
+    data class IosSimulator(
+      override val trailblazeDeviceId: TrailblazeDeviceId,
+      val connectedDevice: TrailblazeConnectedDevice,
+      override val targetTestApp: TrailblazeHostAppTarget? = null,
+    ) : DeviceConnection {
+      override val driverType: TrailblazeDriverType get() = connectedDevice.trailblazeDriverType
+    }
+  }
+
+  /**
+   * What the session knows about one bound device before its agent exists. [profile] is a
+   * reference because the device's size changes under the run (`setOrientation` swaps the axes,
+   * and orientation is derived from them), so an Android agent refreshes it from every screen state
+   * it reports — one per device, so a companion rotating can't rewrite the launch device's size.
+   */
+  private class ProbedDevice(
+    val device: DeviceConnection,
+    val profile: AtomicReference<HostDeviceProfile>,
+    val classifiers: List<TrailblazeDeviceClassifier>,
+    /** This device's own target and installed app id, which a tool reads as `ctx.target`. */
+    val resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget?,
+    val appId: String?,
+  ) {
+    fun deviceInfo(): TrailblazeDeviceInfo {
+      val size = profile.get()
+      return TrailblazeDeviceInfo(
+        trailblazeDeviceId = device.trailblazeDeviceId,
+        trailblazeDriverType = device.driverType,
+        widthPixels = size.widthPixels,
+        heightPixels = size.heightPixels,
+        classifiers = classifiers,
+      )
+    }
+  }
+
+  private suspend fun probeDevice(
+    device: DeviceConnection,
+    classifierOverride: List<TrailblazeDeviceClassifier> = emptyList(),
+  ): ProbedDevice {
+    val profile = when (device) {
+      is DeviceConnection.AndroidRpc -> queryDeviceProfile(device.rpcClient)
+      is DeviceConnection.IosSimulator -> HostDeviceProfile(
+        classifiers = emptyList(),
+        widthPixels = device.connectedDevice.deviceWidth,
+        heightPixels = device.connectedDevice.deviceHeight,
+      )
+      // Unmeasured deliberately: a browser's viewport has no free read (capturing would settle the
+      // page and spend a step's pending detail request), and a resize tool can change it anyway.
+      is DeviceConnection.WebBrowser -> HostDeviceProfile(
+        classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+        widthPixels = HostDeviceProfile.UNMEASURED,
+        heightPixels = HostDeviceProfile.UNMEASURED,
+      )
+    }
+    // A browser installs no app, so its target only selects a tool scope.
+    val resolvedTarget = if (device is DeviceConnection.WebBrowser) {
+      null
+    } else {
+      MultiDeviceTargetBinding.agentResolvedTarget(device.targetTestApp, device.trailblazeDeviceId)
+    }
+    return ProbedDevice(
+      device = device,
+      profile = AtomicReference(profile),
+      classifiers = classifierOverride
+        .ifEmpty { profile.classifiers }
+        .ifEmpty { HostProbedDeviceClassifiers.forDevice(device.trailblazeDeviceId) },
+      resolvedTarget = resolvedTarget,
+      appId = resolvedTarget?.let { resolveInstalledAppId(it) },
+    )
   }
 
   /**
@@ -1315,7 +1415,10 @@ object TrailblazeHostYamlRunner {
     /** Suspend capture used by the snapshot/screenshot hooks; null when capture failed. */
     val captureScreenState: suspend () -> ScreenState?,
     val closeStreamScreenshotSource: () -> Unit,
-  )
+  ) {
+    /** A browser replays a recorded tool scripted, as a single-browser run does: its captures keep filled secrets out. */
+    fun <T> runRecorded(block: () -> T): T = if (agent is PlaywrightTrailblazeAgent) agent.runScripted(block) else block()
+  }
 
   /**
    * A resolved-and-bound multi-device configuration for one session — the runtime counterpart of
@@ -1330,17 +1433,7 @@ object TrailblazeHostYamlRunner {
     /** The configuration's first declared device name; bound to the launch device. */
     val startDeviceName: String,
     /** The non-start named devices in declaration order. Never contains [startDeviceName]. */
-    val companions: Map<String, CompanionDeviceConnection>,
-    /**
-     * The start device's EFFECTIVE target (its own `target:` override, else the session target).
-     * Null means "no target", same as a session with none.
-     *
-     * Session-level surfaces — capture app ids, force-stop, the recorded `targetAppName`, the
-     * session-start `targetAppInfo` — follow this one, because a session reports a single target
-     * and the start device is the one it launched against. Per-device attribution in reports is
-     * separate follow-up work.
-     */
-    val startDeviceTarget: TrailblazeHostAppTarget? = null,
+    val companions: Map<String, DeviceConnection>,
     /** Human-readable role descriptions from the selected configuration, including start. */
     val deviceDescriptions: Map<String, String?>,
   ) {

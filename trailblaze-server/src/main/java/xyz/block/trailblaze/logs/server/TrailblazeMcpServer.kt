@@ -118,7 +118,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.mcp.utils.McpToolArgumentValidationException
 import xyz.block.trailblaze.mcp.utils.McpToolExecutionException
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.model.ResolvedTarget
@@ -132,7 +131,6 @@ import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.resetDeclaredToolSetProblemReporting
 import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
@@ -324,7 +322,7 @@ class TrailblazeMcpServer(
     private const val SESSION_END_TIMEOUT_MS = 5_000L
 
     /**
-     * Deadline for the scripted/YAML descriptor collection inside [registerTools]. The cold
+     * Deadline for the scripted descriptor collection inside [registerTools]. The cold
      * runtime build (device discovery, in-process QuickJS launches, per-inline-tool `bun`
      * subprocess MCP handshakes) has no internal deadline of its own, and it runs inside
      * `runBlocking` — a separate job tree the per-call [MCP_TOOL_EXECUTION_TIMEOUT_MS]
@@ -548,10 +546,8 @@ class TrailblazeMcpServer(
    */
   private fun collectBoundTargetTools(driverType: TrailblazeDriverType): BoundTargetTools {
     val allClasses = mutableSetOf<KClass<out TrailblazeTool>>()
-    val allYaml = mutableSetOf<ToolName>()
     val allScripted = mutableSetOf<ToolName>()
     val keptClasses = mutableSetOf<KClass<out TrailblazeTool>>()
-    val keptYaml = mutableSetOf<ToolName>()
     val keptScripted = mutableSetOf<ToolName>()
     val targets = runCatching { mcpBridge.getAvailableAppTargets() }.getOrElse {
       reportTargetToolFailureOnce(
@@ -563,14 +559,11 @@ class TrailblazeMcpServer(
     for (target in targets) {
       runCatching {
         val classes = target.getCustomToolsForDriver(driverType)
-        val yaml = target.getCustomYamlToolNamesForDriver(driverType)
         val scripted = target.getCustomScriptedToolNamesForDriver(driverType)
         val excluded = target.getExcludedToolSurfaceForDriver(driverType)
         allClasses += classes
-        allYaml += yaml
         allScripted += scripted
         keptClasses += classes - excluded.toolClasses
-        keptYaml += yaml - excluded.yamlToolNames
         keptScripted += scripted - excluded.scriptedToolNames
       }.onFailure {
         reportTargetToolFailureOnce(
@@ -580,10 +573,9 @@ class TrailblazeMcpServer(
       }
     }
     return BoundTargetTools(
-      declared = ResolvedAgentToolbox(allClasses, allYaml, allScripted),
+      declared = ResolvedAgentToolbox(allClasses, allScripted),
       excluded = ResolvedToolExclusions(
         toolClasses = allClasses - keptClasses,
-        yamlToolNames = allYaml - keptYaml,
         scriptedToolNames = allScripted - keptScripted,
       ),
     )
@@ -786,14 +778,12 @@ class TrailblazeMcpServer(
       }
 
       // Resolve the active target's declared toolsets (e.g. the `wikipedia` trailmap's
-      // `platforms.android.tool_sets: [wikipedia_extras]`) so YAML-defined tool names that
-      // arrive via a toolset reference — not via the trailmap's `target.tools:` array — end up
-      // in the session repo's `registeredYamlToolNames`. Without this, a trailmap's pure-YAML
-      // composed tool is visible in the toolbox and the inner-agent descriptor list but the
-      // dispatch-time resolver (`TrailblazeToolRepo.toolCallToTrailblazeTool`) classifies it
-      // as an `OtherTrailblazeTool` and `StepToolSet` rejects with "Unknown tool". Mirrors
-      // the resolution the inner-agent provider does at line ~1417 — same catalog +
-      // driverType + toolSetIds inputs, just plumbed through to the dispatch repo too.
+      // `platforms.android.tool_sets: [wikipedia_extras]`) so tool names that arrive via a
+      // toolset reference — not via the trailmap's `target.tools:` array — end up registered in
+      // the session's dispatch repo. Without this, such a tool is visible in the toolbox and the
+      // inner-agent descriptor list but `StepToolSet` rejects it with "Unknown tool". Same
+      // catalog + driverType + toolSetIds inputs the inner-agent provider uses, plumbed through
+      // to the dispatch repo too.
       //
       // Workspace-authored toolset ids resolve correctly here because
       // `AppTargetDiscovery.discover()` registers the workspace-aware merged toolset map
@@ -801,15 +791,13 @@ class TrailblazeMcpServer(
       // catalog). `resolveForDriver` reads `defaultEntries()`, which merges the classpath
       // cache with that overlay — so both classpath-bundled and workspace toolsets are
       // visible at session-init time. Pinned by
-      // `target toolset resolution surfaces workspace yaml tool names for dispatch repo`
-      // in `AppTargetDiscoveryTest`.
+      // toolset resolution tests in `AppTargetDiscoveryTest`.
       val scope = target.resolveToolScopeForDriver(driverType)
       // Scripted tools the active targets declare via `platforms.<p>.tools:` / a toolset, beyond the
-      // trailmap-resolved set. Mirrors `collectCustomYamlToolNames` above so a scripted name surfaced
+      // trailmap-resolved set. So a scripted name surfaced
       // by `getAgentToolboxForDriver` / discovery is also REGISTERED for dispatch here (the dispatch
       // repo classifies it as scripted instead of "Unknown tool") AND handed to the launcher below so
-      // its bundle actually loads. Closes the inclusion-side advertise≠execute gap for scripted tools,
-      // the runtime parallel of the class/YAML `collect*` helpers.
+      // its bundle actually loads. Closes the inclusion-side advertise≠execute gap for scripted tools.
       val boundTools = collectBoundTargetTools(driverType)
       val customSurface = boundTools.declared
       // A sibling's opt-out only removes what the ACTIVE target's own scope doesn't already supply.
@@ -820,7 +808,6 @@ class TrailblazeMcpServer(
       // is not the only way a tool legitimately reaches the session; the active trailmap is.
       val siblingExcluded = ResolvedToolExclusions(
         toolClasses = boundTools.excluded.toolClasses - scope.toolClasses,
-        yamlToolNames = boundTools.excluded.yamlToolNames - scope.yamlToolNames,
         scriptedToolNames = boundTools.excluded.scriptedToolNames - scope.scriptedToolNames,
       )
       // Scripted names to launch: what the bound targets declare, minus what they opted out of.
@@ -831,7 +818,7 @@ class TrailblazeMcpServer(
       // as ADDITIONS to the whole catalog, which is the shape that over-included on device.
       val toolRepo = scope.toCustomTrailblazeTools(
         // A daemon session can have several targets bound. The OTHER targets' tools ride in here,
-        // across all three backings — dropping the YAML/scripted ones makes them dispatch as
+        // across both backings — dropping the scripted ones makes them dispatch as
         // "Unknown tool", and leaving scripted names launched-but-unregistered makes
         // `advertisedDynamic()` advertise them unconditionally.
         //
@@ -847,7 +834,6 @@ class TrailblazeMcpServer(
             // to drive the device with — no `revyl_tap`, no `revyl_type`. The non-runtime advertise
             // path already folds them in; this is the dispatch side of the same thing.
             mcpBridge.getInnerAgentBuiltInToolClasses(),
-          yamlToolNames = customSurface.yamlToolNames,
           scriptedToolNames = customSurface.scriptedToolNames,
         ),
         // Narrows what the session can DISPATCH without narrowing what it can DECODE.
@@ -929,7 +915,7 @@ class TrailblazeMcpServer(
       }
 
       // Nothing to run — don't cache an empty runtime; let the caller fall back to the static
-      // class/YAML descriptor path.
+      // class-backed descriptor path.
       if (inProcessRegistrations.isEmpty() && runtime == null) {
         clearSessionScriptToolRuntime(sessionId)
         return@withLock null
@@ -968,7 +954,7 @@ class TrailblazeMcpServer(
         true
       }
       check(rebuilt != null) { "timed out rebuilding the scripted-tool runtime" }
-      check(refreshToolsForSession(sessionId)) { "the session's scripted/YAML tools failed to register" }
+      check(refreshToolsForSession(sessionId)) { "the session's scripted tools failed to register" }
     }
   }
 
@@ -992,7 +978,7 @@ class TrailblazeMcpServer(
   /**
    * The surface a session sees when no target is bound: the driver's `always_enabled` toolsets
    * only, never the cross-target catalog — an MCP client shouldn't be offered every app's tools
-   * before it has picked one. Shared by the class and YAML paths so a target-less session can't
+   * before it has picked one. Shared by the class and scripted paths so a target-less session can't
    * end up with one backing and not the other. Pinned by `TrailblazeMcpServerTargetScopedToolsTest`.
    *
    * Deliberately NARROWER than `toSessionToolRepo(null)`, which keeps the whole driver catalog.
@@ -1006,16 +992,16 @@ class TrailblazeMcpServer(
     TrailblazeToolSetCatalog.resolveForDriver(driverType, emptyList())
 
   /**
-   * The bound target's scripted (`.ts`) + YAML-defined tool descriptors for the session's
-   * driver — the descriptor-backed surface [registerTools] registers as first-class MCP tools
-   * (three-way parity with class-backed tools on the MCP surface).
+   * The bound target's scripted (`.ts`) tool descriptors for the session's driver — the
+   * descriptor-backed surface [registerTools] registers as first-class MCP tools (parity with
+   * class-backed tools on the MCP surface).
    *
    * Scoped to the CURRENT target + bound device's driver, not all targets: names come from the
    * target's trailmap-declared toolsets ([TrailblazeToolSetCatalog.resolveForDriver]) plus its
    * per-platform `tools:` declarations, minus its `excluded_tools:` surface. Scripted descriptors
    * are read off the session's scripted-tool runtime repo (so they carry the analyzer-extracted
-   * full JSON Schema on [TrailblazeToolDescriptor.inputSchema]); YAML descriptors come from the
-   * global YAML tool registry (flat parameter schemas).
+   * full JSON Schema on [TrailblazeToolDescriptor.inputSchema]); class-backed descriptors come from the
+   * global tool registry (flat parameter schemas).
    *
    * Empty when no device is bound, no target resolves, or the driver is unknown — the
    * descriptor surface appears once `device connect` + target selection complete (the
@@ -1033,10 +1019,9 @@ class TrailblazeMcpServer(
     // `platforms.<p>.tools:`, and root `tools:` inline scripts) and subtracts `excluded_tools:`.
     val scope = target.resolveToolScopeForDriver(driverType)
     val scriptedNames = scope.scriptedToolNames
-    val yamlNames = scope.yamlToolNames
 
     val runtimeRepo = ensureSessionScriptToolRuntime(sessionContext.mcpSessionId.sessionId)?.toolRepo
-    val scriptedDescriptors = if (runtimeRepo != null && scriptedNames.isNotEmpty()) {
+    return if (runtimeRepo != null && scriptedNames.isNotEmpty()) {
       // The repo's descriptor view already applies the `surfaceToLlm` + exclusion gates for
       // dynamic registrations; the name filter scopes it down to the CURRENT target's scripted
       // names (the repo also aggregates other targets' custom names for dispatch).
@@ -1044,12 +1029,10 @@ class TrailblazeMcpServer(
     } else {
       emptyList()
     }
-    val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(yamlNames)
-    return scriptedDescriptors + yamlDescriptors
   }
 
   /**
-   * Executes a descriptor-backed (scripted / YAML-defined) tool for a first-class MCP
+   * Executes a descriptor-backed (scripted) tool for a first-class MCP
    * `tools/call`, through the SAME dispatch path recorded replay and the inner agent use:
    * schema validation via [JsScriptingCallbackArgumentValidator], name→tool resolution via
    * [TrailblazeToolRepo.toolCallToTrailblazeTool], host-local scripted dispatch via
@@ -1066,30 +1049,13 @@ class TrailblazeMcpServer(
     arguments: JsonObject,
   ): String {
     // Resolve against the live runtime repo so a mid-session target switch dispatches against
-    // the CURRENT surface, not the one captured at registration. Sessions whose target has no
-    // scripted runtime (YAML-only surface) fall back to a minimal repo carrying just this YAML
-    // name — same validator, same resolution chain.
+    // the CURRENT surface, not the one captured at registration. No runtime at call time means
+    // the device/target was torn down between registration and this call.
     val repo = ensureSessionScriptToolRuntime(sessionId)?.toolRepo
-      ?: run {
-        // No scripted runtime at call time. Only fall back to YAML resolution when the name IS
-        // a known YAML-defined tool — pushing a scripted name through the YAML fallback would
-        // surface a misleading "unknown tool" instead of the real condition (the runtime is
-        // gone, e.g. device/target torn down between registration and this call).
-        if (KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(setOf(ToolName(toolName))).isEmpty()) {
-          throw McpToolArgumentValidationException(
-            "Tool '$toolName' is a scripted tool but its runtime is not available for this " +
-              "session — connect a device and select a target, then retry.",
-          )
-        }
-        TrailblazeToolRepo(
-          TrailblazeToolSet.DynamicTrailblazeToolSet(
-            name = "McpDescriptorToolFallback",
-            toolClasses = emptySet(),
-            yamlToolNames = setOf(ToolName(toolName)),
-            scriptedToolNames = emptySet(),
-          ),
-        )
-      }
+      ?: throw McpToolArgumentValidationException(
+        "Tool '$toolName' is a scripted tool but its runtime is not available for this " +
+          "session — connect a device and select a target, then retry.",
+      )
     val argumentsJson = arguments.toString()
     JsScriptingCallbackArgumentValidator.validate(repo, toolName, argumentsJson)?.let { validationError ->
       throw McpToolArgumentValidationException(validationError)
@@ -1416,7 +1382,7 @@ class TrailblazeMcpServer(
    * between the target-change write and our refresh attempt). That's the
    * same shape every other lifecycle helper here uses — production callers
    * never branch on the outcome, except a classifier rebuild: it retries while this returns false,
-   * because the target-scoped scripted/YAML tools failed to register.
+   * because the target-scoped scripted tools failed to register.
    */
   internal fun refreshToolsForSession(sessionId: String): Boolean {
     if (sessionId in closingMcpSessionIds) return true
@@ -2607,7 +2573,7 @@ class TrailblazeMcpServer(
     registerToolsLocked(mcpServer, mcpSessionId, sessionContext)
   }
 
-  /** Returns false when the target-scoped scripted/YAML tools failed to register. */
+  /** Returns false when the target-scoped scripted tools failed to register. */
   @OptIn(InternalAgentToolsApi::class)
   private fun registerToolsLocked(
     mcpServer: Server,
@@ -2650,7 +2616,7 @@ class TrailblazeMcpServer(
     val trailblazeToolBridge = TrailblazeToolToMcpBridge(
       mcpBridge = mcpBridge,
       sessionContext = sessionContext,
-      // Class-backed and descriptor-backed (scripted/YAML) calls count as session calls, so a
+      // Class-backed and descriptor-backed (scripted) calls count as session calls, so a
       // background classifier rebuild never swaps the runtime under one.
       runAsSessionCall = { id, call -> asSessionToolCall(id.sessionId, call) },
     )
@@ -2848,16 +2814,6 @@ class TrailblazeMcpServer(
           // sessions resolve the tool list against the device that's about
           // to run.
           val activeTarget = findCurrentTarget(activeDeviceId(sessionContext))
-          // Ask the bridge for device-appropriate built-in tools.
-          // For WEB/Playwright/Revyl: returns a driver-specific replacement (no kitchen sink).
-          // For Android/iOS AND Compose: returns empty → we resolve from the active target's
-          // trailmap `tool_sets:` declarations via TrailblazeToolSetCatalog.resolveForDriver
-          // (driver-aware, target-scoped),
-          // not the catalog-wide kitchen sink. With no active target, the LLM sees only the
-          // catalog's `always_enabled` toolsets — trailmap authors opt into more by declaring tool_sets.
-          val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
-          val usingBridgeTools = bridgeToolClasses.isNotEmpty()
-
           // The one scope — same resolution the session repo and `tools/list` read, so the inner
           // agent can never be offered something the session can't dispatch.
           val scope = if (driverType != null && activeTarget != null) {
@@ -2872,27 +2828,11 @@ class TrailblazeMcpServer(
           // (target, driver), so re-resolving repeated the catalog merge on every request.
           val classDescriptors = resolveTargetScopedToolClasses(sessionContext, preResolvedScope = scope)
             .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-          // Yaml-defined tools only ride along on the fallback (Android/iOS) path — the
-          // bridge path is a complete driver-specific replacement (e.g. Playwright), and
-          // driver-compatibility filtering for yaml tools lives in the catalog, not here.
-          val yamlDescriptors = if (usingBridgeTools) {
-            emptyList()
-          } else {
-            // The scope already unions the trailmap and custom YAML names and subtracts
-            // `excluded_tools:`. With no target there is no scope, so fall back to the same
-            // always-enabled surface the class path uses — otherwise a target-less session keeps
-            // its always-enabled tool CLASSES but loses the YAML ones (`eraseText`), which is a
-            // split neither the comment above nor `tools/list` describes.
-            KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(
-              scope?.yamlToolNames
-                ?: driverType?.let { alwaysEnabledSurfaceForDriver(it).yamlToolNames }.orEmpty(),
-            )
-          }
-          val allTools = classDescriptors + yamlDescriptors
+          val allTools = classDescriptors
           Console.log(
             "[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, " +
               "target=${activeTarget?.id}, trailmapToolSets=$trailmapToolSets, " +
-              "class=${classDescriptors.size}, yaml=${yamlDescriptors.size})"
+              "class=${classDescriptors.size})"
           )
           allTools
           }
@@ -2992,7 +2932,7 @@ class TrailblazeMcpServer(
     )
     newlyRegisteredToolNames.addAll(targetScopedToolClasses.map { it.toolName().toolName })
 
-    // Scripted (.ts) + YAML-defined tools become first-class MCP tools too — registered from
+    // Scripted (.ts) tools become first-class MCP tools too — registered from
     // their TrailblazeToolDescriptor with real JSON Schemas, so an external MCP client
     // (Claude Code, Codex, Goose) can call them directly without going through the `step`
     // tool's inner agent. Scoped to the CURRENT target + bound driver (same scoping model as
@@ -3034,13 +2974,13 @@ class TrailblazeMcpServer(
         )
         newlyRegisteredToolNames.addAll(descriptorTools.map { it.name })
         Console.log(
-          "[MCP] Registered ${descriptorTools.size} target-scoped scripted/YAML MCP tools: " +
+          "[MCP] Registered ${descriptorTools.size} target-scoped scripted MCP tools: " +
             descriptorTools.joinToString { it.name },
         )
       }
     } catch (e: Exception) {
       Console.error(
-        "[MCP] Failed to register target-scoped scripted/YAML MCP tools for session " +
+        "[MCP] Failed to register target-scoped scripted MCP tools for session " +
           "${mcpSessionId.sessionId}: ${e.message} — continuing with the class-backed surface",
       )
       descriptorToolsRegistered = false
@@ -3138,7 +3078,7 @@ class TrailblazeMcpServer(
         Console.log("[MCP] Auto-connected to ${device.instanceId} (${device.platform.displayName})")
         // Same chain as the explicit connect tool (DeviceManagerToolSet.onDeviceConnected):
         // build the scripted-tool runtime for the newly-bound device, then re-register so the
-        // target-scoped TrailblazeTools AND the descriptor-backed scripted/YAML tools for it
+        // target-scoped TrailblazeTools AND the descriptor-backed scripted tools for it
         // are advertised. For HTTP sessions this fires tools/list_changed; for the stdio path
         // (auto-connect runs before the transport goes live) it's a plain registry update the
         // client sees on its first tools/list.

@@ -103,7 +103,7 @@ data class ReadBarcodeFromScreenTrailblazeTool(
           } catch (chromeUnavailable: Exception) {
             // The crop is an optimization, not a requirement, and the two captures are
             // independent: `AxeScreenState.viewHierarchy` throws outright when `axe describe-ui`
-            // produced no usable tree, while `screenshotBytes` runs its own `axe screenshot`. So
+            // produced no usable tree, while `screenshotBytes` runs its own screenshot. So
             // a transient metadata failure must not fail a decode the screenshot alone can serve
             // — the cost of skipping the crop is a decode attempt that may hit chrome favicons,
             // which the tile escalation already handles.

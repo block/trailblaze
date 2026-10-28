@@ -247,11 +247,13 @@ class AccessibilityTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
     tapRoute: TapRouteOverride?,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val action = AccessibilityAction.TapOnElement(
       nodeSelector = nodeSelector,
       longPress = longPress,
+      timeoutMs = timeoutMs ?: DEFAULT_ELEMENT_TIMEOUT_MS,
       tapRoute = tapRoute,
     )
 

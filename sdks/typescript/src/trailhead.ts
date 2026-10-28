@@ -14,26 +14,6 @@ import type { TrailblazeClient } from "./client.js";
 /** How the trail that just ended finished. */
 export type TrailOutcome = "passed" | "failed" | "cancelled" | "setup-failed";
 
-/** One thing a tool reported through `ctx.trailhead.note(...)`. */
-export interface TrailheadNote {
-  /**
-   * State this run changed that cleanup can't undo. Any such note makes the run non-reusable: the
-   * framework stores `reusable: false` whatever `teardown` returns, naming the note.
-   */
-  invalidates?: string;
-  /** Something cleanup should delete. */
-  created?: { kind: string; id: string };
-  /** The tool that wrote the note. Filled in by the framework. */
-  tool: string;
-  /** Epoch milliseconds. Filled in by the framework. */
-  timestamp: number;
-}
-
-/** What a tool passes to `ctx.trailhead.note(...)`. */
-export type TrailheadNoteInput =
-  | { invalidates: string }
-  | { created: { kind: string; id: string } };
-
 /**
  * Match vocabulary for [TrailEvents.query]: the survey vocabulary minus predicates, because the
  * match runs in Kotlin and a function can't cross over.
@@ -74,8 +54,6 @@ export interface TrailEvents {
 export interface TrailRun {
   /** `"setup-failed"`: the trailhead threw, so no trail step ran. */
   outcome: TrailOutcome;
-  /** What tools reported through `ctx.trailhead.note(...)`, in call order. */
-  notes: TrailheadNote[];
   events: TrailEvents;
 }
 
@@ -110,18 +88,18 @@ export interface PreviousRun {
   reason: string;
   state?: JsonObject;
   /**
+   * The waypoint the screen matched as that run's trailhead returned: where its setup left the
+   * app. Absent when nothing checked (an on-device run). A reused setup must land on it again
+   * when this trailhead returns, or the trailhead fails.
+   */
+  trailheadEndWaypoint?: string;
+  /**
    * Reuse that setup instead of doing a full one. Logs the attempt, then runs [catchUp] (whatever
    * the last run left to finish, such as clearing a cart) and resolves with its result. A throw
    * from [catchUp] fails the trailhead, logged as a failed reuse of [sessionId]'s setup. Without
    * a call the log says "full setup". Call it at most once.
    */
   reuse<T>(reason: string, catchUp?: () => Promise<T>): Promise<T | undefined>;
-}
-
-/** `ctx.trailhead`. */
-export interface TrailheadContext {
-  /** Any tool. Reports state the trailhead's `teardown` must know about. */
-  note(note: TrailheadNoteInput): void;
 }
 
 /** `trailhead.teardown` on a typed tool spec. */
@@ -131,7 +109,7 @@ export type TeardownHandler<TInput, TContext> = (
   trailRun: TrailRun,
 ) => Promise<TeardownResult>;
 
-/** `_meta.trailblaze.trailhead` on a tool result: what the handler reported through `ctx.trailhead`. */
+/** `_meta.trailblaze.trailhead` on a tool result: the trailhead handler's reuse report. */
 export const META_KEY_TRAILHEAD = "trailhead";
 
 /** Reserved host functions behind [TrailEvents]. Mirrors `TrailEventsHostFunctions.kt`. */
@@ -139,42 +117,32 @@ export const HOST_FUNCTION_TRAIL_EVENTS_LIST = "trailblaze.trailEvents.list";
 export const HOST_FUNCTION_TRAIL_EVENTS_QUERY = "trailblaze.trailEvents.query";
 
 /**
- * Marks a thrown value with the notes its tool wrote before throwing, so a tool that created
- * something and then failed still reports it. Read by the in-process dispatcher (`QuickJsToolHost`).
+ * Marks a thrown value with the reuse report of the handler that threw, so a reuse that failed is
+ * still recorded as one. Read by the in-process dispatcher (`QuickJsToolHost`).
  */
 export const TRAILHEAD_REPORT_ON_ERROR: unique symbol = Symbol.for("trailblaze.trailhead.report");
 
 /** What a handler reported, as carried on `_meta.trailblaze.trailhead`. */
 export interface TrailheadReport {
-  notes?: TrailheadNoteInput[];
   /** Set once `previousRun.reuse` is called. `ok` is absent while the catch-up is still running. */
   reuse?: { reason: string; startedAtMs: number; ok?: boolean; error?: string };
 }
 
-/** `ctx.trailhead` and `ctx.previousRun` for one invocation, plus the report they accumulated. */
+/** `ctx.previousRun` for one invocation, plus the report its `reuse` call left. */
 export interface TrailheadRecorder {
-  context: TrailheadContext;
   previousRun: PreviousRun | null;
   /** `undefined` when nothing was reported. */
   report(): TrailheadReport | undefined;
 }
 
 /**
- * Build `ctx.trailhead` and `ctx.previousRun` for one invocation. [previousRun] is what the
- * host put on the envelope; everything the handler reports is buffered and flushed onto the
- * result's `_meta`.
+ * Build `ctx.previousRun` for one invocation. [previousRun] is what the host put on the envelope;
+ * the handler's reuse report is buffered and flushed onto the result's `_meta`.
  */
 export function createTrailheadRecorder(previousRun: unknown): TrailheadRecorder {
-  const notes: TrailheadNoteInput[] = [];
   let reuse: TrailheadReport["reuse"];
-  const context: TrailheadContext = {
-    note(note: TrailheadNoteInput) {
-      notes.push(validateNote(note));
-    },
-  };
   const wire = parsePreviousRun(previousRun);
   return {
-    context,
     previousRun: wire === null ? null : {
       ...wire,
       async reuse<T>(reason: string, catchUp?: () => Promise<T>): Promise<T | undefined> {
@@ -196,33 +164,9 @@ export function createTrailheadRecorder(previousRun: unknown): TrailheadRecorder
       },
     },
     report() {
-      if (notes.length === 0 && reuse === undefined) return undefined;
-      const report: TrailheadReport = {};
-      if (notes.length > 0) report.notes = notes.slice();
-      if (reuse !== undefined) report.reuse = { ...reuse };
-      return report;
+      return reuse === undefined ? undefined : { reuse: { ...reuse } };
     },
   };
-}
-
-function validateNote(note: TrailheadNoteInput): TrailheadNoteInput {
-  const raw = note as { invalidates?: unknown; created?: { kind?: unknown; id?: unknown } } | null;
-  if (raw != null && typeof raw.invalidates === "string" && raw.invalidates.length > 0 && raw.created === undefined) {
-    return { invalidates: raw.invalidates };
-  }
-  if (
-    raw != null &&
-    raw.invalidates === undefined &&
-    raw.created != null &&
-    typeof raw.created.kind === "string" &&
-    typeof raw.created.id === "string"
-  ) {
-    return { created: { kind: raw.created.kind, id: raw.created.id } };
-  }
-  throw new TypeError(
-    "ctx.trailhead.note(note): pass exactly one of { invalidates: string } or " +
-      "{ created: { kind: string, id: string } }",
-  );
 }
 
 function parsePreviousRun(value: unknown): Omit<PreviousRun, "reuse"> | null {
@@ -232,9 +176,13 @@ function parsePreviousRun(value: unknown): Omit<PreviousRun, "reuse"> | null {
   const state = v.state != null && typeof v.state === "object" && !Array.isArray(v.state)
     ? (v.state as JsonObject)
     : undefined;
-  return state === undefined
-    ? { sessionId: v.sessionId, reason: v.reason }
-    : { sessionId: v.sessionId, reason: v.reason, state };
+  const trailheadEndWaypoint = typeof v.trailheadEndWaypoint === "string" ? v.trailheadEndWaypoint : undefined;
+  return {
+    sessionId: v.sessionId,
+    reason: v.reason,
+    ...(state === undefined ? {} : { state }),
+    ...(trailheadEndWaypoint === undefined ? {} : { trailheadEndWaypoint }),
+  };
 }
 
 /**
@@ -267,7 +215,7 @@ export function attachTrailheadReportToResult(result: unknown, report: Trailhead
 }
 
 /**
- * Mark [error] with [report] so the dispatcher can keep the notes of a tool that threw, and return
+ * Mark [error] with [report] so the dispatcher can keep the reuse report of a handler that threw, and return
  * what to rethrow. A value that can't carry the report (a thrown string, a frozen error) comes back
  * as an `Error` with the same message that carries it, with the original as `cause`.
  */
@@ -289,16 +237,15 @@ export function markErrorWithTrailheadReport(error: unknown, report: TrailheadRe
 }
 
 /**
- * Build [TrailRun] from the wire payload the host sends (`{ outcome, notes }`). `events` calls
+ * Build [TrailRun] from the wire payload the host sends (`{ outcome }`). `events` calls
  * back into Kotlin through the reserved host functions.
  */
 export function createTrailRun(wire: unknown, client: TrailblazeClient): TrailRun {
-  const w = (wire ?? {}) as { outcome?: unknown; notes?: unknown };
+  const w = (wire ?? {}) as { outcome?: unknown };
   const outcome = (["passed", "failed", "cancelled", "setup-failed"] as const).find((o) => o === w.outcome);
   if (outcome === undefined) {
     throw new Error(`teardown: the host sent an unknown trail outcome: ${String(w.outcome)}`);
   }
-  const notes = Array.isArray(w.notes) ? (w.notes as TrailheadNote[]) : [];
   const host = client.host as unknown as Record<string, (args: unknown) => Promise<unknown>>;
   const events: TrailEvents = {
     async list() {
@@ -312,7 +259,7 @@ export function createTrailRun(wire: unknown, client: TrailblazeClient): TrailRu
       return (await host[HOST_FUNCTION_TRAIL_EVENTS_QUERY](args)) as SessionEvent[];
     },
   };
-  return { outcome, notes, events };
+  return { outcome, events };
 }
 
 /** A `RegExp` crosses to Kotlin as `{ "$regex": source, "$flags": flags }`. [caller] names the API in errors. */

@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.logs.server
 
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import org.junit.Rule
 import org.junit.Test
@@ -80,29 +79,24 @@ class TrailblazeMcpServerTargetScopedToolsTest {
   }
 
   @Test
-  fun `driver bound with no target resolves the catalog always-enabled surface for that driver`() =
-    YamlDefinedToolFixture.inCoreInteraction {
-      val bridge = ToolSurfaceBridge(driverType = androidDriver)
-      val server = newServer(bridge)
+  fun `driver bound with no target resolves the catalog always-enabled surface for that driver`() {
+    val bridge = ToolSurfaceBridge(driverType = androidDriver)
+    val server = newServer(bridge)
 
-      val resolved = server.resolveTargetScopedToolClasses(newSessionContext())
+    val resolved = server.resolveTargetScopedToolClasses(newSessionContext())
 
-      // Both backings must move together here. A refactor once left the class path with its
-      // no-target fallback while the YAML path dropped to empty, so a target-less session kept
-      // `tap` but silently lost its YAML-defined tools — a split nothing in `tools/list`
-      // describes. No built-in toolset carries a YAML-defined tool, so the fixture supplies one.
-      val expected = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList())
-      assertTrue(
-        expected.toolClasses.isNotEmpty() && expected.yamlToolNames.isNotEmpty(),
-        "Catalog sanity: the always-enabled Android surface must carry both backings",
-      )
-      assertEquals(
-        expected.toolClasses,
-        resolved,
-        "With a driver but no target, only the catalog's always-enabled toolsets for " +
-          "that driver are advertised — NOT the full cross-target catalog.",
-      )
-    }
+    val expected = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList())
+    assertTrue(
+      expected.toolClasses.isNotEmpty(),
+      "Catalog sanity: the always-enabled Android surface must carry class-backed tools",
+    )
+    assertEquals(
+      expected.toolClasses,
+      resolved,
+      "With a driver but no target, only the catalog's always-enabled toolsets for " +
+        "that driver are advertised — NOT the full cross-target catalog.",
+    )
+  }
 
   @Test
   fun `a bound target that declares no toolsets advertises the whole driver catalog`() {

@@ -144,7 +144,6 @@ const SPEC_RUNTIMES = ["inProcess", "subprocess"];
 const RECOGNIZED_SPEC_FIELDS = new Set([
   "description",
   "supportedPlatforms",
-  "requiresContext", // deprecated and ignored; still accepted so older specs compile
   "requiresHost",
   "supportedDrivers",
   "requiredClassifiers",
@@ -153,6 +152,23 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "sensitiveArgNames",
   "trailhead",
   "runtime",
+]);
+
+/**
+ * The [RECOGNIZED_SPEC_FIELDS] that restrict where or how a tool runs. Unlike `description` or
+ * `trailhead`, losing one of these widens the tool, so [unreadableSpecGates] reports an unreadable
+ * one instead of skipping it. `runtime` is absent because [specRuntimeError] already rejects it.
+ * [specRequiredClassifiersError] rejects an unreadable `requiredClassifiers` value too; it is listed
+ * here for the computed keys and getters that check doesn't see.
+ */
+const SPEC_GATE_FIELDS = new Set([
+  "supportedPlatforms",
+  "supportedDrivers",
+  "requiredClassifiers",
+  "requiresHost",
+  "surfaceToLlm",
+  "isRecordable",
+  "sensitiveArgNames",
 ]);
 
 /**
@@ -380,15 +396,17 @@ for (const arg of args) {
       // today:
       //
       //   { supportedPlatforms: ["web"], requiresHost: true }       // OK — literals
-      //   { ...sharedDefaults, requiresHost: true }                 // partial — spread skipped
-      //   { supportedPlatforms: PLATFORMS_CONST }                   // skipped — identifier
+      //   { ...sharedDefaults, requiresHost: true }                 // partial — spread flagged
+      //   { supportedPlatforms: PLATFORMS_CONST }                   // skipped + flagged — identifier
+      //   { description: DESCRIPTION }                              // skipped — not a gate
       //
       // Resolving spread expressions and identifier references is deferred
       // (#3352's "factory helper" path). When the analyzer sees an unrecognized
       // expression shape for a value, it skips that field — the runtime falls
       // back to the framework default (false for booleans, empty for the
-      // platform/driver gates). Authors who need a captured value can inline the
-      // literal at the call site for now.
+      // platform/driver gates). A skipped GATE field or a spread also sets
+      // `uncapturedSpec` (see [unreadableSpecGates]), because that default widens
+      // the tool; the Kotlin layer fails a descriptor-less tool on it.
       //
       // **Why "skip" rather than "fail".** A future PR will resolve helper
       // function returns through the TypeScript Program, and "fail on unknown
@@ -402,7 +420,13 @@ for (const arg of args) {
       // reference the analyzer can't read (`const SPEC = {...}` / a factory call), so the WHOLE
       // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
       // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
-      const uncapturedSpec = !capturedAnySpecField(spec) && specArgIsUncapturedReference(init);
+      // The same hazard inside an inline literal: a gate field written as a reference
+      // (`supportedPlatforms: ANDROID_ONLY`), a shorthand (`{ supportedPlatforms }`) or hidden in a
+      // spread (`{ ...SPEC }`) is dropped while the readable fields are kept, so the tool still
+      // registers — just without that gate. Name what was unreadable so the error can point at it.
+      const uncapturedSpecFields = unreadableSpecGates(init);
+      const uncapturedSpec =
+        uncapturedSpecFields.length > 0 || (!capturedAnySpecField(spec) && specArgIsUncapturedReference(init));
       const runtimeError = specRuntimeError(init) ?? specRequiredClassifiersError(init);
       if (runtimeError) {
         errors.push({ file: absFile, name, message: `tool '${name}': ${runtimeError}` });
@@ -464,9 +488,11 @@ for (const arg of args) {
         // shape stable for existing consumers and lets the Kotlin decoder
         // treat absent-spec the same way it treats no-such-field.
         ...(spec ? { spec } : {}),
-        // Emitted only in the dangerous "spec ref, nothing captured" case (see above) so existing
-        // consumers that don't read it see an unchanged envelope.
+        // Emitted only when a gate may have been dropped (see above) so existing consumers that
+        // don't read it see an unchanged envelope. `uncapturedSpecFields` is empty when the whole
+        // spec is a reference, and otherwise names each unreadable gate field or `...spread`.
         ...(uncapturedSpec ? { uncapturedSpec: true } : {}),
+        ...(uncapturedSpecFields.length > 0 ? { uncapturedSpecFields } : {}),
       });
     }
   }
@@ -745,7 +771,8 @@ function describeGeneratorError(e) {
  *     case.
  *   - An object carrying each recognized field whose value at the call site is
  *     an inline JSON-compatible literal. Spread expressions, computed property
- *     names, and non-literal values are silently skipped.
+ *     names, and non-literal values are skipped here; [unreadableSpecGates]
+ *     reports the skipped ones that could have carried a gate.
  *
  * `trailhead` is the marker that makes a tool a trailhead, so any inline object there counts,
  * even `{}` or one holding only a `teardown` function, and only its string `to` is kept. For
@@ -761,8 +788,8 @@ function extractToolSpec(callExpression, isTrailhead = false) {
   const specLiteral = arg0 && ts.isObjectLiteralExpression(arg0) ? arg0 : null;
   for (const prop of specLiteral?.properties ?? []) {
     // Spread elements (`...sharedDefaults`) — skip. A future PR can resolve the
-    // spread source through the TypeScript Program; today we accept the
-    // partial-extraction outcome to keep the helper-function pattern working.
+    // spread source through the TypeScript Program; until then
+    // [unreadableSpecGates] flags the spread.
     if (!ts.isPropertyAssignment(prop)) continue;
     // Computed property names (`{ [key]: value }`) — skip. The recognized field
     // set is identifier-based; computed keys can't match.
@@ -879,6 +906,43 @@ function specRequiredClassifiersError(callExpression) {
     return `spec \`requiredClassifiers\` must be an inline array of string literals (e.g. \`["rig"]\`); the analyzer can't read \`${prop.initializer.getText()}\`, and dropping it would load the tool on every device.`;
   }
   return null;
+}
+
+/**
+ * The gate fields of an inline spec literal that the analyzer can't read (a reference, shorthand,
+ * getter or method, or a computed key naming the gate), plus a `...expr` entry for each spread and
+ * a `[expr]` entry for each computed key that can't be evaluated (either may carry any gate). Empty
+ * when arg 0 isn't an object literal or every gate is an inline literal. Dropping a gate silently widens the tool (every platform and driver, surfaced to
+ * the LLM, run on-device), so these are flagged rather than skipped like other unreadable fields.
+ */
+function unreadableSpecGates(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return [];
+  const unreadable = [];
+  for (const prop of arg0.properties) {
+    if (ts.isSpreadAssignment(prop)) {
+      unreadable.push(`...${prop.expression.getText()}`);
+      continue;
+    }
+    // [extractToolSpec] never reads a computed key, so flag one that names a gate or might.
+    // A computed key that evaluates to a gate is reported under the gate's own name, so a
+    // descriptor that sets that gate can settle it.
+    if (ts.isComputedPropertyName(prop.name)) {
+      const key = literalValueOf(prop.name.expression);
+      if (typeof key !== "string") unreadable.push(`[${prop.name.expression.getText()}]`);
+      else if (SPEC_GATE_FIELDS.has(key)) unreadable.push(key);
+      continue;
+    }
+    // Numeric and private names can't name a gate.
+    if (!ts.isIdentifier(prop.name) && !ts.isStringLiteral(prop.name)) continue;
+    const fieldName = prop.name.text;
+    if (!SPEC_GATE_FIELDS.has(fieldName)) continue;
+    // A shorthand holds only a reference, and a getter or method has no initializer to read.
+    if (!ts.isPropertyAssignment(prop) || literalValueOf(prop.initializer) === undefined) {
+      unreadable.push(fieldName);
+    }
+  }
+  return unreadable;
 }
 
 /**

@@ -30,7 +30,7 @@ A legacy scripted tool is a `(yaml, ts)` pair co-located inside one trailmap dir
 trails/config/
 └── trailmaps/
     └── myapp/
-        ├── trailmap.yaml                     # references the descriptor by name
+        ├── trailmap.yaml                     # no entry needed for the tool
         └── tools/
             ├── myapp_login.yaml              # the descriptor (name, schema)
             └── myapp_login.ts                # the implementation (TS source)
@@ -38,10 +38,12 @@ trails/config/
 
 Trailblaze treats them as one tool:
 
-1. **`trailmap.yaml`** lists the descriptor under `target.tools:` by **bare tool name**.
-2. **The descriptor YAML** points at the `.ts` source, declares the tool's `name:`, and
+1. **The descriptor YAML** points at the `.ts` source, declares the tool's `name:`, and
    defines its parameter contract via `inputSchema:`.
-3. **The `.ts` source** exports a function under the same name as the descriptor.
+2. **The `.ts` source** exports a function under the same name as the descriptor.
+
+`trailmap.yaml` doesn't need to list the tool: every descriptor in the trailmap's `tools/`
+folder is on its target; `platforms.<p>.excluded_tools:` keeps one off that platform.
 
 The descriptor's `script:` field is resolved **relative to the directory containing the
 descriptor YAML** (see
@@ -154,8 +156,8 @@ target:
   platforms:
     android:
       app_ids: [com.example.myapp]
-  tools:
-    - myapp_login                 # bare tool name (matches descriptor `name:`)
+      # No tools list: myapp_login is on the target because its descriptor is in tools/.
+      # To keep it off, add `excluded_tools: [myapp_login]` here.
 ```
 
 A duplicate `name:` across two descriptors in the same trailmap is a load-time error.
@@ -194,8 +196,8 @@ trailblaze tool myapp_login \
 ## Composing other tools via `client.tools.<name>(args)`
 
 The `client` argument exposes typed access to every tool the trailmap can dispatch — the
-trailmap's `platforms.<p>.tool_sets:` Kotlin primitives, sibling scripted tools listed
-on `target.tools:`, and scripted tools inherited from `dependencies:` via their
+trailmap's `platforms.<p>.tool_sets:` Kotlin primitives, sibling scripted tools in the
+trailmap's own `tools/` folder, and scripted tools inherited from `dependencies:` via their
 `exports:` field.
 
 That list is the **typed** surface. Dispatch resolves against the wider global registry, so

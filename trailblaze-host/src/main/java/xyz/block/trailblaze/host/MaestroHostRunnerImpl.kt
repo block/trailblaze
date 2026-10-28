@@ -5,7 +5,6 @@ import kotlinx.coroutines.runBlocking
 import maestro.Maestro
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
-import maestro.orchestra.Orchestra
 import maestro.orchestra.util.Env.withDefaultEnvVars
 import maestro.orchestra.util.Env.withEnv
 import maestro.orchestra.util.Env.withInjectedShellEnvVars
@@ -87,6 +86,8 @@ class MaestroHostRunnerImpl(
   /** Sink for the one-per-run dual-tree failure warning. Seam for tests, which cannot read
    * [Console] reliably — it caches `System.out` at class init. */
   private val migrationCaptureLog: (String) -> Unit = { Console.error(it) },
+  /** A device the caller already connected and owns; null looks one up (taking a new hold). */
+  private val injectedConnectedDevice: TrailblazeConnectedDevice? = null,
 ) : MaestroHostRunner {
 
   init {
@@ -95,6 +96,7 @@ class MaestroHostRunnerImpl(
     }
   }
   val connectedDevice: TrailblazeConnectedDevice by lazy {
+    injectedConnectedDevice?.let { return@lazy it }
     val hostDriverType = when (trailblazeDeviceId.trailblazeDevicePlatform) {
       TrailblazeDevicePlatform.ANDROID -> error(
         "Android does not use MaestroHostRunnerImpl — use on-device drivers via RPC instead"
@@ -456,19 +458,7 @@ class MaestroHostRunnerImpl(
         trailblazeLogger = trailblazeLogger,
         sessionProvider = sessionProvider,
         screenStateProvider = screenStateProvider,
-        orchestraFactory = { callbacks ->
-          // Create Orchestra executor with standardized callbacks
-          object : OrchestraRunner.OrchestraExecutor {
-            override suspend fun execute(commands: List<MaestroCommand>): Boolean = Orchestra(
-              maestro = Maestro(batchDriver),
-              onCommandComplete = callbacks.onCommandComplete,
-              onCommandFailed = { index, command, throwable ->
-                callbacks.onCommandFailed(index, command, throwable)
-                Orchestra.ErrorResolution.FAIL
-              },
-            ).runFlow(commands).success
-          }
-        },
+        orchestraFactory = { callbacks -> HostOrchestraExecutor(batchDriver, callbacks) },
       )
     }
   }

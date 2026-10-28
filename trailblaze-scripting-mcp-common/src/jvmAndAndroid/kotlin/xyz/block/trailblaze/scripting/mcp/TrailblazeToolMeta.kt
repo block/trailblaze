@@ -53,8 +53,6 @@ data class TrailblazeToolMeta(
   val requiredClassifiers: RequiredDeviceClassifiers = RequiredDeviceClassifiers.None,
   /** Null = global registry (pull-based). Non-null = pushed into that toolset at registration. */
   val toolset: String? = null,
-  /** Deprecated and ignored: every handler gets `ctx`. Still parsed so older specs load. */
-  val requiresContext: Boolean = false,
   /**
    * Reserved runtime capability: this hidden MCP tool drains process-local opaque session
    * resources immediately before the host closes the subprocess. It is never registered in the
@@ -77,7 +75,7 @@ data class TrailblazeToolMeta(
    * applies; `false` when any of the filter rules rejects it.
    *
    * Implements the scope devlog's § Capability filtering order: drivers → platforms →
-   * requiresHost → requiredClassifiers. `requiresContext` is deprecated and ignored.
+   * requiresHost → requiredClassifiers.
    *
    * On-device callers pass `preferHostAgent = false`, which is what makes
    * `trailblaze/requiresHost: true` tools skip at registration without any extra branching
@@ -140,7 +138,6 @@ data class TrailblazeToolMeta(
     private const val KEY_SUPPORTED_DRIVERS = "${PREFIX}supportedDrivers"
     private const val KEY_SUPPORTED_PLATFORMS = "${PREFIX}supportedPlatforms"
     private const val KEY_TOOLSET = "${PREFIX}toolset"
-    private const val KEY_REQUIRES_CONTEXT = "${PREFIX}requiresContext"
     private const val KEY_SESSION_RESOURCE_FINALIZER = "${PREFIX}sessionResourceFinalizer"
 
     /**
@@ -168,7 +165,6 @@ data class TrailblazeToolMeta(
       // specially equipped devices on every device. See [RequiredDeviceClassifiers].
       requiredClassifiers = RequiredDeviceClassifiers.fromMeta(meta),
       toolset = meta.readString(KEY_TOOLSET),
-      requiresContext = meta.readBoolean(KEY_REQUIRES_CONTEXT, default = false),
       isSessionResourceFinalizer = meta.readBoolean(KEY_SESSION_RESOURCE_FINALIZER, default = false),
       // NOT `readStringList` — that treats a malformed shape as absent, which for this key means
       // "mask nothing" and silently leaks the credential. See [DeclaredSensitiveArgs].

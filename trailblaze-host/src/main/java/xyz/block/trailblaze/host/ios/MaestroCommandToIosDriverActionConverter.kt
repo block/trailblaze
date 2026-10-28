@@ -132,6 +132,13 @@ object MaestroCommandToIosDriverActionConverter {
     if (parts.size != 2) error("Invalid point format: ${command.point}")
     val xStr = parts[0]
     val yStr = parts[1]
+    val repeat = (command.repeat?.repeat ?: 1).coerceAtLeast(1)
+    if (command.longPress == true && repeat > 1) {
+      Console.log(
+        "[IosDriverConverter] TapOnPointV2Command with longPress=true and repeat=$repeat — " +
+          "AXe has no repeated long-press, performing a single long press.",
+      )
+    }
     return if (xStr.endsWith("%") && yStr.endsWith("%")) {
       val xPct = xStr.removeSuffix("%").toDouble()
       val yPct = yStr.removeSuffix("%").toDouble()
@@ -145,11 +152,11 @@ object MaestroCommandToIosDriverActionConverter {
             "Switch to absolute coordinates if a real long-press is required.",
         )
       }
-      IosDriverAction.TapRelative(xPct, yPct)
+      IosDriverAction.TapRelative(xPct, yPct, repeat = if (command.longPress == true) 1 else repeat)
     } else {
       val x = xStr.toDouble().toInt()
       val y = yStr.toDouble().toInt()
-      if (command.longPress == true) IosDriverAction.LongPress(x, y) else IosDriverAction.Tap(x, y)
+      if (command.longPress == true) IosDriverAction.LongPress(x, y) else IosDriverAction.Tap(x, y, repeat)
     }
   }
 

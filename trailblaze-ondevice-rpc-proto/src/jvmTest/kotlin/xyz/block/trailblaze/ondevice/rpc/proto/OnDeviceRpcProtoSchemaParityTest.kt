@@ -131,7 +131,12 @@ class OnDeviceRpcProtoSchemaParityTest {
         "maxDimension2" to setOf("max_dimension_2"),
       ),
     )
-    assertParity(ModelTrailblazeConfig.serializer(), TrailblazeConfig::class.java)
+    assertParity(
+      ModelTrailblazeConfig.serializer(),
+      TrailblazeConfig::class.java,
+      // Read by host runners only; an on-device runner takes reuse from its instrumentation argument.
+      ignoredModelFields = setOf("trailheadReuse"),
+    )
     assertParity(ModelReferrer.serializer(), Referrer::class.java)
     assertParity(ModelExecutionStatus.serializer(), ExecutionStatus::class.java)
     assertParity(

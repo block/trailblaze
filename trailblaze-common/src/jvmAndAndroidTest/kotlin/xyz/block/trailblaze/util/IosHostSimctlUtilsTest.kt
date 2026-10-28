@@ -31,6 +31,83 @@ class IosHostSimctlUtilsTest {
     )
   }
 
+  /**
+   * A simulator pasteboard. [dropsWrites] makes `simctl pbcopy` exit 0 and change nothing, as while
+   * Xcode's DeviceHub.app syncs its pasteboard; [lagReads] pastes return the old value before the
+   * write shows. Each command advances [clockNanos] by [commandMillis]. Any other command fails, so
+   * a write that touched the Mac pasteboard would too.
+   */
+  private class FakePasteboard(
+    val dropsWrites: Boolean = false,
+    var lagReads: Int = 0,
+    val commandMillis: Long = 0,
+  ) {
+    var device = ""
+    var shown = ""
+    var clockNanos = 0L
+    val timeouts = mutableListOf<Long>()
+
+    fun run(args: List<String>, stdin: String, timeoutMillis: Long): String {
+      timeouts += timeoutMillis
+      clockNanos += TimeUnit.MILLISECONDS.toNanos(commandMillis)
+      return when (args.takeLast(2)) {
+        listOf("pbcopy", UDID) -> "".also { if (!dropsWrites) device = stdin }
+        listOf("pbpaste", UDID) -> if (lagReads-- > 0) shown else device.also { shown = it }
+        else -> error("unexpected command $args")
+      }
+    }
+
+    companion object {
+      const val UDID = "TEST-SIMULATOR"
+    }
+  }
+
+  private fun FakePasteboard.write(text: String, timeoutMillis: Long = 30_000) =
+    IosHostSimctlUtils.writePasteboardVerified(
+      FakePasteboard.UDID,
+      text,
+      timeoutMillis,
+      runCommand = ::run,
+      sleep = { clockNanos += TimeUnit.MILLISECONDS.toNanos(it) },
+      nanoTime = { clockNanos },
+    )
+
+  @Test
+  fun `setting the pasteboard returns once the simulator reads the text back`() {
+    val pasteboard = FakePasteboard()
+
+    pasteboard.write("ClipboardEvalText42 日本語\nsecond line\n")
+
+    assertEquals("ClipboardEvalText42 日本語\nsecond line\n", pasteboard.device)
+  }
+
+  @Test
+  fun `setting the pasteboard waits for a write that shows late`() {
+    val pasteboard = FakePasteboard(lagReads = 3)
+
+    pasteboard.write("ClipboardEvalText42")
+
+    assertEquals("ClipboardEvalText42", pasteboard.device)
+  }
+
+  @Test
+  fun `setting the pasteboard fails, naming DeviceHub, when the write is dropped`() {
+    val pasteboard = FakePasteboard(dropsWrites = true)
+
+    val error = assertFailsWith<IllegalStateException> { pasteboard.write("ClipboardEvalText42") }
+    assertContains(error.message.orEmpty(), "DeviceHub")
+    assertFalse("ClipboardEvalText42" in error.message.orEmpty(), "the text stays out of the error")
+  }
+
+  @Test
+  fun `setting the pasteboard shares one deadline across every command`() {
+    val pasteboard = FakePasteboard(dropsWrites = true, commandMillis = 400)
+
+    assertFailsWith<IllegalStateException> { pasteboard.write("ClipboardEvalText42", timeoutMillis = 1_000) }
+    assertTrue(TimeUnit.NANOSECONDS.toMillis(pasteboard.clockNanos) < 1_000 + 400, "ran past the deadline")
+    assertEquals(pasteboard.timeouts.sortedDescending(), pasteboard.timeouts, "each command gets what is left")
+  }
+
   @Test
   fun `clipboard timeout releases the lock even when stdin is blocked`() {
     lateinit var process: Process

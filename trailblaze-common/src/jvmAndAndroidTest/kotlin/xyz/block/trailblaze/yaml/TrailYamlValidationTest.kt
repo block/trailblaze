@@ -326,8 +326,7 @@ class TrailYamlValidationTest {
  * Every place a tool NAME can be declared in this repo, and how the gate above decides a name is
  * real. Split into two groups:
  *
- * **Registry (runtime).** [TrailblazeSerializationInitializer.buildAllTools] (class-backed),
- * [TrailblazeSerializationInitializer.buildYamlDefinedTools] (`tools:`-mode YAML) and
+ * **Registry (runtime).** [TrailblazeSerializationInitializer.buildAllTools] (class-backed) and
  * [ScriptedToolNameDiscoverer.discoverAllNames] (statically-named scripted descriptors), reached
  * through [ToolNameResolver.isKnown]. These see only this test's CLASSPATH, which is a small slice
  * of the repo: `:trailblaze-common:jvmTest` carries its own bundled trailmaps and nothing else — no
@@ -348,7 +347,7 @@ class TrailYamlValidationTest {
  * false failure here would get the gate disabled, which is strictly worse than a measured blind
  * spot. Two blind spots follow from that and are reported on every run rather than implied:
  *  1. a typo that collides with a `.ts` basename or an exported symbol reads as known;
- *  2. tool calls nested inside another tool's arguments (a `block_runIf`-style wrapper, whose
+ *  2. tool calls nested inside another tool's arguments (a `runIf`-style wrapper, whose
  *     recorded body decodes to an opaque raw-args map) are not walked, so their names are not
  *     adjudicated at all.
  *
@@ -358,7 +357,7 @@ class TrailYamlValidationTest {
 private object ToolNameBackings {
 
   const val REGISTRY_ENTRY_POINTS =
-    "TrailblazeSerializationInitializer.buildAllTools/buildYamlDefinedTools, " +
+    "TrailblazeSerializationInitializer.buildAllTools, " +
       "ScriptedToolNameDiscoverer.discoverAllNames"
 
   /**
@@ -416,7 +415,7 @@ private object ToolNameBackings {
           "known-not-a-typo, not known-to-exist",
       )
       appendLine(
-        "  blind spot: tool calls nested inside another tool's args (e.g. a `block_runIf` body) " +
+        "  blind spot: tool calls nested inside another tool's args (e.g. a `runIf` body) " +
           "decode to opaque raw args and are NOT walked",
       )
       appendLine(if (unknown.isEmpty()) "  unknown: 0" else "  unknown: ${unknown.size} -> ${unknown.joinToString(", ")}")
@@ -498,7 +497,7 @@ private object ToolNameBackings {
     return Backings(
       listOf(
         Partition(
-          "classpath registry (class-backed / YAML-defined / scripted descriptors)",
+          "classpath registry (class-backed / scripted descriptors)",
           registryNames().filter { resolver.isKnown(it) }.toSet(),
         ),
         Partition("worktree *.tool|trailhead.yaml `id:`", yamlToolIds),
@@ -518,7 +517,6 @@ private object ToolNameBackings {
    */
   private fun registryNames(): Set<String> = buildSet {
     TrailblazeSerializationInitializer.buildAllTools().keys.forEach { add(it.toolName) }
-    TrailblazeSerializationInitializer.buildYamlDefinedTools().keys.forEach { add(it.toolName) }
     ScriptedToolNameDiscoverer.discoverAllNames().forEach { add(it.toolName) }
   }
 

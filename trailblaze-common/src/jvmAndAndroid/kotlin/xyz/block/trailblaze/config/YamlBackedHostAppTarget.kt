@@ -69,8 +69,8 @@ class YamlBackedHostAppTarget(
   // --- Custom tools per driver type ---
 
   /**
-   * Per-driver classification of resolved tool names into class-backed, YAML-defined, and
-   * scripted (`.ts` / `.js`) buckets. Used for both `tools:` (inclusion) and `excluded_tools:`
+   * Per-driver classification of resolved tool names into class-backed and scripted
+   * (`.ts` / `.js`) buckets. Used for both `tools:` (inclusion) and `excluded_tools:`
    * (exclusion) — both sides need the same split so callers can route each kind through its own
    * API.
    *
@@ -83,23 +83,21 @@ class YamlBackedHostAppTarget(
    */
   private data class ResolvedToolsByDriver(
     val classes: Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>>,
-    val yamlNames: Map<TrailblazeDriverType, Set<ToolName>>,
     val scriptedNames: Map<TrailblazeDriverType, Set<ToolName>> = emptyMap(),
   )
 
   /**
    * For each driver type, the resolved set of custom tools (both class-backed and
-   * YAML-defined). Computed lazily from the YAML's platform sections + companion contributions.
+   * scripted). Computed lazily from the YAML's platform sections + companion contributions.
    */
   private val resolvedCustomToolsByDriver: ResolvedToolsByDriver by lazy {
     val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
-    val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
     val scriptedNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
     config.platforms?.forEach { (platformKey, platformConfig) ->
       val driverTypes = platformConfig.resolveDriverTypes(platformKey)
 
-      // Resolve toolsets — all three backings flow through.
+      // Resolve toolsets — both backings flow through.
       platformConfig.toolSets?.forEach { toolSetId ->
         val toolSet = availableToolSets[toolSetId]
         if (toolSet == null) {
@@ -109,28 +107,21 @@ class YamlBackedHostAppTarget(
         for (dt in driverTypes) {
           if (!toolSet.isCompatibleWith(dt)) continue
           classes.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedToolClasses)
-          yamlNames.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedYamlToolNames)
           scriptedNames.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedScriptedToolNames)
         }
       }
 
       // Resolve individual tools — look up by bare name; route to the right bucket.
-      // `resolveYamlNameOrNull` / `resolveScriptedNameOrNull` return a typed `ToolName?`, so
-      // classification hands back the already-wrapped value and we avoid a re-wrap here
-      // (Decision 038's wrap-at-the-boundary pattern). Before the scripted branch, a scripted
-      // (`.ts` / `.js`) tool name listed in `tools:` (e.g. `openUrl`) resolved to neither a class
-      // nor a YAML name and hit the `else` below — silently dropped as "unknown tool" — the
-      // inclusion-side parallel of the exclusion bug fixed in `resolvedExcludedToolsByDriver`.
+      // `resolveScriptedNameOrNull` returns a typed `ToolName?`, so classification hands back the
+      // already-wrapped value and we avoid a re-wrap here (Decision 038's wrap-at-the-boundary
+      // pattern). Without the scripted branch, a scripted (`.ts` / `.js`) tool name listed in
+      // `tools:` (e.g. `openUrl`) would hit the `else` below — silently dropped as "unknown tool".
       platformConfig.tools?.forEach { toolName ->
         val toolClass = toolNameResolver.resolveOrNull(toolName)
-        val yamlName = toolNameResolver.resolveYamlNameOrNull(toolName)
         val scriptedName = toolNameResolver.resolveScriptedNameOrNull(toolName)
         when {
           toolClass != null -> for (dt in driverTypes) {
             classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
-          }
-          yamlName != null -> for (dt in driverTypes) {
-            yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
           }
           scriptedName != null -> for (dt in driverTypes) {
             scriptedNames.getOrPut(dt) { mutableSetOf() }.add(scriptedName)
@@ -142,19 +133,13 @@ class YamlBackedHostAppTarget(
       }
     }
 
-    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames, scriptedNames = scriptedNames)
+    ResolvedToolsByDriver(classes = classes, scriptedNames = scriptedNames)
   }
 
   override fun internalGetCustomToolsForDriver(
     driverType: TrailblazeDriverType,
   ): Set<KClass<out TrailblazeTool>> {
     return resolvedCustomToolsByDriver.classes[driverType] ?: emptySet()
-  }
-
-  override fun getCustomYamlToolNamesForDriver(
-    driverType: TrailblazeDriverType,
-  ): Set<ToolName> {
-    return resolvedCustomToolsByDriver.yamlNames[driverType] ?: emptySet()
   }
 
   override fun getCustomScriptedToolNamesForDriver(
@@ -166,32 +151,28 @@ class YamlBackedHostAppTarget(
   // --- Excluded tools ---
 
   /**
-   * For each driver type, the resolved set of *excluded* tools — split into class-backed,
-   * YAML-defined, and scripted (`.ts` / `.js`) entries. Mirrors [resolvedCustomToolsByDriver]'s
-   * classification so a target's `excluded_tools: [myapp_replaceText]` (YAML) or `excluded_tools: [openUrl]`
-   * (scripted, toolset-delivered) flows through the right exclusion API instead of being swallowed
-   * by the resolver as an unknown tool. Before scripted was a recognized bucket here, an
-   * `excluded_tools: [openUrl]` entry hit the `else` branch below and was logged as "unknown tool"
-   * then dropped, so the exclusion never reached the LLM-surface compositors.
+   * For each driver type, the resolved set of *excluded* tools — split into class-backed and
+   * scripted (`.ts` / `.js`) entries. Mirrors [resolvedCustomToolsByDriver]'s classification so a
+   * target's `excluded_tools: [openUrl]` (scripted, toolset-delivered) flows through the right
+   * exclusion API instead of being swallowed by the resolver as an unknown tool.
    */
   private val resolvedExcludedToolsByDriver: ResolvedToolsByDriver by lazy {
     val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
-    val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
     val scriptedNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
+    // The target's own scripted tools, including a bare `.ts` with no descriptor the resolver
+    // could have discovered by name.
+    val ownScriptedToolNames = config.tools.orEmpty().mapTo(mutableSetOf()) { it.name }
     config.platforms?.forEach { (platformKey, platformConfig) ->
       val excludedNames = platformConfig.excludedTools ?: return@forEach
       val driverTypes = platformConfig.resolveDriverTypes(platformKey)
       excludedNames.forEach { name ->
         val toolClass = toolNameResolver.resolveOrNull(name)
-        val yamlName = toolNameResolver.resolveYamlNameOrNull(name)
         val scriptedName = toolNameResolver.resolveScriptedNameOrNull(name)
+          ?: ToolName(name).takeIf { name in ownScriptedToolNames }
         when {
           toolClass != null -> for (dt in driverTypes) {
             classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
-          }
-          yamlName != null -> for (dt in driverTypes) {
-            yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
           }
           scriptedName != null -> for (dt in driverTypes) {
             scriptedNames.getOrPut(dt) { mutableSetOf() }.add(scriptedName)
@@ -203,18 +184,13 @@ class YamlBackedHostAppTarget(
       }
     }
 
-    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames, scriptedNames = scriptedNames)
+    ResolvedToolsByDriver(classes = classes, scriptedNames = scriptedNames)
   }
 
   override fun getExcludedToolsForDriver(
     driverType: TrailblazeDriverType,
   ): Set<KClass<out TrailblazeTool>> =
     resolvedExcludedToolsByDriver.classes[driverType] ?: emptySet()
-
-  override fun getExcludedYamlToolNamesForDriver(
-    driverType: TrailblazeDriverType,
-  ): Set<ToolName> =
-    resolvedExcludedToolsByDriver.yamlNames[driverType] ?: emptySet()
 
   override fun getExcludedScriptedToolNamesForDriver(
     driverType: TrailblazeDriverType,

@@ -105,7 +105,7 @@ object RecordingTailHold {
     RecordingFormat.WEBM -> RecordingFormat.WEBM.encodeArgs()
   }
 
-  private fun formatFor(file: File): RecordingFormat =
+  internal fun formatFor(file: File): RecordingFormat =
     if (file.extension.equals(RecordingFormat.MP4.fileExtension, ignoreCase = true)) RecordingFormat.MP4
     else RecordingFormat.WEBM
 

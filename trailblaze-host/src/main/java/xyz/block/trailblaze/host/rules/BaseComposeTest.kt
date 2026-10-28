@@ -22,7 +22,6 @@ import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
-import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -51,7 +50,6 @@ class BaseComposeTest(
       trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
     ),
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  customYamlToolNames: Set<ToolName> = setOf(),
   val trailblazeDeviceId: TrailblazeDeviceId,
   val viewportWidth: Int = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_WIDTH,
   val viewportHeight: Int = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_HEIGHT,
@@ -79,14 +77,12 @@ class BaseComposeTest(
     )
 
   private val allToolClasses = resolvedComposeToolSet.toolClasses + customToolClasses
-  private val allYamlToolNames = resolvedComposeToolSet.yamlToolNames + customYamlToolNames
 
   private val toolRepo =
     TrailblazeToolRepo(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "Compose Desktop Tool Set",
         toolClasses = allToolClasses,
-        yamlToolNames = allYamlToolNames,
       ),
     )
 
@@ -160,7 +156,7 @@ class BaseComposeTest(
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
         sessionUpdater = { loggingRule.setSession(it) },
-        trailheadReuse = TrailheadRuns.reuseEnabledFromEnv(),
+        trailheadReuse = TrailheadRuns.reuseEnabledFor(config.trailheadReuse),
         // Shares one execution context + snapshot frame across the recording, matching the
         // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
         // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than

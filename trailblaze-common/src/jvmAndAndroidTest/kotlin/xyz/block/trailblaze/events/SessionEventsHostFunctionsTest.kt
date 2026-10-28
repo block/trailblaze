@@ -38,6 +38,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 
 class SessionEventsHostFunctionsTest {
 
@@ -151,6 +152,32 @@ class SessionEventsHostFunctionsTest {
 
     assertEquals(listOf("CHECKOUT"), names(query("""{"stream":"$stream","since":"launched"}""")))
     assertEquals(listOf("AUTH"), names(query("""{"stream":"network","since":"launched"}""")))
+  }
+
+  @Test
+  fun `time-based queries report their cutoff so cursor consumers can retain it`() {
+    val run = TrailheadRuns.open(session.sessionId, emptySet(), reuseEnabled = false)
+    run.markTrailStart(run.trailheadStartMs + 100)
+    try {
+      for ((since, floor) in listOf("trailhead" to run.trailheadStartMs, "trail" to run.trailStartMs!!)) {
+        val events = "$stream.$since"
+        // Even a stream created later needs the same cutoff.
+        assertEquals(floor, query("""{"stream":"$events","since":"$since"}""")["timeFloorMs"]!!.jsonPrimitive.long)
+        append(events, journey("BEFORE", "end"), timeMs = floor - 1)
+        append(events, journey("AT_BOUNDARY", "end"), timeMs = floor)
+        val first = query("""{"stream":"$events","since":"$since"}""")
+        assertEquals(listOf("AT_BOUNDARY"), names(first))
+        assertEquals(floor, first["timeFloorMs"]!!.jsonPrimitive.long)
+
+        append(events, journey("DELAYED_OLD", "end"), timeMs = floor - 1)
+        append(events, journey("NEW", "end"), timeMs = floor + 1)
+        // The event API's cursor precedence stays unchanged; the survey retains timeFloorMs.
+        val next = query("""{"stream":"$events","after":${first["cursor"]!!.jsonPrimitive.long}}""")
+        assertEquals(listOf("DELAYED_OLD", "NEW"), names(next))
+      }
+    } finally {
+      TrailheadRuns.close(run)
+    }
   }
 
   @Test

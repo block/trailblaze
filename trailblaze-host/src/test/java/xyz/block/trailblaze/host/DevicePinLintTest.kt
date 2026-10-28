@@ -276,6 +276,93 @@ class DevicePinLintTest {
     assertNull(lint("config:\n  id: myapp/login\ntrail:\n  - step: Open the app\n"))
   }
 
+  // ---- Top-level config.locale (fatal) ----
+
+  @Test
+  fun `a top-level locale is fatal and names the classifiers it belongs under`() {
+    val finding = lint(
+      buildString {
+        appendLine("config:")
+        appendLine("  id: myapp/login")
+        appendLine("  locale: es-ES")
+        appendLine("  devices:")
+        appendLine("    android-phone: {}")
+        appendLine("    ios-iphone: {}")
+        appendLine("trail:")
+        appendLine("  - step: Open the app")
+      },
+    )
+    assertNotNull(finding)
+    assertTrue(finding.isFatal)
+    val locale = assertNotNull(finding.sessionLocale)
+    assertEquals(3, locale.line)
+    assertEquals("es-ES", locale.tag)
+    assertEquals(listOf("android-phone", "ios-iphone"), locale.declaredClassifiers)
+    val rendered = DevicePinLint.renderFatalFailures(listOf(finding))
+    assertTrue("fixture/trail.yaml:3" in rendered, rendered)
+    assertTrue("`config.devices.android-phone`" in rendered, rendered)
+    assertTrue("driver" !in rendered.substringAfter("FATAL"), "no driver advice for a locale-only finding")
+  }
+
+  @Test
+  fun `a top-level locale without a devices block is still fatal`() {
+    val finding = lint("config:\n  id: myapp/login\n  locale: es\ntrail:\n  - step: Open the app\n")
+    assertNotNull(finding)
+    assertTrue(finding.isFatal)
+    assertEquals(emptyList(), assertNotNull(finding.sessionLocale).declaredClassifiers)
+  }
+
+  @Test
+  fun `a top-level locale is caught when the trail only parses once templates are filled in`() {
+    // `{{CWD}}` unquoted is a YAML flow mapping, so the raw text doesn't parse — but a run fills it
+    // in first and reaches the decode-time refusal, so check must not wave it through.
+    val text = "config:\n  id: myapp/login\n  context: {{CWD}}\n  locale: es-ES\ntrail:\n  - step: Open\n"
+    assertTrue(
+      runCatching { com.charleskorn.kaml.Yaml.default.parseToYamlNode(text) }.isFailure,
+      "precondition: the raw text must not parse",
+    )
+    val finding = lint(text)
+    assertEquals(4, assertNotNull(assertNotNull(finding).sessionLocale).line)
+  }
+
+  @Test
+  fun `a template written across lines keeps the locale's reported line`() {
+    val finding = lint(
+      "config:\n  id: myapp/login\n  context: {{\n    CWD\n    }}\n  locale: es-ES\ntrail:\n  - step: Open\n",
+    )
+    assertEquals(6, assertNotNull(assertNotNull(finding).sessionLocale).line)
+  }
+
+  @Test
+  fun `a template written across lines with text after it keeps the locale's reported line`() {
+    val finding = lint(
+      "config:\n  id: myapp/login\n  context: {{\n    CWD\n    }}/fixtures\n  locale: es-ES\n" +
+        "trail:\n  - step: Open\n",
+    )
+    assertEquals(6, assertNotNull(assertNotNull(finding).sessionLocale).line)
+  }
+
+  @Test
+  fun `two templates written across lines on one value keep the locale's reported line`() {
+    val finding = lint(
+      // Inner lines at column 0, which only parse once a run collapses each token to its value.
+      "config:\n  context: {{\n CWD\n}}/{{\n HOME\n}}\n  locale: es-ES\n" +
+        "trail:\n  - step: Open\n",
+    )
+    assertEquals(7, assertNotNull(assertNotNull(finding).sessionLocale).line)
+  }
+
+  @Test
+  fun `two templates on one line are both blanked`() {
+    val finding = lint("config:\n  context: {{A}}/{{B}}\n  locale: es-ES\ntrail:\n  - step: Open\n")
+    assertEquals(3, assertNotNull(assertNotNull(finding).sessionLocale).line)
+  }
+
+  @Test
+  fun `a locale nested under a device entry is clean`() {
+    assertNull(lint(trail("    android-phone:\n      locale: es")))
+  }
+
   // ---- Phase-level exit-code contract ----
 
   private fun workspaceWith(fileName: String, body: String): java.io.File {
@@ -441,6 +528,24 @@ class DevicePinLintTest {
             android-phone:
               - thisToolDoesNotExist:
                   someArg: 1
+      """.trimIndent(),
+    )
+    assertEquals(CheckCommand.EXIT_TYPE_ERROR, CheckCommand().runTrailLintPhase(workspaceRoot))
+  }
+
+  @Test
+  fun `check phase fails the build on a top-level config locale`() {
+    val workspaceRoot = workspaceWith(
+      "toplocale.trail.yaml",
+      """
+      config:
+        id: test/toplocale
+        locale: es-ES
+        devices:
+          android-phone: {}
+      trail:
+        - step: Open the app
+          recordable: false
       """.trimIndent(),
     )
     assertEquals(CheckCommand.EXIT_TYPE_ERROR, CheckCommand().runTrailLintPhase(workspaceRoot))

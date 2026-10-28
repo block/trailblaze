@@ -164,6 +164,11 @@ abstract class MaestroTrailblazeAgent(
      * routes; drivers that always dispatch a gesture ignore this.
      */
     tapRoute: TapRouteOverride? = null,
+    /**
+     * How long to wait for the element to appear before failing. `null` means the call site is
+     * not opinionated and each agent applies its own per-driver default.
+     */
+    timeoutMs: Long? = null,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
@@ -395,14 +400,14 @@ abstract class MaestroTrailblazeAgent(
       is OtherTrailblazeTool -> throw TrailblazeException(
         // Align prose with `HostOnDeviceRpcTrailblazeAgent.executeTool`'s else-branch
         // diagnostic so an operator triaging a failed trail sees the same precise
-        // taxonomy ("class-backed, YAML-defined, or dynamic scripted tool") regardless
+        // taxonomy ("class-backed or dynamic scripted tool") regardless
         // of which agent fired. Drift between the two messages would make triage
         // depend on which dispatcher the trail's driver routes through — confusing
         // for a debugger who doesn't know that detail.
         message = buildString {
           appendLine(
             "Unknown tool '${repoResolvedTool.toolName}' is not registered in this session's " +
-              "tool repo as a class-backed, YAML-defined, or dynamic scripted tool, and cannot " +
+              "tool repo as a class-backed or dynamic scripted tool, and cannot " +
               "be executed.",
           )
           appendLine(

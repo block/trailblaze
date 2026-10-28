@@ -176,9 +176,6 @@ boundary before the step's tool executes. Tokens follow Mustache's rules:
 spaces inside the braces are ignored (`{{ variable }}`), `{{{variable}}}`
 works too, a `$` right before a token stays a literal `$` (`${{amount}}`
 gives `$5`), and a substituted value is never scanned for tokens again.
-(This trail-step recall is a
-separate mechanism from a YAML-*defined* tool's `tools:` body, which
-interpolates only `{{params.*}}`.)
 
 ## Inspecting a session — generate an HTML report
 

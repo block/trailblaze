@@ -332,7 +332,7 @@ function readDeviceLog(sessionDir: string): string | null {
 
 // Network log (network.ndjson). One NetworkEvent JSON object per line; keep the fields the viewer
 // renders. Skip empty/oversized; keep the last MAX_LOG_LINES events.
-function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
+export function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
   try {
     const path = join(sessionDir, "network.ndjson");
     if (!existsSync(path) || statSync(path).size > MAX_LOG_BYTES) return null;
@@ -341,7 +341,7 @@ function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
     for (const line of lines) {
       try {
         const e = JSON.parse(line);
-        out.push({ method: e.method || "", statusCode: e.statusCode ?? null, durationMs: e.durationMs ?? null, urlPath: e.urlPath || e.url || "", phase: e.phase || "" });
+        out.push({ method: e.method || "", statusCode: e.statusCode ?? null, durationMs: e.durationMs ?? null, urlPath: e.urlPath || e.url || "", phase: e.phase || "", trailPhase: e.trailPhase || null });
       } catch { /* skip malformed line */ }
     }
     return out.length ? out : null;

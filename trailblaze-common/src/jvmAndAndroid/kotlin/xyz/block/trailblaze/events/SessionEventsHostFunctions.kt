@@ -236,6 +236,9 @@ object SessionEventsHostFunctions {
       if (countOnly) put("count", matched) else put("events", JsonArray(events.map { it.record }))
       if (truncated) put("truncated", true)
       put("cursor", offset)
+      // A cursor retains the byte position, not a time-based boundary. Let polling consumers
+      // keep that cutoff so that later records carrying an older timestamp are excluded.
+      if (startPoint is StartPoint.FromTime) put("timeFloorMs", startPoint.fromMs)
       // Where a record came from, for evidence: the stream's name hides a device's file suffix.
       if (file != null && sessionDir != null) put("file", file.relativeTo(sessionDir).invariantSeparatorsPath)
       putJsonObject("scan") {

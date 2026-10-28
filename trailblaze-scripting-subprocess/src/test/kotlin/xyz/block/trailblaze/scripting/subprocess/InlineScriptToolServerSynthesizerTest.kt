@@ -60,7 +60,7 @@ class InlineScriptToolServerSynthesizerTest {
         description = "Test tool.",
         meta = buildJsonObject {
           put("trailblaze/toolset", "web_core")
-          put("trailblaze/requiresContext", true)
+          put("trailblaze/requiresHost", true)
         },
       ),
       authorFile = authorFile,
@@ -1339,6 +1339,239 @@ class InlineScriptToolServerSynthesizerTest {
           McpSubprocessSession.connect(
             spawnedProcess = spawned,
             stderrCapture = StderrCapture(File(tmpDir, "wide-tool.stderr.log")),
+          )
+        }
+        connected.getOrNull()?.shutdown()
+        assertThat(connected.isFailure).isEqualTo(true)
+      } finally {
+        spawned.process.destroyForcibly()
+        spawned.process.waitFor(60, TimeUnit.SECONDS)
+      }
+    }
+  }
+
+  @Test fun `annotation metadata preserves advertised descriptions and JSON values`() = runBlocking {
+    assumeTrue("bun must be on PATH to run the inline tool host", runtimeAvailable())
+    authorFile.writeText(
+      """
+      export async function annotatedInput(args) {
+        return JSON.stringify(args);
+      }
+      """.trimIndent(),
+    )
+    val schema = Json.parseToJsonElement(
+      """
+      {
+        "type": "object",
+        "properties": {
+          "nodeSelector": {"description": "Select the result row."},
+          "metadata": {
+            "title": "Metadata", "description": "An unrestricted value.",
+            "default": {}, "examples": [{}], "deprecated": true,
+            "readOnly": true, "writeOnly": false, "${'$'}comment": "No validation keywords."
+          },
+          "label": {"type": "string"}
+        },
+        "required": ["nodeSelector", "label"]
+      }
+      """.trimIndent(),
+    ).jsonObject
+    val generated = InlineScriptToolServerSynthesizer.synthesize(
+      tools = listOf(
+        InlineScriptToolConfig(
+          script = authorFile.absolutePath,
+          name = "annotatedInput",
+          inputSchema = schema,
+        ),
+      ),
+      outputDir = generatedDir,
+    )
+    val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+    try {
+      val session = McpSubprocessSession.connect(
+        spawnedProcess = spawned,
+        stderrCapture = StderrCapture(File(tmpDir, "annotated-input.stderr.log")),
+      )
+      try {
+        val advertised = session.client.listTools(ListToolsRequest()).tools.single { it.name == "annotatedInput" }
+        assertThat(advertised.inputSchema.properties?.get("nodeSelector")?.jsonObject
+          ?.get("description")?.jsonPrimitive?.content).isEqualTo("Select the result row.")
+
+        suspend fun call(arguments: String) = session.client.callTool(
+          CallToolRequest(
+            params = CallToolRequestParams(
+              name = "annotatedInput",
+              arguments = Json.parseToJsonElement(arguments).jsonObject,
+            ),
+          ),
+        )
+
+        for (value in listOf(
+          """{"androidAccessibility":{"textRegex":"Name"},"childOf":{"androidAccessibility":{"isClickable":true}}}""",
+          """{"iosAxe":{"labelRegex":"Name"}}""",
+          """[1,true,null]""",
+          """"text"""",
+          "7",
+          "true",
+          "null",
+        )) {
+          val arguments = """{"nodeSelector":$value,"metadata":$value,"label":"result"}"""
+          val result = call(arguments)
+          assertThat(result.isError == true).isEqualTo(false)
+          assertThat(Json.parseToJsonElement((result.content.single() as TextContent).text))
+            .isEqualTo(Json.parseToJsonElement(arguments))
+        }
+        assertThat(call("""{"nodeSelector":{},"label":7}""").isError).isEqualTo(true)
+        assertThat(call("""{"nodeSelector":{}}""").isError).isEqualTo(true)
+        assertThat(call("""{"label":"result"}""").isError).isEqualTo(true)
+      } finally {
+        session.shutdown()
+      }
+    } finally {
+      if (!spawned.process.waitFor(60, TimeUnit.SECONDS)) {
+        spawned.process.destroyForcibly()
+        spawned.process.waitFor(60, TimeUnit.SECONDS)
+      }
+      assertThat(spawned.process.isAlive).isEqualTo(false)
+    }
+  }
+
+  @Test fun `annotation metadata does not hide unsupported schema constraints`() = runBlocking {
+    assumeTrue("bun must be on PATH to run the inline tool host", runtimeAvailable())
+    authorFile.writeText("export async function annotatedConstraint(args) { return 'unreachable'; }")
+    for (constraint in listOf(
+      """"const":"fixed"""",
+      """"minimum":1""",
+      """"properties":{"name":{"type":"string"}}""",
+    )) {
+      val schema = Json.parseToJsonElement(
+        """{"type":"object","properties":{"value":{"description":"A constrained value.",$constraint}}}""",
+      ).jsonObject
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "annotatedConstraint",
+            inputSchema = schema,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      try {
+        val connected = runCatching {
+          McpSubprocessSession.connect(
+            spawnedProcess = spawned,
+            stderrCapture = StderrCapture(File(tmpDir, "annotated-constraint.stderr.log")),
+          )
+        }
+        connected.getOrNull()?.shutdown()
+        assertThat(connected.isFailure).isEqualTo(true)
+      } finally {
+        spawned.process.destroyForcibly()
+        spawned.process.waitFor(60, TimeUnit.SECONDS)
+      }
+    }
+  }
+
+  @Test fun `annotation-only input property registers as an unconstrained value`() {
+    runBlocking {
+      assumeTrue(
+        "bun must be on PATH to exercise the synthesized inline tool host path",
+        runtimeAvailable(),
+      )
+      authorFile.writeText(
+        """
+        export async function rememberName(args, ctx, client) {
+          return JSON.stringify(args.nodeSelector);
+        }
+        """.trimIndent() + "\n",
+      )
+      // What the analyzer emits for `nodeSelector: TrailblazeNodeSelector` when it cannot resolve
+      // the imported type: no `type`, no `$ref`, just the field's TSDoc as `description`.
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "rememberName",
+            description = "Tool with an unresolved-type input.",
+            inputSchema = Json.parseToJsonElement(
+              """
+              {
+                "type": "object",
+                "properties": {
+                  "nodeSelector": {"description": "Selector for the recipient's name."},
+                  "label": {"type": "string"}
+                },
+                "required": ["nodeSelector", "label"]
+              }
+              """.trimIndent(),
+            ).jsonObject,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      val stderrLog = File(tmpDir, "annotation-only.stderr.log")
+      val session = runCatching {
+        McpSubprocessSession.connect(spawnedProcess = spawned, stderrCapture = StderrCapture(stderrLog))
+      }.getOrElse { t ->
+        val stderr = if (stderrLog.isFile) stderrLog.readText() else "(no stderr captured)"
+        throw AssertionError("Annotation-only inline tool failed during connect. stderr:\n$stderr", t)
+      }
+      try {
+        val listed = session.client.listTools(ListToolsRequest()).tools
+        assertThat(listed.map { it.name }).contains("rememberName")
+        assertThat(listed.single { it.name == "rememberName" }.inputSchema.toString()).contains("nodeSelector")
+      } finally {
+        session.shutdown()
+        spawned.process.waitFor(10, TimeUnit.SECONDS)
+        spawned.process.destroyForcibly()
+      }
+    }
+  }
+
+  @Test fun `a bare ref input property still fails server startup`() {
+    runBlocking {
+      assumeTrue(
+        "bun must be on PATH to exercise the synthesized inline tool host path",
+        runtimeAvailable(),
+      )
+      authorFile.writeText(
+        """
+        export async function refTool(args, ctx, client) {
+          return "unreachable";
+        }
+        """.trimIndent() + "\n",
+      )
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "refTool",
+            description = "Tool with an unflattened ref input.",
+            inputSchema = Json.parseToJsonElement(
+              """
+              {
+                "type": "object",
+                "properties": {
+                  "value": {"${'$'}ref": "#/definitions/Missing", "description": "annotation next to a ref"}
+                }
+              }
+              """.trimIndent(),
+            ).jsonObject,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      try {
+        val connected = runCatching {
+          McpSubprocessSession.connect(
+            spawnedProcess = spawned,
+            stderrCapture = StderrCapture(File(tmpDir, "ref-tool.stderr.log")),
           )
         }
         connected.getOrNull()?.shutdown()

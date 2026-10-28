@@ -28,10 +28,8 @@ fun createTrailblazeYaml(
 }
 
 /**
- * Builds a fresh [TrailblazeYaml] from an explicit set of all tool classes. Also picks up any
- * YAML-defined (`tools:` mode) tools discovered on the classpath and registers a per-tool
- * custom serializer for each. Used by [TrailblazeYaml.Default]'s lazy initializer via
- * `buildTrailblazeYamlDefault()`.
+ * Builds a fresh [TrailblazeYaml] from an explicit set of all tool classes. Used by
+ * [TrailblazeYaml.Default]'s lazy initializer via `buildTrailblazeYamlDefault()`.
  */
 @OptIn(InternalSerializationApi::class)
 @JvmOverloads
@@ -39,12 +37,8 @@ fun createTrailblazeYamlFromAllTools(
   allToolClasses: Set<KClass<out TrailblazeTool>>,
   strict: Boolean = false,
 ): TrailblazeYaml {
-  val classBacked = buildToolSerializerMap(allToolClasses)
-  val yamlDefined = TrailblazeSerializationInitializer
-    .buildYamlDefinedToolSerializers()
-    .mapKeys { it.key.toolName }
   return TrailblazeYaml(
-    toolSerializersByName = classBacked + yamlDefined,
+    toolSerializersByName = buildToolSerializerMap(allToolClasses),
     strict = strict,
   )
 }

@@ -81,14 +81,12 @@ class ToolYamlLoaderTrailmapBundledTest {
       shortcut:
         from: app/elsewhere
         to: app/home
-      tools:
-        - tap: { selector: "home_button" }
       """.trimIndent(),
     )
 
     withClasspathRoot(root) {
-      val resolved = ToolYamlLoader.discoverYamlDefinedTools()
-      assertEquals(emptyMap(), resolved)
+      assertEquals(emptyMap(), ToolYamlLoader.discoverAndLoadAll())
+      assertEquals(emptyMap(), ToolYamlLoader.discoverTrailheads())
     }
   }
 
@@ -145,17 +143,13 @@ class ToolYamlLoaderTrailmapBundledTest {
     File(toolsDir, "misplaced.trailhead.yaml").writeText(
       """
       id: misplaced
-      description: A trailhead placed in the wrong directory.
       trailhead:
         to: app/b
-      tools:
-        - tap: { selector: "go" }
       """.trimIndent(),
     )
 
     withClasspathRoot(root) {
-      val resolved = ToolYamlLoader.discoverYamlDefinedTools()
-      assertEquals(emptyMap(), resolved)
+      assertEquals(emptyMap(), ToolYamlLoader.discoverTrailheads())
     }
   }
 
@@ -253,7 +247,7 @@ class ToolYamlLoaderTrailmapBundledTest {
   fun `metadata-only trailhead (no body) surfaces in discoverTrailheads but not as a tool`() {
     // A body-less *.trailhead.yaml attaches trailhead metadata to a tool registered elsewhere by
     // the same id — e.g. a scripted `.ts` tool delivered via a target's `target.tools:`, which has
-    // no Kotlin class for a `class:` body. It must NOT be instantiated as a class/yaml tool (there's
+    // no Kotlin class for a `class:` body. It must NOT be instantiated as a class tool (there's
     // nothing to instantiate), but MUST surface in nav-metadata discovery so the picker / graph /
     // toolbox still treat the underlying tool as a trailhead.
     val root = newTempDir()
@@ -276,12 +270,10 @@ class ToolYamlLoaderTrailmapBundledTest {
 
     withClasspathRoot(root) {
       val classBacked = ToolYamlLoader.discoverAndLoadAll()
-      val yamlDefined = ToolYamlLoader.discoverYamlDefinedTools()
       val navMeta = ToolYamlLoader.discoverTrailheads()
 
       val name = ToolName("scripted_launchAppSignedIn")
       assertTrue(name !in classBacked, "metadata-only trailhead must not register as a class tool: $classBacked")
-      assertTrue(name !in yamlDefined, "metadata-only trailhead must not register as a yaml tool: $yamlDefined")
       assertTrue(name in navMeta, "metadata-only trailhead must surface in nav-metadata discovery: ${navMeta.keys}")
       assertEquals(ToolYamlConfig.Mode.METADATA, navMeta.getValue(name).mode)
       assertEquals("scripted/android/home", navMeta.getValue(name).trailhead?.to)

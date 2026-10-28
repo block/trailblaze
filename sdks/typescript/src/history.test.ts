@@ -148,7 +148,6 @@ describe("ctx.history", () => {
     );
     const result = await def.teardown!({}, {} as never, hostClient(calls, () => [addItem]), {
       outcome: "passed",
-      notes: [],
     });
     expect(result.reason).toBe("myapp_addItem");
     expect(calls).toEqual([{ name: HOST_FUNCTION_HISTORY_TOOL_CALLS, args: { section: "trail" } }]);

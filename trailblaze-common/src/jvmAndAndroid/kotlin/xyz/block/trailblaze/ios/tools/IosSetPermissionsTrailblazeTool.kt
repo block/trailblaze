@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import maestro.orchestra.SetPermissionsCommand
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -18,7 +19,9 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  * Sets an app's iOS simulator permissions in one call, the iOS counterpart of
  * `android_grantPermissions`. In order: optional [grantAll], then [reset], [revoke], and [grant] privacy services, each via
  * `xcrun simctl privacy <udid> <action> <service> <appId>` with simctl's own service names passed
- * through unchanged; then [notifications].
+ * through unchanged; then [notifications]. Camera changes use the driver because simctl cannot
+ * grant camera access. Camera also needs an explicit [notifications] policy, unless [grantAll]
+ * establishes Allow first: Maestro replaces its stored notifications map with each camera command.
  *
  * Only what is listed changes: the Maestro-backed `launchApp` grants every service on every launch
  * (Maestro's `all: allow` default), so a trail can't tell which permissions it depends on. Clearing
@@ -45,24 +48,24 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
 @LLMDescription(
   "Sets an app's iOS simulator permissions: optionally grants all through the driver, then resets, revokes, and grants `simctl privacy` services, " +
     "and has the driver answer the notifications alert whenever it appears. Only what is listed " +
-    "changes. Call BEFORE `openApp` — simctl terminates a running app when a grant changes.",
+    "changes. The `camera` service requires `IOS_HOST` and an explicit `notifications` policy unless `grantAll` is true. Call BEFORE `openApp` — simctl terminates a running app when a grant changes.",
 )
 data class IosSetPermissionsTrailblazeTool(
   @param:LLMDescription("The iOS bundle id of the target app (e.g. `com.example.app`).")
   val appId: String,
   @param:LLMDescription(
     "simctl privacy services to reset to undecided, so the app asks again (`xcrun simctl privacy` " +
-      "lists them). `all` drops every grant an earlier trail left. Applied after `grantAll`.",
+      "lists them), or `camera` via the driver. `all` drops every grant an earlier trail left. Applied after `grantAll`.",
   )
   val reset: List<String> = emptyList(),
   @param:LLMDescription(
     "simctl privacy services to revoke, so the app sees them denied and shows no dialog, e.g. " +
-      "`microphone`, `location`, `photos`. Applied after `reset`.",
+      "`microphone`, `location`, `photos`, or `camera` via the driver. Applied after `reset`.",
   )
   val revoke: List<String> = emptyList(),
   @param:LLMDescription(
     "simctl privacy services to grant, so their dialogs never appear, e.g. `location`, `photos`, " +
-      "`contacts`. Applied after `revoke`.",
+      "`contacts`, or `camera` via the driver. Applied after `revoke`.",
   )
   val grant: List<String> = emptyList(),
   @param:LLMDescription(
@@ -97,8 +100,15 @@ data class IosSetPermissionsTrailblazeTool(
       else -> return error("ios_setPermissions: notifications must be `allow`, `deny` or `unset`, got `$notifications`.")
     }
     val agent = toolExecutionContext.maestroTrailblazeAgent
-    if ((grantAll || notifications != null) && agent == null) {
-      return error("ios_setPermissions needs a Maestro-command driver for grantAll or the notifications alert.")
+    val changesCamera = listOf(reset, revoke, grant).any { "camera" in it }
+    if (changesCamera && deviceInfo.trailblazeDriverType == TrailblazeDriverType.IOS_AXE) {
+      return error("ios_setPermissions: camera permission changes require IOS_HOST; IOS_AXE does not support them.")
+    }
+    if ((grantAll || notifications != null || changesCamera) && agent == null) {
+      return error("ios_setPermissions needs a Maestro-command driver for grantAll, camera or the notifications alert.")
+    }
+    if (changesCamera && !grantAll && notifications == null) {
+      return error("ios_setPermissions: camera changes require an explicit notifications policy unless grantAll is true.")
     }
 
     if (grantAll && agent != null) {
@@ -111,11 +121,31 @@ data class IosSetPermissionsTrailblazeTool(
 
     val deviceId = deviceInfo.trailblazeDeviceId.instanceId
     try {
-      withContext(Dispatchers.IO) {
-        listOf("reset" to reset, "revoke" to revoke, "grant" to grant).forEach { (action, services) ->
-          services.forEach { service -> IosHostSimctlUtils.setPrivacy(deviceId, appId, action, service) }
+      val failure = withContext(Dispatchers.IO) {
+        for ((action, services) in listOf("reset" to reset, "revoke" to revoke, "grant" to grant)) {
+          for (service in services) {
+            if (service == "camera" && agent != null) {
+              val permission = when (action) {
+                "reset" -> "unset"
+                "revoke" -> "deny"
+                else -> "allow"
+              }
+              val result = agent.runMaestroCommands(
+                maestroCommands = listOf(SetPermissionsCommand(appId, mapOf(
+                  "camera" to permission,
+                  "notifications" to if (grantAll) "allow" else checkNotNull(notifications),
+                ))),
+                traceId = toolExecutionContext.traceId,
+              )
+              if (!result.isSuccess()) return@withContext result
+            } else {
+              IosHostSimctlUtils.setPrivacy(deviceId, appId, action, service)
+            }
+          }
         }
+        null
       }
+      if (failure != null) return failure
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {

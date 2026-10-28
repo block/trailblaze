@@ -1339,10 +1339,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const last = offered.get(data.tool);
       if (data.setup === 'reused' || data.setup === 'reuseFailed') {
         const failed = data.setup === 'reuseFailed';
-        decisions.push({ tool: data.tool, kind: failed ? 'reuseFailed' : 'reused', sessionId: data.previousRunSessionId || null, reason: String(data.reason || ''), error: failed && data.error ? String(data.error) : '' });
+        decisions.push({ tool: data.tool, kind: failed ? 'reuseFailed' : 'reused', sessionId: data.previousRunSessionId || null, trailheadSessionId: data.trailheadSessionId || null, reason: String(data.reason || ''), error: failed && data.error ? String(data.error) : '' });
       } else {
         const why = !last ? '' : last.previousRun ? `the trailhead did not reuse ${last.previousRun.sessionId}` : String(last.reason || '');
-        decisions.push({ tool: data.tool, kind: 'full', sessionId: null, reason: why, error: '' });
+        decisions.push({ tool: data.tool, kind: 'full', sessionId: null, trailheadSessionId: null, reason: why, error: '' });
       }
     });
     return decisions;
@@ -4195,22 +4195,63 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <div class="logpane" id="dlpane">${html}</div>`, 'logview');
   };
 
+  const NETWORK_PHASE_LABELS = { trailhead: 'Trailhead', trail: 'Trail', teardown: 'Teardown' };
+  // One line per trailhead tool that reused a setup: the requests that built it were made by the
+  // session that ran it in full (after any chain of reuses), so they are in that session's log.
+  const networkReuseNotice = () => {
+    const reused = trailheadSetupDecisions(D).filter((d) => d.kind === 'reused');
+    if (!reused.length) return '';
+    const here = D.meta && D.meta.sessionId;
+    const lines = reused.map((d) => {
+      // Successive trails in one session (an MCP session, say) can reuse a setup it ran itself.
+      if (here && d.trailheadSessionId === here) {
+        return `<div><code>${esc(d.tool)}</code> reused the setup an earlier trail in this session ran, so the requests that setup made are earlier in this log.</div>`;
+      }
+      // Logs from before the setup's own session was recorded name only the session that handed it
+      // on, which in a chain of reuses did not run it: leave the origin unknown, not guessed.
+      if (!d.trailheadSessionId) {
+        const via = d.sessionId ? ` handed on by <code>${esc(d.sessionId)}</code>` : '';
+        return `<div><code>${esc(d.tool)}</code> reused a setup${via}. This log does not record which session ran that setup; the requests it made are in that session's network log, not here.</div>`;
+      }
+      const from = `<code>${esc(d.trailheadSessionId)}</code>`;
+      const via = d.sessionId && d.sessionId !== d.trailheadSessionId ? ` (handed on by <code>${esc(d.sessionId)}</code>)` : '';
+      return `<div><code>${esc(d.tool)}</code> reused the setup ${from} ran${via}, so the requests that setup made are in that session's network log, not here.</div>`;
+    }).join('');
+    return `<div class="netcoverage">${lines}</div>`;
+  };
   const renderNetwork = () => {
     const network = sessionNetwork(D);
+    const coverage = networkReuseNotice();
     if (!network || !network.length) {
-      return viewPage('Network', '', `<div class="empty">${gzEmptyNote('network log', D.networkGz, 'No network activity captured.')}</div>`);
+      // A multi-device session captures each device's traffic into its own `network.<device>`
+      // stream, which the Timeline shows; this tab reads only the session's own log.
+      const deviceStreams = (sessionEvents(D) || []).filter((s) => s && /^network\..+/.test(s.name) && s.total > 0);
+      const none = deviceStreams.length
+        ? `This session captured each device's traffic separately: ${deviceStreams.map((s) => `<code>${esc(s.name)}</code> (${s.total} events)`).join(', ')}. Those requests are on the Timeline.`
+        // Not "nothing was captured": reports built in the browser (live, Share, a session ZIP)
+        // carry no network log, and the tab still opens there for the reuse notice.
+        : 'This report has no network log for this session.';
+      return viewPage('Network', '', `${coverage}<div class="empty">${gzEmptyNote('network log', D.networkGz, none)}</div>`);
     }
+    // Each request carries the trail phase it started in, so one the trailhead sent stays the
+    // trailhead's even when its response landed during the trail. Older sessions carry none.
+    const phaseOf = (e) => (e.trailPhase && NETWORK_PHASE_LABELS[e.trailPhase] ? e.trailPhase : '');
+    const phases = Object.keys(NETWORK_PHASE_LABELS).filter((p) => network.some((e) => phaseOf(e) === p));
     const rows = network.map((e) => {
       const fail = e.phase === 'FAILED' || (e.statusCode != null && e.statusCode >= 400);
       const status = e.phase === 'FAILED' ? 'FAILED' : (e.statusCode != null ? String(e.statusCode) : (e.phase === 'REQUEST_START' ? '→' : ''));
       const dur = e.durationMs != null ? ` ${e.durationMs}ms` : '';
-      return `<div class="ln ${fail ? 'e' : ''}"><span>${esc(e.method)}</span><span class="m">${esc(status)}${esc(dur)}</span><span>${esc(e.urlPath)}</span></div>`;
+      const ph = phaseOf(e);
+      const phaseCell = phases.length ? `<span class="netphase ${ph}">${ph ? NETWORK_PHASE_LABELS[ph] : ''}</span>` : '';
+      return `<div class="ln ${fail ? 'e' : ''}"${ph ? ` data-netphase="${ph}"` : ''}>${phaseCell}<span class="meth">${esc(e.method)}</span><span class="m">${esc(status)}${esc(dur)}</span><span>${esc(e.urlPath)}</span></div>`;
     }).join('');
     return viewPage('Network', `${network.length} events`, `
       <div class="lfilter" id="nlbar"><input id="nlq" type="search" placeholder="Filter by method, path, status…" />
         <button class="evchip on" data-lvl="">All</button>
         <button class="evchip" data-lvl="e">Failed</button>
+        ${phases.length > 1 ? phases.map((p) => `<button class="evchip" data-netphase="${p}">${NETWORK_PHASE_LABELS[p]}</button>`).join('') : ''}
         <span class="count" id="nlcount"></span></div>
+      ${coverage}
       <div class="logpane net" id="nlpane">${rows}</div>`, 'logview');
   };
 
@@ -4581,14 +4622,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const input = document.getElementById(inputId) as HTMLInputElement | null;
     const countEl = document.getElementById(countId);
     const chips = Array.from(root.querySelectorAll<HTMLElement>(`#${barId} [data-lvl]`));
+    // Phase chips narrow by the row's data-netphase on top of the level; a second click clears one.
+    const phaseChips = Array.from(root.querySelectorAll<HTMLElement>(`#${barId} [data-netphase]`));
     let lvl = '';
+    let phase = '';
     const apply = () => {
       const q = ((input && input.value) || '').toLowerCase();
       let shown = 0;
       for (const r of Array.from(pane.children) as HTMLElement[]) {
         const okLvl = !lvl || (lvl === 'e' ? r.classList.contains('e') : (r.classList.contains('e') || r.classList.contains('w')));
         const okQ = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
-        const on = okLvl && okQ;
+        const okPhase = !phase || r.dataset.netphase === phase;
+        const on = okLvl && okQ && okPhase;
         r.style.display = on ? '' : 'none';
         if (on) shown++;
       }
@@ -4596,6 +4641,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     };
     if (input) input.oninput = apply;
     chips.forEach((c) => c.onclick = () => { lvl = c.dataset.lvl; chips.forEach((x) => x.classList.toggle('on', x === c)); apply(); });
+    phaseChips.forEach((c) => c.onclick = () => { phase = phase === c.dataset.netphase ? '' : c.dataset.netphase; phaseChips.forEach((x) => x.classList.toggle('on', x.dataset.netphase === phase)); apply(); });
     apply();
   };
 
@@ -8294,7 +8340,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ...(yamlRootSection(D.recordingYaml, 'config') || yamlRootSection(D.originalYaml, 'config') ? [['config', 'Config']] : []),
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
       ...(D.deviceLog || D.deviceLogGz ? [['device', 'Device logs']] : []),
-      ...((D.network && D.network.length) || D.networkGz ? [['network', 'Network']] : []),
+      ...((D.network && D.network.length) || D.networkGz || trailheadSetupDecisions(D).some((d) => d.kind === 'reused') ? [['network', 'Network']] : []),
       ...(D.visibleStrings && D.visibleStrings.length ? [['strings', 'Strings']] : []),
       ['info', 'Info'],
     ];
@@ -9607,7 +9653,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // LIVE DOM so the advancing selection is visible without a full re-render.
   const revealTimelineStepInPlace = () => {
     revealTimelineStep(st.step);
-    root.querySelectorAll<HTMLElement>('[data-phase]').forEach((control) => {
+    root.querySelectorAll<HTMLElement>('.phasecontrol[data-phase]').forEach((control) => {
       const open = control.dataset.phase === 'trailhead' ? st.trailheadOpen : control.dataset.phase === 'teardown' ? st.teardownOpen : st.trailOpen;
       control.setAttribute('aria-expanded', String(open));
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
@@ -10599,7 +10645,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       st.tlStreams = el.dataset.tlstreams === 'all' ? (sessionEvents(D) || []).map((_, i) => i) : [];
       st.tlMenuOpen = true; st.tlEventMenuOpen = false; writeRoute(true); render(true);
     });
-    root.querySelectorAll<HTMLElement>('[data-phase]').forEach((control) => control.onclick = () => {
+    root.querySelectorAll<HTMLElement>('.phasecontrol[data-phase]').forEach((control) => control.onclick = () => {
       const phase = control.dataset.phase;
       const open = control.getAttribute('aria-expanded') !== 'true';
       if (phase === 'trailhead') st.trailheadOpen = open;

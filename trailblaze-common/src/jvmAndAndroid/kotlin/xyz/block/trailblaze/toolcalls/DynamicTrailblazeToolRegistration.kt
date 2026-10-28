@@ -3,7 +3,7 @@ package xyz.block.trailblaze.toolcalls
 /**
  * Session-scoped dynamic tool source — the plug point that lets runtimes like the subprocess
  * MCP path (`:trailblaze-scripting-subprocess`) contribute tools into a session's
- * [TrailblazeToolRepo] alongside Kotlin `KClass`-backed tools and YAML-defined tools.
+ * [TrailblazeToolRepo] alongside Kotlin `KClass`-backed tools.
  *
  * Each registration represents **one tool** — register N of these for a subprocess that
  * advertises N tools. Implementations are free to close over whatever per-source state they
@@ -38,7 +38,7 @@ interface DynamicTrailblazeToolRegistration {
    * [requiredArgumentKeysFor]) use this to decide what an empty parameter set means:
    *
    *  - `true` → strict: an empty set is returned and the validator rejects every incoming key,
-   *    the same policy as YAML tools with `parameters: []` and no-arg class-backed tools.
+   *    the same policy as no-arg class-backed tools.
    *  - `false` (default) → skip: an empty set makes introspection return `null`, so validation
    *    falls through — a subprocess MCP server can legitimately advertise no schema, and
    *    rejecting args on its tools would be a false positive.

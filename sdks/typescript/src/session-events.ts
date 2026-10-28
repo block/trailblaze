@@ -62,6 +62,8 @@ export interface SessionEventsQueryResult {
   events: SessionEvent[];
   /** Pass as `after` to read only what arrives next. */
   cursor: number;
+  /** Inclusive host-clock timestamp cutoff resolved for a time-based starting point. A cursor alone does not retain it. */
+  timeFloorMs?: number;
   /**
    * True when the matches reached the size budget for one result (about 4 MB of record text) and
    * stopped early. An oldest-first read continues from `cursor` passed as `after`.
@@ -79,6 +81,8 @@ export interface SessionEventsCountResult {
   incompleteReason?: string;
   count: number;
   cursor: number;
+  /** Inclusive host-clock timestamp cutoff resolved for a time-based starting point. */
+  timeFloorMs?: number;
   scan: SessionEventsScan;
 }
 
@@ -96,7 +100,7 @@ export interface SessionEvents {
   query(stream: string, options?: SessionEventsQueryOptions): Promise<SessionEventsQueryResult>;
   /** How many records match, with no payloads crossing into JavaScript. */
   count(stream: string, options?: SessionEventsQueryOptions): Promise<SessionEventsCountResult>;
-  /** Name this point in every stream, to query `since` it later. Re-marking a name moves it. */
+  /** Name this point in every stream. Re-marking moves it; do not overwrite a mark while a survey using it is running. */
   mark(name: string): Promise<SessionEventsMark>;
 }
 

@@ -320,7 +320,7 @@ abstract class TrailblazeDesktopApp(
     // Pin a SessionId per delegated trail run so the post-completion status check
     // can target THIS run's session. See SessionId.pinnedFor for the parallel-safety
     // rationale (a reproduction surfaced cross-attribution without it).
-    val pinnedSessionId = SessionId.pinnedFor(testName)
+    val pinnedSessionId = runSessionId(request.sessionId, testName, deviceManager.logsRepo.logsDir)
 
     val runYamlRequest = resolvedRunRequest ?: RunYamlRequest(
       testName = testName,
@@ -349,6 +349,7 @@ abstract class TrailblazeDesktopApp(
         // app and CI do. Without this the model default (true = host-driven via RPC)
         // always won, ignoring a user who chose on-device execution.
         preferHostAgent = deviceManager.settingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
+        trailheadReuse = request.trailheadReuse,
       ),
       // Use "cli" referrer (not "cli-daemon") so DesktopYamlRunner's shared-scope set
       // matches and parallel CLI delegations don't cancel each other.
@@ -590,3 +591,12 @@ abstract class TrailblazeDesktopApp(
   }
 
 }
+
+/**
+ * The caller's [requested] session id, so it can watch the run, unless a session already has it:
+ * a retried request must not append to the run before it.
+ */
+internal fun runSessionId(requested: String?, testName: String, logsDir: File): SessionId =
+  requested?.takeIf { it.isNotBlank() }?.let { SessionId.sanitized(it) }
+    ?.takeIf { !File(logsDir, it.value).exists() }
+    ?: SessionId.pinnedFor(testName)

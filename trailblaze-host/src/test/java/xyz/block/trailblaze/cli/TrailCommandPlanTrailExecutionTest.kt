@@ -1196,6 +1196,53 @@ class TrailCommandPlanTrailExecutionTest {
   }
 
   /**
+   * With several configurations and none named, the bound device names pick the one declaring
+   * exactly those devices beyond its start device, so only that configuration's `skip:` applies.
+   */
+  @Test
+  fun `the bound names pick which configuration's skip applies`() {
+    val file = File(tempFolder.root, "two-casts-skip.trail.yaml")
+    file.writeText(
+      """
+      config:
+        target: myapp
+        devices:
+          phone-cast:
+            devices:
+              seller:
+                classifier: android-phone
+              customer:
+                classifier: android-phone
+          tablet-cast:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+              customer:
+                classifier: android-phone
+        skip:
+          tablet-cast: "tablet blocked on #789"
+      trail:
+        - step: Do the thing
+      """.trimIndent() + "\n",
+    )
+
+    fun planItem(boundDeviceNames: Set<String>) = TrailCommand.planTrailExecution(
+      files = listOf(file),
+      includeTags = emptyList(),
+      configClassifiers = listOf(TrailblazeDeviceClassifier("android-phone")),
+      bindsCompanionDevices = boundDeviceNames.isNotEmpty(),
+      boundDeviceNames = boundDeviceNames,
+    ).items.single()
+
+    assertIs<TrailExecutionItem.Run>(planItem(setOf("customer")))
+    val tablet = planItem(setOf("buyer", "customer"))
+    assertIs<TrailExecutionItem.Skip>(tablet)
+    assertEquals("tablet blocked on #789", tablet.reason)
+  }
+
+  /**
    * The planner reads this shell's `TRAILBLAZE_DEVICE_BINDINGS`, but a delegated run executes with the
    * daemon's environment, so a mixed trail must carry the shell's bindings to run what was planned.
    */
@@ -1270,6 +1317,49 @@ class TrailCommandPlanTrailExecutionTest {
     )
   }
 
+  /**
+   * A trail declaring several configurations is selected by the devices a run binds, so the planner's
+   * pick and the daemon's must read the same bindings: a daemon started with other bindings, or none,
+   * would run another cast than the one whose `skip:` was planned, or refuse the run.
+   */
+  @Test
+  fun `a delegated multi-configuration trail carries this shell's environment bindings`() {
+    val casts = File(tempFolder.root, "casts-forward.trail.yaml").apply {
+      writeText(
+        """
+        config:
+          devices:
+            phone-cast:
+              devices:
+                pos:
+                  classifier: android-phone
+                customer:
+                  classifier: android-phone
+            tablet-cast:
+              devices:
+                seller:
+                  classifier: android-tablet
+                buyer:
+                  classifier: android-phone
+                customer:
+                  classifier: android-phone
+        trail:
+          - step: Do the thing
+        """.trimIndent() + "\n",
+      )
+    }
+
+    assertEquals(
+      mapOf("buyer" to "emulator-5556", "customer" to "emulator-5558"),
+      TrailCommand.delegatedDeviceBindings(
+        casts.readText(),
+        emptyMap(),
+        rawEnvironmentBindings = "buyer=emulator-5556,customer=emulator-5558",
+      ),
+    )
+    assertTrue(TrailCommand.forwardsEnvironmentBindings(listOf(casts), emptyMap(), "customer=emulator-5558"))
+  }
+
   @Test
   fun `a delegated trail that is not mixed leaves environment bindings to the daemon`() {
     val singleDevice = """
@@ -1293,7 +1383,7 @@ class TrailCommandPlanTrailExecutionTest {
     """.trimIndent()
 
     // A request binding on a trail declaring no configuration is a hard error where the env var is
-    // ignored, and a configuration-only trail binds its configuration either way.
+    // ignored, and a trail with one configuration and nothing else binds it either way.
     for (yaml in listOf(singleDevice, configurationOnly)) {
       assertEquals(
         emptyMap(),

@@ -3,7 +3,9 @@ package xyz.block.trailblaze.waypoint
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
+import kotlin.test.assertEquals
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -25,7 +27,7 @@ class WaypointRegistryResolverTest {
   }
 
   /** Writes a minimal workspace (trailblaze.yaml + one app trailmap declaring one waypoint). */
-  private fun writeWorkspace(root: File): File {
+  private fun writeWorkspace(root: File, waypointId: String = "sampleapp/home", targetId: String? = null): File {
     val configDir = File(root, "trails/config").apply { mkdirs() }
     File(configDir, "trailblaze.yaml").writeText("targets:\n  - sampleapp\n")
     val trailmapDir = File(configDir, "trailmaps/sampleapp").apply { mkdirs() }
@@ -36,11 +38,11 @@ class WaypointRegistryResolverTest {
         display_name: Sample App
       waypoints:
         - waypoints/home.waypoint.yaml
-      """.trimIndent(),
+      """.trimIndent().let { yaml -> targetId?.let { yaml.replace("target:\n", "target:\n  id: $it\n") } ?: yaml },
     )
     File(File(trailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml").writeText(
       """
-      id: "sampleapp/home"
+      id: "$waypointId"
       description: "App waypoint that only resolves via the workspace config."
       """.trimIndent(),
     )
@@ -81,6 +83,56 @@ class WaypointRegistryResolverTest {
         resolver("sampleapp/home"),
         "an app waypoint declared in the workspace trailblaze.yaml must resolve via walk-up (#4279)",
       )
+    } finally {
+      root.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `selecting another workspace in the same process resolves that workspace's waypoints`() {
+    val first = createTempDirectory(prefix = "wp-registry-switch-a-").toFile()
+    val second = createTempDirectory(prefix = "wp-registry-switch-b-").toFile()
+    try {
+      val firstConfig = writeWorkspace(first, waypointId = "sampleapp/home")
+      val secondConfig = writeWorkspace(second, waypointId = "sampleapp/settings")
+      WaypointRegistryResolver.workspaceConfigDirProvider = { firstConfig }
+      assertNotNull(WaypointRegistryResolver.resolver()("sampleapp/home"))
+
+      WaypointRegistryResolver.workspaceConfigDirProvider = { secondConfig }
+      val resolver = WaypointRegistryResolver.resolver()
+      assertNotNull(resolver("sampleapp/settings"), "the newly selected workspace's waypoint must resolve")
+      assertNull(resolver("sampleapp/home"), "the previous workspace's waypoint must not linger")
+    } finally {
+      first.deleteRecursively()
+      second.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a selected workspace that fails to load is reported unloaded, then picked up once it recovers`() {
+    val root = createTempDirectory(prefix = "wp-registry-broken-").toFile()
+    try {
+      val configDir = writeWorkspace(root, waypointId = "sampleapp/settings")
+      val manifest = File(configDir, "trailblaze.yaml")
+      val good = manifest.readText()
+      manifest.writeText("targets: [unclosed")
+      WaypointRegistryResolver.workspaceConfigDirProvider = { configDir }
+      assertFailsWith<IllegalStateException> { WaypointRegistryResolver.forTarget("sampleapp") }
+
+      manifest.writeText(good)
+      assertNotNull(WaypointRegistryResolver.resolver()("sampleapp/settings"))
+    } finally {
+      root.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a target's waypoints are its trailmap's, even when the trailmap gives the target another id`() {
+    val root = createTempDirectory(prefix = "wp-registry-target-id-").toFile()
+    try {
+      val configDir = writeWorkspace(root, waypointId = "sampleapp/home", targetId = "sample-pos")
+      WaypointRegistryResolver.workspaceConfigDirProvider = { configDir }
+      assertEquals(listOf("sampleapp/home"), WaypointRegistryResolver.forTarget("sample-pos").map { it.id })
     } finally {
       root.deleteRecursively()
     }

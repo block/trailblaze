@@ -45,6 +45,7 @@ import xyz.block.trailblaze.logs.client.SessionMetadata
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -69,6 +70,7 @@ import xyz.block.trailblaze.toolcalls.carriesPayload
 import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
 import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -747,7 +749,7 @@ open class AndroidTrailblazeRule(
 
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
-      runTrailblazeTool = ::runTrailblazeTool,
+      runTrailblazeTool = { tools -> runTrailblazeTool(tools) },
       trailblazeLogger = trailblazeLoggingRule.logger,
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
@@ -782,6 +784,12 @@ open class AndroidTrailblazeRule(
      */
     sendSessionEndLog: Boolean,
     trailSourceUrl: String? = null,
+    /**
+     * The host's trace for this dispatch ([xyz.block.trailblaze.llm.RunYamlRequest.traceId]). A
+     * direct tool call logs its outer call on the host under this trace; logging the device's
+     * executor calls under it too is what lets a saved recording pair the two.
+     */
+    traceId: TraceId? = null,
   ): TrailblazeToolResult.Success? {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this on-device runner. v1 inputs ignore
@@ -822,8 +830,12 @@ open class AndroidTrailblazeRule(
     )?.let { refusal -> throw TrailblazeException(refusal) }
 
     // A locale is a device setting, not an app launch argument. Apply it before the session starts
-    // so the session snapshot and every subsequently launched target process observe it.
-    trailConfig?.locale?.let { AndroidDeviceLocale.apply(it) }
+    // so the session snapshot and every subsequently launched target process observe it. Only a
+    // declared locale (the trail's own or its catalog device's) is applied here. The default for a
+    // trail that declares none belongs to whoever started the run: [run] or [runFromAsset] before
+    // it starts, or the host for a host-driven run, whose config here need not carry the locale the
+    // host already applied and must not be overwritten with the default.
+    AndroidDeviceLocale.forTrail(trailConfig?.locale)?.let { AndroidDeviceLocale.applyForTrail(it) }
 
     // Per-trail overrides (e.g. a `config.driver` flip) must land before the session-start
     // log below reads the device info, and before any lazy agent field is first touched.
@@ -860,14 +872,7 @@ open class AndroidTrailblazeRule(
       trailblazeAgent.clearMemory()
     }
 
-    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
-      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
-      throw TrailblazeException(
-        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file." +
-          (emptyTrailGuardHint(trailConfig)?.let { " $it" } ?: ""),
-      )
-    }
+    requireActionableSteps(trailItems, trailConfig, trailFilePath)
 
     // PR A5: launch the target-declared MCP bundles at session start, so advertised tools
     // are registered into [trailblazeToolRepo] before the LLM selects a tool. Tear down in
@@ -966,7 +971,9 @@ open class AndroidTrailblazeRule(
                 useRecordedSteps = true,
                 selfHeal = resolveSelfHealEnabled(),
               )
-            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem {
+              runTrailblazeTool(item.tools.map { it.trailblazeTool }, traceId)
+            }
             is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
           }
           if (itemResult is TrailblazeToolResult.Error) {
@@ -1062,12 +1069,67 @@ open class AndroidTrailblazeRule(
     useRecordedSteps: Boolean,
   ) {
     refuseIfRequiresHost(testYaml, trailFilePath)
+    // A direct run has no host and no [runFromAsset] ahead of it, so the default is applied here.
+    // A trail that can't be read is left to the run's own decode to report. A changed language
+    // restarts the app, as [runFromAsset] does, or a running process keeps strings it cached.
+    val localeChanged = applyTrailLocale(
+      runCatching {
+        trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers)
+      }.getOrNull(),
+      trailFilePath,
+    )
+    // The restart stays owed until an app was actually stopped.
+    if (localeChanged) {
+      defaultForceStopAppId?.let {
+        AdbCommandUtil.forceStopApp(it)
+        TrailDeviceLocale.cleanupDone(localeCleanupKey())
+      }
+    }
     runWithSource(
       testYaml = testYaml,
       trailFilePath = trailFilePath,
       useRecordedSteps = useRecordedSteps,
       trailSourceUrl = null,
     )
+  }
+
+  /**
+   * Applies the language of [trailItems] — its `locale:`, or the default when it declares none —
+   * unless the trail is unreadable (null) or skipped. A trail pinned to a retired driver is
+   * refused first, as [runSuspend] would refuse it, so a trail that cannot run leaves the device's
+   * language and reusable setup alone, and so is a trail with no steps. A change drops this
+   * device's trailhead hand-offs, whose setup lived in the app process the change restarts.
+   *
+   * Returns whether the app needs a fresh process: the language changed, or an earlier change's
+   * restart never happened (that run failed first). The caller restarts the app, then calls
+   * [TrailDeviceLocale.cleanupDone].
+   */
+  private fun applyTrailLocale(trailItems: List<TrailYamlItem>?, trailFilePath: String?): Boolean {
+    val runnable = trailItems?.takeIf { trailblazeYaml.firstSkipReason(it) == null } ?: return false
+    val trailConfig = trailblazeYaml.extractTrailConfig(runnable)
+    retiredTrailDriverPinRefusal(
+      pinnedDriver = trailConfig?.driver,
+      forcedDriver = InstrumentationArgUtil.driverType(),
+    )?.let { refusal -> throw TrailblazeException(refusal) }
+    requireActionableSteps(runnable, trailConfig, trailFilePath)
+    val changed = TrailDeviceLocale.changeNeedingCleanup(localeCleanupKey()) {
+      AndroidDeviceLocale.applyForTrail(trailConfig?.locale)
+    }
+    if (changed) TrailheadHandoffStore.dropDevice(trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId)
+    return changed
+  }
+
+  private fun localeCleanupKey(): String = trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId.toString()
+
+  private fun requireActionableSteps(trailItems: List<TrailYamlItem>, trailConfig: TrailConfig?, trailFilePath: String?) {
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      throw TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (emptyTrailGuardHint(trailConfig)?.let { " $it" } ?: ""),
+      )
+    }
   }
 
   /**
@@ -1105,9 +1167,13 @@ open class AndroidTrailblazeRule(
     }
   }
 
-  private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult =
+  private fun runTrailblazeTool(
+    trailblazeTools: List<TrailblazeTool>,
+    traceId: TraceId? = null,
+  ): TrailblazeToolResult =
     trailblazeAgent.runTrailblazeTools(
       tools = trailblazeTools,
+      traceId = traceId,
       // null + provider = capture lazily on first `context.screenState` read (see the lazy
       // getter on TrailblazeToolExecutionContext). Most recorded tools (inputText, pressKey,
       // swipe, launchApp) never read it — the accessibility driver resolves against the live
@@ -1277,24 +1343,25 @@ open class AndroidTrailblazeRule(
     val reuseEnabled = TrailheadRuns.reuseEnabled(
       InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
     )
-    // Decoded only when the clean-start decision needs it: a reusable hand-off can skip the
-    // ordinary force-stop, but never a locale change. A trail that can't be read keeps its clean
-    // start under reuse; the run's own decode reports the error.
+    // Decoded for the trail's language, which [runSuspend] leaves to this caller when the trail
+    // declares none, and for the clean-start decision: a reusable hand-off can skip the ordinary
+    // force-stop, but never a locale change. A trail that can't be read keeps its clean start; the
+    // run's own decode reports the error.
     val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
     val trailItems = when {
       !forceStopApp -> trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
-      reuseEnabled -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers) }.getOrNull()
-      else -> null
+      else -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers) }.getOrNull()
     }
-    val localeForFreshProcess = trailItems?.let { items ->
-      trailblazeYaml.extractTrailConfig(items)
-        ?.locale
-        ?.takeIf { trailblazeYaml.firstSkipReason(items) == null }
-    }
+    // The language is applied before the clean-start decision because only a change needs a fresh
+    // process; the same language leaves a running app, and a reusable hand-off, alone.
+    val deviceId = trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId
+    val localeChanged = applyTrailLocale(trailItems, computedAssetPath)
     val keepForReuse = reuseEnabled && trailItems != null &&
-      TrailheadHandoffStore.holdsReusableFor(trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId, trailItems)
-    if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess, keepForReuse) && appIdToForceStop != null) {
+      TrailheadHandoffStore.holdsReusableFor(deviceId, trailItems)
+    if (shouldForceStopTargetApp(forceStopApp, localeChanged, keepForReuse) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
+      // The restart stays owed until an app was actually stopped.
+      if (localeChanged) TrailDeviceLocale.cleanupDone(localeCleanupKey())
     }
     afterCleanStart()
     runWithSource(
@@ -1317,9 +1384,9 @@ open class AndroidTrailblazeRule(
    * Every trail runs even after one fails, and the test then fails with each failure. An interrupt
    * (the test's timeout) ends the trail it lands in and stops there.
    *
-   * The trails must share a driver and a locale: the agent is built for the first trail, and
-   * nothing resets a locale a trail set. Each trail's `config.context` and turbo verdict are its
-   * own, and a failed trail hands no setup on. [trailSourceUrls] maps a path to the link its report
+   * The trails must share a driver: the agent is built for the first trail. Each trail runs in its
+   * own `locale:`, or the default when it declares none. Each trail's `config.context` and turbo
+   * verdict are its own, and a failed trail hands no setup on. [trailSourceUrls] maps a path to the link its report
    * shows for the trail's source, as [runFromAsset]'s `trailSourceUrl` does.
    */
   fun runFromAssets(
@@ -1428,11 +1495,12 @@ open class AndroidTrailblazeRule(
       yamlAssetPath.trimEnd('/').substringAfterLast('/').removeSuffix(".trail.yaml")
 
     /**
-     * A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. A
-     * reusable trailhead hand-off skips the ordinary clean start: the trailhead decides what to keep.
+     * A trail that changed the device's language needs a fresh process even when ordinary
+     * clean-start is disabled. A reusable trailhead hand-off skips the ordinary clean start: the
+     * trailhead decides what to keep.
      */
-    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?, keepForReuse: Boolean = false): Boolean =
-      (requested && !keepForReuse) || locale != null
+    internal fun shouldForceStopTargetApp(requested: Boolean, localeChanged: Boolean, keepForReuse: Boolean = false): Boolean =
+      (requested && !keepForReuse) || localeChanged
 
     /**
      * Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)

@@ -82,6 +82,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings. |
 | `strings` | Extract the human-visible text a recorded session showed, for localization and copy diffs |
+| `survey` | Run surveys over finished sessions, store their findings and labels in each session, and print a report |
 | `viewer` | Write out the standalone report viewer (one self-contained HTML page). |
 | `profile` | Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory. |
 | `otel` | Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint). |
@@ -350,7 +351,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 
 ### `trailblaze loop`
 
-Run a trail's trailhead once, then repeat its steps in a loop.  One session runs the `trailhead:`, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began.  A failed pass is reported, handed to --on-failure, and counted toward --iterations. The loop then recovers in a new session that runs the trailhead again, and continues with the passes left. It stops early after 3 sessions in a row that complete no pass. Exits non-zero if any pass failed.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations each. Never saves a recording: it would record every pass into the trail.
+Run a trail's trailhead once, then repeat its steps in a loop.  One session runs the `trailhead:`, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began.  A failed pass is reported, handed to --on-failure, and counted toward --iterations. The loop then recovers in a new session that runs the trailhead again, and continues with the passes left. It stops early after 3 sessions in a row that complete no pass. Exits non-zero if any pass failed.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it. Each pass then runs the whole trail in a session of its own.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations each. Never saves a recording: it would record every pass into the trail.
 
 **Synopsis:**
 
@@ -406,6 +407,7 @@ trailblaze loop [OPTIONS] [<<trailFile>>]
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
 | `-n`, `--iterations` | How many passes to run, failed ones included. | - |
 | `--on-failure` | Run this shell command for each failed pass, with the failed session's log directory appended as its last argument. It runs alongside the loop, one at a time: the loop waits for it before starting the next one, and before exiting. | - |
+| `--reuse-trailhead` | Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting up again. Each pass then runs the whole trail, trailhead included, in a session of its own. Only a trailhead that defines `teardown` hands its setup on, and only after a pass that passed; otherwise the next pass sets up from scratch. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -723,6 +725,7 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
 | `-v`, `--verbose` | Show the generator's own progress logs — workspace config loading, tool-class discovery, per-session clock normalisation, and step timings. Suppressed by default so the report paths are the output; turn this on when a report is slow or empty and you need to see which session the generator was working on. | - |
+| `--surveys` | Also run surveys over the report's sessions, and write what they found beside the report: surveys.md (labels, the findings behind each, and the runs they came from) and surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated (--surveys=journeys,jobs). Each session's findings and labels are stored in its surveys.json too. Surveys never run unless asked. Put a session id before this flag, or it is read as a survey name. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -798,6 +801,35 @@ trailblaze strings diff [OPTIONS] <<baseline.ndjson>> <<candidate.ndjson>>
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--untranslated` | Report the strings both runs show verbatim instead of the ones that changed. Run the same trail at two locales and this is the list of screens nobody translated. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze survey`
+
+Run surveys over finished sessions, store their findings and labels in each session, and print a report Surveys load from the workspace you run this in. Each survey's find phase reads every session, then label phases run over the batch. A survey that a selected survey lists in `dependsOn` runs too, reusing a session's stored findings while they are current.
+
+**Synopsis:**
+
+```
+trailblaze survey [OPTIONS] [<<session>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<session>>` | Session id or unambiguous prefix, or a path: a session directory, a directory of sessions, or a session zip. Defaults to every session in the logs directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--survey` | Only run the survey exported under this name (repeatable). | - |
+| `--format` | What to print: markdown (default), summary, json, or none. | - |
+| `-o`, `--out` | Also write the JSON report to this file. | - |
+| `--logs-dir` | Directory session ids resolve in. Defaults to the configured logs directory. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

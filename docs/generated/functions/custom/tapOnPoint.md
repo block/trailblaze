@@ -4,7 +4,7 @@
 
 # `tapOnPoint`
 
-Tap or long press at device screen coordinates, in the units of element bounds (not screenshot pixels).
+Tap, double-tap or long press at device screen coordinates, in the units of element bounds (not screenshot pixels).
 
 ## Source
 
@@ -30,6 +30,8 @@ Tap or long press at device screen coordinates, in the units of element bounds (
 
 - `longPress` — `Boolean`
   Long press instead of tap.
+- `doubleTap` — `Boolean`
+  Tap twice in quick succession (a double-tap). Cannot combine with longPress.
 - `reasoning` — `String`
 
 ## Output

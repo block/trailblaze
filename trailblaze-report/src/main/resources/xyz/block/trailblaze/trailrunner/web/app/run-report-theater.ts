@@ -5,6 +5,7 @@
 // The viewer mounts this into an empty container after each render and disposes it before the
 // next (see run-report-tab-host.ts), so everything here is plain DOM that dispose can fully undo.
 // Time inside the view is story time (ms from the run's first timestamp); the host speaks epoch ms.
+import { clipFrameSource } from './run-report-clip-player';
 import { videoClipRate, videoClipScale } from './run-report-trail-replay';
 import { DEFAULT_SCREEN, deviceFrame, frameKindFor, type FrameKind } from './run-report-device-frames';
 import type { ReportTabHost, ReportTabMount } from './run-report-tab-host';
@@ -39,6 +40,9 @@ interface TheaterState {
 }
 
 const INSET_GAP = 16;
+/** Canvas width of a wall cell's copy of the program device: about a cell's size, not the stage's. */
+const MIRROR_WIDTH = 360;
+const MIRROR_REFRESH_MS = 500;
 /** Ripples only read at speeds a person can follow. */
 const TAP_MAX_RATE = 4;
 /** A frame this late skips its ripples rather than firing them in a burst. */
@@ -72,6 +76,44 @@ export function markPlacer(mark: { dw: number; dh: number }, screen?: { w: numbe
     width: (dx: number) => pct(dx * scale, w),
     height: (dy: number) => pct(dy * scale, h),
   };
+}
+
+/** The device whose wall cell holds a copy: the one on the program, when there is a wall to fill. */
+const DEVICE_WORDS: Record<string, string> = { ios: 'iOS', iphone: 'iPhone', ipad: 'iPad', android: 'Android', web: 'Web' };
+
+/** A device's classifier or platform as words: `ios-iphone` reads "iOS iPhone", `android-tablet` "Android tablet". */
+export function deviceWords(raw: string): string {
+  return raw.split(/[-_\s]+/).filter(Boolean).map((word, index) => {
+    const known = DEVICE_WORDS[word.toLowerCase()];
+    if (known) return known;
+    return index > 0 ? word.toLowerCase() : word.slice(0, 1).toUpperCase() + word.slice(1);
+  }).join(' ');
+}
+
+export function mirroredDevice(deviceCount: number, onAir: string | undefined, grid: boolean): string | undefined {
+  return deviceCount > 1 && !grid ? onAir : undefined;
+}
+
+/** What a wall copy would show: a video at its position, a screenshot, or nothing drawable yet. */
+export function mirrorKey(shown: { source?: string; clip?: number; videoReady: boolean; currentTime: number; imageReady: boolean; imageSrc: string }): string {
+  if (shown.source === 'video' && shown.videoReady) return `v${shown.clip}:${shown.currentTime}`;
+  if (shown.source === 'shots' && shown.imageReady) return `i${shown.imageSrc}`;
+  return '';
+}
+
+/**
+ * Whether a wall copy repaints: when what it shows changed, and every `refreshMs` while it hasn't.
+ * A paused video can report a frame before it can draw one, so the same position is drawn again.
+ */
+export function mirrorDue(key: string, last: string | undefined, lastAt: number, now: number, refreshMs: number): boolean {
+  return key !== last || now - lastAt >= refreshMs;
+}
+
+/** A picture contained in a box, centred, as the program's own video and screenshot are. */
+export function containIn(sw: number, sh: number, w: number, h: number): { x: number; y: number; w: number; h: number } | null {
+  if (!(sw > 0 && sh > 0 && w > 0 && h > 0)) return null;
+  const scale = Math.min(w / sw, h / sh);
+  return { x: (w - sw * scale) / 2, y: (h - sh * scale) / 2, w: sw * scale, h: sh * scale };
 }
 
 /** Where the view opens: a navigation's moment always wins; otherwise the saved playhead, then the route's. */
@@ -149,6 +191,13 @@ interface Rig {
   shown?: string;
   url?: string;
   marked?: TheaterAction;
+  /** A copy of the frame left in the device's wall cell while the device is on the program, its
+   * screen a canvas painted from what the program shows, so the wall still shows every device. */
+  mirror: HTMLElement;
+  mirrorCanvas: HTMLCanvasElement;
+  /** What the canvas last painted and when, so a still screen is not repainted every frame. */
+  mirrored?: string;
+  mirroredAt: number;
 }
 
 interface Layout {
@@ -221,7 +270,7 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
 
   // ---- Markup ---------------------------------------------------------------------------------------
   const meta = session.meta || {};
-  const platform = [meta.platform, meta.deviceType].filter(Boolean).join(' ');
+  const platform = deviceWords([meta.platform, meta.deviceType].filter(Boolean).join(' '));
   const outcomeLabel = OUTCOME_LABEL[story.outcome] || meta.status || '';
   const total = stepCount(chapters);
   container.innerHTML = `
@@ -320,7 +369,14 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
     el.style.width = `${BASE}px`;
     el.style.visibility = 'hidden';
     el.dataset.role = 'wall';
-    const rig: Rig = { device, slot, kind, ratio: 1, el, screen: el, nodes, video, failed: new Set(), unwire: [], img, taps: tapLayer, urlEl: null };
+    const mirror = document.createElement('div');
+    mirror.className = 'storyframe';
+    mirror.style.width = `${BASE}px`;
+    mirror.style.visibility = 'hidden';
+    mirror.dataset.role = 'wall';
+    const mirrorCanvas = document.createElement('canvas');
+    mirrorCanvas.className = 'storymirror';
+    const rig: Rig = { device, slot, kind, ratio: 1, el, screen: el, nodes, video, failed: new Set(), unwire: [], img, taps: tapLayer, urlEl: null, mirror, mirrorCanvas, mirroredAt: 0 };
     mountFrame(rig);
     return rig;
   });
@@ -333,12 +389,51 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
     rig.screen.append(...rig.nodes);
     rig.urlEl = rig.el.querySelector<HTMLElement>('[data-story-url]');
     rig.ratio = frame.ratio;
+    rig.mirror.innerHTML = frame.html;
+    rig.mirror.querySelector<HTMLElement>('[data-story-screen]')?.append(rig.mirrorCanvas);
+    rig.mirrored = undefined;
+  }
+
+  /** Paints the program device's wall copy from the recording or screenshot the program shows. */
+  function paintMirror(): void {
+    const name = snap && mirroredDevice(rigs.length, snap.onAir, isGrid());
+    const rig = name ? rigByName.get(name) : undefined;
+    if (!rig) return;
+    const source = rig.screen.dataset.source;
+    const videoReady = !!rig.video && rig.video.readyState >= 2;
+    const imageReady = rig.img.complete && rig.img.naturalWidth > 0;
+    const key = mirrorKey({ source, clip: rig.clip, videoReady, currentTime: rig.video?.currentTime ?? 0, imageReady, imageSrc: rig.img.src });
+    const video = key.startsWith('v') ? rig.video! : null;
+    const img = key.startsWith('i') ? rig.img : null;
+    const now = performance.now();
+    if (!mirrorDue(key, rig.mirrored, rig.mirroredAt, now, MIRROR_REFRESH_MS)) return;
+    rig.mirrored = key;
+    rig.mirroredAt = now;
+    const canvas = rig.mirrorCanvas;
+    const screen = rig.device.screen ?? DEFAULT_SCREEN[rig.kind];
+    const w = MIRROR_WIDTH;
+    const h = Math.max(1, Math.round((MIRROR_WIDTH * screen.h) / screen.w));
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, w, h);
+    // A clip the fallback decoder took over is drawn from its canvas; the element may have no frame.
+    const drawn = video ? clipFrameSource(video) : img;
+    const sw = drawn instanceof HTMLVideoElement ? drawn.videoWidth : drawn instanceof HTMLImageElement ? drawn.naturalWidth : drawn?.width ?? 0;
+    const sh = drawn instanceof HTMLVideoElement ? drawn.videoHeight : drawn instanceof HTMLImageElement ? drawn.naturalHeight : drawn?.height ?? 0;
+    const box = containIn(sw, sh, w, h);
+    try {
+      if (box && drawn) context.drawImage(drawn, box.x, box.y, box.w, box.h);
+    } catch {
+      // A frame not drawable yet: the periodic repaint tries again, and playback keeps ticking.
+    }
   }
 
   const hardwareLabel = (rig: Rig): string => {
     const raw = rig.device.classifier || rig.device.platform;
     if (!raw) return KIND_LABEL[rig.kind];
-    return raw.split(/[-_\s]+/).filter(Boolean).map((word, index) => (index > 0 ? word.toLowerCase() : word.toLowerCase() === 'ios' ? 'iOS' : word.slice(0, 1).toUpperCase() + word.slice(1))).join(' ');
+    return deviceWords(raw);
   };
 
   /** A device whose screen no step measured takes its shape from its first picture. */
@@ -479,8 +574,11 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
     nodeEl = stage.querySelector<HTMLElement>('[data-story-node]');
     framesEl = stage.querySelector<HTMLElement>('.storyframes')!;
     wellEls = new Map([...stage.querySelectorAll<HTMLElement>('[data-story-well]')].map((well) => [well.dataset.storyWell!, well]));
-    framesEl.append(...rigs.map((rig) => rig.el));
-    for (const rig of rigs) rig.el.style.visibility = 'hidden';
+    framesEl.append(...rigs.map((rig) => rig.el), ...rigs.map((rig) => rig.mirror));
+    for (const rig of rigs) {
+      rig.el.style.visibility = 'hidden';
+      rig.mirror.style.visibility = 'hidden';
+    }
     layout = undefined;
     kept = undefined;
     nodeSize = { w: 0, h: 0 };
@@ -533,6 +631,14 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
       rig.el.style.setProperty('--storyscale', String(spot.s));
       rig.el.style.visibility = '';
       rig.el.dataset.role = grid ? (name === snap.onAir ? 'program' : 'wall') : name === snap.onAir ? 'program' : name === insetDevice ? 'inset' : 'wall';
+      // The device on the program still has a cell on the wall; its copy fills it.
+      const mirrored = name === mirroredDevice(rigs.length, snap.onAir, grid);
+      if (mirrored) {
+        const cell = fit(well, rig.ratio, 6);
+        rig.mirror.style.transform = `translate(${cell.x.toFixed(2)}px, ${cell.y.toFixed(2)}px) scale(${cell.s.toFixed(5)})`;
+        rig.mirror.style.setProperty('--storyscale', String(cell.s));
+      }
+      rig.mirror.style.visibility = mirrored ? '' : 'hidden';
     }
     if (linksEl && nodeEl) {
       const shown = !!(handoff && links);
@@ -903,7 +1009,12 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
       }
       if (rig.kind === 'browser' && rig.urlEl) {
         const url = browserHost(story, rig.device.name, t) ?? '';
-        if (url !== rig.url) { rig.url = url; rig.urlEl.textContent = url; }
+        if (url !== rig.url) {
+          rig.url = url;
+          rig.urlEl.textContent = url;
+          const copy = rig.mirror.querySelector<HTMLElement>('[data-story-url]');
+          if (copy) copy.textContent = url;
+        }
       }
     }
   }
@@ -1180,6 +1291,7 @@ export function mountTheater(container: HTMLElement, host: ReportTabHost): Repor
     syncVideos();
     paintScreens(shown);
     paintMarks(shown);
+    paintMirror();
     tickId = requestAnimationFrame(tick);
   };
 

@@ -69,7 +69,7 @@ internal object CanonicalToolAdapters {
       // tapRoute is ignored, matching every non-accessibility driver: it pins how the
       // ACCESSIBILITY driver routes a tap, and its own contract says other drivers dispatch
       // their one native gesture unconditionally.
-      AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress)
+      AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
     }
 

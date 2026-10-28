@@ -140,7 +140,7 @@ class WaypointGraphScriptedTrailheadTest {
 
       /** Launch MyApp onto its home screen. */
       export const myapp_launchHome = trailblaze.tool(
-        { requiresContext: true, $platforms trailhead: { to: "myapp/home" } },
+        { $platforms trailhead: { to: "myapp/home" } },
         async (_input, ctx) => {
           return "launched";
         },

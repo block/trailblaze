@@ -7,6 +7,8 @@ import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDeviceMet
 import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDeviceOrientation
 import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDisplayMetrics
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.devices.CatalogDeviceArgs
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -90,6 +92,11 @@ class TrailblazeAndroidLoggingRule(
   /** Host-validated locale/variant classifiers for the current run. Reset on every request. */
   var deviceClassifiersOverride: List<TrailblazeDeviceClassifier> = emptyList()
 
+  /** The catalog device a device-farm run says it stands for; see [CatalogDeviceArgs]. */
+  private val requestedDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
+    CatalogDeviceArgs.classifiers()
+  }
+
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
     val displayMetrics = getDisplayMetrics()
     TrailblazeDeviceInfo(
@@ -99,7 +106,9 @@ class TrailblazeAndroidLoggingRule(
       orientation = getDeviceOrientation(),
       widthPixels = displayMetrics.widthPixels,
       heightPixels = displayMetrics.heightPixels,
-      classifiers = deviceClassifiersOverride.ifEmpty(trailblazeDeviceClassifiersProvider),
+      classifiers = deviceClassifiersOverride.ifEmpty {
+        DeviceClassifierKey.refine(trailblazeDeviceClassifiersProvider(), requestedDeviceClassifiers)
+      },
       metadata = getDeviceMetadata(),
     )
   }

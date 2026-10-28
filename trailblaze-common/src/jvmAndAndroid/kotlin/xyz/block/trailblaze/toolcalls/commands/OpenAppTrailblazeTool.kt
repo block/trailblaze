@@ -7,11 +7,11 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.device.androidPackageNameViolation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.ios.tools.IosOpenAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
@@ -30,7 +30,8 @@ import xyz.block.trailblaze.util.TrailblazeDispatchers
  *   in the foreground — both hard requirements. The
  *   app's activity record is then polled for `idle=true` (its main thread first drained after
  *   resume), for up to [AndroidOpenAppReadiness.IDLE_TIMEOUT_MS]. See [AndroidOpenAppReadiness].
- * - **iOS:** `simctl launch` has no drawn signal, so the screen is captured before the launch and
+ * - **iOS:** runs `ios_openApp` ([IosOpenAppTrailblazeTool]), which also takes launch arguments.
+ *   `simctl launch` has no drawn signal, so the screen is captured before the launch and
  *   polled after it until it has changed and then held still, for up to a few seconds. See
  *   [awaitIosScreenReady].
  *
@@ -59,7 +60,7 @@ data class OpenAppTrailblazeTool(
     withContext(TrailblazeDispatchers.IO) {
       when (val platform = toolExecutionContext.trailblazeDeviceInfo.platform) {
         TrailblazeDevicePlatform.ANDROID -> openOnAndroid(toolExecutionContext)
-        TrailblazeDevicePlatform.IOS -> openOnIos(toolExecutionContext)
+        TrailblazeDevicePlatform.IOS -> IosOpenAppTrailblazeTool(appId = appId).execute(toolExecutionContext)
         TrailblazeDevicePlatform.WEB,
         TrailblazeDevicePlatform.DESKTOP,
         -> TrailblazeToolResult.Error.ExceptionThrown(
@@ -144,27 +145,6 @@ data class OpenAppTrailblazeTool(
       appId,
     )
 
-  private suspend fun openOnIos(context: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val deviceId = context.trailblazeDeviceInfo.trailblazeDeviceId.instanceId
-    if (deviceId !in IosHostSimctlUtils.listBootedDeviceIds()) {
-      return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "$deviceId is not a booted iOS simulator, so openApp cannot open '$appId' " +
-          "there. Only simulators are supported on iOS.",
-        command = this,
-      )
-    }
-    val capture = context.screenStateProvider?.let { provider -> { provider().viewHierarchy } }
-    val baseline = capture?.invoke()
-    IosHostSimctlUtils.launchApp(deviceId = deviceId, appId = appId)
-    if (capture == null) {
-      return TrailblazeToolResult.Success(
-        message = "Opened $appId. This session has no screen capture, so readiness was not checked.",
-      )
-    }
-    val readiness = awaitIosScreenReady(baseline = baseline, capture = capture)
-    return TrailblazeToolResult.Success(message = "Opened $appId: ${readiness.description}")
-  }
-
   internal companion object {
     /** `am start` already waited for the first frame, so this only has to see a settled answer. */
     const val FOREGROUND_CONFIRM_MS = 5_000L
@@ -179,6 +159,12 @@ internal object AndroidOpenAppReadiness {
 
   /** How long to wait for `idle=true` after the first frame. Idle normally follows within ~1s. */
   const val IDLE_TIMEOUT_MS = 10_000L
+
+  /**
+   * How long to wait for a drawn window once `am start -W` has given up (it stops at 10s). Large
+   * apps on slow CI emulators can take 16-25s to cold start.
+   */
+  const val DRAWN_TIMEOUT_MS = 60_000L
   private const val IDLE_POLL_MS = 250L
 
   /**
@@ -269,7 +255,7 @@ internal object AndroidOpenAppReadiness {
 
   fun awaitActivityDrawn(
     appId: String,
-    timeoutMs: Long = IDLE_TIMEOUT_MS,
+    timeoutMs: Long = DRAWN_TIMEOUT_MS,
     nowMs: () -> Long = System::currentTimeMillis,
     sleep: (Long) -> Unit = Thread::sleep,
     dumpActivities: () -> String,

@@ -54,16 +54,16 @@ import java.util.concurrent.ConcurrentHashMap
  * that doesn't carry meta-only scripted-tool descriptors — so the common case needs no setup. Only a
  * workspace whose trailmaps contain meta-only scripted-tool descriptors needs the analyzer
  * enrichment, or `resolveRuntime` fails and `build` falls back (or resolves nothing).
- * `TrailblazeHostYamlRunner`'s `init {}` installs the real provider; because every host trail run
- * (the only path that executes the host-backed `assertWaypoint`) routes through that object first,
- * the provider is installed before any waypoint is resolved.
+ * The host's `HostWaypointWiring.ensureInstalled()` installs the real provider; every host entry
+ * point (`TrailblazeHostYamlRunner` and the standalone JUnit `BaseHostTrailblazeTest`) calls it
+ * first, so the provider is installed before any waypoint is resolved.
  */
 object WaypointRegistryResolver {
 
   /**
    * Host-installed supplier of the analyzer-backed scripted-tool enrichment — see the class kdoc's
    * "Enrichment seam" section for when it matters and why the default is safe. Installed once by
-   * `TrailblazeHostYamlRunner`'s `init {}`.
+   * the host's `HostWaypointWiring`.
    */
   @Volatile
   var scriptedToolEnrichmentProvider: () -> ScriptedToolEnrichment? = { null }
@@ -74,25 +74,57 @@ object WaypointRegistryResolver {
    * so a workspace selected in the desktop app / Trail Runner (which installs it without changing
    * the JVM working directory) is honored here too. Defaults to `{ null }`; `WorkspaceConfigDirHolder`
    * lives in `trailblaze-models` (JVM-only), so the host installs the delegation from
-   * `TrailblazeHostYamlRunner`'s `init {}` rather than this common module importing it directly.
+   * `HostWaypointWiring` rather than this common module importing it directly.
    * When it returns null, resolution falls back to the working-directory walk-up.
    *
-   * Install once at startup, before any waypoint is resolved: the built resolver is cached per
-   * working directory ([resolver]), so reassigning this after the first resolve for a directory has
-   * no effect until [clearCache] is called (tests do exactly that).
+   * Called on every resolve: the built registry is cached per working directory AND the directory
+   * this returns, so selecting another workspace in a running daemon loads that workspace's
+   * waypoints rather than reusing the first one's.
    */
   @Volatile
   var workspaceConfigDirProvider: () -> File? = { null }
 
-  // Keyed by absolute working-dir path. A long-lived daemon keeps a stable CWD, so this is
-  // effectively a single entry; keying by path keeps it correct if a host ever resolves from
-  // more than one workspace root in the same process.
-  private val cache = ConcurrentHashMap<String, (String) -> WaypointDefinition?>()
+  // Keyed by the active workspace dir plus the absolute working-dir path. A long-lived daemon keeps
+  // a stable CWD but can switch workspaces, so both are part of the key.
+  private val cache = ConcurrentHashMap<String, Registry>()
+
+  /**
+   * [loaded] is false when every source failed, or when the selected workspace failed and a fallback
+   * stood in for it (and may lack its waypoints). Such a registry is not cached, so it is retried.
+   */
+  private class Registry(
+    val byId: Map<String, WaypointDefinition>,
+    val loaded: Boolean,
+    /** Target id -> the id of the trailmap that declares it, where the two differ (`target.id`). */
+    val trailmapIdByTargetId: Map<String, String> = emptyMap(),
+  ) {
+    val resolve: (String) -> WaypointDefinition? = { id -> byId[id] }
+  }
 
   /** Returns an id -> [WaypointDefinition] resolver for the current working directory. */
-  fun resolver(): (String) -> WaypointDefinition? {
+  fun resolver(): (String) -> WaypointDefinition? = registry().resolve
+
+  /**
+   * The waypoints of the trailmap that declares [targetId]: ids under `<trailmap id>/`, which is
+   * the target id unless the trailmap sets its own `target.id`. For callers that ask which ones a
+   * screen matches. Throws when the registry failed to load, so a caller can tell that from a
+   * target with no waypoints.
+   */
+  fun forTarget(targetId: String): Collection<WaypointDefinition> {
+    val registry = registry()
+    check(registry.loaded) { "see the '[WaypointRegistryResolver]' log line" }
+    val prefix = "${registry.trailmapIdByTargetId[targetId] ?: targetId}/"
+    return registry.byId.values.filter { it.id.startsWith(prefix) }
+  }
+
+  private fun registry(): Registry {
     val workingDir = File(".").absoluteFile
-    return cache.getOrPut(workingDir.path) { build(workingDir) }
+    // Read the selection once, so the key and the load agree even if it changes mid-load.
+    val configDir = workspaceConfigDirProvider()
+    val key = "${configDir?.absolutePath}|${workingDir.path}"
+    cache[key]?.let { return it }
+    // A failed load is not cached, so the next resolve retries once the workspace or analyzer recovers.
+    return load(workingDir, configDir).also { if (it.loaded) cache.putIfAbsent(key, it) }
   }
 
   /** Drops the cached resolver(s). Primarily for tests. */
@@ -103,21 +135,31 @@ object WaypointRegistryResolver {
    * drive it against a temp-workspace fixture without depending on the process working directory
    * that [resolver] uses.
    */
-  internal fun build(workingDir: File): (String) -> WaypointDefinition? {
+  internal fun build(workingDir: File): (String) -> WaypointDefinition? =
+    load(workingDir, workspaceConfigDirProvider()).resolve
+
+  private fun load(workingDir: File, configDir: File?): Registry {
     val enrichment = scriptedToolEnrichmentProvider()
     // Active workspace (holder) first — honors a desktop/Trail Runner selection that doesn't move
     // the JVM cwd. Then the working-dir walk-up (env + cwd). Then classpath-only so framework
     // waypoints still resolve when there's no workspace anchor at all. The `?:` chain short-circuits
     // on the first non-null tier (so a resolvable workspace is loaded once, not three times), and
-    // `build` itself runs once per working dir — [resolver] caches the result — so this whole walk
+    // `build` itself runs once per working dir and workspace — [resolver] caches the result — so this whole walk
     // (including any analyzer subprocess) is amortized to one-time per JVM, not per assertWaypoint.
-    val resolved = loadFromActiveWorkspace(enrichment)
+    val active = loadFromActiveWorkspace(configDir, enrichment)
+    val activeFailed = active == null && configDir != null && File(configDir, TrailblazeConfigPaths.CONFIG_FILENAME).isFile
+    val resolved = active
       ?: loadFromWorkspaceWalkUp(workingDir, enrichment)
       ?: loadClasspathOnly(workingDir, enrichment)
-    val byId: Map<String, WaypointDefinition> = resolved?.waypoints?.associateBy { it.id } ?: emptyMap()
-    // Closure over the id -> definition map. Returns null for unknown ids — assertWaypoint
-    // surfaces those with a "check the waypoint id against the loaded trailmaps" hint.
-    return { id -> byId[id] }
+    // Unknown ids resolve to null — assertWaypoint surfaces those with a "check the waypoint id
+    // against the loaded trailmaps" hint.
+    return Registry(
+      byId = resolved?.waypoints?.associateBy { it.id }.orEmpty(),
+      loaded = resolved != null && !activeFailed,
+      trailmapIdByTargetId = resolved?.resolvedTrailmaps.orEmpty()
+        .mapNotNull { trailmap -> trailmap.target?.id?.takeIf { it != trailmap.manifest.id }?.let { it to trailmap.manifest.id } }
+        .toMap(),
+    )
   }
 
   /**
@@ -126,8 +168,8 @@ object WaypointRegistryResolver {
    * Returns `null` when no provider is installed, it reports no dir, the dir has no
    * `trailblaze.yaml`, or the load fails — the caller then falls back to [loadFromWorkspaceWalkUp].
    */
-  private fun loadFromActiveWorkspace(enrichment: ScriptedToolEnrichment?): TrailblazeResolvedConfig? {
-    val configDir = workspaceConfigDirProvider() ?: return null
+  private fun loadFromActiveWorkspace(configDir: File?, enrichment: ScriptedToolEnrichment?): TrailblazeResolvedConfig? {
+    configDir ?: return null
     val configFile = File(configDir, TrailblazeConfigPaths.CONFIG_FILENAME)
     if (!configFile.isFile) return null
     return try {

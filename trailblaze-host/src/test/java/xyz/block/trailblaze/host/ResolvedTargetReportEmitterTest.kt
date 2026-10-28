@@ -14,7 +14,6 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
@@ -656,7 +655,7 @@ class ResolvedTargetReportEmitterTest {
       "tap", "tapOnPoint", "swipe", "launchApp", "inputText", "hideKeyboard",
       "android_adbShell", "android_sendBroadcast", "mobile_listInstalledApps",
       "mobile_pasteClipboard", "mobile_setClipboard", "scrollUntilTextIsVisible",
-      "networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
+      "mobile_networkConnection", "networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
     )
     for (leaked in mustNotLeak) {
       assertFalse(
@@ -670,8 +669,6 @@ class ResolvedTargetReportEmitterTest {
           val t = line.trim()
           t == "- `$leaked`" ||
             t == "- [`$leaked`](weblike/tools/$leaked.md)" ||
-            t == "- `$leaked` (YAML-defined)" ||
-            t == "- [`$leaked`](weblike/tools/$leaked.md) (YAML-defined)" ||
             t == "- `$leaked` (individual `tools:` addition)" ||
             t == "- [`$leaked`](weblike/tools/$leaked.md) (individual `tools:` addition)"
         }
@@ -690,9 +687,7 @@ class ResolvedTargetReportEmitterTest {
         toolboxSection.lineSequence().any { line ->
           val t = line.trim()
           t == "- `$expected`" ||
-            t == "- [`$expected`](weblike/tools/$expected.md)" ||
-            t == "- `$expected` (YAML-defined)" ||
-            t == "- [`$expected`](weblike/tools/$expected.md) (YAML-defined)"
+            t == "- [`$expected`](weblike/tools/$expected.md)"
         }
       }
     }
@@ -845,60 +840,6 @@ class ResolvedTargetReportEmitterTest {
     // Resolved-platforms header must also mention `web`.
     assertTrue("expected resolved platform `web` listed in header, got:\n$report") {
       report.contains("Resolved platforms: `web`")
-    }
-  }
-
-  @Test
-  fun `YAML-defined tool added directly via tools list gets a linkified sidecar`() {
-    // Regression for the codex-bot finding on PR #3318: pre-fix, `collectToolDetails` only
-    // emitted a YAML sidecar when the tool name was also listed in some catalog toolset's
-    // `yamlToolNames`. A YAML-defined tool added directly via `platforms.<p>.tools:` (which
-    // the runtime resolver accepts via `ToolNameResolver.resolveYamlNameOrNull`) was left
-    // un-linkified in the matrix and never got a sidecar — the report would name the tool
-    // but offer no detail page, even though the YAML config is right there. The fixture is in
-    // no toolset, so a target adding it to a platform's `tools:` directly must still get the
-    // sidecar.
-    val name = YamlDefinedToolFixture.NAME
-    val platforms = mapOf(
-      "web" to PlatformConfig(
-        appIds = listOf("com.example.yaml-direct"),
-        tools = listOf(name),
-        drivers = listOf("playwright-native"),
-      ),
-    )
-    val trailmap = ResolvedTrailmap(
-      manifest = TrailblazeTrailmapManifest(
-        id = "yamldirect",
-        target = TrailmapTargetConfig(displayName = "YamlDirect", platforms = platforms),
-      ),
-      source = TrailmapSource.Filesystem(newDir("yamldirect")),
-      target = AppTargetYamlConfig(id = "yamldirect", displayName = "YamlDirect", platforms = platforms),
-      toolsets = emptyList(),
-      tools = emptyList(),
-      waypoints = emptyList(),
-    )
-
-    val outDir = newDir("out")
-    YamlDefinedToolFixture.inWorkspace(newDir("workspace-config")) {
-      ResolvedTargetReportEmitter.emit(
-        resolvedTargets = listOf(trailmap.target!!),
-        resolvedTrailmaps = listOf(trailmap),
-        outputDir = outDir,
-      )
-    }
-    val report = File(outDir, "yamldirect.report.md").readText()
-
-    // The `tools:` addition row must be linkified — not the bare backtick form that signals
-    // "no metadata available."
-    assertTrue("expected linkified $name cell, got:\n$report") {
-      report.contains("[`$name`](yamldirect/tools/$name.md) (individual `tools:` addition)")
-    }
-    // And the sidecar file itself must exist with the YAML-defined source metadata.
-    val sidecar = File(outDir, "yamldirect/tools/$name.md")
-    assertTrue("expected sidecar for direct YAML addition at $sidecar") { sidecar.exists() }
-    val sidecarText = sidecar.readText()
-    assertTrue("sidecar should declare YAML-defined source, got:\n$sidecarText") {
-      sidecarText.contains("- Kind: YAML-defined") && sidecarText.contains("- Tool id: `$name`")
     }
   }
 
@@ -1456,7 +1397,7 @@ class ResolvedTargetReportEmitterTest {
   @Test
   fun `availability matrix renders bare backticks for tools without sidecar metadata`() {
     // Regression for the lead-dev review finding (LR#5): if a tool name is added via
-    // `platforms.<p>.tools:` but isn't in any toolset and has no class-backed / yaml-defined
+    // `platforms.<p>.tools:` but isn't in any toolset and has no class-backed or scripted
     // config (e.g. a future tool source the matrix surfaces but `collectToolDetails`
     // doesn't classify), the matrix should render the bare backtick form rather than a
     // broken link. Pin both shapes so a `toolCell()` regression that always emits links

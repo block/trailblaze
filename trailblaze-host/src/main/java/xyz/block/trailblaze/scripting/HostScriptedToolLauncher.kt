@@ -23,6 +23,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.scripting.subprocess.SubprocessToolRegistrar
@@ -93,6 +94,62 @@ object HostScriptedToolLauncher {
     ).partition { tool -> ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS }
 
   /**
+   * The target's own tools in [tools] to keep off the LLM's list: each one its `excluded_tools:`
+   * names on every session driver the tool supports. They still register, so a recorded step that
+   * names one dispatches.
+   */
+  fun targetExcludedTools(
+    target: TrailblazeHostAppTarget,
+    tools: List<InlineScriptToolConfig>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): Set<ToolName> {
+    val excludedByDriver = drivers.associateWith { target.getExcludedScriptedToolNamesForDriver(it) }
+    return tools.mapNotNullTo(mutableSetOf()) { tool ->
+      val name = ToolName(tool.name)
+      val meta = SubprocessToolRegistrar.advertisedMeta(tool)?.let(TrailblazeToolMeta::fromJsonObject)
+        ?: TrailblazeToolMeta()
+      val supported = drivers.filter { meta.shouldRegister(it, preferHostAgent, classifiers) }
+      name.takeIf { supported.isNotEmpty() && supported.all { name in excludedByDriver.getValue(it) } }
+    }
+  }
+
+  /** Names a launch hides from, and shows to, the LLM. */
+  data class TargetToolVisibility(val hide: Set<ToolName>, val show: Set<ToolName>)
+
+  /**
+   * How one target's launch changes which of its [tools] the LLM sees, decided from what actually
+   * registered. A tool is offered when any target that registered it permits it, whichever launched
+   * first: hide the ones this target excludes and [registeredNow], and show the ones it permits that
+   * are registered, by this launch or an earlier one ([preRegistered]), clearing an earlier hide.
+   * A tool whose registration failed (say, no bundle) changes nothing, and neither does one this
+   * target marks `surfaceToLlm: false`: a hidden provider offers nothing to show. A shown tool is
+   * offered even when the copy that registered first is another target's hidden one.
+   */
+  fun targetToolVisibility(
+    target: TrailblazeHostAppTarget,
+    tools: List<InlineScriptToolConfig>,
+    preRegistered: Set<ToolName>,
+    registeredNow: Set<ToolName>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): TargetToolVisibility {
+    val excluded = targetExcludedTools(target, tools, drivers, preferHostAgent, classifiers)
+    val offered = tools
+      .filter { tool ->
+        tool.surfaceToLlm &&
+          (tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()).surfaceToLlm
+      }
+      .mapTo(mutableSetOf()) { ToolName(it.name) }
+    return TargetToolVisibility(
+      hide = excluded intersect registeredNow,
+      show = (offered intersect (preRegistered + registeredNow)) - excluded,
+    )
+  }
+
+  /**
    * @param includeSubprocess when `false`, the Node/Bun **subprocess** MCP path is skipped entirely
    *   — only the in-process (QuickJS) target-declared + catalog tools are registered. The daemon
    *   passes `true` (its historical behavior). The JUnit host test rule passes `false`: it has never
@@ -120,6 +177,13 @@ object HostScriptedToolLauncher {
      * single-device sessions.
      */
     additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
+    /**
+     * Drivers of the devices that run [targetTestApp], which decide whether its `excluded_tools:`
+     * hide a tool. Narrower than the session's drivers in a multi-device session: a browser
+     * companion's driver must not unhide a tool an Android-only target excludes. Null uses
+     * [deviceInfo]'s driver plus [additionalDriverTypes].
+     */
+    targetDriverTypes: Set<TrailblazeDriverType>? = null,
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
     // `ctx.surveys` builds a survey on first use, from the trail's own workspace:
@@ -216,7 +280,8 @@ object HostScriptedToolLauncher {
         toolRepo = toolRepo,
         sessionId = sessionId,
         sessionDir = sessionDir,
-        toolNames = toolRepo.allCatalogScriptedToolNames,
+        toolNames = toolRepo.allCatalogScriptedToolNames +
+          sessionDrivers.flatMap { toolRepo.widenCatalogToDriver(it) },
         drivers = sessionDrivers,
         preferHostAgent = config.preferHostAgent,
         classifiers = deviceInfo.classifiers,
@@ -233,8 +298,14 @@ object HostScriptedToolLauncher {
       // handle — catch + dispose them before rethrowing.
       //
       // Already gated on the session's driver/platform by [partitionSessionInlineTools]: a tool this
-      // session would discard at `tools/list` must not cost a fork and a `script:` resolution.
-      val spawnableInlineTools = if (includeSubprocess) nodeApiInlineTools else emptyList()
+      // session would discard at `tools/list` must not cost a fork and a `script:` resolution. A name
+      // already registered (an earlier target's copy in a multi-device session, or an earlier pass)
+      // keeps that registration, as on the in-process path: spawning it again would collide.
+      val spawnableInlineTools = if (includeSubprocess) {
+        nodeApiInlineTools.filter { ToolName(it.name) !in preRegistered }
+      } else {
+        emptyList()
+      }
       val mcpServers = if (spawnableInlineTools.isNotEmpty()) {
         InlineScriptToolServerSynthesizer.synthesize(
           tools = spawnableInlineTools,
@@ -271,6 +342,21 @@ object HostScriptedToolLauncher {
         }
       } else {
         null
+      }
+
+      // After both runtimes registered, so only tools that actually registered change visibility.
+      if (targetTestApp != null) {
+        val visibility = targetToolVisibility(
+          target = targetTestApp,
+          tools = nodeApiInlineTools + quickJsInlineTools,
+          preRegistered = preRegistered,
+          registeredNow = toolRepo.getRegisteredDynamicTools().keys - preRegistered,
+          drivers = targetDriverTypes ?: sessionDrivers,
+          preferHostAgent = config.preferHostAgent,
+          classifiers = deviceInfo.classifiers,
+        )
+        toolRepo.hideScriptedToolsFromLlm(visibility.hide)
+        toolRepo.showScriptedToolsToLlm(visibility.show)
       }
 
       // If neither path produced anything actionable, no cleanup needed.

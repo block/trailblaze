@@ -45,6 +45,10 @@ class AxeDeviceManager(
   private val tapNotificationAlert: (x: Int, y: Int) -> AxeCli.Result = { x, y -> AxeCli.tapXy(udid, x, y) },
   private val appDisplayName: (bundleId: String) -> String? = { SimctlCli.appDisplayName(udid, it) },
   private val captureScreenshot: () -> ByteArray? = { captureAxeScreenshot(udid) },
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val tapXy: (x: Int, y: Int) -> AxeCli.Result = { x, y -> AxeCli.tapXy(udid, x, y) },
+  private val multiTapXy: (x: Int, y: Int, count: Int) -> AxeCli.Result =
+    { x, y, count -> AxeCli.multiTapXy(udid, x, y, count) },
 ) : IosDeviceManager {
 
   companion object {
@@ -386,13 +390,13 @@ class AxeDeviceManager(
   private fun dispatch(action: IosDriverAction): ExecutionResult {
     return when (action) {
       is IosDriverAction.Tap -> {
-        AxeCli.tapXy(udid, action.x, action.y).throwIfError("tap")
+        tapRepeated(action.x, action.y, action.repeat).throwIfError("tap")
         ExecutionResult(action.x, action.y)
       }
       is IosDriverAction.TapRelative -> {
         val x = pixelFromPercent(action.percentX, deviceWidth)
         val y = pixelFromPercent(action.percentY, deviceHeight)
-        AxeCli.tapXy(udid, x, y).throwIfError("tapRelative")
+        tapRepeated(x, y, action.repeat).throwIfError("tapRelative")
         ExecutionResult(x, y)
       }
       is IosDriverAction.LongPress -> {
@@ -798,7 +802,7 @@ class AxeDeviceManager(
     if (longPress) {
       AxeCli.touchHold(udid, x, y, durationMs = 500L).throwIfError("longPress-element")
     } else {
-      AxeCli.tapXy(udid, x, y).throwIfError("tap-element")
+      tapXy(x, y).throwIfError("tap-element")
     }
   }
 
@@ -807,6 +811,9 @@ class AxeDeviceManager(
     width: Int,
     height: Int,
   ): IntArray = computeDirectionalSwipeCoords(direction, width, height)
+
+  private fun tapRepeated(x: Int, y: Int, repeat: Int): AxeCli.Result =
+    if (repeat > 1) multiTapXy(x, y, repeat) else tapXy(x, y)
 
   private fun AxeCli.Result.throwIfError(label: String) {
     if (!success) error("axe $label failed (exit=$exitCode): ${stderr.trim()}")

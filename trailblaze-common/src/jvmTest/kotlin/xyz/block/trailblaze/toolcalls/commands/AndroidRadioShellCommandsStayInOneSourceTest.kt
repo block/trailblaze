@@ -12,7 +12,7 @@ import kotlin.test.fail
  * [NetworkConnectionTrailblazeTool.ANDROID_RADIOS] names. That used to be written out once per
  * driver, kept together only by comments asking the next editor to keep them in sync — and a
  * comment has no compiler behind it. A radio added to one driver and missed in another changes
- * what a recorded `networkConnection` step MEANS depending on which driver replays the trail: same
+ * what a recorded `mobile_networkConnection` step MEANS depending on which driver replays the trail: same
  * YAML, two different device states, nothing red anywhere.
  *
  * Hoisting the list fixed the three copies that existed. It does not stop a fourth from being
@@ -48,7 +48,7 @@ class AndroidRadioShellCommandsStayInOneSourceTest {
       offenders.isEmpty(),
       "These hardcode a radio `svc` command or the airplane-mode command instead of reading it " +
         "from NetworkConnectionTrailblazeTool. A second copy silently changes what " +
-        "`networkConnection` means on the driver that owns it. Call " +
+        "`mobile_networkConnection` means on the driver that owns it. Call " +
         "NetworkConnectionTrailblazeTool.androidRadioShellCommand(radio, on), " +
         "androidAirplaneModeShellCommand(enabled), or " +
         "maestroSetAirplaneModeRadioCommands(airplaneModeEnabled) from a Maestro " +

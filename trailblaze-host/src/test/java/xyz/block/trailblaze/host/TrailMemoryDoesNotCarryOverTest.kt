@@ -100,11 +100,9 @@ class TrailMemoryDoesNotCarryOverTest {
   private fun run(name: String) = runBlocking {
     TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
       dynamicLlmClient = noLlm,
-      onDeviceRpc = rpcClient,
+      launchDevice = TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(deviceId, rpcClient, TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION),
       runYamlRequest = request(name),
-      trailblazeDeviceId = deviceId,
       onProgressMessage = {},
-      targetTestApp = null,
       logsDir = tempFolder.newFolder(name),
     )
   }

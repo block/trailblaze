@@ -13,23 +13,20 @@ import kotlin.reflect.KClass
 
 /**
  * A toolset whose tool names have been resolved to their backing implementations. Splits into
- * class-backed tools ([resolvedToolClasses]), YAML-defined tools ([resolvedYamlToolNames]), and
- * scripted (`.ts` / `.js`) tools ([resolvedScriptedToolNames]) — the name-based authoring surface
- * doesn't distinguish, but the runtime does (scripted names are advertised like YAML names but
- * dispatched through the per-session scripted-tool runtime).
+ * class-backed tools ([resolvedToolClasses]) and scripted (`.ts` / `.js`) tools
+ * ([resolvedScriptedToolNames]) — the name-based authoring surface doesn't distinguish, but the
+ * runtime does (scripted names are dispatched through the per-session scripted-tool runtime).
  */
 data class ResolvedToolSet(
   val config: ToolSetYamlConfig,
   val resolvedToolClasses: Set<KClass<out TrailblazeTool>>,
   val compatibleDriverTypes: Set<TrailblazeDriverType>,
-  val resolvedYamlToolNames: Set<ToolName> = emptySet(),
   val resolvedScriptedToolNames: Set<ToolName> = emptySet(),
 ) : TrailblazeToolSurface {
   // The interface uses unprefixed names; this loader-local type prefixes them with `resolved*`.
   // Alias overrides let it satisfy [TrailblazeToolSurface] (and so expose `allToolNames`) without
   // renaming its public fields.
   override val toolClasses: Set<KClass<out TrailblazeTool>> get() = resolvedToolClasses
-  override val yamlToolNames: Set<ToolName> get() = resolvedYamlToolNames
   override val scriptedToolNames: Set<ToolName> get() = resolvedScriptedToolNames
 
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
@@ -39,7 +36,6 @@ data class ResolvedToolSet(
     id = config.id,
     description = config.description,
     toolClasses = resolvedToolClasses,
-    yamlToolNames = resolvedYamlToolNames,
     scriptedToolNames = resolvedScriptedToolNames,
     alwaysEnabled = config.alwaysEnabled,
     compatibleDriverTypes = compatibleDriverTypes,
@@ -157,7 +153,6 @@ object ToolSetYamlLoader {
       config = config,
       resolvedToolClasses = partitioned.classBacked,
       compatibleDriverTypes = driverTypes,
-      resolvedYamlToolNames = partitioned.yamlDefinedNames,
       resolvedScriptedToolNames = partitioned.scriptedToolNames,
     )
   }

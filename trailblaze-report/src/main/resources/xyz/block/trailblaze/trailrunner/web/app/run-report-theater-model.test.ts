@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   besideInset,
-  actionLabel, acts, buildTheaterStory, cameraCuts, chapterIndexAt, chapterStep, clock, cutAt, fit, handoffLayout,
+  actionLabel, acts, buildTheaterStory, headline, patternWords, cameraCuts, chapterIndexAt, chapterStep, clock, cutAt, fit, handoffLayout,
   insetAt, isLapsing, lapseEnd, lapseWindows, locateYaml, markAt, recordingAt, sameSnapshot, scenes, scriptLines,
   settledMs, snapshotAt, stepClock, stepNumber, syncVideo, yamlLineState, yamlSeekTimes, yamlSegments, frameAt, screenshotOutlasts,
   type TheaterStory,
@@ -86,6 +86,56 @@ describe('building a story', () => {
     expect(result.label).toBe('Tap "Pay now"');
     expect(result.detail).toBe(long);
     expect(actionLabel(row({ label: 'web_navigate' })).label).toBe('Navigate');
+  });
+
+  test('a text pattern reads as the words it matches, and one that is more than words stays as written', () => {
+    expect(patternWords('^Get started$')).toEqual({ text: 'Get started', more: 0 });
+    expect(patternWords('.*\\QPizza\\E.*')).toEqual({ text: 'Pizza', more: 0 });
+    expect(patternWords('(?ism)(?:^Skip$)|(?:\\^Skip\\$)')).toEqual({ text: 'Skip', more: 1 });
+    expect(patternWords('(?i).*(Tap, Insert or Swipe|Insert or tap|Tap Now).*')).toEqual({ text: 'Tap, Insert or Swipe', more: 2 });
+    expect(patternWords('How would you like to set up your device\\?')).toEqual({ text: 'How would you like to set up your device?', more: 0 });
+    expect(patternWords('(100|[1-9]?[0-9])%')).toBeNull();
+    expect(patternWords('(?s)(Enter your|Welcome back).*PIN.*')).toBeNull();
+    expect(patternWords('^\\d$')).toBeNull();
+    expect(patternWords('\\bPay\\b')).toBeNull();
+    expect(patternWords(`${'\\Q'.repeat(200000)}x`)).toBeNull();
+  });
+
+  test('a check on a pattern names its first words, and how many others would also pass', () => {
+    const label = (args: string) => actionLabel(row({ label: 'assertVisibleBySelector', args })).label;
+    expect(label('nodeSelector:\n  textRegex: "(?i).*(Tap, Insert or Swipe|Tap Now).*"')).toBe('See "Tap, Insert or Swipe" or 1 more');
+    expect(label('nodeSelector:\n  textRegex: "(100|[1-9]?[0-9])%"')).toBe('See "(100|[1-9]?[0-9])%"');
+    expect(label('nodeSelector:\n  textRegex: (?i).*(Tap, Insert or Swipe|Tap Now).*')).toBe('See "Tap, Insert or Swipe" or 1 more');
+  });
+
+  test('a browser step names what it clicked, typed or checked', () => {
+    expect(actionLabel(row({ label: 'web_type', args: 'text: Wireless Mouse\nref: e2' })).label).toBe('Type "Wireless Mouse"');
+    expect(actionLabel(row({ label: 'web_type', args: 'nodeSelector:\n  web:\n    ariaNameRegex: Price\ntext: "5.99"' })).label).toBe('Type "5.99"');
+    expect(actionLabel(row({ label: 'web_click', args: 'nodeSelector:\n  web:\n    ariaName: Search' })).label).toBe('Click "Search"');
+    expect(actionLabel(row({ label: 'web_verifyElementVisible', args: 'nodeSelector:\n  web:\n    ariaNameRegex: .*Bluetooth, Black.*' })).label).toBe('See "Bluetooth, Black"');
+  });
+
+  test('a step\'s title runs to its first clause, but not to a comma inside a quoted name', () => {
+    expect(headline('Click the button labeled "Wireless Mouse - Bluetooth, Black - $29.99"')).toBe('Click the button labeled "Wireless Mouse - Bluetooth, Black - $29.99"');
+    expect(headline('Open the cart, then pay.')).toBe('Open the cart');
+  });
+
+  test('a line names the field the tool acts on: a pattern over a literal it overrides', () => {
+    expect(actionLabel(row({ label: 'scrollUntilTextIsVisible', args: 'text: ignored\ntextRegex: Loyalty' })).label).toBe('Scroll to "Loyalty"');
+    expect(actionLabel(row({ label: 'scrollUntilTextIsVisible', args: 'textRegex: ""\ntext: Loyalty' })).label).toBe('Scroll to "Loyalty"');
+    expect(actionLabel(row({ label: 'scrollUntilTextIsVisible', args: 'textRegex: null\ntext: Loyalty' })).label).toBe('Scroll to "Loyalty"');
+    expect(actionLabel(row({ label: 'scrollUntilTextIsVisible', args: 'text: "null"' })).label).toBe('Scroll to "null"');
+    expect(actionLabel(row({ label: 'assertVisibleBySelector', args: 'nodeSelector:\n  textRegex: ^\\d$' })).label).toBe('See "^\\d$"');
+  });
+
+  test('waiting for text to go, or checking it is absent, does not read as seeing it', () => {
+    expect(actionLabel(row({ label: 'waitUntilNotVisible', args: 'nodeSelector:\n  textRegex: Remove card' })).label).toBe('Wait for "Remove card" to go');
+    expect(actionLabel(row({ label: 'assertNotVisibleWithText', args: 'text: Error' })).label).toBe('No "Error"');
+  });
+
+  test('an iOS tap or scroll names the text it went to, so two taps read as two different lines', () => {
+    expect(actionLabel(row({ label: 'tapOnElementWithAccessibilityText', args: 'accessibilityText: Pizza' })).label).toBe('Tap "Pizza"');
+    expect(actionLabel(row({ label: 'scrollUntilTextIsVisible', args: 'text: Pizza' })).label).toBe('Scroll to "Pizza"');
   });
 
   test('taps, swipes and checks become marks at the time the driver acted, not when the row began', () => {

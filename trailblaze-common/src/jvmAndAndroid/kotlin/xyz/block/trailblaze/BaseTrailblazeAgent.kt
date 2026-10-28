@@ -381,6 +381,11 @@ abstract class BaseTrailblazeAgent(
       // device — gating on it would let post-tap queries read stale trees.
       if (resolved !is ReadOnlyTrailblazeTool && !resolved.isVerificationToolInstance()) {
         SnapshotCache.invalidateCurrent(traceTag = context.traceId?.traceId)
+        // A nested `ctx.tools` call shares its caller's context, so re-arm lazy capture: the
+        // caller's next nested call must read the screen after this action, not before it.
+        if (context.nestedDispatchDepth.get() > 0 && context.screenStateProvider != null) {
+          context.screenState = null
+        }
       }
       lastSuccessResult = result
     }
@@ -523,8 +528,8 @@ abstract class BaseTrailblazeAgent(
    * Two details a hand-rolled copy keeps getting wrong, and the reason to call this instead:
    *
    *  - The name comes from [resolveToolName], which unwraps [OtherTrailblazeTool], honors an
-   *    instance's own name (every `tools:`-authored tool shares one annotation, so going by the
-   *    annotation collapses them all into `YamlDefinedTrailblazeTool`), and cannot return null
+   *    instance's own name (one implementation class can back many named tools, so going by the
+   *    annotation collapses them into one name), and cannot return null
    *    the way `::class.simpleName` can.
    *  - The wrapper note states an OBSERVATION and lists the causes; it does not pick one.
    *    Arriving wrapped means only that nothing resolved the name. It may be unregistered, its

@@ -33,6 +33,7 @@ import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.PlaywrightDesktopLaunchGooseTool
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
 import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
@@ -163,7 +164,6 @@ class BasePlaywrightElectronTest(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "Playwright Electron Tool Set",
       toolClasses = resolvedWebToolSet.toolClasses + ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
-      yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
     // Bind the repo to the web driver so the KOOG verify-step surface scopes to `web_verification`
     // (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS). Without this the
@@ -223,7 +223,10 @@ class BasePlaywrightElectronTest(
   private var currentToolTraceId: TraceId? = null
 
   // The runner-util: deterministic replay + tool dispatch around the agent.
-  private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
+  private fun runnerUtilFor(
+    runner: TestAgentRunner,
+    trailheadReuse: Boolean,
+  ): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
     trailblazeRunner = runner,
     runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
       playwrightAgent.runTrailblazeTools(
@@ -239,15 +242,13 @@ class BasePlaywrightElectronTest(
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     sessionUpdater = { loggingRule.setSession(it) },
-    trailheadReuse = TrailheadRuns.reuseEnabledFromEnv(),
+    trailheadReuse = trailheadReuse,
     // Shares one execution context + snapshot frame across the recording, matching the
     // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
     // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than
     // a clipboard-style state-survival fix.
     sharedToolBatch = { block -> playwrightAgent.runInSharedToolBatch(block) },
   )
-
-  private val agentRunnerUtil by lazy { runnerUtilFor(agentRunner) }
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
@@ -257,9 +258,12 @@ class BasePlaywrightElectronTest(
     // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailheadReuse: Boolean?,
   ) {
     val activeRunner: TestAgentRunner = agentRunner
-    val activeRunnerUtil = agentRunnerUtil
+    // Built per trail: a cached test serves many requests, and each one says whether its
+    // trailhead may reuse the last hand-off.
+    val activeRunnerUtil = runnerUtilFor(activeRunner, TrailheadRuns.reuseEnabledFor(trailheadReuse))
     // One trail: the trailhead's teardown runs after it, whatever the outcome.
     activeRunnerUtil.runTrail {
       for (item in trailItems) {
@@ -323,6 +327,8 @@ class BasePlaywrightElectronTest(
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
     trailSourceUrl: String? = null,
+    /** This run's `TrailblazeConfig.trailheadReuse`; a cached test's [config] may be an earlier request's. */
+    trailheadReuse: Boolean? = config.trailheadReuse,
   ): SessionId = withContext(trailLoopDispatcher) {
     // Stable loop thread, NOT the Playwright thread — see [trailLoopDispatcher]. Playwright
     // API calls bridge onto the Playwright thread per-call.
@@ -403,7 +409,7 @@ class BasePlaywrightElectronTest(
     ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
     try {
-      runTrail(trailItems, useRecordedSteps, onStepProgress)
+      runTrail(trailItems, useRecordedSteps, onStepProgress, trailheadReuse)
     } finally {
       currentToolTraceId = null
     }
@@ -548,6 +554,8 @@ class BasePlaywrightElectronTest(
     electronAppManager.close()
     // Closing the dispatcher shuts down the executor it wraps.
     trailLoopDispatcher.close()
+    // This browser identity is never used again, so no later trail could take its hand-offs.
+    TrailheadHandoffStore.dropDevice(trailblazeDeviceId)
   }
 
   companion object {

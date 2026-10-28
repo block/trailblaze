@@ -79,9 +79,17 @@ object ScriptedToolDefsExtraction {
       .groupBy { File(it["sourcePath"] as String).canonicalFile }
     return sources.mapNotNull { src -> toolsBySource[src.canonicalFile]?.let { src to it } }.associate { (src, tools) ->
       tools.firstOrNull { it["uncapturedSpec"] == true }?.let {
+        val fields = (it["uncapturedSpecFields"] as? List<*>).orEmpty()
         throw GradleException(
-          "${src.name}: the spec of '${it["name"]}' isn't an inline object literal, so its fields " +
-            "can't be read at build time. Inline the spec, or add a descriptor YAML.",
+          if (fields.isEmpty()) {
+            "${src.name}: the spec of '${it["name"]}' isn't an inline object literal, so its fields " +
+              "can't be read at build time. Inline the spec, or add a descriptor YAML."
+          } else {
+            "${src.name}: the spec of '${it["name"]}' has ${fields.joinToString(", ") { f -> "`$f`" }}, " +
+              "which can't be read at build time (only inline literals under plain keys can). Write " +
+              "each as an inline literal under a plain key (e.g. `supportedPlatforms: [\"ios\"]`) and " +
+              "replace a spread with the fields it carries, or set those gates in a descriptor YAML."
+          },
         )
       }
       val defs = tools.map { tool -> tool.filterKeys { it != "sourcePath" && it != "line" } }

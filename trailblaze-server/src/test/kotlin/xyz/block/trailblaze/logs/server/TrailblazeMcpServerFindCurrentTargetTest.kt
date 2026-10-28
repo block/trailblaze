@@ -29,7 +29,7 @@ import kotlin.test.assertNull
  * tool-discovery `currentTargetProvider`). If a future refactor breaks any
  * link of the chain — e.g. someone reverts to reading `getCurrentAppTargetId`
  * directly, or stops calling `getSessionTargetAppIdForDevice` — every
- * YAML-defined and TypeScript-scripted tool silently drops from the
+ * TypeScript-scripted tool silently drops from the
  * dispatch gate on bound devices whose `--target` doesn't match the
  * daemon-wide setting. That's the regression PR #3463 closed and this test
  * is the guard.

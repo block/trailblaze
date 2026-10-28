@@ -26,6 +26,9 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  * Drives the rule's lifecycle methods directly rather than through a JUnit runner: the failure in
  * claim 2 is a *setup* failure, and a rule that fails its own setup cannot also be the rule under
  * test in the same run.
+ *
+ * Every rule here is built with `noLogging = true`. Without it each test opens a real session that
+ * the device farm pulls and the CI report uploads as a result row, though no trail ran.
  */
 class AndroidTestLoggingRuleTraceLevelOnDeviceTest {
 
@@ -45,7 +48,7 @@ class AndroidTestLoggingRuleTraceLevelOnDeviceTest {
   @Test
   fun appliesTheRequestedLevelForTheTestAndRestoresItAfterwards() {
     TrailblazeTracer.level = TraceLevel.NORMAL
-    val rule = AndroidTestLoggingRule(requestedTraceLevel = TraceLevel.VERBOSE)
+    val rule = AndroidTestLoggingRule(requestedTraceLevel = TraceLevel.VERBOSE, noLogging = true)
     val description = Description.createTestDescription(javaClass, "appliesTheRequestedLevel")
 
     rule.beforeTestExecution(description)
@@ -68,7 +71,7 @@ class AndroidTestLoggingRuleTraceLevelOnDeviceTest {
   @Test
   fun restoresTheLevelWhenSessionStartFails() {
     TrailblazeTracer.level = TraceLevel.NORMAL
-    val rule = AndroidTestLoggingRule(requestedTraceLevel = TraceLevel.VERBOSE)
+    val rule = AndroidTestLoggingRule(requestedTraceLevel = TraceLevel.VERBOSE, noLogging = true)
 
     // A Description with no test class: the base rule builds the session name from
     // `description.testClass.canonicalName`, so starting the session throws.
@@ -94,7 +97,7 @@ class AndroidTestLoggingRuleTraceLevelOnDeviceTest {
   @Test
   fun leavesTheProcessLevelAloneWhenNothingWasRequested() {
     TrailblazeTracer.level = TraceLevel.VERBOSE
-    val rule = AndroidTestLoggingRule(requestedTraceLevel = null)
+    val rule = AndroidTestLoggingRule(requestedTraceLevel = null, noLogging = true)
     val description = Description.createTestDescription(javaClass, "leavesTheProcessLevelAlone")
 
     rule.beforeTestExecution(description)

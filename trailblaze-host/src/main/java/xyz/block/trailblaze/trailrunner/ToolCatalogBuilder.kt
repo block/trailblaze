@@ -183,29 +183,27 @@ object ToolCatalogBuilder {
         Console.log("[ToolCatalogBuilder] could not parse tool YAML, dropping: $relPath")
         return@mapNotNull null
       }
-      val isKotlin = cfg.toolClass != null
-      // For Kotlin-backed tools, read params + the LLM-facing description from the actual
-      // parsed tool descriptor (reflection over the @TrailblazeToolClass / @LLMDescription
-      // annotations), not by regex-parsing the .kt source — the descriptor is the same
-      // representation the framework resolves at runtime.
-      val kotlinDescriptor = if (isKotlin) descriptorForClass(cfg.toolClass!!) else null
+      val toolClass = cfg.toolClass
+      if (toolClass == null) {
+        // A `.tool.yaml` without `class:` registers nothing at runtime (a retired `tools:`
+        // composition, which `ToolYamlConfig.validate` rejects), so it isn't a catalog tool either.
+        Console.log("[ToolCatalogBuilder] tool YAML has no `class:`, dropping: $relPath")
+        return@mapNotNull null
+      }
+      // Read params + the LLM-facing description from the actual parsed tool descriptor
+      // (reflection over the @TrailblazeToolClass / @LLMDescription annotations), not by
+      // regex-parsing the .kt source — the descriptor is the same representation the framework
+      // resolves at runtime.
+      val kotlinDescriptor = descriptorForClass(toolClass)
       ToolCatalogEntry(
         id = cfg.id,
-        flavor = if (isKotlin) ToolFlavor.KOTLIN else ToolFlavor.YAML,
+        flavor = ToolFlavor.KOTLIN,
         trailmap = trailmap,
         sourcePath = sourcePath,
-        description = cfg.description,
-        className = cfg.toolClass,
+        className = toolClass,
         source = content,
-        parameters = cfg.parameters.map {
-          ToolParamDto(
-            name = it.name,
-            type = it.type,
-            required = it.required,
-            description = it.description,
-          )
-        }.ifEmpty { kotlinDescriptor?.let(::paramsFromDescriptor) ?: emptyList() },
-        llmDescription = if (isKotlin) (kotlinDescriptor?.description ?: cfg.description) else cfg.description,
+        parameters = kotlinDescriptor?.let(::paramsFromDescriptor) ?: emptyList(),
+        llmDescription = kotlinDescriptor?.description,
       )
     }
   }
@@ -237,8 +235,7 @@ object ToolCatalogBuilder {
   /**
    * Tool ids a tool's own implementation dispatches to, derived purely from its source — no file IO,
    * so it's unit-testable. Scripted tools expose edges via `ctx.tools.*`; Kotlin tools via
-   * `invokeFrameworkTool`. YAML-declarative tools wrap framework primitives (maestro), not other
-   * catalog tools, so they contribute no edges here. Comments are stripped first so a doc/comment
+   * `invokeFrameworkTool`. Comments are stripped first so a doc/comment
    * reference doesn't create a phantom edge. The tool's own id is dropped (no self-edge).
    */
   internal fun referencedToolIdsIn(flavor: ToolFlavor, source: String, selfId: String): Set<String> {
@@ -246,7 +243,6 @@ object ToolCatalogBuilder {
     return when (flavor) {
       ToolFlavor.SCRIPTED -> CTX_TOOLS_RX.findAll(scannable).map { it.groupValues[1] }
       ToolFlavor.KOTLIN -> INVOKE_FRAMEWORK_RX.findAll(scannable).map { it.groupValues[1] }
-      ToolFlavor.YAML -> emptySequence()
     }.toSet() - selfId
   }
 
@@ -259,7 +255,6 @@ object ToolCatalogBuilder {
     val source = when (entry.flavor) {
       ToolFlavor.SCRIPTED -> entry.source
       ToolFlavor.KOTLIN -> entry.className?.let { ToolSourceFiles.sourceFor(it) }
-      ToolFlavor.YAML -> null
     } ?: return emptySet()
     return referencedToolIdsIn(entry.flavor, source, entry.id)
   }
@@ -478,7 +473,7 @@ object ToolCatalogBuilder {
    * Builds the parsed tool descriptor for a Kotlin tool by its fully-qualified class name,
    * reflecting over the live class on the daemon classpath. Returns null (and logs) when the
    * class isn't loadable or can't be lowered to a descriptor (e.g. it's missing the required
-   * class-level `@LLMDescription`); callers fall back to the YAML-declared metadata.
+   * class-level `@LLMDescription`); callers then show the tool without params or description.
    */
   private fun descriptorForClass(fqn: String): TrailblazeToolDescriptor? = runCatching {
     @Suppress("UNCHECKED_CAST")
@@ -503,7 +498,7 @@ object ToolCatalogBuilder {
   )
 
   // Koog descriptor types come through uppercased (STRING, ARRAY, INT…); lowercase them so
-  // Kotlin-tool params read the same as the lowercase types YAML-defined tools already show.
+  // Kotlin-tool params read the same as the lowercase types scripted tools show.
   private fun String.toDisplayType(): String = lowercase()
 
   // Param enrichment is grouped by trailmap (one [scriptedParamsByToolName] call per DISTINCT

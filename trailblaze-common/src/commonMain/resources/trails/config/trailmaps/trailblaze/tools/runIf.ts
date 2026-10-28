@@ -27,9 +27,8 @@
 //
 // A `then`/`else` entry (or a `{ tool }` condition) that is itself a conditional recurses as a
 // local call, NOT through `ctx.tools`: re-dispatching `runIf` while its own call is still running
-// re-enters the same QuickJS engine, which the framework refuses. `block_runIf`, the name older
-// recordings carry, uses the same evaluator, so it recurses locally too. The nested branch's own
-// tool-calls still dispatch through `ctx.tools` and are logged as usual.
+// re-enters the same QuickJS engine, which the framework refuses. The nested branch's own tool-calls
+// still dispatch through `ctx.tools` and are logged as usual.
 //
 // Dispatch by recorded name: `ctx.tools` is typed to the known tool names, but a recorded tool-call
 // carries an arbitrary string key. The runtime Proxy accepts any name, so we cast through

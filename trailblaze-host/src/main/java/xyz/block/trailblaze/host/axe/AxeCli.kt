@@ -22,6 +22,10 @@ import xyz.block.trailblaze.util.SimctlCommand
  * waiting for the UI to settle. The POC uses a fixed post-action delay instead of
  * polling. Tree-hash settling is a natural follow-up once this path graduates from
  * POC status.
+ *
+ * Each `axe` process that opens a render-server connection leaks it (see [screenshot]). `tap`,
+ * `swipe` and `touch` each read the UI orientation through a connection of their own, so each call
+ * leaks about three ports.
  */
 object AxeCli {
 
@@ -156,14 +160,22 @@ object AxeCli {
     return supported
   }
 
-  /** Captures a screenshot. Returns the PNG path (either [outputPath] or AXe's auto-name on stdout). */
-  fun screenshot(udid: String, outputPath: String? = null, timeoutSeconds: Long = 10): Result {
-    val args = mutableListOf(axeBin, "screenshot", "--udid", udid)
-    if (outputPath != null) {
-      args += listOf("--output", outputPath)
-    }
-    return run(args, timeoutSeconds)
-  }
+  /**
+   * Captures a PNG of the Simulator's screen to [outputPath] with `simctl io screenshot`.
+   *
+   * `axe screenshot` is avoided: every `axe` process that captures a frame attaches a framebuffer
+   * consumer to Apple's SimRenderServer that the server never frees, about two Mach ports per
+   * capture until the simulator reboots, enough over a long run to pin a CPU core in the render
+   * server. `simctl` takes the same frame without that cost.
+   *
+   * [outputPath] is written by CoreSimulator, so it must be somewhere CoreSimulator can write
+   * (see `CoreSimulatorTempFiles`).
+   */
+  fun screenshot(udid: String, outputPath: String, timeoutSeconds: Long = 10): Result =
+    run(screenshotArgs(udid, outputPath), timeoutSeconds, timeoutDescription = "simctl screenshot")
+
+  internal fun screenshotArgs(udid: String, outputPath: String): List<String> =
+    SimctlCommand.argv("io", udid, "screenshot", "--type=png", outputPath)
 
   /** Tap at screen coordinates. POC uses a fixed-delay settle after dispatch. */
   fun tapXy(
@@ -183,6 +195,36 @@ object AxeCli {
       "--udid", udid,
     )
     return run(args, timeoutSeconds)
+  }
+
+  /**
+   * Taps ([x], [y]) [count] times in one `axe batch` HID session, so the taps land back-to-back
+   * (a double-tap when [count] is 2) rather than a process-spawn apart, which is slower than the
+   * system's double-tap window.
+   */
+  fun multiTapXy(
+    udid: String,
+    x: Int,
+    y: Int,
+    count: Int,
+    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
+    timeoutSeconds: Long = 10,
+  ): Result = run(multiTapArgs(udid, x, y, count, postDelaySeconds), timeoutSeconds)
+
+  internal fun multiTapArgs(
+    udid: String,
+    x: Int,
+    y: Int,
+    count: Int,
+    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
+  ): List<String> {
+    require(count >= 2) { "multiTapXy needs count >= 2, got $count" }
+    // Only the last tap carries the settle delay; the earlier ones fire immediately.
+    val steps = (1..count).flatMap { i ->
+      val delay = if (i == count) postDelaySeconds else 0.0
+      listOf("--step", "tap -x $x -y $y --post-delay $delay")
+    }
+    return listOf(axeBin, "batch") + steps + listOf("--udid", udid)
   }
 
   /**
@@ -270,11 +312,8 @@ object AxeCli {
         udid = udid,
         text = text,
         writePasteboard = { deviceId, value ->
-          // Built before the budget hands out what is left, so a process's one-time simctl lookup is
-          // charged to this call's timeout instead of running on top of it.
-          val args = writePasteboardArgs(deviceId)
           budget.run("simctl pbcopy", safetyReserveMillis) { remaining ->
-            writePasteboard(args, value, remaining)
+            stagePasteboard(deviceId, value, remaining)
           }
         },
         paste = { deviceId ->
@@ -370,16 +409,20 @@ object AxeCli {
     return pasteAttempt.getOrThrow()
   }
 
-  private fun writePasteboard(args: List<String>, text: String, timeoutMillis: Long): Result =
-    runWithTimeoutMillis(
-      args,
-      timeoutMillis,
-      stdin = text,
-      timeoutDescription = "simctl pbcopy",
-    )
-
-  internal fun writePasteboardArgs(udid: String): List<String> =
-    SimctlCommand.argv("pbcopy", udid)
+  /**
+   * Stages [text] with [IosHostSimctlUtils.writePasteboardVerified], which confirms the simulator
+   * reads it back: a bare `simctl pbcopy` is silently dropped while Xcode's DeviceHub.app mirrors
+   * the Mac pasteboard, and Cmd+V would then paste whatever was already there.
+   */
+  private fun stagePasteboard(udid: String, text: String, timeoutMillis: Long): Result =
+    try {
+      IosHostSimctlUtils.setPasteboard(udid, text, timeoutMillis)
+      Result(0, "", "")
+    } catch (e: InterruptedException) {
+      throw e
+    } catch (e: Exception) {
+      Result(-1, "", "simctl pbcopy: ${e.message}")
+    }
 
   private fun pasteFromPasteboard(udid: String, timeoutMillis: Long): Result = runWithTimeoutMillis(
     pasteFromPasteboardArgs(udid),

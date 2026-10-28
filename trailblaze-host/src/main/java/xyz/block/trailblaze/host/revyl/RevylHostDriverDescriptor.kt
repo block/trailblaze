@@ -49,6 +49,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -232,7 +233,6 @@ class RevylHostDriverDescriptor(
         TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "Revyl Native Tool Set",
           toolClasses = revylToolSet.toolClasses,
-          yamlToolNames = revylToolSet.yamlToolNames,
         ),
         // Bind the repo to the Revyl driver so the KOOG verify-step surface scopes to
         // `revyl_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS).
@@ -240,6 +240,11 @@ class RevylHostDriverDescriptor(
         // generic `requestDetailedViewHierarchy` inspection tool off the Revyl KOOG surface (Revyl
         // is excluded from KOOG_INSPECTION_DRIVERS — its agent can't run that generic tool).
         driverType = runOnHostParams.trailblazeDriverType,
+        // The target's own tools register later; hide the ones `excluded_tools:` opts out of here.
+        excludedScriptedToolNames = runOnHostParams.targetTestApp
+          ?.getExcludedToolSurfaceForDriver(runOnHostParams.trailblazeDriverType)
+          ?.scriptedToolNames
+          .orEmpty(),
       )
 
       val agent = RevylTrailblazeAgent(

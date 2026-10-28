@@ -301,35 +301,6 @@ describe("runIf - nesting", () => {
     ).rejects.toThrow(`Tool 'runIf' was called without required argument keys: ["then"]`);
   });
 
-  test("a nested block_runIf, the name older recordings carry, runs locally too", async () => {
-    // `block_runIf` forwards to `runIf`, so dispatching it from inside a `runIf` would wait on this
-    // tool's own engine while it is held.
-    const client = createQueuedFindMatchesClient();
-    client.queueFindMatches([[MATCH]]); // inner selector present
-    const nested: RunIfArgs = { condition: PRESENT_SELECTOR, then: [TAP_CONFIRM] };
-
-    const result = await runIf(
-      { condition: { tool: { someProbe: {} } }, then: [{ block_runIf: nested as unknown as Record<string, unknown> }] },
-      ctx(),
-      client,
-    );
-
-    expect(toolsOf(client)).toEqual(["someProbe", "findSelectorMatches", "tapOnElementBySelector"]);
-    expect(result).toContain("nested=[runIf: condition=true ran=then (1 tools)]");
-  });
-
-  test("a nested block_runIf with an unknown key fails under its own name", async () => {
-    const client = createMockClient();
-
-    await expect(
-      runIf(
-        { condition: { tool: { someProbe: {} } }, then: [{ block_runIf: { condition: PRESENT_SELECTOR, then: [], els: [] } }] },
-        ctx(),
-        client,
-      ),
-    ).rejects.toThrow(`Tool 'block_runIf' was called with unknown argument keys: ["els"]`);
-  });
-
   test("a nested runIf as the condition runs locally too", async () => {
     const client = createQueuedFindMatchesClient();
     client.queueFindMatches([[MATCH]]); // inner selector present
@@ -348,11 +319,11 @@ describe("runIf - nesting", () => {
   test("a third level of nesting fails before anything runs, pointing at a .ts tool", async () => {
     const client = createMockClient();
     const third = { condition: PRESENT_SELECTOR, then: [TAP_CONFIRM] };
-    const second = { condition: PRESENT_SELECTOR, then: [{ block_runIf: third }] };
+    const second = { condition: PRESENT_SELECTOR, then: [{ runIf: third }] };
 
     await expect(
       runIf({ condition: PRESENT_SELECTOR, then: [], else: [{ runIf: second }] }, ctx(), client),
-    ).rejects.toThrow("runIf.else[0].runIf.then[0].block_runIf: conditionals nest at most 2 deep. Move this logic into a .ts tool");
+    ).rejects.toThrow("runIf.else[0].runIf.then[0].runIf: conditionals nest at most 2 deep. Move this logic into a .ts tool");
     expect(toolsOf(client)).toEqual([]);
   });
 

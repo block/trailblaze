@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.ios
 
 import java.io.File
 import maestro.orchestra.Command
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -52,12 +53,14 @@ class IosDriverTrailblazeAgent(
    * capture is a screenshot and a tree read per action for nothing.
    */
   private val logDriverActions: Boolean = true,
+  memory: AgentMemory = AgentMemory(),
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   nodeSelectorMode = nodeSelectorMode,
   trailblazeToolRepo = trailblazeToolRepo,
+  memory = memory,
   resolvedTarget = resolvedTarget,
   appId = appId,
   sessionDirProvider = sessionDirProvider,
@@ -120,9 +123,16 @@ class IosDriverTrailblazeAgent(
     longPress: Boolean,
     // Ignored — the iOS driver has only one dispatch path, so there is no route to pin.
     tapRoute: TapRouteOverride?,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
-    actions = listOf(IosDriverAction.TapOnElement(nodeSelector, longPress = longPress)),
+    actions = listOf(
+      IosDriverAction.TapOnElement(
+        nodeSelector,
+        longPress = longPress,
+        timeoutMs = timeoutMs ?: IosDriverAction.DEFAULT_ELEMENT_TIMEOUT_MS,
+      ),
+    ),
     traceId = traceId,
     deviceManager = deviceManager,
     trailblazeLogger = driverActionLogger,
@@ -213,7 +223,7 @@ class IosDriverTrailblazeAgent(
             "wired on this agent, and cannot be executed on IOS_AXE."
         } else {
           "Unknown tool '${resolved.toolName}' is not registered in this session's " +
-            "tool repo as a class-backed, YAML-defined, or dynamic scripted tool, and cannot " +
+            "tool repo as a class-backed or dynamic scripted tool, and cannot " +
             "be executed on IOS_AXE."
         },
       )

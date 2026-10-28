@@ -2,7 +2,7 @@
 <!-- Trailblaze framework tool reference -->
 <!-- Regenerate with: ./gradlew :docs:generator:run -->
 
-# `networkConnection`
+# `mobile_networkConnection`
 
 Set the device's network radios and airplane mode; unset fields are left unchanged. To go offline,
 set wifi, cellular and bluetooth all false; set them true to go back online. Neither implies the

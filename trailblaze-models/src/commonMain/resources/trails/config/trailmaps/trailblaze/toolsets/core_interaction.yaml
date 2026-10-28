@@ -21,6 +21,9 @@ tools:
   - inputTextRandom
   - launchApp
   - openApp
+  - mobile_networkConnection
+  # Deprecated alias of mobile_networkConnection, hidden from the LLM (surfaceToLlm = false). Listed
+  # only so recorded trails still using the old name replay; remove with the alias class.
   - networkConnection
   - openUrl
   - mobile_pasteClipboard

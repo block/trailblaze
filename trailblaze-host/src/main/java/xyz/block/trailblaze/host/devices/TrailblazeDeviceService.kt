@@ -82,6 +82,27 @@ object TrailblazeDeviceService {
   }
 
   /**
+   * [describe]'s first successful result, retried for up to [AXE_CONNECT_RETRY_MS]. A SpringBoard
+   * that just restarted (as a device-language switch does) posts that it started a moment before
+   * the accessibility server can describe its screen, and AXe reports that as a failure.
+   */
+  internal fun describeUiOnceReady(
+    nanoTime: () -> Long = System::nanoTime,
+    sleep: (Long) -> Unit = Thread::sleep,
+    describe: () -> AxeCli.Result,
+  ): AxeCli.Result {
+    val deadline = nanoTime() + AXE_CONNECT_RETRY_MS * 1_000_000
+    while (true) {
+      val result = describe()
+      if (result.success || nanoTime() >= deadline) return result
+      sleep(AXE_CONNECT_RETRY_INTERVAL_MS)
+    }
+  }
+
+  private const val AXE_CONNECT_RETRY_MS = 10_000L
+  private const val AXE_CONNECT_RETRY_INTERVAL_MS = 250L
+
+  /**
    * Gets a connected iOS Simulator via the AXe CLI. Simulator-only by design — AXe uses
    * Apple's private Accessibility APIs which are not available on real devices.
    */
@@ -95,7 +116,7 @@ object TrailblazeDeviceService {
     // Bounds come from the AXe root `AXApplication` frame — the `application` element is
     // sized to the screen. Cheaper than calling `xcrun simctl` and doesn't require an
     // extra subprocess.
-    val describe = AxeCli.describeUi(udid)
+    val describe = describeUiOnceReady { AxeCli.describeUi(udid) }
     if (!describe.success) {
       System.err.println("[IOS_AXE] axe describe-ui failed for $udid: ${describe.stderr.trim()}")
       return null

@@ -104,6 +104,42 @@ class TapOnTrailblazeToolTest {
   }
 
   @Test
+  fun `doubleTap taps the element twice at the resolved point`(): Unit = runBlocking {
+    val target = node(
+      DriverNodeDetail.AndroidAccessibility(text = "Debug"),
+      TrailblazeNode.Bounds(100, 200, 300, 260),
+    )
+    val root = node(
+      DriverNodeDetail.AndroidAccessibility(),
+      TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(target),
+    )
+    val agent = CapturingAgent()
+    val context = contextWithTree(agent, tree = root)
+
+    val result = TapOnTrailblazeTool(
+      selector = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Debug"),
+      ),
+      doubleTap = true,
+    ).execute(context)
+
+    assertEquals(
+      "Double-tapped at (200, 230) within element",
+      assertIs<TrailblazeToolResult.Success>(result).message,
+    )
+    assertEquals(200 to 230, agent.lastTapPoint)
+    assertEquals(2, agent.lastTapCommand?.repeat?.repeat)
+  }
+
+  @Test
+  fun `doubleTap and longPress together are rejected`() {
+    assertFailsWith<IllegalArgumentException> {
+      TapOnTrailblazeTool(selector = TrailblazeNodeSelector(), longPress = true, doubleTap = true)
+    }
+  }
+
+  @Test
   fun `omitting relativePoint taps element center`(): Unit = runBlocking {
     val target = node(
       DriverNodeDetail.AndroidAccessibility(text = "Submit"),
@@ -998,12 +1034,15 @@ class TapOnTrailblazeToolTest {
   ) {
     var lastTapPoint: Pair<Int, Int>? = null
       private set
+    var lastTapCommand: TapOnPointV2Command? = null
+      private set
 
     override suspend fun executeMaestroCommands(
       commands: List<Command>,
       traceId: TraceId?,
     ): TrailblazeToolResult {
       commands.filterIsInstance<TapOnPointV2Command>().lastOrNull()?.let { cmd ->
+        lastTapCommand = cmd
         val parts = cmd.point.split(",").mapNotNull { it.trim().toIntOrNull() }
         if (parts.size == 2) lastTapPoint = parts[0] to parts[1]
       }

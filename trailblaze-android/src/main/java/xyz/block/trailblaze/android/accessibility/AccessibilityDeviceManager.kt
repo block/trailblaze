@@ -56,6 +56,17 @@ class AccessibilityDeviceManager(
   // Drops the capture gate's stable-tree proof whenever this driver dispatches input — see
   // [dispatchAndAwaitSettleBlocking]. Injectable so a unit test can see when it runs.
   private val forgetStableTree: () -> Unit = { TrailblazeAccessibilityService.forgetStableTree() },
+  // Gesture dispatchers for point taps, and the screen size percent taps resolve against.
+  // Injectable so a unit test can see which gesture a tap becomes without a running service.
+  private val dispatchTap: (x: Int, y: Int) -> Boolean = { x, y ->
+    TrailblazeAccessibilityService.tap(x, y)
+  },
+  private val dispatchMultiTap: (x: Int, y: Int, count: Int) -> Boolean = { x, y, count ->
+    TrailblazeAccessibilityService.multiTap(x, y, count)
+  },
+  private val screenDimensions: () -> Pair<Int, Int> = {
+    TrailblazeAccessibilityService.getScreenDimensions()
+  },
 ) : DriverDispatch {
 
   companion object {
@@ -288,14 +299,16 @@ class AccessibilityDeviceManager(
   private fun dispatchAction(action: AccessibilityAction): ExecutionResult =
     when (action) {
       is AccessibilityAction.Tap -> {
-        tap(action.x, action.y)
+        tap(action.x, action.y, action.repeat)
         ExecutionResult(resolvedX = action.x, resolvedY = action.y)
       }
       is AccessibilityAction.TapRelative -> {
-        val (width, height) = getScreenDimensions()
-        val resolvedX = width * action.percentX / 100
-        val resolvedY = height * action.percentY / 100
-        tap(resolvedX, resolvedY)
+        val (width, height) = screenDimensions()
+        // 100% is the screen's far edge, one pixel past the last valid coordinate: clamp, as the
+        // iOS AXe driver does.
+        val resolvedX = (width * action.percentX / 100.0).toInt().coerceIn(0, width - 1)
+        val resolvedY = (height * action.percentY / 100.0).toInt().coerceIn(0, height - 1)
+        tap(resolvedX, resolvedY, action.repeat)
         ExecutionResult(resolvedX = resolvedX, resolvedY = resolvedY)
       }
       is AccessibilityAction.LongPress -> {
@@ -472,8 +485,12 @@ class AccessibilityDeviceManager(
    * [AccessibilityDeviceManager.execute]'s direct [AccessibilityAction.Tap] /
    * [AccessibilityAction.TapRelative] dispatch — can't mistake a no-op gesture for a completed one.
    */
-  fun tap(x: Int, y: Int) = dispatchAndAwaitSettleBlocking {
-    failIfGestureNotDispatched(TrailblazeAccessibilityService.tap(x, y), "tap at ($x, $y)")
+  fun tap(x: Int, y: Int, repeat: Int = 1) = dispatchAndAwaitSettleBlocking {
+    if (repeat > 1) {
+      failIfGestureNotDispatched(dispatchMultiTap(x, y, repeat), "$repeat taps at ($x, $y)")
+    } else {
+      failIfGestureNotDispatched(dispatchTap(x, y), "tap at ($x, $y)")
+    }
   }
 
   /** Long-presses at the given coordinates and waits for the UI to settle. Fails loudly on a
@@ -753,12 +770,12 @@ class AccessibilityDeviceManager(
    * [NetworkConnectionTrailblazeTool.maestroSetAirplaneModeRadioCommands], so every Android
    * driver switches the same set. That is the radios-off stand-in, not real airplane mode — see
    * that driver's override for why this surface keeps the stand-in even though the
-   * `networkConnection` tool no longer does.
+   * `mobile_networkConnection` tool no longer does.
    *
    * Whether a radio actually switched is not checked, matching this driver's long-standing
    * behavior. `svc` exits 0 either way and what it PRINTS does not answer the question — on API 36
    * `svc bluetooth` prints "disable: Success" on the happy path — so the only real check is reading
-   * [NetworkConnectionTrailblazeTool.AndroidRadio.stateSetting] back, as the `networkConnection`
+   * [NetworkConnectionTrailblazeTool.AndroidRadio.stateSetting] back, as the `mobile_networkConnection`
    * tool does. Adding that poll here would make every toggle on the driver the fleet replays on wait out
    * a radio that did not move, which is a fleet-wide behavior change and not this one.
    */

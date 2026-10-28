@@ -69,11 +69,20 @@ data class TrailheadMatchKey(
   }
 }
 
-/** One stored hand-off: what `teardown` returned, and the key it was recorded under. */
+/**
+ * One stored hand-off: what `teardown` returned, the key it was recorded under, and the one
+ * waypoint the trailhead ended on (null when nothing checked).
+ */
 data class StoredHandoff(
   val key: TrailheadMatchKey,
   val result: TeardownResult,
   val sessionId: SessionId,
+  /**
+   * The session whose trailhead ran this setup in full. Differs from [sessionId] when that trail
+   * reused the setup itself, so a chain of reuses still names where the setup's work happened.
+   */
+  val trailheadSessionId: SessionId = sessionId,
+  val endWaypoint: String? = null,
 )
 
 /**
@@ -102,6 +111,21 @@ object TrailheadHandoffStore {
   fun dropDevice(deviceId: String) {
     entries.keys.removeIf { it.deviceId == deviceId }
   }
+
+  /**
+   * Drop every hand-off [sessionId]'s teardown stored. For a session the runner fails after its
+   * teardown ran (a capture that would not finalize, an app crash found afterwards): its teardown
+   * judged a session that passed, and a failed one hands nothing on.
+   */
+  fun dropSession(sessionId: SessionId) {
+    entries.values.removeIf { it.sessionId == sessionId }
+  }
+
+  /**
+   * Drop every hand-off for [deviceId] because its app is about to be restarted, as when a trail's
+   * language differs from the last one's: a setup kept in the old process is gone with it.
+   */
+  fun dropDevice(deviceId: TrailblazeDeviceId) = dropDevice(keyOf(deviceId))
 
   /** Drop every hand-off: a trail ran that no trailhead teardown followed. */
   fun dropAll() = entries.clear()

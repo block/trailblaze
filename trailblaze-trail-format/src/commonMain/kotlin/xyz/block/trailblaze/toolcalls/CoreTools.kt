@@ -60,6 +60,9 @@ object CoreTools {
   /** Tap at specific screen coordinates. */
   const val TAP_ON_POINT = "tapOnPoint"
 
+  /** Tap at a point given as a percentage of the screen. */
+  const val TAP_ON_PERCENT = "tapOnPercent"
+
   /** Long press on a UI element. */
   const val LONG_PRESS = "longPress"
 
@@ -136,7 +139,11 @@ object CoreTools {
    */
   const val SLEEP = "sleep"
 
-  /** Control network connectivity. */
+  /** Set a mobile device's network radios and airplane mode. */
+  const val MOBILE_NETWORK_CONNECTION = "mobile_networkConnection"
+
+  /** Deprecated alias of [MOBILE_NETWORK_CONNECTION], kept while recorded trails migrate. */
+  @Deprecated("Renamed to mobile_networkConnection", ReplaceWith("MOBILE_NETWORK_CONNECTION"))
   const val NETWORK_CONNECTION = "networkConnection"
 
   // =========================================================================
@@ -191,6 +198,7 @@ object CoreTools {
       TAP, // "tap"                      — Trailblaze core (ref-based)
       LONG_PRESS, // "longPress"                — Trailblaze core (ref-based hold)
       TAP_ON_POINT, // "tapOnPoint"              — Trailblaze core
+      TAP_ON_PERCENT, // "tapOnPercent"            — Trailblaze core
       TAP_ON_ELEMENT, // "tapOnElement"             — Trailblaze core
       "click", // AndroidWorld canonical
     )

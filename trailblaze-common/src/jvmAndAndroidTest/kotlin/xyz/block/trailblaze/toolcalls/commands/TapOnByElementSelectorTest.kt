@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
 import xyz.block.trailblaze.api.DriverNodeMatch
@@ -73,5 +74,25 @@ class TapOnByElementSelectorTest {
     assertIs<TapOnElementCommand>(command)
     assertEquals("login_button", command.selector.idRegex)
     assertEquals(null, command.selector.textRegex)
+  }
+
+  /**
+   * The Maestro path has no per-tap wait of its own, so a set [TapOnByElementSelector.timeoutMs]
+   * must become a visibility wait on the same element ahead of the tap — otherwise a driver that
+   * falls back to Maestro silently applies Maestro's default instead of the author's budget.
+   */
+  @Test
+  fun `timeoutMs lowers to a visibility wait on the same element before the tap`() {
+    val tap = TapOnByElementSelector(
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "More cart options")),
+      timeoutMs = 30_000,
+    )
+    val commands = tap.toMaestroCommands()
+    assertEquals(2, commands.size)
+    val wait = assertIs<AssertConditionCommand>(commands[0])
+    assertEquals("30000", wait.timeout)
+    assertEquals("More cart options", wait.condition.visible?.textRegex)
+    val tapCommand = assertIs<TapOnElementCommand>(commands[1])
+    assertEquals("More cart options", tapCommand.selector.textRegex)
   }
 }

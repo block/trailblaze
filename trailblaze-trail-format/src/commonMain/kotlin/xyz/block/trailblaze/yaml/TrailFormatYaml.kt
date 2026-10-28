@@ -7,6 +7,8 @@ import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlList
 import com.charleskorn.kaml.YamlMap
 import com.charleskorn.kaml.YamlNamingStrategy
+import com.charleskorn.kaml.YamlNode
+import com.charleskorn.kaml.YamlScalar
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
@@ -352,7 +354,7 @@ open class TrailFormatYaml(
    * mis-classified or have its extra keys silently dropped. A genuine tool wrapper is always a
    * single-entry `<toolName>: <args>` map, so this is exact, not merely conservative.
    */
-  private fun isBareToolEnvelope(yaml: String): Boolean {
+  fun isBareToolEnvelope(yaml: String): Boolean {
     val root =
       try {
         yamlInstance.parseToYamlNode(yaml)
@@ -538,8 +540,7 @@ open class TrailFormatYaml(
     var trail: List<UnifiedTrailStep>? = null
     for ((keyNode, valueNode) in rootNode.entries) {
       when (val key = keyNode.content) {
-        "config" ->
-          config = yamlInstance.decodeFromYamlNode(UnifiedTrailConfig.serializer(), valueNode)
+        "config" -> config = decodeUnifiedConfigNode(valueNode)
         "trailhead" ->
           trailhead = yamlInstance.decodeFromYamlNode(unifiedTrailheadSerializer, valueNode)
         "trail" ->
@@ -598,7 +599,36 @@ open class TrailFormatYaml(
     val configNode =
       rootNode.entries.entries.firstOrNull { it.key.content == "config" }?.value
         ?: return UnifiedTrailConfig()
+    return decodeUnifiedConfigNode(configNode)
+  }
+
+  /**
+   * Decode a unified `config:` node, refusing a top-level `config.locale:`. [UnifiedTrailConfig]
+   * has no `locale` field — device language is per device (`config.devices.<classifier>.locale`) —
+   * so the lenient decoder would drop it and the trail would run in whatever language the device
+   * already had, with nothing to say why. A v1 author writes it at the top because the v1
+   * `TrailConfig.locale` lives there.
+   */
+  private fun decodeUnifiedConfigNode(configNode: YamlNode): UnifiedTrailConfig {
+    (configNode as? YamlMap)
+      ?.entries
+      ?.entries
+      ?.firstOrNull { it.key.content == "locale" }
+      ?.let { (key, value) ->
+        throw IllegalArgumentException(topLevelLocaleMessage(key.location.line, value))
+      }
     return yamlInstance.decodeFromYamlNode(UnifiedTrailConfig.serializer(), configNode)
+  }
+
+  private fun topLevelLocaleMessage(line: Int, value: YamlNode): String {
+    val tag = (value as? YamlScalar)?.content ?: "<tag>"
+    return "Line $line: `config.locale:` is not read in a unified trail, so the trail would run in " +
+      "the device's current language. Device language is set per device: move `locale: $tag` " +
+      "onto each `config.devices.<classifier>:` entry that should run in it, for example\n" +
+      "  config:\n" +
+      "    devices:\n" +
+      "      android-phone:\n" +
+      "        locale: $tag"
   }
 
   /**

@@ -512,7 +512,7 @@ class HostOnDeviceRpcTrailblazeAgent(
         toolsExecuted.add(repoResolvedTool)
         if (repoResolvedTool is HostLocalExecutableTrailblazeTool || repoResolvedTool.requiresHostInstance()) {
           // Host-local tools (subprocess MCP, QuickJS scripted, cbot / dip-slot ADB tools,
-          // YAML-defined `requires_host: true`) run on the host JVM — so the host IS their
+          // `requiresHost = true` class-backed tools) run on the host JVM — so the host IS their
           // memory boundary: resolve here, dispatch resolved, log raw + resolved.
           val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory)
           executeHostLocalWithLogging(
@@ -555,7 +555,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           append("Unsupported tool type for RPC execution: ${repoResolvedTool::class.simpleName}")
           if (repoResolvedTool is OtherTrailblazeTool) {
             append(" (toolName='${repoResolvedTool.toolName}' — not registered in this session's ")
-            append("tool repo as a class-backed, YAML-defined, or dynamic scripted tool)")
+            append("tool repo as a class-backed or dynamic scripted tool)")
           }
         },
       )
@@ -586,6 +586,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
     tapRoute: TapRouteOverride?,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     // Accessibility-shaped selectors are recorded under the accessibility driver and must
@@ -609,6 +610,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           nodeSelector = nodeSelector,
           longPress = longPress,
           tapRoute = tapRoute,
+          timeoutMs = timeoutMs,
         ),
         traceId = traceId,
       )
