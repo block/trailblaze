@@ -470,11 +470,13 @@ class StepToolSet(
       hint = if (isVerify) {
         // Verify steps must leave a recording: call at least one assertion tool that returns
         // success, otherwise the captured trail has empty recording.tools for the verify and
-        // strict-replay has nothing to validate. Visual reasoning alone is not enough.
+        // strict-replay has nothing to validate. Visual reasoning alone is not enough. Tool names
+        // are deliberately not listed: they differ per platform, and a named tool the model is
+        // not offered makes every verify fail.
         "Verify this assertion using read-only tools only. Do not tap, swipe, or type. " +
-          "You MUST call at least one assertion tool (e.g. assertVisible " +
-          "or assertWithAi) AND have it return success before marking " +
-          "the objective complete. Visual inspection alone is NOT a valid verification — the " +
+          "You MUST call at least one assertion tool from your tool list AND have it return " +
+          "success before marking the objective complete. Prefer one that checks a specific " +
+          "element over one that asks AI. Visual inspection alone is NOT a valid verification — the " +
           "captured trail needs a concrete assertion tool call on record so the trail can be " +
           "replayed deterministically."
       } else null,
