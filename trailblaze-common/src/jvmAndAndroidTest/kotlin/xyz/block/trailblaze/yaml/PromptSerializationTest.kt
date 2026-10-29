@@ -7,9 +7,11 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import org.junit.Test
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
@@ -33,8 +35,10 @@ trail:
   - verify: Check another thing
     recording:
       android:
-        - assertVisibleWithText:
-            text: Bingo
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Bingo
     """.trimIndent()
     val trailItems =
       trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
@@ -78,9 +82,11 @@ trail:
             recording = ToolRecording(
               listOf(
                 TrailblazeToolYamlWrapper(
-                  name = "assertVisibleWithText",
-                  trailblazeTool = AssertVisibleWithTextTrailblazeTool(
-                    text = "Bingo",
+                  name = "assertVisibleBySelector",
+                  trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
+                    nodeSelector = TrailblazeNodeSelector.withMatch(
+                      DriverNodeMatch.AndroidAccessibility(textRegex = "Bingo"),
+                    ),
                   ),
                 ),
               ),
@@ -126,9 +132,11 @@ trail:
             recording = ToolRecording(
               listOf(
                 TrailblazeToolYamlWrapper(
-                  name = "assertVisibleWithText",
-                  trailblazeTool = AssertVisibleWithTextTrailblazeTool(
-                    text = "Bingo",
+                  name = "assertVisibleBySelector",
+                  trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
+                    nodeSelector = TrailblazeNodeSelector.withMatch(
+                      DriverNodeMatch.AndroidAccessibility(textRegex = "Bingo"),
+                    ),
                   ),
                 ),
               ),
@@ -154,8 +162,10 @@ trail:
       |  - verify: "Check another thing"
       |    recording:
       |      android:
-      |        - assertVisibleWithText:
-      |            text: Bingo
+      |        - assertVisibleBySelector:
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Bingo
     """.trimMargin()
     val actualYaml = trailblazeYaml.encodeUnifiedTrailToString(
       UnifiedTrailAdapter.mergeRecordedClassifier(

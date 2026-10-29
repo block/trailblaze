@@ -8,11 +8,14 @@ import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.capture.CaptureMetadata
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
+import xyz.block.trailblaze.capture.DeviceClockSampler
 import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
+import xyz.block.trailblaze.capture.video.AndroidVideoCapture
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -66,31 +69,47 @@ import xyz.block.trailblaze.util.Console
  * A session that binds several devices (a trail's `config.devices:` configuration, or an MCP
  * session's named roster) is recorded on EVERY display, not just the one it started on: the
  * step that ran on the buyer display is otherwise a step whose recording shows the seller's screen
- * sitting still. [bindDevices] starts one video-only capture per companion into the same session
- * directory — under `video-<name>.webm` ([CaptureFilenames.companionVideoBasename]) so the files
- * cannot collide, while the start device keeps `video.webm` so every reader that knows only one
+ * sitting still. [bindDevices] starts one capture per companion into the same session
+ * directory — under `video-<name>.webm` ([CaptureFilenames.companionVideoBasename]) and
+ * `device-<name>.log` ([CaptureFilenames.companionDeviceLog]) so the files cannot collide, while
+ * the start device keeps `video.webm` and `device.log` so every reader that knows only one
  * recording per session still finds the display the trail began on. [stopForSession] stops them
  * all and publishes ONE `capture_metadata.json` whose entries name their device
  * ([CaptureArtifact.deviceName]); the report matches each entry to the steps that ran there.
  *
- * Companions record video only. Their logs and memory would need their own filenames and their
- * own readers, and nothing asks for them yet. A web companion is recorded from its browser's live
- * screencast, never by Playwright's own recorder — see [bindDevices].
+ * Companions record video and, on Android, logcat; the app crashing on a companion fails the run.
+ * Their memory would need its own filename and reader, and nothing asks for it yet. A web
+ * companion is recorded from its browser's live screencast, never by Playwright's own recorder —
+ * see [bindDevices].
  */
 class SessionCaptureCoordinator(
   private val logsRepo: LogsRepo,
   /**
    * Builds the capture for one companion device of a multi-device session (see [bindDevices]):
-   * video only, written under the given basename so it lands beside the start device's recording
-   * instead of over it. Its own seam because the primary factory is what every existing test drives
-   * and a companion has a narrower contract — no logs, no memory, a filename that is not the
-   * canonical one. The default records the way the primary does, minus the streams a companion
-   * does not keep; a baguette-stream companion is not offered because that recorder names its own
+   * video and logcat, written under the given basename so they land beside the start device's
+   * files instead of over them. Its own seam because the primary factory is what every existing
+   * test drives and a companion has a narrower contract — no iOS logs, no memory, non-canonical
+   * filenames. A baguette-stream companion is not offered because that recorder names its own
    * file. A web companion gets no Playwright-recorder fallback; see [bindDevices].
    */
   private val companionCaptureFactory: (CaptureOptions, TrailblazeDevicePlatform, String) -> CaptureSession? =
     { options, platform, videoBasename ->
-      CaptureSession.fromOptions(options, platform, videoBasename = videoBasename, webPlaywrightFallback = false)
+      CaptureSession.fromOptions(
+        options = options,
+        platform = platform,
+        videoBasename = videoBasename,
+        deviceLogFilename = CaptureFilenames.companionDeviceLog(videoBasename),
+        webPlaywrightFallback = false,
+        sampleDeviceClock = false,
+      )
+    },
+  /**
+   * Builds the clock sampler for one companion device (see [bindDevices]), or null for a platform
+   * whose clock is not sampled. A seam so tests never shell out to adb.
+   */
+  private val companionClockSamplerFactory: (File, TrailblazeDevicePlatform, String) -> DeviceClockSampler? =
+    { sessionDir, platform, instanceId ->
+      if (platform == TrailblazeDevicePlatform.ANDROID) DeviceClockSampler(sessionDir, instanceId) else null
     },
   /**
    * Test seam — swap the real `CaptureSession.fromOptions` for a factory that returns
@@ -107,8 +126,8 @@ class SessionCaptureCoordinator(
   private val captureSessionFactory: (CaptureOptions, TrailblazeDevicePlatform) -> CaptureSession? =
     { options, platform ->
       CaptureSession.fromOptions(
-        options,
-        platform,
+        options = options,
+        platform = platform,
         iosVideoStreamOverride =
           if (platform == TrailblazeDevicePlatform.IOS && IosBaguetteVideoGate.enabled()) {
             BaguetteIosVideoCapture()
@@ -127,11 +146,12 @@ class SessionCaptureCoordinator(
     val name: String,
     val deviceId: TrailblazeDeviceId,
     /**
-     * The app the session drives on this device, when known — the target's first app id for the
-     * device's platform. Handed to the companion's recorders as `startAll`'s appId; companions record
-     * video only, and no video recorder reads it.
+     * Resolves the app the session drives on this device, or null when unknown. Handed to the
+     * companion's recorders as `startAll`'s appId; the logcat capture attributes crashes to it.
+     * Called only for a companion about to record, as resolving it may ask the device what is
+     * installed.
      */
-    val appId: String? = null,
+    val appId: () -> String? = { null },
   )
 
   /** A companion display's running capture, keyed in [ActiveCapture.companions] by its name. */
@@ -202,11 +222,21 @@ class SessionCaptureCoordinator(
     /** The configuration name of the device [session] records, once [bindDevices] has said. */
     @Volatile var deviceName: String? = null
 
+    /**
+     * Clock samplers for companion devices, by configuration name: every companion's clock is
+     * measured, video or not, so its device-stamped streams convert on its own clock. Guarded by
+     * the coordinator's `lock`.
+     */
+    val companionClockSamplers = LinkedHashMap<String, DeviceClockSampler>()
+
     /** Companion displays being recorded alongside, by configuration name. Guarded by the coordinator's `lock`. */
     val companions = LinkedHashMap<String, CompanionCapture>()
 
     /** What companions unbound before the session ended captured; published with everything else at stop. */
     val finishedCompanionArtifacts = mutableListOf<CaptureArtifact>()
+
+    /** One latch per companion an [unbindDevice] is still stopping; [stopForSession] waits on them. Guarded by `lock`. */
+    val unbindsInFlight = mutableListOf<CountDownLatch>()
 
     /**
      * Every recording basename this session has handed out, the start device's included, lowercased.
@@ -315,9 +345,13 @@ class SessionCaptureCoordinator(
    *   authoritative.
    * @return `true` when this call reserved the slot and started a fresh capture;
    *   `false` when (a) the slot was already taken by another caller, (b) the platform
-   *   has no coordinator-owned capture stream (WEB, which self-instruments — see below —
-   *   or Compose/desktop, which has no branch in [CaptureSession.fromOptions]; Android
-   *   and iOS are both wired), or (c) `startAll` threw and the slot was cleaned up.
+   *   has no coordinator-owned capture stream (WEB without [followWebScreencast], which
+   *   self-instruments — see below — or Compose/desktop, which has no branch in
+   *   [CaptureSession.fromOptions]; Android and iOS are both wired), or (c) `startAll` threw and
+   *   the slot was cleaned up.
+   * @param followWebScreencast records a WEB session from its browser's live screencast, the way a
+   *   web companion is recorded. For a multi-device session launched on a browser, whose browser is
+   *   not the single-device web runner's and whose companions are recorded only once this starts.
    */
   fun startForSession(
     sessionId: SessionId,
@@ -325,16 +359,16 @@ class SessionCaptureCoordinator(
     platform: TrailblazeDevicePlatform,
     options: CaptureOptions,
     appId: String? = null,
+    followWebScreencast: Boolean = false,
   ): Boolean {
-    // WEB is intentionally skipped here: `BasePlaywrightNativeTest` self-instruments
+    // WEB is skipped unless it follows the screencast: `BasePlaywrightNativeTest` self-instruments
     // its capture inside `runTrailblazeYamlSuspend` and owns the
     // `PlaywrightVideoRecordDir` lifecycle. If the coordinator also publishes a record
     // dir, the manager's `syncRecordingWithRegistry` tears down + recreates the
     // BrowserContext at exactly the moment the trail is trying to navigate, wedging
-    // the runBlocking call on the Playwright dispatcher thread. A session that starts on a
-    // browser therefore has no capture here — and so no companion recordings either (see
-    // [bindDevices]); web companions of an Android or iOS session are recorded.
-    if (platform == TrailblazeDevicePlatform.WEB) return false
+    // the runBlocking call on the Playwright dispatcher thread. The screencast recorder publishes
+    // no record dir, so a followed browser is never rebuilt.
+    if (platform == TrailblazeDevicePlatform.WEB && !followWebScreencast) return false
 
     // Step 1: reserve the slot atomically under `lock`. Bail if another caller already
     // owns this sessionId, if this id was tombstoned by a previous failed `stopAll`
@@ -366,7 +400,16 @@ class SessionCaptureCoordinator(
         )
         return false
       }
-      val captureSession = captureSessionFactory(options, platform)
+      // The companion factory is the one whose web recorder never falls back to Playwright's own.
+      // With nothing to record, an empty capture still owns the session so its companions' clocks are sampled.
+      val captureSession = (
+        if (platform == TrailblazeDevicePlatform.WEB) {
+          companionCaptureFactory(options, platform, CaptureFilenames.VIDEO_BASENAME)
+            ?: CaptureSession(emptyList(), options)
+        } else {
+          captureSessionFactory(options, platform)
+        }
+        )
         ?: run {
           Console.log(
             "[SessionCaptureCoordinator] no capture wired for platform=$platform — skipping " +
@@ -411,6 +454,7 @@ class SessionCaptureCoordinator(
       val committed = synchronized(lock) {
         if (active[sessionId] === reservation) {
           reservation.started = true
+          runCatching { File(reservation.sessionDir, CAPTURE_IN_PROGRESS_FILE).createNewFile() }
           true
         } else {
           false
@@ -457,9 +501,10 @@ class SessionCaptureCoordinator(
    * starts recording from that moment.
    *
    * Companions record only when the session's own capture records video: a session that opted out
-   * of video has not asked for footage of any display — and a session that started on a browser has
-   * no capture here at all ([startForSession] skips WEB), so none of its devices are recorded. A companion records video only: the session
-   * has one `device.log` and one memory series, and they are the start device's.
+   * of video has not asked for footage of any display — and a session that started on a browser
+   * without `followWebScreencast` has no capture here at all, so none of its devices are recorded. A
+   * companion records video and, on Android, logcat (`device-<name>.log`); the session has one
+   * memory series, and it is the start device's.
    *
    * A web companion is recorded from its browser's live screencast, which it follows for the whole
    * session — a browser that comes up after the bind is picked up when it does. It never falls back
@@ -485,6 +530,7 @@ class SessionCaptureCoordinator(
     val (self, others) = devices.partition { it.deviceId.instanceId == capture.deviceId }
     self.firstOrNull()?.let { capture.deviceName = it.name }
     if (others.isEmpty()) return 0
+    sampleCompanionClocks(sessionId, capture, devices, others)
     if (!capture.options.captureVideo) {
       Console.log(
         "[SessionCaptureCoordinator] video capture is off for session=$sessionId, so its companion " +
@@ -492,7 +538,7 @@ class SessionCaptureCoordinator(
       )
       return 0
     }
-    val companionOptions = capture.options.copy(captureLogcat = false, captureIosLogs = false, captureMemory = false)
+    val companionOptions = capture.options.copy(captureIosLogs = false, captureMemory = false)
     var started = 0
     for (device in others) {
       val reservation = synchronized(lock) {
@@ -509,7 +555,7 @@ class SessionCaptureCoordinator(
         CompanionCapture(device.name, device.deviceId, session, basename).also { capture.companions[device.name] = it }
       } ?: continue
       try {
-        reservation.session.startAll(capture.sessionDir, device.deviceId.instanceId, device.appId)
+        reservation.session.startAll(capture.sessionDir, device.deviceId.instanceId, device.appId())
         val committed = synchronized(lock) {
           val live = active[sessionId] === capture && capture.companions[device.name] === reservation
           if (live) reservation.started = true
@@ -541,6 +587,40 @@ class SessionCaptureCoordinator(
   }
 
   /**
+   * Names every bound device in `session_device_clock.json` and starts measuring each new companion's
+   * clock. Each device's capture streams carry its name as a suffix, and a reader converts a stream
+   * only on the clock of the device that name belongs to.
+   */
+  private fun sampleCompanionClocks(
+    sessionId: SessionId,
+    capture: ActiveCapture,
+    devices: List<BoundDevice>,
+    companions: List<BoundDevice>,
+  ) {
+    runCatching {
+      DeviceClockSyncFile.nameDevices(
+        capture.sessionDir,
+        capture.deviceId,
+        devices.associate { it.deviceId.instanceId to it.name },
+      )
+    }.onFailure {
+      Console.log("[SessionCaptureCoordinator] naming devices for session=$sessionId failed: ${it.message}")
+    }
+    for (device in companions) {
+      // Registered and started in one lock hold: a stop or unbind between the two would find
+      // nothing to stop and leave a sampler polling a finished session. start() only schedules.
+      synchronized(lock) {
+        if (active[sessionId] !== capture || capture.companionClockSamplers.containsKey(device.name)) {
+          return@synchronized
+        }
+        companionClockSamplerFactory(capture.sessionDir, device.deviceId.trailblazeDevicePlatform, device.deviceId.instanceId)
+          ?.also { capture.companionClockSamplers[device.name] = it }
+          ?.start()
+      }
+    }
+  }
+
+  /**
    * Stops recording the companion bound as [name] — an MCP `device(action=UNBIND)` — keeping what
    * it captured so far for the session's `capture_metadata.json`. The session's own capture is
    * not a companion and is left alone. Returns false when no such companion is recording.
@@ -549,24 +629,37 @@ class SessionCaptureCoordinator(
    * stops its own recorder, so nothing is left filming a device the session no longer binds.
    */
   fun unbindDevice(sessionId: SessionId, name: String): Boolean {
+    // Stopped outside the lock: a stop takes one last reading over adb.
+    synchronized(lock) { active[sessionId]?.companionClockSamplers?.remove(name) }?.stop()
+    val stopped = CountDownLatch(1)
     val (capture, companion) = synchronized(lock) {
       val capture = active[sessionId] ?: return false
       val companion = capture.companions.remove(name) ?: return false
       if (!companion.started) return false
+      capture.unbindsInFlight += stopped
       capture to companion
     }
-    val artifacts = stopCompanion(sessionId, companion)
+    val artifacts = try {
+      stopCompanion(sessionId, companion)
+    } finally {
+      stopped.countDown()
+    }
     val publishedAlready = synchronized(lock) {
       capture.finishedCompanionArtifacts += artifacts
-      val published = capture.publishedArtifacts ?: return@synchronized false
-      // The session stopped while this companion was still stopping, and its metadata went out
-      // without this recording. Add it and write again, or the file on disk is invisible to readers.
-      capture.publishedArtifacts = published + artifacts
-      artifacts.isNotEmpty()
+      val published = capture.publishedArtifacts
+      if (published == null) capture.unbindsInFlight -= stopped else capture.publishedArtifacts = published + artifacts
+      published != null
     }
     if (publishedAlready) {
+      // The session stopped while this companion was still stopping, and its metadata went out
+      // without this recording. Add it and write again, or the file on disk is invisible to readers.
       runCatching { writeCaptureMetadata(capture) }.onFailure {
         Console.log("[SessionCaptureCoordinator] rewriting ${CaptureMetadata.FILENAME} for session=$sessionId failed: ${it.message}")
+      }
+      // Leaving in flight only after the write means the last one out clears the marker with every recording on record.
+      synchronized(lock) {
+        capture.unbindsInFlight -= stopped
+        if (capture.unbindsInFlight.isEmpty()) File(capture.sessionDir, CAPTURE_IN_PROGRESS_FILE).delete()
       }
     }
     return true
@@ -653,13 +746,34 @@ class SessionCaptureCoordinator(
       emptyList()
     }
     val companionArtifacts = companions.filter { it.started }.flatMap { stopCompanion(sessionId, it) }
+    // A companion an unbind is still stopping indexes its crashes as it stops; the run is judged
+    // on that index once this returns, so wait for it. An unbind that outlasts the wait still
+    // publishes its own files (see `unbindDevice`), but its crash lands after the verdict.
+    // An interrupt (`shutdownAll` tearing the pool down) ends the wait the same way a timeout does:
+    // what has already stopped is still published below.
+    for (latch in synchronized(lock) { capture.unbindsInFlight.toList() }) {
+      val joined = try {
+        latch.await(UNBIND_JOIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        debug.appendLine("interrupted while waiting for an unbind to stop its companion")
+        break
+      }
+      if (!joined) debug.appendLine("an unbind was still stopping its companion after ${UNBIND_JOIN_TIMEOUT_SECONDS}s")
+    }
+    synchronized(lock) { capture.companionClockSamplers.values.toList() }.forEach { it.stop() }
     // Taking the finished list and publishing happen under one lock hold, so an unbind still
     // stopping its companion either lands in this list or sees it published and writes again.
-    val artifacts = synchronized(lock) {
-      (primaryArtifacts + companionArtifacts + capture.finishedCompanionArtifacts).also { capture.publishedArtifacts = it }
+    // Holding the write lock across both makes any such rewrite land after this write.
+    val artifacts = synchronized(capture.metadataWriteLock) {
+      synchronized(lock) {
+        (primaryArtifacts + companionArtifacts + capture.finishedCompanionArtifacts).also { capture.publishedArtifacts = it }
+      }.also {
+        runCatching { writeCaptureMetadata(capture) }
+          .onFailure { debug.appendLine("EXCEPTION writing ${CaptureMetadata.FILENAME}: ${it.message}") }
+      }
     }
-    runCatching { writeCaptureMetadata(capture) }
-      .onFailure { debug.appendLine("EXCEPTION writing ${CaptureMetadata.FILENAME}: ${it.message}") }
+    synchronized(lock) { if (capture.unbindsInFlight.isEmpty()) File(capture.sessionDir, CAPTURE_IN_PROGRESS_FILE).delete() }
     debug.appendLine("artifacts=${artifacts.size}")
     debug.appendLine(
       "artifactTypes=" + artifacts.joinToString(",") {
@@ -685,8 +799,9 @@ class SessionCaptureCoordinator(
    * shutdown hook (see [stopCapturesOnExit]) so a daemon exit (`trailblaze stop`, a CLI
    * source-change rebuild) doesn't leak stale `screenrecord` / `xcrun` processes.
    *
-   * Refuses new starts, and waits up to [perSessionTimeoutMs] for starts already under way to
-   * commit. Sessions then stop in parallel with a per-session timeout — the default JVM shutdown
+   * Refuses new starts, and waits up to [inFlightStartTimeoutMs] for starts already under way to
+   * commit. That wait outlasts an Android recorder's first-picture wait: until a start commits its
+   * stream nothing here can stop it, so giving up sooner leaves its ffmpeg and adb running. Sessions then stop in parallel with a per-session timeout — the default JVM shutdown
    * grace period is short, and a single wedged `stopAll()` (e.g. ffmpeg muxer stuck on
    * a missing keyframe) should not block the rest of the cleanup. Sessions that don't
    * stop in [perSessionTimeoutMs] are interrupted, and given [interruptGraceMs] to run the
@@ -696,13 +811,14 @@ class SessionCaptureCoordinator(
   fun shutdownAll(
     perSessionTimeoutMs: Long = SHUTDOWN_PER_SESSION_TIMEOUT_MS,
     interruptGraceMs: Long = SHUTDOWN_INTERRUPT_GRACE_MS,
+    inFlightStartTimeoutMs: Long = perSessionTimeoutMs + AndroidVideoCapture.FIRST_PICTURE_TIMEOUT_MS,
   ) {
     // Starts already under way finish first, so each is stopped below as a committed capture.
     val inFlight = synchronized(lock) {
       shuttingDown = true
       startsInFlight.toList()
     }
-    val startsDeadline = System.currentTimeMillis() + perSessionTimeoutMs
+    val startsDeadline = System.currentTimeMillis() + inFlightStartTimeoutMs
     for (start in inFlight) {
       val remaining = (startsDeadline - System.currentTimeMillis()).coerceAtLeast(0)
       runCatching { start.await(remaining, TimeUnit.MILLISECONDS) }
@@ -735,6 +851,12 @@ class SessionCaptureCoordinator(
   companion object {
     /** Cap on [ended]; see there. */
     private const val MAX_REMEMBERED_ENDED_SESSIONS = 1_024
+
+    /** How long [stopForSession] waits for a companion an [unbindDevice] is still stopping. */
+    private const val UNBIND_JOIN_TIMEOUT_SECONDS = 30L
+
+    /** In the session directory from a capture's start until every recording it made is in the metadata. */
+    const val CAPTURE_IN_PROGRESS_FILE = "capture_in_progress"
 
     /**
      * Per-session deadline used by [shutdownAll]. ffmpeg muxer flush + adb `screenrecord`

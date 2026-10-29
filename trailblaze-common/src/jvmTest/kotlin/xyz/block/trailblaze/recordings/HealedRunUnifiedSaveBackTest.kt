@@ -57,8 +57,8 @@ class HealedRunUnifiedSaveBackTest {
     assertTrue(seeded is UnifiedRecordingWriter.MergeOutcome.Merged, "seed merge must succeed")
     val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
 
-    // The heal recovered with two tool calls, so the recorded trailhead arrives as
-    // failed attempt (1 tool) + recovery (2 tools) = 3 tools.
+    // The heal recovered with two tool calls, so the recorded trailhead arrives as the failed
+    // attempt's one passing tool + recovery (2 tools) = 3 tools. The call that failed is not recorded.
     val logs = healedRunLogs(recoveryToolNames = listOf("tapSignIn", "enterEmail"))
     // The lowered items the CLI save-back merges (previously a v1 encode + strict decode round-trip).
     val recordedItems = logs.generateRecordedTrailItems(yaml)
@@ -84,7 +84,7 @@ class HealedRunUnifiedSaveBackTest {
   fun `healed run whose recovery captured zero tools merges back into the unified trail`() {
     // The AI can heal without any recordable tool call (it verified the trailhead state was
     // already reached and declared the objective complete). The merged trailhead then keeps only
-    // the recorded attempt's single tool, which the unified trailhead slot CAN represent.
+    // the recorded attempt's one passing tool, which the unified trailhead slot CAN represent.
     val dir = tempFolder.newFolder()
     val logs = healedRunLogs(recoveryToolNames = emptyList())
 
@@ -108,8 +108,8 @@ class HealedRunUnifiedSaveBackTest {
   // --- fixtures ---
 
   /**
-   * The log stream of one healed run: the trailhead's recorded attempt fails (window 1, closed
-   * with a failed complete), AI recovery re-opens the same trailhead prompt step and succeeds
+   * The log stream of one healed run: the trailhead's recorded attempt launches, then its next call
+   * fails (window 1, closed with a failed complete), AI recovery re-opens the same trailhead prompt step and succeeds
    * (window 2, with [recoveryToolNames] recordable calls), then the rest of the trail proceeds
    * normally (one recorded step).
    */
@@ -121,7 +121,8 @@ class HealedRunUnifiedSaveBackTest {
     val cartStep = DirectionStep(step = "Open the cart")
     return buildList {
       add(start(trailheadStep))
-      add(toolLog("myapp_launchSignedIn", successful = false))
+      add(toolLog("myapp_launchSignedIn"))
+      add(toolLog("waitForHome", successful = false))
       add(completeFailed(trailheadStep))
       add(start(trailheadStep))
       recoveryToolNames.forEach { add(toolLog(it)) }
@@ -162,7 +163,7 @@ class HealedRunUnifiedSaveBackTest {
   private fun completeFailed(step: PromptStep) = TrailblazeLog.ObjectiveCompleteLog(
     promptStep = step,
     objectiveResult = AgentTaskStatus.Failure.ObjectiveFailed(
-      llmExplanation = "Recording failed at myapp_launchSignedIn: app crashed",
+      llmExplanation = "Recording failed at waitForHome: home screen never appeared",
       statusData = statusData(step),
     ),
     session = session,

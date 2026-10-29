@@ -52,16 +52,6 @@ class JsScriptingCallbackArgumentValidatorTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "validator-test-toolset",
         toolClasses = classes.toSet(),
-        yamlToolNames = emptySet(),
-      ),
-    )
-
-  private fun repoWithYaml(vararg yamlNames: String): TrailblazeToolRepo =
-    TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "validator-test-yaml-toolset",
-        toolClasses = emptySet(),
-        yamlToolNames = yamlNames.map { ToolName(it) }.toSet(),
       ),
     )
 
@@ -131,9 +121,8 @@ class JsScriptingCallbackArgumentValidatorTest {
   @Test
   fun `validate enforces empty-arg contract for class-backed tools with no properties`() {
     // A `@TrailblazeToolClass` with no constructor args has an exhaustively-declared empty
-    // schema — any incoming key is unknown. Pairs with the YAML strict-on-empty fix; both
-    // author-controlled empty schemas must reject extra keys, only dynamic / subprocess
-    // schemas get the lenient "skip on empty" treatment.
+    // schema — any incoming key is unknown. Author-controlled empty schemas must reject extra
+    // keys; only dynamic / subprocess schemas get the lenient "skip on empty" treatment.
     val repo = repoWith(NoArgTool::class)
 
     val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "no_arg_tool", "{}")
@@ -254,30 +243,6 @@ class JsScriptingCallbackArgumentValidatorTest {
       error("buildKoogTool not exercised by the validator test path")
     override fun decodeToolCall(argumentsJson: String): TrailblazeTool =
       error("decodeToolCall not exercised by the validator test path")
-  }
-
-  @Test
-  fun `validate enforces empty-arg contract for YAML tools with empty parameters list`() {
-    // The other half of the strict-empty fix: YAML tools that exhaustively declare
-    // `parameters: []` (the shipped `pressBack.tool.yaml` is the canonical example) must
-    // reject extra keys, not skip the gate like dynamic tools do. The class-backed
-    // `NoArgTool` test pins the same behavior for the Kotlin path; this test pins it for
-    // the YAML path so a refactor that re-introduces `.ifEmpty { null }` on the YAML
-    // branches can't slip through unnoticed.
-    val repo = repoWithYaml("pressBack")
-
-    val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "pressBack", "{}")
-    assertThat(emptyOk).isNull()
-
-    val rejected = JsScriptingCallbackArgumentValidator.validate(
-      repo,
-      "pressBack",
-      """{"element":"hint"}""",
-    )
-    assertThat(rejected).isNotNull()
-    assertThat(rejected!!).contains("\"element\"")
-    assertThat(rejected).contains("accepts no arguments")
-    assertThat(rejected).contains("client.tools.pressBack")
   }
 
   @Test

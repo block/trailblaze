@@ -12,26 +12,21 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("compose_type")
 @LLMDescription(
   """
-Type text into a UI input element.
-Identify the element using its element ID from the view hierarchy (e.g., 'e3'),
-or by existing text content.
-By default this clears the field first. Set clearFirst to false to append text instead.
+Type into an input, identified by elementId (preferred), testTag, or existingText. Clears the field first unless clearFirst is false.
 """,
 )
 data class ComposeTypeTool(
-  @param:LLMDescription("The text to type into the element.")
+  @param:LLMDescription("Text to type.")
   val text: String,
-  @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e3'. Preferred method.")
+  @param:LLMDescription("Element ID, e.g. 'e3'.")
   val elementId: String? = null,
-  @param:LLMDescription("Accessibility identifier of the input element.")
+  @param:LLMDescription("Input testTag.")
   val testTag: String? = null,
-  @param:LLMDescription("The existing text content of the input element.")
+  @param:LLMDescription("Input's current text, exact whole-text match.")
   val existingText: String? = null,
-  @param:LLMDescription("Human-readable description of the element being typed into, for logging.")
+  @param:LLMDescription("Short description of the element, for logs.")
   val element: String = "",
-  @param:LLMDescription(
-    "If true (default), clear the field before typing. If false, append to existing text."
-  )
+  @param:LLMDescription("Clear the field before typing (default true); false appends.")
   val clearFirst: Boolean = true,
 ) : ComposeExecutableTool {
 

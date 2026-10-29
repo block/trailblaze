@@ -119,6 +119,49 @@ class AgentMemoryTest {
   }
 
   @Test
+  fun `a literal dollar sign directly before a double-brace token stays literal`() {
+    // `${{amount}}` is a `$` followed by an `{{amount}}` token, the natural way to write a price
+    // or a `$`-prefixed handle. The `${...}` pattern must not claim `${{amount}` as a token named
+    // `{amount`, or the blank-unknown mode erases the dollar sign and the value with it.
+    val memory = AgentMemory()
+    memory.remember("amount", "5")
+    assertEquals("pay \$5", memory.interpolateVariables("pay \${{amount}}", blankUnknownTokens = false))
+    assertEquals("pay \$5", memory.interpolateVariables("pay \${{amount}}", blankUnknownTokens = true))
+    assertEquals("^\\\$5\$", memory.interpolateVariables("^\\\${{memory.amount}}\$", blankUnknownTokens = true))
+  }
+
+  @Test
+  fun `whitespace inside a token is ignored, as in Mustache`() {
+    val memory = AgentMemory()
+    memory.remember("amount", "5")
+    assertEquals("pay 5", memory.interpolateVariables("pay {{ amount }}", blankUnknownTokens = false))
+    assertEquals("pay 5", memory.interpolateVariables("pay {{ memory.amount }}", blankUnknownTokens = false))
+    assertEquals("pay 5", memory.interpolateVariables("pay \${ amount }", blankUnknownTokens = false))
+    // A blank body is not a token: it stays as written even in blank-unknown mode.
+    assertEquals("pay {{ }}", memory.interpolateVariables("pay {{ }}", blankUnknownTokens = true))
+  }
+
+  @Test
+  fun `a triple-brace token resolves like a double-brace one`() {
+    // Mustache's unescaped `{{{x}}}`. Nothing is HTML-escaped here, so it is the same value.
+    val memory = AgentMemory()
+    memory.remember("amount", "5")
+    assertEquals("pay 5", memory.interpolateVariables("pay {{{amount}}}", blankUnknownTokens = true))
+    assertEquals("pay \$5", memory.interpolateVariables("pay \${{{ amount }}}", blankUnknownTokens = true))
+  }
+
+  @Test
+  fun `an inserted value is never interpolated again`() {
+    // One pass, like Mustache: a remembered value that contains token text comes out verbatim,
+    // whichever spelling inserted it.
+    val memory = AgentMemory()
+    memory.remember("template", "{{secret}}")
+    memory.remember("secret", "hunter2")
+    assertEquals("{{secret}}", memory.interpolateVariables("{{template}}", blankUnknownTokens = false))
+    assertEquals("{{secret}}", memory.interpolateVariables("\${template}", blankUnknownTokens = false))
+  }
+
+  @Test
   fun `interpolateVariables blank-unknown mode resolves unknown tokens to empty string`() {
     // The TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS=1 kill-switch path. The env read sits
     // outside this overload so both modes are pinnable without process-global env mutation.

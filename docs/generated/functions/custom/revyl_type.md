@@ -4,7 +4,7 @@
 
 # `revyl_type`
 
-Type text into an input field. Optionally specify a target field (e.g. 'email field', 'password input').
+Type text into the focused field, or into a target field.
 
 ## Source
 
@@ -22,14 +22,14 @@ Type text into an input field. Optionally specify a target field (e.g. 'email fi
 ### Required parameters
 
 - `text` — `String`
-  The text to type into the field.
+  Text to type.
 
 ### Optional parameters
 
 - `target` — `String`
-  Optional target field, described in natural language.
+  Target field in natural language, e.g. 'email field'.
 - `clearFirst` — `Boolean`
-  If true, clear the field before typing.
+  Clear the field before typing.
 - `reasoning` — `String`
 
 ## Output

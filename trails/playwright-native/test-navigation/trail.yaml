@@ -78,9 +78,11 @@ trail:
   - step: "Verify the text \"Trailblaze is an AI-powered UI testing framework\" is visible"
     recording:
       web:
-        - web_verifyTextVisible:
-            text: Trailblaze is an AI-powered UI testing framework
-            reasoning: The objective requires verifying the exact text 'Trailblaze is an AI-powered UI testing framework' is visible. I will check if this specific text appears on the page.
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: .*Trailblaze is an AI-powered UI testing framework.*
 
   - step: "Navigate back to the previous page state by clicking the \"Home\" navigation link"
     recording:

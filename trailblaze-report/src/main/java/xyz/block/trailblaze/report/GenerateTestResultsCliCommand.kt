@@ -45,7 +45,6 @@ import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
-import xyz.block.trailblaze.report.models.selfHealConfigured
 import xyz.block.trailblaze.report.models.writeCategory2Evidence
 import xyz.block.trailblaze.report.models.AxisBucket
 import xyz.block.trailblaze.report.models.CrossPlatformMismatch
@@ -220,7 +219,7 @@ open class GenerateTestResultsCliCommand(
     }
 
     // Collect session results and tool usage data
-    val metadata = buildMetadataFromEnvironment()
+    val metadata = CiRunMetadata.fromEnvironment(environment)
     val sessionResults = mutableListOf<SessionResult>()
     val errors = mutableListOf<String>()
     val allSessionToolUsage = mutableListOf<SessionToolUsage>()
@@ -313,6 +312,8 @@ open class GenerateTestResultsCliCommand(
             originalYaml = logs.getSessionStartedInfo()?.rawYaml,
             healedYaml = healedYaml,
             healedStepIndexes = healedStepIndexes,
+            logs = logs,
+            platform = sessionInfo.trailblazeDeviceInfo?.platform,
           )
 
         sessionResults.add(
@@ -321,6 +322,7 @@ open class GenerateTestResultsCliCommand(
             title = title,
             test_key = testKey,
             metadata = sessionInfo.trailConfig?.metadata,
+            context = sessionInfo.trailConfig?.context?.takeIf { it.isNotBlank() },
             // Blank normalizes to null, as it does for `test_class`/`test_name` below and for
             // `SessionInfo.displayName`: a consumer reads null as "named no trail", and an empty
             // string that survived to the report would answer that question two different ways
@@ -368,6 +370,7 @@ open class GenerateTestResultsCliCommand(
             priority = sessionInfo.trailConfig?.priority,
             accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
             trail_id = sessionInfo.trailConfig?.id,
+            trail_source_url = sessionInfo.trailSourceUrl?.takeIf { it.isNotBlank() },
           )
         )
       } catch (e: Exception) {
@@ -399,6 +402,8 @@ open class GenerateTestResultsCliCommand(
     val summaryReport = CiSummaryReport(
       metadata = metadata,
       results = finalResults,
+      // Only when something retried; otherwise every row would repeat in `results`.
+      attempts = deduplicated.attemptResults.takeIf { it.size > ranResults.size },
     )
 
     val output = outputArg ?: File(logsDir, "trailblaze_test_report.${outputFormat.extension}")
@@ -440,7 +445,7 @@ open class GenerateTestResultsCliCommand(
     // the ones a retry superseded, and it is what the Block subclass uploads to CDP. A skip made
     // no attempt, so a synthetic row here would send an external results sink a test execution
     // that never happened. The report on disk still lists it.
-    generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults)
+    generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults, attempts = null)
 
     // Clean up file watchers to allow JVM to exit
     if (ownsLogsRepo) logsRepo.close()
@@ -522,60 +527,6 @@ open class GenerateTestResultsCliCommand(
     Console.log(output)
   }
 
-  private fun buildMetadataFromEnvironment(): CiRunMetadata {
-    fun getEnv(name: String): String? = environment[name]?.takeIf { it.isNotBlank() }
-    fun getEnvList(name: String): List<String> = getEnv(name)?.split(",")?.map {
-      it.trim()
-    }?.filter {
-      it.isNotEmpty()
-    } ?: emptyList()
-
-    // Trail source: a git trail repo emits TRAIL_SOURCE_REPO/REF (the combined / deferred report
-    // steps re-emit them). When a repo is present we label the type "git"; otherwise the type is
-    // left to an explicit TRAIL_SOURCE_TYPE env (set by the CI pipeline) or null.
-    val trailSourceRepo = getEnv("TRAIL_SOURCE_REPO")
-    val trailSourceRef = getEnv("TRAIL_SOURCE_REF")
-    val trailSourceType =
-      getEnv("TRAIL_SOURCE_TYPE") ?: if (trailSourceRepo != null) "git" else null
-
-    return CiRunMetadata(
-      // Un-namespaced, like TRAIL_SOURCE_* above. Null off-CI rather than a placeholder, so a run
-      // with no config doesn't read as a config named "unknown".
-      config_id = getEnv("CONFIG_ID"),
-      target_app = getEnv("TRAILBLAZE_TARGET_APP") ?: "",
-      build_type = getEnv("TRAILBLAZE_BUILD_TYPE") ?: "",
-      devices = getEnvList("TRAILBLAZE_DEVICES"),
-      android_build_url = getEnv("ANDROID_BUILD_URL"),
-      ios_build_url = getEnv("IOS_BUILD_URL"),
-      android_build_version = getEnv("ANDROID_BUILD_VERSION"),
-      ios_build_version = getEnv("IOS_BUILD_VERSION"),
-      android_build_git_sha = getEnv("ANDROID_BUILD_GIT_SHA"),
-      ios_build_git_sha = getEnv("IOS_BUILD_GIT_SHA"),
-      android_build_source_repo = getEnv("ANDROID_BUILD_SOURCE_REPO"),
-      ios_build_source_repo = getEnv("IOS_BUILD_SOURCE_REPO"),
-      android_build_branch = getEnv("ANDROID_BUILD_BRANCH"),
-      ios_build_branch = getEnv("IOS_BUILD_BRANCH"),
-      android_build_pr_number = getEnv("ANDROID_BUILD_PR_NUMBER"),
-      ios_build_pr_number = getEnv("IOS_BUILD_PR_NUMBER"),
-      trail_source_type = trailSourceType,
-      trail_source_repo = trailSourceRepo,
-      trail_source_ref = trailSourceRef,
-      retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
-      ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
-      self_heal_enabled = selfHealConfigured(getEnv("TRAILBLAZE_SELF_HEAL_ENABLED")),
-      parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
-      ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
-      ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
-      ci_organization_slug = getEnv("BUILDKITE_ORGANIZATION_SLUG") ?: getEnv("CI_ORGANIZATION_SLUG"),
-      ci_pipeline_slug = getEnv("BUILDKITE_PIPELINE_SLUG") ?: getEnv("CI_PIPELINE_SLUG"),
-      ci_build_source = getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
-      ci_build_message = getEnv("BUILDKITE_MESSAGE") ?: getEnv("CI_BUILD_MESSAGE"),
-      ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
-      git_commit = getEnv("BUILDKITE_COMMIT") ?: getEnv("GIT_COMMIT"),
-      git_branch = getEnv("BUILDKITE_BRANCH") ?: getEnv("GIT_BRANCH"),
-    )
-  }
-
   private fun mapStatusToOutcome(status: SessionStatus): Outcome = when (status) {
     is SessionStatus.Ended.Succeeded -> Outcome.PASSED
     is SessionStatus.Ended.SucceededWithSelfHeal -> Outcome.PASSED
@@ -594,7 +545,7 @@ open class GenerateTestResultsCliCommand(
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
-      "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+      status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
 
     else -> null
   }

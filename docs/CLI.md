@@ -74,27 +74,30 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `ask` | Ask a question about what's on screen (uses AI vision, no actions taken) |
 | `verify` | Check a condition on screen and pass/fail (exit code 0/1, ideal for CI) |
 | `snapshot` | Capture the current screen's UI tree (fast, no AI, no actions) |
-| `tool` | Run a Trailblaze tool by name (e.g., tap, inputText) |
+| `tool` | Run a Trailblaze tool by name (e.g., tap, type) |
 | `toolbox` | Browse available tools by target app and platform |
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
+| `loop` | Run a trail's trailhead once, then repeat its steps in a loop. |
 | `usages` | Find every trail that directly invokes a tool (IDE "Find Usages" for tools). |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings. |
 | `strings` | Extract the human-visible text a recorded session showed, for localization and copy diffs |
+| `survey` | Run surveys over finished sessions, store their findings and labels in each session, and print a report |
 | `viewer` | Write out the standalone report viewer (one self-contained HTML page). |
 | `profile` | Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory. |
 | `otel` | Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint). |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
+| `selector` | Suggest and check element selectors against captured screens, or the device's (--live). |
 | `results` | Query the persisted test-result index for a test case. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
-| `app` | Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). |
+| `app` | Open Trailblaze App, starting the daemon if it is not running (use --headless to start only the daemon). |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check its TypeScript, run its `*.test.ts` tests. |
 | `inprocess` | Check an app APK for in-process driver compatibility, and build a test APK that drives it. |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
-| `companion` | Attach a coding agent to Trail Runner while it authors a trail. |
+| `companion` | Attach a coding agent to Trailblaze App while it authors a trail. |
 
 ---
 
@@ -221,7 +224,7 @@ trailblaze snapshot [OPTIONS]
 
 ### `trailblaze tool`
 
-Run a Trailblaze tool by name (e.g., tap, inputText)
+Run a Trailblaze tool by name (e.g., tap, type)
 
 **Synopsis:**
 
@@ -266,7 +269,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<ROLE>` | Optional role filter — show only tools tagged with this role. Valid values: trailheads, shortcuts.   trailheads — tools that bring the device to a known starting state (launch + sign-in, deep-link, etc.). Use one at the start of every trail.   shortcuts  — tools that jump between named waypoints during a trail. Omit to show everything; trailheads and shortcuts will be called out as headline sections above the toolset listing. | No |
+| `<ROLE>` | Optional role filter — show only tools tagged with this role. Valid values: trailheads.   trailheads — tools that bring the device to a known starting state (launch + sign-in, deep-link, etc.). Use one at the start of every trail. Omit to show everything; trailheads will be called out as a headline section above the toolset listing. | No |
 
 **Options:**
 
@@ -318,9 +321,9 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config. | - |
 | `--headless`, `--no-headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
-| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
+| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-6-luna). Mutually exclusive with --llm-provider and --llm-model. | - |
 | `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
-| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
+| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-6-luna) | - |
 | `--memory` | Pre-populate trail memory with KEY=VAL before any step runs. Repeatable (`--memory user=sam --memory accountTier=PRO`). Overrides any value with the same key in the trail YAML's `config.memory:` block. Values are strings; keys must be non-empty. Visible to `{{name}}` interpolation and to scripted tools via `ctx.memory.get(name)`. Values are logged in cleartext and persisted into the session-start snapshot — use --secret for passwords, tokens, or other sensitive data. | - |
 | `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
 | `--arg` | Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable (`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are declared and typed: the value is coerced to the arg's declared type, a missing required arg fails before the run starts, and an undeclared arg is rejected. Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file entry with the same key. The value is always a string here; declaration-driven coercion turns `retries=3` into a number for an `integer` arg. Use --args-file for structured (array/object) values. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
@@ -329,18 +332,82 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--full-report-payloads` | Embed full event payloads in the after-run HTML report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so an existing session can also be regenerated in full later via `trailblaze report --full-report-payloads`. Applies to in-process runs; a run delegated to an already-running daemon doesn't generate a report from this process. | - |
 | `--save-recording`, `--no-save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the trail file is only rewritten when a step self-healed during the run, --no-use-recorded-steps re-drove every step, or this device had no recording yet — a clean replay leaves the file unchanged. | - |
-| `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
+| `--no-logging` | Disable session logging — no files written to logs/, run does not appear in Trailblaze App's Runs list | - |
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
 | `--compose-port` | RPC port for Compose driver connections (default: 52600) | - |
 | `--turbo`, `--no-turbo` | Turbo mode: let the Android app under test report when it is idle so the driver waits less after each action, instead of watching for its screen to go quiet. Each wait ends at whichever answer comes first, so this can only make a run faster, never slower. Needs an app signed with a key this build carries a helper for (debug and internal builds; not release or beta) — a run that can't use it says so and runs at normal speed. When neither flag is passed, inherits TRAILBLAZE_TURBO and the saved `trailblaze config turbo` setting. | - |
-| `--capture-video`, `--no-capture-video` | Record device screen video for the session. Off by default — video writes large files — pass --capture-video to enable it for a run. When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved `trailblaze config capture-video` setting. | - |
+| `--capture-video`, `--no-capture-video` | Record device screen video for the session. On by default for `run`; use --no-capture-video to skip it. Interactive sessions (`session start`, `tool`, `blaze`, MCP) stay off unless TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config capture-video` opts them in. | - |
 | `--capture-logcat`, `--no-capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. On by default; use --no-capture-logcat to disable. | - |
 | `--capture-ios-logs`, `--no-capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. Use --no-capture-ios-logs to disable. | - |
 | `--capture-memory`, `--no-capture-memory` | Track the app under test's memory for the whole run as `memory` events in <session-dir>/events/memory.ndjson: a sample around every tool call, plus one every 5 seconds whenever it changed, all read in the background so the run never waits. Android reports heap used vs. the heap limit, read through the on-device runner when one is installed and over adb otherwise; iOS Simulator reports the app's footprint. For exact before/after figures, start the daemon with TRAILBLAZE_MEMORY_DIAGNOSTICS=true: each tool call then waits for its two readings and Android collects garbage first. On by default; use --no-capture-memory to disable. | - |
-| `--capture-network`, `--no-capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. On by default; use --no-capture-network to disable. When neither flag is passed, inherits the desktop app's saved setting. | - |
+| `--capture-network`, `--no-capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the "Network traffic" capture default in Trailblaze App Settings. On by default; use --no-capture-network to disable. When neither flag is passed, inherits that saved setting. | - |
 | `--capture-all` | Enable all capture streams: video, logcat, iOS logs, memory, network (local dev mode) | - |
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze loop`
+
+Run a trail's trailhead once, then repeat its steps in a loop.  One session runs the `trailhead:`, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began.  A failed pass is reported, handed to --on-failure, and counted toward --iterations. The loop then recovers in a new session that runs the trailhead again, and continues with the passes left. It stops early after 3 sessions in a row that complete no pass. Exits non-zero if any pass failed.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it. Each pass then runs the whole trail in a session of its own.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations each. Never saves a recording: it would record every pass into the trail.
+
+**Synopsis:**
+
+```
+trailblaze loop [OPTIONS] [<<trailFile>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to every named unified trail, plus one pick per legacy trail (recording preferred over NL when both are present). Bare `trailblaze run` with no arguments is rejected as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to fan out under a workspace's trails directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
+| `-d`, `--device` | Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices (`--device android,ios` → one run per device). When omitted, resolves to a pinned (`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ devices are connected and none is pinned, the run fails and asks you to pass this (or `--driver` / `--all-devices`). See also --all-devices. | - |
+| `--device-classifier` | Select a locale/variant-qualified recording for this run (for example `ios-iphone-es`). The key must refine the connected device's detected classifiers. Only valid for a single-device run. | - |
+| `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
+| `--bind` | Bind a multi-device trail's COMPANION devices for this run: `--bind buyer=emulator-5562`. Repeatable or comma-separated. The names come from the trail's `config.devices:` configuration; the START device is the one `--device` names and must NOT be bound here. Per-run, so two multi-device trails can run concurrently against different device sets on one daemon — which `TRAILBLAZE_DEVICE_BINDINGS` cannot express (it is daemon-wide, and changing it needs a daemon restart). Takes precedence over that env var when passed. | - |
+| `--configuration` | Select which of a trail's `config.devices:` configurations to run when it declares more than one. Per-run, like --bind. Naming a configuration a single-device trail does not declare is an error rather than a silent single-device run. | - |
+| `--use-recorded-steps`, `--no-use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
+| `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
+| `--snapshot-baseline` | Diff this run's `takeSnapshot` captures against a PREVIOUS run instead of checked-in golden files. <ref> is an http(s) URL to a session logs zip (e.g. the CI artifact store's latest_success.zip), a local zip, or an extracted session directory. Snapshots are matched by name; a snapshot missing from the baseline is skipped, a resolvable mismatch above the threshold fails the run, and an unresolvable <ref> fails it too. Alternatively set TRAILBLAZE_SNAPSHOT_BASELINE on the executing process (the daemon for delegated runs). | - |
+| `--snapshot-baseline-threshold` | Pass threshold for --snapshot-baseline: a snapshot passes when its pixel diff percentage is <= this value. Default: 2.0 (or TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set). | - |
+| `-v`, `--verbose` | Enable verbose output | - |
+| `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config. | - |
+| `--headless`, `--no-headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
+| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-6-luna). Mutually exclusive with --llm-provider and --llm-model. | - |
+| `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
+| `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-6-luna) | - |
+| `--memory` | Pre-populate trail memory with KEY=VAL before any step runs. Repeatable (`--memory user=sam --memory accountTier=PRO`). Overrides any value with the same key in the trail YAML's `config.memory:` block. Values are strings; keys must be non-empty. Visible to `{{name}}` interpolation and to scripted tools via `ctx.memory.get(name)`. Values are logged in cleartext and persisted into the session-start snapshot — use --secret for passwords, tokens, or other sensitive data. | - |
+| `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
+| `--arg` | Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable (`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are declared and typed: the value is coerced to the arg's declared type, a missing required arg fails before the run starts, and an undeclared arg is rejected. Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file entry with the same key. The value is always a string here; declaration-driven coercion turns `retries=3` into a number for an `integer` arg. Use --args-file for structured (array/object) values. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
+| `--args-file` | Read parameter values from a YAML or JSON file (a map of arg-name to value). Applied BEFORE --arg, so a --arg KEY=VAL overrides the file entry with the same key. A YAML-null value is rejected (args have no null) — use '' for an empty string. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
+| `--max-llm-calls` | Cap the number of LLM calls per objective. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 25. | - |
+| `--no-report` | Skip HTML report generation after execution | - |
+| `--full-report-payloads` | Embed full event payloads in the after-run HTML report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so an existing session can also be regenerated in full later via `trailblaze report --full-report-payloads`. Applies to in-process runs; a run delegated to an already-running daemon doesn't generate a report from this process. | - |
+| `--save-recording`, `--no-save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the trail file is only rewritten when a step self-healed during the run, --no-use-recorded-steps re-drove every step, or this device had no recording yet — a clean replay leaves the file unchanged. | - |
+| `--no-logging` | Disable session logging — no files written to logs/, run does not appear in Trailblaze App's Runs list | - |
+| `--markdown` | Generate a markdown report after execution | - |
+| `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
+| `--compose-port` | RPC port for Compose driver connections (default: 52600) | - |
+| `--turbo`, `--no-turbo` | Turbo mode: let the Android app under test report when it is idle so the driver waits less after each action, instead of watching for its screen to go quiet. Each wait ends at whichever answer comes first, so this can only make a run faster, never slower. Needs an app signed with a key this build carries a helper for (debug and internal builds; not release or beta) — a run that can't use it says so and runs at normal speed. When neither flag is passed, inherits TRAILBLAZE_TURBO and the saved `trailblaze config turbo` setting. | - |
+| `--capture-video`, `--no-capture-video` | Record device screen video for the session. On by default for `run`; use --no-capture-video to skip it. Interactive sessions (`session start`, `tool`, `blaze`, MCP) stay off unless TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config capture-video` opts them in. | - |
+| `--capture-logcat`, `--no-capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. On by default; use --no-capture-logcat to disable. | - |
+| `--capture-ios-logs`, `--no-capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. Use --no-capture-ios-logs to disable. | - |
+| `--capture-memory`, `--no-capture-memory` | Track the app under test's memory for the whole run as `memory` events in <session-dir>/events/memory.ndjson: a sample around every tool call, plus one every 5 seconds whenever it changed, all read in the background so the run never waits. Android reports heap used vs. the heap limit, read through the on-device runner when one is installed and over adb otherwise; iOS Simulator reports the app's footprint. For exact before/after figures, start the daemon with TRAILBLAZE_MEMORY_DIAGNOSTICS=true: each tool call then waits for its two readings and Android collects garbage first. On by default; use --no-capture-memory to disable. | - |
+| `--capture-network`, `--no-capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the "Network traffic" capture default in Trailblaze App Settings. On by default; use --no-capture-network to disable. When neither flag is passed, inherits that saved setting. | - |
+| `--capture-all` | Enable all capture streams: video, logcat, iOS logs, memory, network (local dev mode) | - |
+| `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
+| `-n`, `--iterations` | How many passes to run, failed ones included. | - |
+| `--on-failure` | Run this shell command for each failed pass, with the failed session's log directory appended as its last argument. It runs alongside the loop, one at a time: the loop waits for it before starting the next one, and before exiting. | - |
+| `--reuse-trailhead` | Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting up again. Each pass then runs the whole trail, trailhead included, in a session of its own. Only a trailhead that defines `teardown` hands its setup on, and only after a pass that passed; otherwise the next pass sets up from scratch. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -368,7 +435,7 @@ trailblaze usages [OPTIONS] [<<tool>>]
 |--------|-------------|---------|
 | `--changed-since` | Instead of naming tools, derive them: compare the workspace's scripted tools against git <ref> and report usages for every tool that was added, removed, or modified. Detection hashes each tool's source together with its resolved import closure, so editing a shared helper flags every tool that imports it. | - |
 | `--json` | Emit the machine-readable JSON report (schemaVersion 1) to stdout instead of the human-readable summary. | - |
-| `--trails` | Trails directory to scan. Repeatable — a repo whose trails live under more than one root scans them all in one pass, and every reported usage names the root it was found under. Order matters: the FIRST one is the primary root, which is what the report names and what --changed-since walks up from to find the workspace's trailmaps. Passing any --trails replaces the configured roots rather than adding to them. Default: the workspace's effective trails directory (TRAILBLAZE_TRAILS_DIR, the workspace `trails:` declaration, or the configured default) plus any extra roots configured in Trail Runner. | - |
+| `--trails` | Trails directory to scan. Repeatable — a repo whose trails live under more than one root scans them all in one pass, and every reported usage names the root it was found under. Order matters: the FIRST one is the primary root, which is what the report names and what --changed-since walks up from to find the workspace's trailmaps. Passing any --trails replaces the configured roots rather than adding to them. Default: the workspace's effective trails directory (TRAILBLAZE_TRAILS_DIR, the workspace `trails:` declaration, or the configured default) plus any extra roots configured in Trailblaze App. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -658,6 +725,7 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
 | `-v`, `--verbose` | Show the generator's own progress logs — workspace config loading, tool-class discovery, per-session clock normalisation, and step timings. Suppressed by default so the report paths are the output; turn this on when a report is slow or empty and you need to see which session the generator was working on. | - |
+| `--surveys` | Also run surveys over the report's sessions, and write what they found beside the report: surveys.md (labels, the findings behind each, and the runs they came from) and surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated (--surveys=journeys,jobs). Each session's findings and labels are stored in its surveys.json too. Surveys never run unless asked. Put a session id before this flag, or it is read as a survey name. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -733,6 +801,35 @@ trailblaze strings diff [OPTIONS] <<baseline.ndjson>> <<candidate.ndjson>>
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--untranslated` | Report the strings both runs show verbatim instead of the ones that changed. Run the same trail at two locales and this is the list of screens nobody translated. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze survey`
+
+Run surveys over finished sessions, store their findings and labels in each session, and print a report Surveys load from the workspace you run this in. Each survey's find phase reads every session, then label phases run over the batch. A survey that a selected survey lists in `dependsOn` runs too, reusing a session's stored findings while they are current.
+
+**Synopsis:**
+
+```
+trailblaze survey [OPTIONS] [<<session>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<session>>` | Session id or unambiguous prefix, or a path: a session directory, a directory of sessions, or a session zip. Defaults to every session in the logs directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--survey` | Only run the survey exported under this name (repeatable). | - |
+| `--format` | What to print: markdown (default), summary, json, or none. | - |
+| `-o`, `--out` | Also write the JSON report to this file. | - |
+| `--logs-dir` | Directory session ids resolve in. Defaults to the configured logs directory. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -824,13 +921,11 @@ trailblaze waypoint list
 trailblaze waypoint locate
 trailblaze waypoint validate
 trailblaze waypoint capture-example
-trailblaze waypoint suggest-selector
 trailblaze waypoint migrate-trail
 trailblaze waypoint segment
 trailblaze waypoint graph
 trailblaze waypoint tune
 trailblaze waypoint propose
-trailblaze waypoint shortcut
 ```
 
 **Options:**
@@ -880,7 +975,7 @@ trailblaze waypoint locate [OPTIONS]
 | `--session` | Session log directory. With --step, locates a single step; without --step, batch-locates every screen-state log in the dir and emits one TSV row per step. | - |
 | `--step` | 1-based index of the step within the session (single-step mode; selects from *_TrailblazeLlmRequestLog.json files) | - |
 | `--file` | Direct path to a *_TrailblazeLlmRequestLog.json file (alternative to --session/--step) | - |
-| `--target` | Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. Mutually exclusive with --root (--root wins if both given). | - |
+| `--target` | Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. Mutually exclusive with --root (--root wins if both given). Without it, `{{target.appId}}` selectors expand to the app ids of the target the session recorded. | - |
 | `--root` | Additional directory to scan for *.waypoint.yaml files. Overrides --target. Trailmap waypoints are always included regardless. (Convention: ./trails) | - |
 | `--rel-base` | Batch mode only: emit log paths relative to this directory. Must be an existing directory. Default: relative to the session dir's parent (yielding <session-name>/<step-filename>). | - |
 | `--log-suffix` | Batch mode only: restrict the walk to logs whose filename ends with this suffix (e.g. `_AgentDriverLog.json`). Default: every screen-state log type (`_AgentDriverLog.json`, `_TrailblazeSnapshotLog.json`, `_TrailblazeLlmRequestLog.json`). Use to pin row accounting against a specific log type when the session dir may carry multiple. | - |
@@ -954,41 +1049,9 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 
 ---
 
-### `trailblaze waypoint suggest-selector`
-
-Suggest selector YAML for a specific element ref in a captured screen — the whole menu. Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching session log to translate ref → selector. Prints EVERY strategy that computes a selector resolving to the target (resource id, text, structural, childOf, containsChild, spatial, index-qualified variants, plus a run-variable-wildcarded text variant), each with its strategy name + live match count, ranked most-stable first. Nothing computable is hidden.
-
-**Synopsis:**
-
-```
-trailblaze waypoint suggest-selector [OPTIONS] [<<positionalLogFile>>]
-```
-
-**Arguments:**
-
-| Argument | Description | Required |
-|----------|-------------|----------|
-| `<<positionalLogFile>>` | Path to a *_TrailblazeLlmRequestLog.json (required unless --session/--step given). Same shape as the input to `waypoint validate`. | No |
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--ref` | Element ref from the captured tree (e.g. 'a812'). Mutually exclusive with --at; exactly one must be provided. | - |
-| `--at` | Screen-coordinate pair `x,y` (in device pixels) identifying the target element. The frontmost interactive node whose bounds contain the point is selected via the same hit-test the runtime uses for taps. Useful for the deterministic Maestro-selector → accessibility-selector migration: resolve the Maestro selector to a center coordinate, then ask this command for an accessibility selector that covers the same node. Mutually exclusive with --ref / --maestro-selector. | - |
-| `--maestro-selector` | Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like `textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the shape used by the older Maestro-driver tap recordings. The selector is resolved against the captured `viewHierarchy` (Maestro tree) using the same matcher the runtime taps use; the resulting node's CENTER coordinate is then hit-tested against the captured `trailblazeNodeTree` (accessibility tree) to find the accessibility node that covers the same on-screen element. The output is the same selector cascade as `--ref` / `--at`, but starting from a Maestro selector. This is the deterministic Maestro→accessibility migration primitive. Mutually exclusive with --ref / --at. | - |
-| `--session` | Session log directory (containing *_TrailblazeLlmRequestLog.json files) | - |
-| `--step` | 1-based step within --session (default: last step) | - |
-| `--max` | Maximum candidate selectors to print (default: 25 — enough to show them all) | - |
-| `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
 ### `trailblaze waypoint migrate-trail`
 
-Mechanically migrate a trail's Maestro-shape selectors to accessibility shape. Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector` still carries androidMaestro matchers is rewritten to androidAccessibility shape, using the captured session logs to deterministically resolve each selector through the same matcher the runtime uses for taps. Defaults to dry-run (unified diff on stdout). Use `--write` to apply the migration in place. Pair with a recorded session log directory (`--session`) for the same trail.
+Mechanically migrate a trail's selectors from one driver's dialect to another's. Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector` is still written in the source dialect is rewritten into the target dialect, using a recorded session that captured BOTH drivers' trees to resolve each selector the same way the runtime resolved it, then describe the element it landed on in the new dialect. The pair is read from the capture (e.g. androidMaestro -> androidAccessibility, iosMaestro -> iosAxe); `--from` / `--to` assert it rather than choose it. Defaults to dry-run (unified diff on stdout). Use `--write` to apply the migration in place. Pair with a recorded session log directory (`--session`) for the same trail.
 
 **Synopsis:**
 
@@ -1008,6 +1071,8 @@ trailblaze waypoint migrate-trail [OPTIONS] <<trailFile>>
 |--------|-------------|---------|
 | `--session` | Session log directory from a dual-tree recorded run of this trail (trailblaze.captureSecondaryTree=true). Accepts *_TrailblazeLlmRequestLog.json, *_TrailblazeSnapshotLog.json, and *_AgentDriverLog.json files; only logs carrying viewHierarchy + trailblazeNodeTree + driverMigrationTreeNode are usable. | - |
 | `--write` | Overwrite the trail file in place with the migrated YAML. Default is dry-run: print a unified diff for review without changing the file. | - |
+| `--from` | Assert the SOURCE selector dialect (e.g. `androidMaestro`, `iosMaestro`). The pair is always inferred from the session capture; this fails the run when the capture says something else, so a batch migration can't quietly rewrite the wrong dialect. | - |
+| `--to` | Assert the TARGET selector dialect (e.g. `androidAccessibility`, `iosAxe`). Same contract as `--from`: an assertion about the capture, not a choice. | - |
 | `--classifier` | For a unified-format trail file only: which classifier's recordings to migrate (e.g. `android-phone`, `ios-tablet`). A session is captured against one device at a time, so migrate-trail always operates on one classifier per invocation — unified format just changes where that classifier's tool list lives (nested under this trail's `recording:` map instead of its own file). If omitted, inferred from the session logs' device classifier when exactly one available classifier matches; otherwise this is required. Ignored for legacy-format trail files. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1058,7 +1123,7 @@ trailblaze waypoint segment list [OPTIONS]
 
 ### `trailblaze waypoint graph`
 
-Render the waypoint navigation graph (waypoints, authored shortcuts, authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at `http://localhost:<daemon-port>/waypoints/graph` instead.
+Render the waypoint navigation graph (waypoints and authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at `http://localhost:<daemon-port>/waypoints/graph` instead.
 
 **Synopsis:**
 
@@ -1070,8 +1135,8 @@ trailblaze waypoint graph [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--target` | Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered graph to waypoints whose id starts with `<id>/` and drops shortcuts/trailheads that cross out of that scope. Also resolves --root to <workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given. | - |
-| `--platform` | Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints whose source path is under `waypoints/<platform>/...` and drops shortcuts/trailheads that cross out of that scope. Combine with --target to produce a single (target, platform) map. | - |
+| `--target` | Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered graph to waypoints whose id starts with `<id>/` and drops trailheads that land outside that scope. Also resolves --root to <workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given. | - |
+| `--platform` | Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints whose source path is under `waypoints/<platform>/...` and drops trailheads that land outside that scope. Combine with --target to produce a single (target, platform) map. | - |
 | `--root` | Filesystem directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Overrides --target's root resolution. Trailmap-bundled waypoints from the classpath are always included regardless of this flag. | - |
 | `--out`, `-o` | Output HTML file path (default: ./.trailblaze/reports/waypoint-graph.html, relative to the current directory). The default scopes the artifact to .trailblaze/reports/ — a stack-agnostic, generated-output-only subpath that consumers can gitignore without having to blanket-ignore the rest of .trailblaze/ (which may hold things they want to commit). Parent directories are created if missing; the file is overwritten if present. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1131,16 +1196,16 @@ trailblaze waypoint propose [OPTIONS]
 
 ---
 
-### `trailblaze waypoint shortcut`
+### `trailblaze selector`
 
-Analyze a session set for (A->B) waypoint transitions and synthesize draft shortcut YAMLs, then empirically replay each candidate on a fresh emulator before opening a PR. Subcommands: propose (offline), verify (on-device).
+Suggest and check element selectors against captured screens, or the device's (--live).
 
 **Synopsis:**
 
 ```
-trailblaze waypoint shortcut [OPTIONS]
-trailblaze waypoint shortcut propose
-trailblaze waypoint shortcut verify
+trailblaze selector [OPTIONS]
+trailblaze selector suggest
+trailblaze selector match
 ```
 
 **Options:**
@@ -1152,54 +1217,72 @@ trailblaze waypoint shortcut verify
 
 ---
 
-### `trailblaze waypoint shortcut propose`
+### `trailblaze selector suggest`
 
-Analyze a session set for (A->B) transitions and emit draft shortcut YAMLs. Each surviving proposal lands as a JSON+YAML pair under --out-dir, ready for the pipeline's verify + auto-PR steps.
+Suggest selectors for one element of a captured screen, or the device's (--live) — the whole menu. Name the element by --ref (from `trailblaze snapshot --all`), by --at x,y, or by a legacy --maestro-selector. Prints EVERY strategy that computes a selector resolving to the element, each with its strategy name + live match count, ranked most-stable first.
 
 **Synopsis:**
 
 ```
-trailblaze waypoint shortcut propose [OPTIONS]
+trailblaze selector suggest [OPTIONS] [<<positionalLogFile>>]
 ```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<positionalLogFile>>` | Path to a *_TrailblazeLlmRequestLog.json (required unless --session or --batch is given). | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--sessions` | Directory containing one or more session subdirectories with *_AgentDriverLog.json files. Each subdirectory is one session. | - |
-| `--target` | Trailmap id. Resolves --root to <workspace>/trailmaps/<id>/waypoints/ and supplies the trailmap's app_ids for templated selector expansion. | - |
-| `--root` | Override the waypoint-root dir for waypoint + existing-shortcut discovery. (Convention: ./trails) | - |
-| `--min-support` | Minimum distinct sessions for a transition to be proposed. Default: 3. | - |
-| `--fingerprint-agreement` | Fraction of supporting sessions that must share the dominant action fingerprint (default: 0.67). Sessions disagreeing on the procedure short-circuit the proposal. | - |
-| `--top-k` | Process at most the top-K surviving proposals by hit count. The replay step is expensive enough that v1 caps weekly throughput here. Default: 5. | - |
-| `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_shortcut/proposals/. Wiped at the start of each run. | - |
-| `--idempotence-check` | Re-run after applying the surviving proposals in-memory; fail (exit 1) if any new proposal surfaces. | - |
+| `--ref` | Element ref from the captured tree (e.g. 'a812'). Exactly one of --ref, --at, or --maestro-selector must be provided. | - |
+| `--at`, `--xy` | Screen-coordinate pair `x,y` (in device pixels) identifying the target element. The frontmost interactive node whose bounds contain the point is selected via the same hit-test the runtime uses for taps. Useful for the deterministic Maestro-selector → accessibility-selector migration: resolve the Maestro selector to a center coordinate, then ask this command for an accessibility selector that covers the same node. Mutually exclusive with --ref / --maestro-selector. | - |
+| `--maestro-selector` | Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like `textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the shape used by the older Maestro-driver tap recordings. The selector is resolved against the captured `viewHierarchy` (Maestro tree) using the same matcher the runtime taps use; the resulting node's CENTER coordinate is then hit-tested against the captured `trailblazeNodeTree` (accessibility tree) to find the accessibility node that covers the same on-screen element. The output is the same selector cascade as `--ref` / `--at`, but starting from a Maestro selector. This is the deterministic Maestro→accessibility migration primitive. Mutually exclusive with --ref / --at. | - |
+| `--session` | Session log directory. Steps count every screen capture in it that has an element tree, oldest first. | - |
+| `--step` | 1-based step within --session (default: last step) | - |
+| `--live` | Read the connected device's current screen instead of a log: the screen `trailblaze snapshot --all` shows, so its refs resolve here. With --batch, lets lines read it with `live: true`. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `--max` | Maximum candidate selectors to print (default: 25 — enough to show them all) | - |
+| `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
+| `--json` | Print the menu as one JSON object instead of commented YAML. | - |
+| `--batch` | Answer many questions in one call. Each line is a JSON object with the same keys as the flags: `log` (or `session` + optional `step`, or `live: true` with --live), one of `ref` / `at` / `maestroSelector`, and optional `max` / `anchor` (defaulting to this command's --max / --anchor). Prints one JSON object per line, in order; a line that can't be answered prints {"line":N,"error":...} and the rest still run (exit 3 at the end, 2 if it failed unexpectedly). | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
 ---
 
-### `trailblaze waypoint shortcut verify`
+### `trailblaze selector match`
 
-Empirical replay of a proposed shortcut against a connected emulator. Generates a throwaway trail YAML and runs it via `trailblaze run`. Returns 0 if the post-condition waypoint matches, non-zero otherwise.
+Show what a selector matches on one or more captured screens, or the device's (--live). Pass several captures of the same screen (other runs, locales, devices) to check that a selector survives them. --expect unique|present|absent exits 1 if any screen fails.
 
 **Synopsis:**
 
 ```
-trailblaze waypoint shortcut verify [OPTIONS]
+trailblaze selector match [OPTIONS] [<<log>>]
 ```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<log>>` | Screen-state logs to match against (*_TrailblazeLlmRequestLog.json, *_TrailblazeSnapshotLog.json or *_AgentDriverLog.json). | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--yaml` | Path to the shortcut YAML to verify (a `*.shortcut.yaml`). | - |
-| `--device` | Device id to run against (forwarded to `trailblaze run --device`). Defaults to $TRAILBLAZE_DEVICE. | - |
-| `--driver` | Driver to use in the generated trail config. Default: ANDROID_ONDEVICE_ACCESSIBILITY. Pick a different value when verifying an iOS shortcut (v1 ships Android-first). | - |
-| `--max-attempts` | Total attempts before declaring failure. Default: 1 (no retries). Trail-runtime exit codes are not distinguishable today between infrastructure and test-side failures (picocli SOFTWARE=1 covers both driver-init failures and post-condition mismatches), so v1 defaults to no retries. Override to 2+ only when investigating known transient infra flake; a flaky shortcut is a bad shortcut and the default policy reflects that. | - |
-| `--trail-out` | Write the generated trail YAML to <path> for debugging. Default: ./.waypoints_shortcut/verify/<shortcut-id>.trail.yaml | - |
-| `--trailblaze-bin` | Override the `trailblaze` binary used for the inner trail run. Default: ./trailblaze (so framework changes are picked up). CI sets this to the installed-distribution binary to mirror the end-user code path. | - |
-| `--timeout-seconds` | Per-attempt timeout in seconds for the inner `trailblaze run` subprocess. Default: 600 (10 min). A wedged trail run (device disconnect, ADB hung, runtime stuck on settle) is destroyed and returns exit code 124 so the outer bootstrap can move on. Without a timeout, a single stuck replay would block the rest of v1's sequential top-K loop indefinitely. | - |
+| `--selector` | The selector, as YAML or JSON — the same body a waypoint or `tool tap --selector` takes, or a `selector` value from `selector suggest --json`. | - |
+| `--selector-file` | Read the selector from a YAML or JSON file instead of --selector. | - |
+| `--session` | Session log directory to match against (repeatable). Uses --step, else its last step. | - |
+| `--step` | 1-based step within each --session (default: last step) | - |
+| `--live` | Also match against the connected device's current screen (the one `trailblaze snapshot --all` shows). Combines with log files and --session. With --batch, lets lines read it with `live: true`. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `--expect` | Check every screen: unique (exactly 1 match), present (1 or more), absent (none). Exits 1 if any screen fails. Without it, the command only reports. present and absent match the way a waypoint does; unique and no --expect check the selector as a tap, and refuse a web selector that web replay would locate differently. | - |
+| `--migration-tree` | Match against a dual-tree capture's accessibility migration tree instead of the primary tree. Its nodes have no refs. | - |
+| `--json` | Print the result as one JSON object. | - |
+| `--batch` | Answer many questions in one call. Each line is a JSON object: `selector` (an object or a YAML string), `logs` (an array), `session` + optional `step`, and/or `live: true` (needs --live), and optional `expect` (defaulting to this command's --expect). Prints one JSON object per line, in order. Exit 1 if any line fails its expectation; a line that can't be answered prints {"line":N,"error":...} and makes the exit 3 (2 if it failed unexpectedly). | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1298,9 +1381,9 @@ trailblaze config reset
 
 | Key | Description | Valid Values |
 |-----|-------------|-------------|
-| `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) or 'none' to disable |
+| `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-6-luna, anthropic/claude-sonnet-4-20250514) or 'none' to disable |
 | `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. or 'none' to disable |
-| `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
+| `llm-model` | LLM model ID | e.g., gpt-6-luna, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
 | `target` | Target app for device connections and custom tools | App target ID. Run 'trailblaze config target' to see all. |
 | `android-driver` | Android driver type | accessibility, in-process |
 | `ios-driver` | iOS driver type | host, axe |
@@ -1314,7 +1397,7 @@ trailblaze config reset
 | `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
 | `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
 | `stream-screenshots` | Experimental: serve agent-loop screenshots from the live device stream on Android, iOS, and web (default: off) | true, false, or 'unset' to inherit the default (off) |
-| `capture-video` | Record device screen video for each session (default: off — video is opt-in) | true or false |
+| `capture-video` | Record video in interactive sessions (default: off; `trailblaze run` records by default regardless of this setting) | true or false |
 | `ios-baguette-video` | Experimental: record iOS session video from the baguette H.264 stream instead of simctl (default: off) | true, false, or 'unset' to inherit the default (off) |
 | `disable-animations` | Experimental: disable OS animations on the device during each session, restored at session end (default: off) | true, false, or 'unset' to inherit the default (off) |
 | `turbo` | Experimental: let the Android app under test report when it is idle so the driver waits less (default: off) | true, false, or 'unset' to inherit the default (off) |
@@ -1561,7 +1644,7 @@ trailblaze device create web [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--instance-id` | Slot name. Subsequent commands address this slot as `--device web/<id>`. Defaults to the singleton `playwright-native` when omitted (the same slot the desktop app's Launch Browser button operates on). | - |
+| `--instance-id` | Slot name. Subsequent commands address this slot as `--device web/<id>`. Defaults to the singleton `playwright-native` when omitted (the default web device). | - |
 | `--emulate` | Playwright `devices` preset name. Applies full device emulation: viewport, deviceScaleFactor, userAgent, isMobile, hasTouch. Examples: 'iPhone 14', 'Pixel 7', 'iPad Pro 11'. Mutually exclusive with --viewport. | - |
 | `--viewport` | Raw viewport size, e.g. '375x812' or '1920x1080'. Sets ONLY the viewport box — does not change User-Agent, deviceScaleFactor, isMobile, or hasTouch, so pages that UA-sniff still serve their desktop variant. Use --emulate for a full mobile/tablet emulation profile. Mutually exclusive with --emulate. | - |
 | `--headless`, `--no-headless` | Launch the browser headless (--headless) or headed (--no-headless). When omitted, defers to the slot's stored preference, falling back to the headed-when-display-available default — so running this on a desktop without --headless does NOT force a hidden window. | - |
@@ -1591,7 +1674,7 @@ trailblaze show [OPTIONS]
 
 ### `trailblaze app`
 
-Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). `trailblaze app start` is an accepted synonym for this command.
+Open Trailblaze App, starting the daemon if it is not running (use --headless to start only the daemon). `trailblaze app start` starts only the daemon, the same as `trailblaze app --headless`.
 
 **Synopsis:**
 
@@ -1603,11 +1686,10 @@ trailblaze app [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--headless` | Start in headless mode (daemon only, no GUI) | - |
+| `--headless` | Start only the daemon, without opening Trailblaze App | - |
 | `--stop` | Stop the running daemon | - |
 | `--status` | Check if the daemon is running | - |
-| `--foreground` | Run in foreground (blocks terminal). Use for debugging with an attached IDE. | - |
-| `--v2` | Open Trail Runner in its native desktop window | - |
+| `--foreground` | Run the daemon in the foreground (blocks terminal). Use for debugging with an attached IDE. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1659,6 +1741,7 @@ trailblaze check [OPTIONS] [<<trailmap-id>>]
 | `--all` | Type-check every trailmap in the discovered workspace, even when running from inside a specific trailmap tree. Mutually exclusive with the positional <trailmap-id>. | - |
 | `--workspace` | Pin the workspace root explicitly (the directory containing `trailblaze-config/trailmaps/` or the legacy `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
 | `--no-typecheck` | Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
+| `--tests-only` | Materialize the workspace's SDK + per-trailmap typed bindings, then run only the trailmaps' `*.test.ts` unit tests via bun: no typecheck and no trail validation, and the exit code is the tests' alone. Fails when no checked trailmap has a test. For CI gates that judge tool tests apart from the trail corpus. | - |
 | `--show-typed-tools` | Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by default because the per-trailmap subprocess spawn it requires adds noticeable latency to `check`. Has no effect when node, the SDK shim, or the SDK's `ts-json-schema-generator` install are missing — the analyzer skips cleanly with an explanatory log line. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1740,7 +1823,7 @@ trailblaze inprocess make-test-apk [OPTIONS]
 | `--release` | Allow a non-debuggable target. Off by default because the usual cause of one is the wrong APK, not a deliberate release target. Signature equality is what actually gates attach, so a release build signed with the SAME key this command signs with is attachable and --release is the explicit override for it. A release build signed with a production key you do not hold stays unattachable no matter what you pass here. | - |
 | `--allow-runtime-tool-source` | Bake `allow_runtime_tool_source: true` into the injected --target-config, letting this APK load scripted-tool bundles pushed to /data/local/tmp at run time instead of the ones packaged in it. Off by default, and written before signing either way, so the signature records the choice and a key-ceremony APK cannot be turned into one by omission. | - |
 | `--target-config` | Target config to inject (`id:`, `display_name:`, `platforms:`, `tools:`). Without one the APK runs framework primitives only — no scripted tools. | - |
-| `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. | - |
+| `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. Its surveys/, if any, is packaged for ctx.surveys, and bundled with esbuild too. | - |
 | `--trail` | A *.trail.yaml to inject. Repeat for several. The shell discovers them at run time and reports one test per trail. | - |
 | `--esbuild` | esbuild binary, when --trailmap carries TypeScript and esbuild is not on PATH. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1839,7 +1922,7 @@ trailblaze skill status [OPTIONS]
 
 ### `trailblaze companion`
 
-Attach a coding agent to Trail Runner while it authors a trail.
+Attach a coding agent to Trailblaze App while it authors a trail.
 
 **Synopsis:**
 
@@ -1879,9 +1962,9 @@ trailblaze companion start [OPTIONS]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--folder` | Trail folder relative to the workspace root. | - |
-| `--title` | Human-readable title shown in Trail Runner. | - |
+| `--title` | Human-readable title shown in Trailblaze App. | - |
 | `--agent` | Agent type: claude or codex. | `claude` |
-| `--label` | Agent label shown in Trail Runner. | - |
+| `--label` | Agent label shown in Trailblaze App. | - |
 | `--trails-dir` | Workspace root (default: current directory). | `.` |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1918,7 +2001,7 @@ trailblaze companion event [OPTIONS] <<runId>>
 
 ### `trailblaze companion send`
 
-Send or retract Trail Runner UI guidance.
+Send or retract Trailblaze App UI guidance.
 
 **Synopsis:**
 
@@ -2004,7 +2087,7 @@ trailblaze companion disconnect [OPTIONS] <<runId>>
 
 ### `trailblaze companion respond`
 
-Settle a request delegated by Trail Runner.
+Settle a request delegated by Trailblaze App.
 
 **Synopsis:**
 

@@ -44,7 +44,7 @@ class SubagentOrchestrator(
 ) {
   private val samplingClient = McpSamplingClient(sessionContext)
 
-  /** Tool surface (class-backed + YAML-defined) available for subagent orchestration. */
+  /** Class-backed tool surface available for subagent orchestration. */
   private val availableTools = ToolSetCategoryMapping.resolve(
     setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION),
   )
@@ -53,11 +53,7 @@ class SubagentOrchestrator(
   private val toolClassByName: Map<String, KClass<out TrailblazeTool>> =
     availableTools.toolClasses.associateBy { it.trailblazeToolClassAnnotation().name }
 
-  /** Known YAML-defined tool names — must be accepted in [executeAction] alongside class-backed names. */
-  private val yamlToolNamesSet: Set<String> =
-    availableTools.yamlToolNames.map { it.toolName }.toSet()
-
-  private val allKnownToolNames: Set<String> get() = toolClassByName.keys + yamlToolNamesSet
+  private val allKnownToolNames: Set<String> get() = toolClassByName.keys
 
   /**
    * Per-orchestrator repo used to deserialize an LLM tool call by name. Built once from
@@ -68,7 +64,6 @@ class SubagentOrchestrator(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "Subagent",
       toolClasses = availableTools.toolClasses,
-      yamlToolNames = availableTools.yamlToolNames,
     ),
   )
 
@@ -93,7 +88,7 @@ For failure:
 
 RULES:
 - Respond with EXACTLY ONE JSON object
-- Look at the view hierarchy to find element coordinates for tapOnPoint
+- Look at the view hierarchy to find the ref of the element to tap
 - Call complete/failed when the objective is achieved or cannot be achieved
 - If stuck after several attempts, respond with failed"""
   }
@@ -194,8 +189,8 @@ RULES:
     }
 
     return try {
-      // Route by toolName via the repo — class-backed and YAML-defined tools both decode
-      // through the same path with the flat args JSON (no toolName/raw wrapping needed).
+      // Route by toolName via the repo — tools decode with the flat args JSON (no toolName/raw
+      // wrapping needed).
       val tool = toolRepo.toolCallToTrailblazeTool(action.name, action.args.toString())
       mcpBridge.executeTrailblazeTool(tool)
     } catch (e: Exception) {

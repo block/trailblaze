@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.report.utils
 
+import kotlin.math.abs
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
@@ -735,6 +737,45 @@ class LogsRepo(
   }
 
   /**
+   * [getSessionInfoDirect]'s answer at [getSessionInfoSummary]'s cost whenever the two agree: the
+   * summary when every status log is stamped by the host clock, the full read otherwise.
+   *
+   * A device-stamped status log (an on-device run writes its own `Started`) can only be put on the
+   * host timeline with offsets derived from the session's tool logs, which the summary never reads.
+   * Compared raw against a host-stamped end or file times, a device clock that runs ahead makes a
+   * cancelled session read as in progress and an abandoned one's duration negative.
+   *
+   * A session writes its first status log as it starts, so on a host-stamped session its oldest
+   * file dates from its earliest status stamp. When the two disagree, the summary's answer cannot
+   * be trusted and INFO takes the full read: files much newer than the stamp were copied (an
+   * import, a farm download, an unzip all make every file "just now", so an abandoned session
+   * would read as in progress), and a stamp much newer than the files is on another clock (an
+   * older device log that carries no clock field, whose timeout would come out negative).
+   */
+  fun getSessionInfoAtLeastCost(sessionId: SessionId): SessionInfo? {
+    val files = readLogFilesFromDisk(sessionId)
+    val statusLogs = readSessionStatusLogs(files)
+    if (statusLogs.any { it.clock == TrailblazeClockDomain.DEVICE }) return getSessionInfoDirect(sessionId)
+    // On-device log files are named by time, not class, so none match the status-log filter.
+    if (statusLogs.isEmpty()) return getSessionInfoDirect(sessionId)
+    val oldestFileMs = files.minOf { it.lastModified() }
+    val firstStampMs = statusLogs.minOf { it.timestamp.toEpochMilliseconds() }
+    if (abs(oldestFileMs - firstStampMs) > FILE_TIME_AGREEMENT_MS) return getSessionInfoDirect(sessionId)
+    val lastActivityMs = files.maxOf { it.lastModified() }
+    return buildSessionInfo(statusLogs, lastActivityMsOverride = lastActivityMs)
+  }
+
+  /**
+   * The end written for [sessionId], from its status logs only; null until one lands. Unlike
+   * [getSessionInfoSummary], never the timeout it synthesizes for a session idle at Started.
+   */
+  fun persistedEndStatus(sessionId: SessionId): SessionStatus.Ended? =
+    readSessionStatusLogs(readLogFilesFromDisk(sessionId))
+      .filter { it.sessionStatus is SessionStatus.Ended }
+      .maxByOrNull { it.timestamp }
+      ?.sessionStatus as? SessionStatus.Ended
+
+  /**
    * When [sessionId]'s first and newest logs were written, in epoch millis, read from file times so
    * no log is parsed. Null when the session has no logs yet.
    *
@@ -839,6 +880,7 @@ class LogsRepo(
               // only thing that does.
               endTimestamp = abandonedTimestamp,
               trailFilePath = startedStatus?.trailFilePath,
+              trailSourceUrl = startedStatus?.trailSourceUrl,
               hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
               selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
               deviceClockOffsetMs = deviceClockOffsetMs,
@@ -876,6 +918,7 @@ class LogsRepo(
       endTimestamp = (lastSessionStatusLog.sessionStatus as? SessionStatus.Ended)
         ?.let { lastSessionStatusLog.timestamp },
       trailFilePath = startedStatus?.trailFilePath,
+      trailSourceUrl = startedStatus?.trailSourceUrl,
       hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
       selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
       deviceClockOffsetMs = deviceClockOffsetMs,
@@ -949,7 +992,12 @@ class LogsRepo(
   /** Failures recorded by [failSucceededEnd] for sessions whose end had not landed yet. */
   private val pendingEndFailures = mutableMapOf<SessionId, EndFailure>()
 
-  private data class EndFailure(val exceptionMessage: String, val exceptionStackTrace: String?)
+  private data class EndFailure(
+    val exceptionMessage: String,
+    val exceptionStackTrace: String?,
+    val failureKind: String?,
+    val failurePayload: JsonElement?,
+  )
 
   /**
    * Fails a session that ended succeeded, by writing a failure after that end: the one exception
@@ -961,11 +1009,20 @@ class LogsRepo(
    * the session's latest status, which may carry a device's clock running ahead of this host's: the
    * latest status is the one every reader takes as the session's outcome.
    *
+   * [failureKind] and [failurePayload] classify the failure as [SessionStatus.Ended.Failed]'s own
+   * fields do, for a failure the framework recognizes (an app crash); null for an unclassified one.
+   *
    * @return whether the failure was written now; false when it waits for the end, or never applies.
    */
-  fun failSucceededEnd(sessionId: SessionId, exceptionMessage: String, exceptionStackTrace: String?): Boolean {
+  fun failSucceededEnd(
+    sessionId: SessionId,
+    exceptionMessage: String,
+    exceptionStackTrace: String?,
+    failureKind: String? = null,
+    failurePayload: JsonElement? = null,
+  ): Boolean {
     if (readOnly) return false
-    val failure = EndFailure(exceptionMessage, exceptionStackTrace)
+    val failure = EndFailure(exceptionMessage, exceptionStackTrace, failureKind, failurePayload)
     synchronized(terminalStatusLock) {
       val statusLogs = readSessionStatusLogs(readLogFilesFromDisk(sessionId))
       val ends = statusLogs.map { it.sessionStatus }.filterIsInstance<SessionStatus.Ended>()
@@ -984,11 +1041,15 @@ class LogsRepo(
       durationMs = end.durationMs,
       exceptionMessage = failure.exceptionMessage,
       exceptionStackTrace = failure.exceptionStackTrace,
+      failureKind = failure.failureKind,
+      failurePayload = failure.failurePayload,
     )
     is SessionStatus.Ended.SucceededWithSelfHeal -> SessionStatus.Ended.FailedWithSelfHeal(
       durationMs = end.durationMs,
       exceptionMessage = failure.exceptionMessage,
       exceptionStackTrace = failure.exceptionStackTrace,
+      failureKind = failure.failureKind,
+      failurePayload = failure.failurePayload,
     )
     else -> null
   }
@@ -1132,6 +1193,16 @@ class LogsRepo(
   }
 
   companion object {
+
+    /** Written into a session directory by the session importer, after the session's files. */
+    const val IMPORTED_SESSION_MARKER = ".imported"
+
+    /**
+     * How far a session's oldest file time may sit from its earliest status stamp, either way,
+     * before [getSessionInfoAtLeastCost] stops trusting file times. A live host session writes its
+     * first file within milliseconds of that stamp.
+     */
+    private const val FILE_TIME_AGREEMENT_MS = 60_000L
 
     /**
      * Directories the logs dir holds that are not sessions: `RunReportGenerator`'s output and

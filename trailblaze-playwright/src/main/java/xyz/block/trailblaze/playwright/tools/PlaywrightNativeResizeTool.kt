@@ -30,18 +30,13 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("web_resize")
 @LLMDescription(
   """
-Resize the browser viewport to the given dimensions.
-
-Use to test responsive CSS at different breakpoints (e.g., 375x812 for phone,
-768x1024 for tablet). Does NOT change User-Agent or device emulation flags —
-pages that UA-sniff still see desktop Chrome. For full mobile emulation set
-the device's profile at creation time, not via this tool.
+Resize the browser viewport, e.g. to test responsive breakpoints. Does not change the User-Agent or enable mobile emulation.
 """,
 )
 data class PlaywrightNativeResizeTool(
-  @param:LLMDescription("Width of the viewport in CSS pixels. Must be positive.")
+  @param:LLMDescription("Viewport width in CSS pixels.")
   val width: Int,
-  @param:LLMDescription("Height of the viewport in CSS pixels. Must be positive.")
+  @param:LLMDescription("Viewport height in CSS pixels.")
   val height: Int,
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {

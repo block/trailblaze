@@ -1,0 +1,2 @@
+id: ios_resetKeychain
+class: xyz.block.trailblaze.ios.tools.IosResetKeychainTrailblazeTool

@@ -9,6 +9,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.PerformanceAnalysisGenerator
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Generate the performance-analysis report - the Instruments-style trail-session profiler
@@ -108,8 +109,8 @@ class ProfileCommand : Callable<Int> {
     val canonical = File(dir, "trailblaze_performance_analysis.html")
     generated.copyTo(canonical, overwrite = true)
     generated.delete()
-    Console.info("Performance analysis: file://${canonical.absolutePath}")
-    if (open) TrailblazeDesktopUtil.openInDefaultBrowser("file://${canonical.absolutePath}")
+    Console.info("Performance analysis: ${canonical.fileUrl()}")
+    if (open) TrailblazeDesktopUtil.openInDefaultBrowser("${canonical.fileUrl()}")
     return TrailblazeExitCode.SUCCESS.code
   }
 }

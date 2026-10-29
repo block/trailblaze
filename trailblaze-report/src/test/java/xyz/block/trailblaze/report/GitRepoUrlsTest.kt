@@ -7,6 +7,17 @@ import kotlin.test.assertNull
 class GitRepoUrlsTest {
 
   @Test
+  fun trailSourcePinsTheFullCommitAndEscapesTheOriginalPathWithoutCredentials() {
+    val sha = "a".repeat(40)
+    assertEquals(
+      "https://github.com/example/trails/blob/$sha/trails/Case%20%231/trail.yaml",
+      gitHubTrailSourceUrl("https://user:password@github.com/example/trails.git", sha, "trails/Case #1/trail.yaml"),
+    )
+    assertNull(gitHubTrailSourceUrl("git@github.com:example/trails.git", "main", "trail.yaml"))
+    assertNull(gitHubTrailSourceUrl("git@github.com:example/trails.git", sha, "../trail.yaml"))
+  }
+
+  @Test
   fun parsesEveryFormAGitRemoteActuallyTakes() {
     val expected = GitRepoUrls.Parsed(host = "github.com", slug = "example/mobile-app")
     listOf(

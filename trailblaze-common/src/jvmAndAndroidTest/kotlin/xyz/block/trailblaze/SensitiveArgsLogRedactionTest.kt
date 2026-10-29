@@ -51,11 +51,153 @@ class SensitiveArgsLogRedactionTest {
 
   private val secretBase64 = "c2VjcmV0LXNlc3Npb24tdG9rZW4="
 
+  @Test
+  fun nestedLogMasksPreCallAndCurrentValuesWithoutChangingExecutionPayload() {
+    val agent = CapturingAgentContext()
+    val oldValue = "FAKE_TEST_ONLY_PRE_CALL_VALUE"
+    val newValue = "FAKE_TEST_ONLY_POST_CALL_VALUE"
+    val before = AgentMemory().apply { rememberSensitive("pin", oldValue) }
+    agent.memory.rememberSensitive("pin", newValue)
+    val payload = buildJsonObject {
+      put("old", oldValue)
+      put("new", newValue)
+      put("control", "visible")
+    }
+    val tool = NestedConditionalLogFixture(payload)
+    val context =
+      TrailblazeToolExecutionContext(
+        screenState = null,
+        traceId = null,
+        trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+        sessionProvider = agent.sessionProvider,
+        trailblazeLogger = agent.trailblazeLogger,
+        memory = agent.memory,
+      )
+    context.nestedDispatchDepth.incrementAndGet()
+    agent.logToolExecution(
+      tool = tool,
+      timeBeforeExecution = Clock.System.now(),
+      context = context,
+      result =
+        TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "$oldValue $newValue",
+          structuredPayload = payload,
+        ),
+      rawTool = AuthoredRawArgsTool("runIf", payload),
+      sensitiveMemoryBeforeExecution = before,
+    )
+    val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    val persisted =
+      listOfNotNull(
+        log.trailblazeTool.raw.toString(),
+        log.rawTrailblazeTool?.raw?.toString(),
+        log.exceptionMessage,
+        log.errorPayload?.toString(),
+      )
+    assertTrue(
+      persisted.none { it.contains(oldValue) || it.contains(newValue) },
+      "Invocation log fields must mask both pre-call and current sensitive values",
+    )
+    assertEquals(payload, tool.rawToolArguments)
+    assertEquals(newValue, agent.memory.variables["pin"])
+
+    // A later invocation still masks current sensitive memory and retains harmless arguments.
+    agent.logToolExecution(tool, Clock.System.now(), context, TrailblazeToolResult.Success())
+    val next = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().last()
+    assertEquals(JsonPrimitive("visible"), next.trailblazeTool.raw["control"])
+    assertTrue(!next.trailblazeTool.raw.toString().contains(newValue))
+  }
+
+  @Test
+  fun forwardedLogMasksOverlappingOldAndCurrentValues() {
+    assertOverlappingInvocationLogIsMasked(forwarded = true, delete = false)
+  }
+
+  @Test
+  fun nestedLogMasksOverlappingOldAndCurrentValues() {
+    assertOverlappingInvocationLogIsMasked(forwarded = false, delete = false)
+  }
+
+  @Test
+  fun forwardedLogMasksDeletedPreCallValue() {
+    assertOverlappingInvocationLogIsMasked(forwarded = true, delete = true)
+  }
+
+  private fun assertOverlappingInvocationLogIsMasked(forwarded: Boolean, delete: Boolean) {
+    val agent = CapturingAgentContext()
+    val before = AgentMemory().apply { rememberSensitive("pin", "4921") }
+    agent.memory.rememberSensitive("pin", "4921")
+    if (delete) agent.memory.delete("pin") else agent.memory.remember("pin", "1")
+    val payload = buildJsonObject {
+      put("old", "4921")
+      put("current", if (delete) "public" else "1")
+      put("control", "visible")
+      put("nested", JsonArray(listOf(buildJsonObject { put("4921", "old=4921") })))
+    }
+    val expected = buildJsonObject {
+      put("old", "{{pin}}")
+      put("current", if (delete) "public" else "{{pin}}")
+      put("control", "visible")
+      put("nested", JsonArray(listOf(buildJsonObject { put("{{pin}}", "old={{pin}}") })))
+    }
+    val tool = NestedConditionalLogFixture(payload)
+    val context = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = null,
+      trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+      sessionProvider = agent.sessionProvider,
+      trailblazeLogger = agent.trailblazeLogger,
+      memory = agent.memory,
+    )
+    context.nestedDispatchDepth.incrementAndGet()
+    agent.logToolExecution(
+      tool = tool,
+      timeBeforeExecution = Clock.System.now(),
+      context = context,
+      result = TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "old=4921 current=" + if (delete) "public" else "1",
+        structuredPayload = payload,
+      ),
+      rawTool = if (forwarded) AuthoredRawArgsTool("runIf", payload) else null,
+      sensitiveMemoryBeforeExecution = before,
+    )
+    val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    // Assert the emitted persistence boundary, including nested values and object member names.
+    assertEquals(expected, log.trailblazeTool.raw)
+    log.rawTrailblazeTool?.let { assertEquals(expected, it.raw) }
+    assertEquals(expected, log.errorPayload)
+    assertEquals("old={{pin}} current=" + if (delete) "public" else "{{pin}}", log.exceptionMessage)
+    val persisted = xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString(
+      TrailblazeLog.TrailblazeToolLog.serializer(), log,
+    )
+    val persistedFields = listOfNotNull(
+      log.trailblazeTool.raw.toString(), log.rawTrailblazeTool?.raw?.toString(),
+      log.exceptionMessage, log.errorPayload?.toString(),
+    )
+    assertTrue(persistedFields.none { it.contains("492") }, "No old secret fragment may survive persistence")
+    assertTrue(persisted.contains("{{pin}}"), "The serialized tool log must retain the redaction token")
+    assertTrue(!log.trailblazeTool.raw.toString().contains("1"), "No overlapping secret suffix may survive persistence")
+    assertEquals(payload, tool.rawToolArguments)
+    assertEquals(if (delete) null else "1", agent.memory.variables["pin"])
+    assertEquals("4921", before.variables["pin"])
+  }
+
   /** Authored raw-args wrapper, as the dispatch boundary produces for a scripted `ctx.tools` call. */
   private data class AuthoredRawArgsTool(
     override val instanceToolName: String,
     override val rawToolArguments: kotlinx.serialization.json.JsonObject,
   ) : RawArgumentTrailblazeTool
+
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass(name = "runIf")
+  private data class NestedConditionalLogFixture(
+    override val rawToolArguments: kotlinx.serialization.json.JsonObject
+  ) : RawArgumentTrailblazeTool, xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool {
+    override val instanceToolName: String = "runIf"
+
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext
+    ): TrailblazeToolResult = error("This log-boundary fixture must never execute")
+  }
 
   private class CapturingAgentContext : TrailblazeAgentContext {
     val emitted = mutableListOf<TrailblazeLog>()
@@ -168,6 +310,167 @@ class SensitiveArgsLogRedactionTest {
         rawTool = authored,
       )
     }
+  }
+
+  @Test
+  fun authoredSecretWithInterpolationIsMaskedBeforeResolvedValueMasking() {
+    val agent = CapturingAgentContext()
+    agent.memory.putArg("account", JsonPrimitive("alice"))
+    val authoredSecret = "token=private;account={{args.account}}"
+    val resolvedSecret = "token=private;account=alice"
+    val authored = AuthoredRawArgsTool(
+      instanceToolName = "android_adbShell",
+      rawToolArguments = buildJsonObject {
+        putJsonArray("command") { listOf("fixture-command", authoredSecret).forEach { add(JsonPrimitive(it)) } }
+        putJsonArray("secrets") { add(JsonPrimitive(authoredSecret)) }
+      },
+    )
+    val executed = AdbShellTrailblazeTool(
+      command = listOf("fixture-command", resolvedSecret), secrets = listOf(resolvedSecret),
+    )
+
+    agent.logToolExecution(
+      tool = executed,
+      timeBeforeExecution = Clock.System.now(),
+      context = TrailblazeToolExecutionContext(
+        screenState = null, traceId = null,
+        trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+        sessionProvider = agent.sessionProvider,
+        trailblazeLogger = agent.trailblazeLogger,
+        memory = agent.memory,
+      ),
+      result = TrailblazeToolResult.Success(),
+      rawTool = authored,
+    )
+
+    val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertTrue(!log.rawTrailblazeTool.toString().contains("private"))
+    assertTrue(!log.trailblazeTool.toString().contains("private"))
+  }
+
+  /**
+   * A nested `ctx.tools.X()` call (a `runIf` branch, a composing tool) logs with no authored form:
+   * its caller already resolved the arguments. A `rememberSensitive` value in them must still be
+   * masked back to its token before the log is persisted.
+   */
+  @Test
+  fun nestedCallMasksASensitiveMemoryValueItsCallerResolved() {
+    val agent = CapturingAgentContext()
+    agent.memory.rememberSensitive("pin", "4921")
+    val context = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = null,
+      trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+      sessionProvider = agent.sessionProvider,
+      trailblazeLogger = agent.trailblazeLogger,
+      memory = agent.memory,
+    )
+    context.nestedDispatchDepth.incrementAndGet()
+
+    agent.logToolExecution(
+      tool = AdbShellTrailblazeTool(command = listOf("input", "text", "4921")),
+      timeBeforeExecution = Clock.System.now(),
+      context = context,
+      result = TrailblazeToolResult.Success(message = "ok"),
+      rawTool = null,
+    )
+
+    val toolLog = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertEquals(JsonPrimitive("{{pin}}"), (toolLog.trailblazeTool.raw["command"] as JsonArray).last())
+    assertTrue(!toolLog.trailblazeTool.raw.toString().contains("4921"))
+  }
+
+  /**
+   * An arg that captured a secret stays secret after the memory key it came from is deleted, so a
+   * nested call that received its resolved value masks it to the arg's own token.
+   */
+  @Test
+  fun nestedCallMasksASensitiveArgAfterItsSourceKeyIsDeleted() {
+    val agent = CapturingAgentContext()
+    agent.memory.rememberSensitive("pin", "4921")
+    agent.memory.putArg("vaultCode", JsonPrimitive("4921"))
+    agent.memory.delete("pin")
+    val context = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = null,
+      trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+      sessionProvider = agent.sessionProvider,
+      trailblazeLogger = agent.trailblazeLogger,
+      memory = agent.memory,
+    )
+    context.nestedDispatchDepth.incrementAndGet()
+
+    agent.logToolExecution(
+      tool = AdbShellTrailblazeTool(command = listOf("input", "text", "4921")),
+      timeBeforeExecution = Clock.System.now(),
+      context = context,
+      result = TrailblazeToolResult.Success(message = "ok"),
+      rawTool = null,
+    )
+
+    val toolLog = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertEquals(JsonPrimitive("{{args.vaultCode}}"), (toolLog.trailblazeTool.raw["command"] as JsonArray).last())
+    assertTrue(!toolLog.trailblazeTool.raw.toString().contains("4921"))
+  }
+
+  @Test
+  fun nestedConditionalLogMasksObjectArgScalarAfterSourceDeletion() {
+    val agent = CapturingAgentContext()
+    val fakeSecret = "FAKE_TEST_ONLY_NOT_A_REAL_PIN_OBJECT_ARG"
+    agent.memory.rememberSensitive("pin", fakeSecret)
+    agent.memory.seedArgs(mapOf("credentials" to buildJsonObject { put("pin", fakeSecret) }))
+    assertTrue("credentials" in agent.memory.sensitiveArgNames)
+    agent.memory.delete("pin")
+    assertTrue(!agent.memory.has("pin"))
+    assertTrue(agent.memory.interpolateVariables("{{args.credentials.pin}}") == fakeSecret)
+
+    // A nested conditional carries its whole resolved tree into the real logging boundary,
+    // including a then branch which was not selected. No device or tool execution is needed.
+    val authored = buildJsonObject {
+      put(
+        "condition",
+        buildJsonObject {
+          put(
+            "selector",
+            buildJsonObject {
+              put("androidAccessibility", buildJsonObject { put("textRegex", "absent-test-only") })
+            },
+          )
+        },
+      )
+      putJsonArray("then") {
+        add(
+          buildJsonObject {
+            put("inputText", buildJsonObject { put("text", "{{args.credentials.pin}}") })
+          }
+        )
+      }
+    }
+    val resolved =
+      agent.memory.interpolateVariablesInJson(authored) as kotlinx.serialization.json.JsonObject
+    val context =
+      TrailblazeToolExecutionContext(
+        screenState = null,
+        traceId = null,
+        trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+        sessionProvider = agent.sessionProvider,
+        trailblazeLogger = agent.trailblazeLogger,
+        memory = agent.memory,
+      )
+    context.nestedDispatchDepth.incrementAndGet()
+    agent.logToolExecution(
+      tool = NestedConditionalLogFixture(resolved),
+      timeBeforeExecution = Clock.System.now(),
+      context = context,
+      result = TrailblazeToolResult.Success(message = "runIf: condition=false ran=else (0 tools)"),
+      rawTool = null,
+    )
+    val persisted = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertTrue(
+      !persisted.trailblazeTool.raw.toString().contains(fakeSecret),
+      "Persisted nested conditional log contains a sensitive object scalar",
+    )
+    assertTrue(persisted.trailblazeTool.raw.toString().contains("{{args.credentials.pin}}"))
   }
 
   private fun assertMemorySuppliedSecretIsMaskedAfterResolution(

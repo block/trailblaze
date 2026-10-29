@@ -1,0 +1,67 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze selector match [-hV] [--json] [--live] [--migration-tree]
+                                 [--batch=<file.jsonl>] [-d=<device>]
+                                 [--expect=<expect>] [--selector=<selector>]
+                                 [--selector-file=<selectorFile>]
+                                 [--step=<step>] [--session=<sessions>]...
+                                 [<log>...]
+Show what a selector matches on one or more captured screens, or the device's
+(--live).
+Pass several captures of the same screen (other runs, locales, devices) to
+check that a selector survives them. --expect unique|present|absent exits 1 if
+any screen fails.
+      [<log>...]             Screen-state logs to match against
+                               (*_TrailblazeLlmRequestLog.json,
+                               *_TrailblazeSnapshotLog.json or *_AgentDriverLog.
+                               json).
+      --batch=<file.jsonl>   Answer many questions in one call. Each line is a
+                               JSON object: `selector` (an object or a YAML
+                               string), `logs` (an array), `session` + optional
+                               `step`, and/or `live: true` (needs --live), and
+                               optional `expect` (defaulting to this command's
+                               --expect). Prints one JSON object per line, in
+                               order. Exit 1 if any line fails its expectation;
+                               a line that can't be answered prints {"line":N,"
+                               error":...} and makes the exit 3 (2 if it failed
+                               unexpectedly).
+  -d, --device=<device>      Device: platform (android, ios, web) or
+                               platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
+                               set (manual override; rare), otherwise this
+                               terminal's pin (set by `trailblaze device
+                               connect`). In a fresh-shell harness (Claude
+                               Code, Cursor, Codex, CI), pass --device on every
+                               call.
+      --expect=<expect>      Check every screen: unique (exactly 1 match),
+                               present (1 or more), absent (none). Exits 1 if
+                               any screen fails. Without it, the command only
+                               reports. present and absent match the way a
+                               waypoint does; unique and no --expect check the
+                               selector as a tap, and refuse a web selector
+                               that web replay would locate differently.
+  -h, --help                 Show this help message and exit.
+      --json                 Print the result as one JSON object.
+      --live                 Also match against the connected device's current
+                               screen (the one `trailblaze snapshot --all`
+                               shows). Combines with log files and --session.
+                               With --batch, lets lines read it with `live:
+                               true`.
+      --migration-tree       Match against a dual-tree capture's accessibility
+                               migration tree instead of the primary tree. Its
+                               nodes have no refs.
+      --selector=<selector>  The selector, as YAML or JSON — the same body a
+                               waypoint or `tool tap --selector` takes, or a
+                               `selector` value from `selector suggest --json`.
+      --selector-file=<selectorFile>
+                             Read the selector from a YAML or JSON file instead
+                               of --selector.
+      --session=<sessions>   Session log directory to match against
+                               (repeatable). Uses --step, else its last step.
+      --step=<step>          1-based step within each --session (default: last
+                               step)
+  -V, --version              Print version information and exit.

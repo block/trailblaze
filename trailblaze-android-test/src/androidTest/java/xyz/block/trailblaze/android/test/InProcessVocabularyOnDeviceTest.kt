@@ -139,6 +139,35 @@ class InProcessVocabularyOnDeviceTest {
   }
 
   /**
+   * A wait that runs out fails the way Maestro's does, with "Assertion is false". Callers of
+   * `mobile_maestro` read exactly that text as "not there" and treat anything else as a broken
+   * session, so a miss worded any other way turns a plain "no" into a failed launch.
+   */
+  @Test
+  fun aWaitThatRunsOutReportsMaestrosAssertionMiss() {
+    val visibleMiss = runExpectingError(
+      maestro(
+        """
+        - extendedWaitUntil:
+            visible: "No Such Thing"
+            timeout: 500
+        """.trimIndent(),
+      ),
+    )
+    assertTrue(visibleMiss.contains("Assertion is false"), "got: $visibleMiss")
+    val notVisibleMiss = runExpectingError(
+      maestro(
+        """
+        - assertNotVisible:
+            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
+            timeout: 500
+        """.trimIndent(),
+      ),
+    )
+    assertTrue(notVisibleMiss.contains("Assertion is false"), "got: $notVisibleMiss")
+  }
+
+  /**
    * `optional` says what to do when the SCREEN refuses a step. A step this driver cannot interpret
    * was never attempted, so skipping it would silently drop whatever the recording meant — the
    * failure this driver exists to make loud.
@@ -223,6 +252,34 @@ class InProcessVocabularyOnDeviceTest {
 
     run(AndroidTestAssertVisibleTool(viewText("typed-by-selector")))
     run(AndroidTestAssertNotVisibleTool(composeText("typed-by-selector")))
+  }
+
+  /**
+   * `clearFirst` replaces what the named field holds, on a View field and a Compose one. Selectors
+   * match the whole text, so the field reading as just the new value proves nothing was left.
+   */
+  @Test
+  fun inputTextWithClearFirstLeavesTheFieldHoldingOnlyTheNewText() {
+    run(InputTextTrailblazeTool(text = "old-view-value", selector = viewHint(MixedUiFixtureActivity.VIEW_INPUT_HINT)))
+    run(InputTextTrailblazeTool(text = "old-compose-value", selector = composeTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG)))
+
+    run(
+      InputTextTrailblazeTool(
+        text = "new-view-value",
+        selector = viewHint(MixedUiFixtureActivity.VIEW_INPUT_HINT),
+        clearFirst = true,
+      ),
+    )
+    run(
+      InputTextTrailblazeTool(
+        text = "new-compose-value",
+        selector = composeTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG),
+        clearFirst = true,
+      ),
+    )
+
+    run(AndroidTestAssertVisibleTool(viewText("new-view-value")))
+    run(AndroidTestAssertVisibleTool(composeText("new-compose-value")))
   }
 
   /** A `selector` that matches nothing fails the step, and nothing reaches the focused field. */
@@ -342,9 +399,9 @@ class InProcessVocabularyOnDeviceTest {
       .getSystemService(Context.WIFI_SERVICE) as WifiManager
     try {
       run(allRadios(on = false))
-      awaitWifi(false, wifi, "networkConnection with every radio false should turn Wi-Fi off")
+      awaitWifi(false, wifi, "mobile_networkConnection with every radio false should turn Wi-Fi off")
       run(allRadios(on = true))
-      awaitWifi(true, wifi, "networkConnection with every radio true should turn Wi-Fi back on")
+      awaitWifi(true, wifi, "mobile_networkConnection with every radio true should turn Wi-Fi back on")
     } finally {
       // Hand the device back on, and WAIT for it: a radio still on its way up is the state every
       // test after this one would start from. Nothing here asserts — a restore that fails must not

@@ -138,6 +138,26 @@ class WebScreencastVideoCaptureTest {
   }
 
   @Test
+  fun `frames stamped before a late-stamped one are kept, not throttled against its stamp`() {
+    val feed = FakeFeed()
+    WebScreencastFeedRegistry.register(deviceId, feed)
+    val capture = WebScreencastVideoCapture(fallback = RecordingFallback()).also { captures += it }
+    capture.start(sessionDir, deviceId, appId = null)
+    val framesDir = File(sessionDir, ".trailblaze-screencast-frames")
+    fun stored() = framesDir.listFiles()?.count { it.name.endsWith(".jpg") } ?: 0
+
+    // The feed's first frame waited 400 ms to be read before the browser's clock was learned, so
+    // it is stamped 400 ms late; the frames after it are stamped right, so earlier than it.
+    feed.emit(ByteArray(10), tsMs = 1_500)
+    for (k in 0 until 8) feed.emit(ByteArray(10), tsMs = 1_100L + k * 50)
+    assertEquals(9, stored(), "every frame after the late one is a real screen change, spaced past the throttle")
+
+    // The throttle still applies from the corrected stamps on.
+    feed.emit(ByteArray(10), tsMs = 1_460)
+    assertEquals(9, stored(), "a frame 10 ms after the last kept one is throttled")
+  }
+
+  @Test
   fun `stop detaches the feed subscription`() {
     val feed = FakeFeed()
     WebScreencastFeedRegistry.register(deviceId, feed)

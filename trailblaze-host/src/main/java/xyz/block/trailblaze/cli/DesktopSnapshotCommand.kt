@@ -14,12 +14,13 @@ import java.util.Base64
 import java.util.concurrent.Callable
 
 /**
- * Hidden CLI command that captures a screen-state snapshot from the **running Trailblaze
- * desktop app's own UI** via the Compose RPC server it exposes on `127.0.0.1:52600` (see
+ * Hidden CLI command that captures a screen-state snapshot from a running Compose Desktop app
+ * via the Compose RPC server it exposes on `127.0.0.1:52600` (see
  * [ComposeRpcServer.COMPOSE_DEFAULT_PORT]).
  *
  * Demo path:
- *   1. `./trailblaze app` — launches the desktop window with the self-test server enabled.
+ *   1. Start a Compose app with an RPC server, e.g. the compose-desktop example's
+ *      `SampleRpcServerMain`.
  *   2. `./trailblaze desktop snapshot` — captures the live window, prints summary +
  *      optionally writes the screenshot to disk via `--out`.
  *
@@ -34,7 +35,7 @@ import java.util.concurrent.Callable
   // exists discover what it can do without grepping source.
   mixinStandardHelpOptions = true,
   description = [
-    "Capture a screen-state snapshot of the running Trailblaze desktop window via the Compose RPC server.",
+    "Capture a screen-state snapshot of a running Compose Desktop app via its Compose RPC server.",
   ],
 )
 class DesktopSnapshotCommand : Callable<Int> {
@@ -69,7 +70,7 @@ class DesktopSnapshotCommand : Callable<Int> {
       if (!client.waitForServer(maxAttempts = 3, delayMs = 200)) {
         Console.error(
           "No Compose RPC server reachable at $baseUrl. " +
-            "Is the Trailblaze desktop app running? Start it with `trailblaze app`.",
+            "Is a Compose Desktop app with a Compose RPC server running on this port?",
         )
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }

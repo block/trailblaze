@@ -2,7 +2,9 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
+import maestro.orchestra.Condition
 import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.model.NodeSelectorMode
@@ -20,8 +22,8 @@ import xyz.block.trailblaze.util.Console
   surfaceToLlm = false,
   // Available to scripted tools: this is the selector-resolved tap (ACTION_CLICK-vs-gesture
   // routing + animation settle) that scripted authors compose for "tap the element matching this
-  // selector". It stays hidden from the LLM (which uses the friendlier `tap` /
-  // `tapOnElementWithText`) — those two audiences are orthogonal. The earlier blanket `false` was
+  // selector". It stays hidden from the LLM (which uses the friendlier `tap`) — those two
+  // audiences are orthogonal. The earlier blanket `false` was
   // a mechanical carry-over from the single-flag `isForLlm` split (#3272), not a scripted-specific
   // decision; surfacing it matches this tool's stated "delegated to, not LLM-registered" role.
 )
@@ -53,14 +55,24 @@ data class TapOnByElementSelector(
    * Serialized in trail YAML files so recordings preserve the rich selector for playback.
    */
   val nodeSelector: TrailblazeNodeSelector? = null,
+  /**
+   * Maximum time (in milliseconds) to wait for the element to appear before the tap fails — set
+   * it higher when the target renders late (a slow screen transition, a tab row that loads after
+   * the page). The driver polls the screen until the element matches or this elapses.
+   *
+   * When `null` each driver applies its own default wait. On the Maestro fallback path a set value
+   * becomes a visibility wait ahead of the tap, so the author's budget holds there too.
+   */
+  val timeoutMs: Long? = null,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector) ?: return emptyList()
+    val element = maestroSelector.toMaestroElementSelector()
+    val tap = TapOnElementCommand(selector = element, longPress = longPress)
+    if (timeoutMs == null) return listOf(tap)
     return listOf(
-      TapOnElementCommand(
-        selector = maestroSelector.toMaestroElementSelector(),
-        longPress = longPress,
-      ),
+      AssertConditionCommand(condition = Condition(visible = element), timeout = timeoutMs.toString()),
+      tap,
     )
   }
 
@@ -99,6 +111,7 @@ data class TapOnByElementSelector(
           nodeSelector = nodeSelector,
           longPress = longPress,
           tapRoute = tapRoute,
+          timeoutMs = timeoutMs,
           traceId = toolExecutionContext.traceId,
         )
         if (accessibilityResult != null) return accessibilityResult
@@ -129,6 +142,7 @@ data class TapOnByElementSelector(
             nodeSelector = nodeSelector,
             longPress = longPress,
             tapRoute = tapRoute,
+            timeoutMs = timeoutMs,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result
@@ -141,6 +155,7 @@ data class TapOnByElementSelector(
             nodeSelector = nodeSelector,
             longPress = longPress,
             tapRoute = tapRoute,
+            timeoutMs = timeoutMs,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result

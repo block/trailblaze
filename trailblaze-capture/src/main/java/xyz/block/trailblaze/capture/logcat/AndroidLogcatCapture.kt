@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.capture.logcat
 
 import java.io.File
+import java.util.Locale
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
@@ -14,8 +15,12 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 
 /**
- * Captures logcat output by streaming `logcat` over the dadb shell wire protocol (no `adb` binary
- * subprocess), filtered to the app under test.
+ * Captures the device's whole logcat by streaming `logcat` over the dadb shell wire protocol (no
+ * `adb` binary subprocess).
+ *
+ * Not filtered to the app's PID: a relaunch or reinstall changes it, and `--pid` would record
+ * nothing after that; `system_server` lines (ANRs, job scheduling) are also wanted.
+ * [CrashEventArtifactWriter] attributes crashes to the app by process name instead.
  *
  * Uses epoch timestamp format for easy correlation with session log timestamps. Bytes are written
  * directly to a file in the session directory via [AndroidHostAdbUtils.streamingShellToFile], so
@@ -32,10 +37,23 @@ import xyz.block.trailblaze.util.Console
  * host-clock — see `CaptureArtifact`). That is deliberate: `logcat` stamps its own lines with the
  * device clock, so the window has to be on the same clock as the file it describes. A reader lining
  * these lines up against session logs owns that conversion.
+ *
+ * @param filename [CaptureFilenames.DEVICE_LOG] for a session's own device,
+ *   [CaptureFilenames.companionDeviceLog] for a companion.
  */
-class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
+class AndroidLogcatCapture(
+  private val filename: String = CaptureFilenames.DEVICE_LOG,
+) : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT
-  override var isAppScoped: Boolean = false
+
+  override val isAppScoped: Boolean = false
+
+  /**
+   * The app's package, which is also its main process name: [start]'s `appId`, which the host
+   * resolves against the device right before starting capture. Null when the host could not tell
+   * which app the session drives, in which case every crash in the log counts.
+   */
+  override var appProcessName: String? = null
     private set
 
   private var streamHandle: AutoCloseable? = null
@@ -45,9 +63,11 @@ class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     this.deviceId = deviceId
-    isAppScoped = false
-    startTimestampMs = DeviceClock.nowMs(deviceId)
-    outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
+    appProcessName = appId
+    outputFile = File(sessionDir, filename)
+    // `-T` is a device-clock time; a host-clock fallback could cut the session's own lines.
+    val deviceNowMs = DeviceClock.deviceNowMs(deviceId)
+    startTimestampMs = deviceNowMs ?: System.currentTimeMillis()
 
     val trailblazeDeviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID)
 
@@ -61,25 +81,12 @@ class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
       Console.log("Failed to clear logcat buffer: ${e.message}")
     }
 
-    // Start logcat capture with epoch timestamps, streaming bytes directly to the session file.
-    val command = buildString {
-      append("logcat -v epoch -v printable")
-      // Filter to app PID if appId is known and app is running
-      if (appId != null) {
-        val pid = getAppPid(deviceId, appId)
-        if (pid != null) {
-          append(" --pid=").append(pid)
-          isAppScoped = true
-          Console.log("Filtering logcat to PID $pid ($appId)")
-        }
-      }
-    }
-
     try {
       val file = outputFile ?: return
       streamHandle = AndroidHostAdbUtils.streamingShellToFile(
         deviceId = trailblazeDeviceId,
-        command = command,
+        // `-T <epoch>` drops what a failed clear left in the buffer, such as an earlier run's crash.
+        command = "logcat -v epoch -v printable" + (deviceNowMs?.let { " -T ${sinceArgument(it)}" } ?: ""),
         outputFile = file,
       )
     } catch (e: Exception) {
@@ -102,12 +109,8 @@ class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
     )
   }
 
-  private fun getAppPid(deviceId: String, appId: String): String? = try {
-    AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
-      args = listOf("pidof", appId),
-    ).trim().ifEmpty { null }
-  } catch (_: Exception) {
-    null
+  private companion object {
+    /** `logcat -T` reads a bare number as a line count; the fraction makes it a time. */
+    fun sinceArgument(epochMs: Long): String = "%d.%03d".format(Locale.ROOT, epochMs / 1000, epochMs % 1000)
   }
 }

@@ -190,13 +190,14 @@ Before publishing — to either a registry or a `github:` ref a consumer is goin
 1. **`trailmap.yaml` is at the package root.** Per the devlog, the future walker looks
    there; staying consistent today keeps tier-3 a no-op when the walker lands.
 2. **`package.json#files`** lists the trailmap artifacts you want consumers to get
-   (`trailmap.yaml`, `tools/`, `waypoints/`, `shortcuts/`, `trailheads/`, `trails/`) and
+   (`trailmap.yaml`, `tools/`, `waypoints/`, `trailheads/`, `trails/`) and
    excludes everything else (`.test.ts`, fixtures, internal scripts).
 3. **A smoke trail in `trails/`** that a consumer can run against a connected device
    without any additional auth or setup. This is the artifact downstream consumers use
    to validate an install.
 4. **Version bumps follow semver.** Breaking a tool's input interface, removing a tool
-   from `target.tools:`, or renaming a waypoint id is a major bump. Adding a tool is a
+   (deleting its file or adding it to `excluded_tools:`), or renaming a waypoint id is a
+   major bump. Adding a tool is a
    minor bump. Fixing a tool's body without changing its surface is a patch.
 
 ## See also

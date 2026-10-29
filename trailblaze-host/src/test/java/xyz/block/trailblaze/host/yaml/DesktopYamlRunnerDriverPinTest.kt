@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.yaml
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -8,12 +9,10 @@ import org.junit.Test
 import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.llm.TrailblazeLlmModels
-import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.ui.model.RunYamlRequestFactory
-import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * Guards the runner-side read of a trail's driver pin
@@ -45,30 +44,82 @@ class DesktopYamlRunnerDriverPinTest {
   }
 
   @Test
-  fun `device locale is suppressed for skipped trails`() {
+  fun `device locale is suppressed for skipped and unreadable trails`() {
     assertNull(
       DesktopYamlRunner.requestedDeviceLocale(
-        TrailConfig(locale = "es", skip = "not supported on this device"),
+        readable = true,
+        config = TrailConfig(locale = "es", skip = "not supported on this device"),
       ),
     )
-    assertEquals("es", DesktopYamlRunner.requestedDeviceLocale(TrailConfig(locale = "es")))
+    assertNull(DesktopYamlRunner.requestedDeviceLocale(readable = false, config = null))
+    assertEquals(
+      TrailDeviceLocale.Request("es", declared = true),
+      DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig(locale = "es")),
+    )
+  }
+
+  @Test
+  fun `a trail that declares no locale runs in the default`() {
+    val default = TrailDeviceLocale.Request(TrailDeviceLocale.DEFAULT, declared = false)
+    assertEquals(default, DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig()))
+    // A trail with no `config:` block at all reads as a null config, not an unreadable trail.
+    assertEquals(default, DesktopYamlRunner.requestedDeviceLocale(readable = true, config = null))
+  }
+
+  @Test
+  fun `a prompt or single tool sent into a running session keeps the session's language`() {
+    val default = TrailDeviceLocale.Request(TrailDeviceLocale.DEFAULT, declared = false)
+    val singleTool = "- tapOnElementWithText:\n    text: Continue\n"
+    val trail = "config:\n  title: A trail\ntrail:\n  - step: Tap Continue\n"
+    assertTrue(TrailblazeYaml.Default.isBareToolEnvelope(singleTool))
+    assertFalse(TrailblazeYaml.Default.isBareToolEnvelope(trail))
+
+    // A prompt continuing a session, with an empty config: no change to the device.
+    assertNull(DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig(), continuesSession = true))
+    // A declared locale still applies inside a running session.
+    assertEquals(
+      TrailDeviceLocale.Request("es", declared = true),
+      DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig(locale = "es"), continuesSession = true),
+    )
+    // A run that opens a session falls back to the default.
+    assertEquals(default, DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig(), continuesSession = false))
+    // A trail with no steps is rejected by the run, so it must not switch the device first.
+    assertNull(DesktopYamlRunner.requestedDeviceLocale(readable = true, config = TrailConfig(), hasSteps = false))
   }
 
   @Test
   fun `a Playwright native trail's locale goes to its browser, not to a device setting`() {
+    val spanish = TrailDeviceLocale.Request("es-US", declared = true)
     // DeviceLocaleConfigurator refuses WEB outright, so handing it a native web locale fails the run.
-    assertNull(DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "es-US"))
+    assertNull(DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_NATIVE, spanish))
     // Electron has no browser-locale path, so its locale still reaches the configurator and is
     // refused there instead of the trail running in the default language.
-    assertEquals("es-US", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, "es-US"))
-    assertEquals("es", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "es"))
-    assertEquals("es", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.IOS_HOST, "es"))
+    assertEquals(spanish, DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, spanish))
+    assertEquals(spanish, DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, spanish))
+    assertEquals(spanish, DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.IOS_HOST, spanish))
   }
 
   @Test
-  fun `device locale forces a fresh target process`() {
-    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, locale = "es"))
-    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = null))
+  fun `the default is not attempted on a cloud device this host cannot reach`() {
+    val default = TrailDeviceLocale.forTrail(null)
+    assertNull(DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.REVYL_ANDROID, default))
+    assertNull(DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.REVYL_IOS, default))
+    assertEquals(default, DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.IOS_AXE, default))
+    val spanish = TrailDeviceLocale.forTrail("es")
+    assertEquals(spanish, DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.REVYL_IOS, spanish))
+  }
+
+  @Test
+  fun `only a language change forces a fresh target process`() {
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, localeChanged = true))
+    assertFalse(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, localeChanged = false))
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, localeChanged = false))
+  }
+
+  @Test
+  fun `a reusable trailhead hand-off skips the clean start but not a locale change`() {
+    assertFalse(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, localeChanged = false, keepForReuse = true))
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, localeChanged = true, keepForReuse = true))
   }
 
   @Test
@@ -236,46 +287,6 @@ class DesktopYamlRunnerDriverPinTest {
       )
       assertEquals(runnable, (resolution as CliRunDriverResolution.Resolved).driverType)
     }
-  }
-
-  /**
-   * The other side of that short-circuit: the desktop Run path must NOT fill the request rung.
-   * Picking a device in the UI is a device choice, not a driver request — when the factory stamped
-   * the device's own driver in, every desktop run arrived with the rung filled, the pin was never
-   * read, and a trail pinned to a retired driver ran on the device's driver instead of refusing.
-   */
-  @Test
-  fun `a desktop UI run leaves the request rung empty so a retired pin still refuses`() {
-    val yaml = """
-      config:
-        devices:
-          android: ANDROID_ONDEVICE_INSTRUMENTATION
-      trail:
-        - step: "Open the Lists tab"
-    """.trimIndent()
-
-    val request = RunYamlRequestFactory(
-      appConfig = SavedTrailblazeAppConfig(selectedTrailblazeDriverTypes = emptyMap()),
-      llmModel = TrailblazeLlmModels.GPT_4O_MINI,
-      effectiveTargetAppId = { null },
-    ).create(
-      // A runnable driver, differing from the pin — the value that used to win silently.
-      device = TrailblazeConnectedDeviceSummary(
-        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        instanceId = "emulator-5554",
-        description = "test emulator",
-      ),
-      yaml = yaml,
-      testName = "test",
-      referrer = TrailblazeReferrer.YAML_TAB,
-    )
-
-    assertNull("the desktop request must not pre-empt driver resolution", request.driverType)
-    val resolution = DesktopYamlRunner.trailPinnedDriverResolution(request.yaml, androidPhone)
-    assertTrue(
-      "expected the retired pin to be refused but was $resolution",
-      resolution is CliRunDriverResolution.Unrecognized,
-    )
   }
 
   @Test

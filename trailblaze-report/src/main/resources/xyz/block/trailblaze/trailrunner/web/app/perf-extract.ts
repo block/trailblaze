@@ -58,7 +58,8 @@
 // the same derivation to place a step on the recording's host-clock window, and two copies that
 // drift are the exact failure it exists to prevent. Re-exported below for this module's readers.
 import type { DeviceClockOffsets } from './run-report-extract';
-import { deviceClockOffsets, logClass, parseLogTimestamp as parsePerfTimestamp, stepText, summarizeToolArgs, truncate } from './run-report-extract';
+import { deviceClockOffsets, logClass, logOffsetMs, parseLogTimestamp as parsePerfTimestamp, stepText, summarizeToolArgs, truncate } from './run-report-extract';
+import { clockTrackFor, deviceToHostMs, type DeviceClockSync } from '../../../report/device-clock-sync';
 
 /**
  * Containment tolerance, ms, for log-vs-log nesting: a wrapper's child can overhang either edge
@@ -98,9 +99,7 @@ function logHostMs(log: TrailblazeLogRecord, offsets: DeviceClockOffsets | null)
   const ts = parsePerfTimestamp(log.timestamp);
   if (ts == null) return null;
   if (!offsets || !isDeviceClockLog(log)) return ts;
-  const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
-  const offset = logClass(log) === 'TrailblazeToolLog' ? offsets.byDeviceName.get(key) : undefined;
-  return ts + (offset ?? offsets.sessionWideMs);
+  return ts + logOffsetMs(log, offsets);
 }
 
 /** The requested timeout, ms: any top-level numeric raw-arg key matching /timeout/i. */
@@ -303,14 +302,30 @@ function buildRawSpans(
  *
  * That clock drifts from the host's by whole seconds, so these events get the same treatment
  * MaestroDriverLog spans do: they render on the Device lane and they are never nested into the
- * host tree. Their stamps are shifted onto the host timeline by the session-wide offset the logs
- * measured — and when the session measured none, they are excluded from the session window
- * instead, because folding raw drift into t0/t1 would shift or stretch the entire profile.
+ * host tree. Their stamps are shifted onto the host timeline by [deviceTraceToHost] — and when the
+ * session has nothing to shift by, they are excluded from the session window instead, because
+ * folding raw drift into t0/t1 would shift or stretch the entire profile.
  * `SessionTraceFile.merge` stamps the flag at the endpoint that received the upload, because only
  * that endpoint knows where the batch came from.
  */
 function isDeviceClockEvent(event: TrailblazeTraceEvent): boolean {
   return event?.clock === 'device';
+}
+
+/**
+ * The one device→host conversion for a device-clock trace event's ms, or null when the session has
+ * none. A trace event names no device, so it takes the session's only device. The measured
+ * `session_device_clock.json` readings win — interpolated at the event's own time, so drift over a long run
+ * is followed — and the log-derived session-wide offset is the fallback: that one is an upper
+ * bound inflated by the fastest upload's latency, and a single number for the whole run.
+ */
+function deviceTraceToHost(
+  offsets: DeviceClockOffsets | null,
+  clockSync: DeviceClockSync | null,
+): ((deviceMs: number) => number) | null {
+  if (clockTrackFor(clockSync)) return (deviceMs) => deviceToHostMs(clockSync, deviceMs) as number;
+  if (offsets) return (deviceMs) => deviceMs + offsets.sessionWideMs;
+  return null;
 }
 
 /**
@@ -341,23 +356,25 @@ function acceptTraceEvent(event: TrailblazeTraceEvent): { tsUs: number; durUs: n
  * [order0] continues the file-order counter the log spans used, so the nest sort's final tie-break
  * stays a total order across both sources.
  *
- * [offsets] shifts device-recorded events onto the host timeline. A trace event names no device,
- * so it takes the session-wide offset; without it the event keeps its raw device stamp, which is
- * where it lands on the Device lane today.
+ * [offsets] and [clockSync] shift device-recorded events onto the host timeline (see
+ * [deviceTraceToHost]); with neither, the event keeps its raw device stamp, which is where it
+ * lands on the Device lane today.
  */
 function buildTraceSpans(
   events: TrailblazeTraceEvent[],
   t0: number,
   order0: number,
   offsets: DeviceClockOffsets | null = null,
+  clockSync: DeviceClockSync | null = null,
 ): MutableSpan[] {
+  const toHost = deviceTraceToHost(offsets, clockSync);
   const spans: MutableSpan[] = [];
   events.forEach((event, i) => {
     const accepted = acceptTraceEvent(event);
     if (!accepted) return;
     const deviceClock = isDeviceClockEvent(event);
-    const shiftMs = deviceClock && offsets ? offsets.sessionWideMs : 0;
-    const s = accepted.tsUs / 1000 + shiftMs - t0;
+    const startMs = accepted.tsUs / 1000;
+    const s = (deviceClock && toHost ? toHost(startMs) : startMs) - t0;
     const dur = accepted.durUs / 1000;
     const cat = typeof event.cat === 'string' && event.cat ? event.cat : null;
     const bare = typeof event.name === 'string' && event.name ? event.name : 'trace';
@@ -729,13 +746,18 @@ function bottomUpAggregate(spans: PerfSpan[], rangeS: number, rangeE: number): P
  * [traceEvents] is the session's `trace.json` (empty for sessions that recorded none). Tracer
  * events recorded on the host share the logs' wall clock, so they bound the window like any other
  * host-clock span. Ones a device recorded and uploaded carry `clock: "device"` and are shifted by
- * the same session-wide offset — or, with no offset to shift by, excluded from both bounds. See
- * [isDeviceClockEvent].
+ * [deviceTraceToHost] — the session's measured [clockSync] readings, else the logs' session-wide
+ * offset — or, with nothing to shift by, excluded from both bounds. See [isDeviceClockEvent].
  */
-function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: TrailblazeTraceEvent[] = []): PerfSessionData | null {
+function extractPerfSession(
+  rawLogs: TrailblazeLogRecord[],
+  traceEvents: TrailblazeTraceEvent[] = [],
+  clockSync: DeviceClockSync | null = null,
+): PerfSessionData | null {
   // One derivation for the whole extraction: every timestamp below is read through it, so the
   // window, the spans, the steps and the step attribution all sit on the same timeline.
   const offsets = deviceClockOffsets(rawLogs);
+  const traceToHost = deviceTraceToHost(offsets, clockSync);
   // The caller's order is not trustworthy (the report input carries filename-sorted raw logs,
   // not the timestamp-sorted typed list) and step pairing is order-sensitive — sort by
   // timestamp up front (stable, so same-timestamp records keep their given order).
@@ -771,12 +793,13 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: Trailbl
     // A device-clock event with no offset to shift it by is excluded for the same reason an
     // unshiftable device log is, above: its skew is not elapsed time, and letting it bound the
     // window shifts or stretches the whole profile.
-    if (isDeviceClockEvent(event) && !offsets) continue;
+    if (isDeviceClockEvent(event) && !traceToHost) continue;
     const accepted = acceptTraceEvent(event);
     if (!accepted) continue;
-    const shiftMs = isDeviceClockEvent(event) ? offsets!.sessionWideMs : 0;
-    hostBounds.push(accepted.tsUs / 1000 + shiftMs);
-    hostBounds.push((accepted.tsUs + accepted.durUs) / 1000 + shiftMs);
+    const startMs = accepted.tsUs / 1000;
+    const hostStartMs = isDeviceClockEvent(event) ? traceToHost!(startMs) : startMs;
+    hostBounds.push(hostStartMs);
+    hostBounds.push(hostStartMs + accepted.durUs / 1000);
   }
   if (!hostBounds.length) return null;
   const t0 = Math.min(...hostBounds);
@@ -787,7 +810,7 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: Trailbl
     logs.filter((l) => logClass(l) === 'TrailblazeLlmRequestLog' && l.traceId).map((l) => String(l.traceId)),
   );
   const spans = buildRawSpans(logs, t0, llmRequestTraceIds, offsets);
-  spans.push(...buildTraceSpans(traceEvents, t0, logs.length, offsets));
+  spans.push(...buildTraceSpans(traceEvents, t0, logs.length, offsets, clockSync));
   // Deterministic id space: tree spans in nest order first (s asc, e desc, file order), then
   // driver spans by start — so ids are stable for equal inputs and roots reference tree ids.
   spans.sort((a, b) => {

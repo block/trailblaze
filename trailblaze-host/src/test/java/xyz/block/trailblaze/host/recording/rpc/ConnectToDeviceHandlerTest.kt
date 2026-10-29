@@ -23,8 +23,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import java.io.File
 import kotlin.reflect.KClass
@@ -104,8 +102,6 @@ class ConnectToDeviceHandlerTest {
         )
       },
       initialAppTargets = registered.map { FakeTarget(it) }.toSet(),
-      appIconProvider = AppIconProvider.DefaultAppIconProvider,
-      deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
       runYamlLambda = {},
       installedAppIdsProviderBlocking = { emptySet() },
       appVersionInfoProviderBlocking = { _, _ -> null },

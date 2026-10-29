@@ -1,7 +1,7 @@
 // Sample test exercising a longer scripted-tool sequence. Where the sibling
 // `playwrightSample_web_openFixtureAndVerifyText` test covers two calls, this one drives
 // a five-call workflow — navigate, type the query, click the search button, click the
-// result row, then verify the detail text — so authors see how to assert on a non-trivial
+// result row, then verify the detail subtitle — so authors see how to assert on a non-trivial
 // dispatch order and on per-step arg shapes.
 //
 // Run via:
@@ -34,7 +34,7 @@ describe("playwrightSample_web_searchProductsAndOpenResult", () => {
       "web_type",
       "web_click",
       "web_click",
-      "web_verifyTextVisible",
+      "web_verifyElementVisible",
     ]);
     expect(client.calls[0]?.args).toMatchObject({
       action: "GOTO",
@@ -49,7 +49,9 @@ describe("playwrightSample_web_searchProductsAndOpenResult", () => {
     // a regression that drops the `resultId` arg into a different selector form is the
     // exact bug this assertion is here to catch.
     expect(client.calls[3]?.args).toMatchObject({ ref: "css=[data-id='2']" });
-    expect(client.calls[4]?.args).toMatchObject({ text: "Bluetooth, Black" });
+    expect(client.calls[4]?.args).toMatchObject({
+      ref: 'css=#detail-subtitle:text-is("Bluetooth, Black")',
+    });
     expect(result).toContain("Bluetooth, Black");
   });
 

@@ -36,7 +36,8 @@ function buildRunCommand(cfg) {
   if ((cfg.llm || '').trim()) parts.push('--llm', shQuote(cfg.llm.trim()));
   if (cfg.verbose) parts.push('--verbose');
   if (cfg.devicePlatform === 'web' && !cfg.headless) parts.push('--no-headless');
-  if (cfg.captureVideo) parts.push('--capture-video');
+  // `run` records video by default, so only an explicit `false` needs a flag.
+  if (cfg.captureVideo === false) parts.push('--no-capture-video');
   if (cfg.captureLogcat) parts.push('--capture-logcat');
   if (cfg.captureNetwork) parts.push('--capture-network');
   if (cfg.captureIosLogs) parts.push('--capture-ios-logs');

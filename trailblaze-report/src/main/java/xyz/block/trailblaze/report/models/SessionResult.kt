@@ -38,9 +38,18 @@ const val SOURCE_TYPE_HANDWRITTEN = "HANDWRITTEN"
 const val SOURCE_TYPE_GENERATED = "GENERATED"
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
 data class CiSummaryReport(
   val metadata: CiRunMetadata,
   val results: List<SessionResult>,
+  /**
+   * Every actual attempt, in chronological order within each test/device group. [results] keeps
+   * its one-verdict-per-test contract; indexes use these rows to retain retry links without logs
+   * or screenshots. Null when no test retried or on older reports; consumers fall back to [results].
+   * Skipped trails remain in [results] because they made no attempt.
+   */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val attempts: List<SessionResult>? = null,
 )
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -64,6 +73,12 @@ data class SessionResult(
    * without that identity having to be re-encoded into [test_key] itself.
    */
   val metadata: Map<String, TrailMetadataValue>? = null,
+
+  /**
+   * The trail's `config.context` — what the case proves and the setup it assumes — or null when the
+   * trail authored none. Carried so the CI run index can search it without the session's logs.
+   */
+  val context: String? = null,
 
   /**
    * Path of the trail file this session ran, from `SessionInfo.trailFilePath`, or null when the
@@ -358,4 +373,7 @@ data class SessionResult(
 
   /** The authored `config.id`, when present. */
   val trail_id: String? = null,
+
+  /** Immutable GitHub permalink for the source trail YAML, when the run had one. */
+  val trail_source_url: String? = null,
 )

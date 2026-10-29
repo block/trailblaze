@@ -11,14 +11,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("compose_wait")
-@LLMDescription(
-  """
-Wait for a specified number of seconds before continuing.
-Use this when you need to wait for animations or async operations to complete.
-""",
-)
+@LLMDescription("Wait for the UI to go idle, pause the given seconds, then wait for idle again.")
 data class ComposeWaitTool(
-  @param:LLMDescription("Number of seconds to wait (e.g., 1, 2, 5). Maximum 30 seconds.")
+  @param:LLMDescription("Seconds to pause, 1 to 30 (default 1).")
   val seconds: Int = 1,
 ) : ComposeExecutableTool {
 

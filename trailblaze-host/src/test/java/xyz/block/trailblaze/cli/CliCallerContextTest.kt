@@ -274,6 +274,39 @@ class CliCallerContextTest {
     }
   }
 
+  @Test
+  fun `a relative path resolves against the launcher's directory when no cwd was forwarded`() {
+    // `./trailblaze --gradle` starts the CLI JVM in the checkout and exports the caller's
+    // directory; a path inside a --batch file must resolve there, not in the JVM's own cwd.
+    val caller = Paths.get("/caller/dir")
+    assertNotEquals(caller, Paths.get("").toAbsolutePath(), "the JVM must not already run in the caller's directory")
+
+    val cwd = CliCallerContext.resolveCallerCwd(forwarded = null, launcherCwd = caller.toString())
+
+    assertEquals(Paths.get("/caller/dir/screen.json"), cwd.resolve("screen.json"))
+  }
+
+  @Test
+  fun `a forwarded cwd wins over the launcher's directory`() {
+    val forwarded = Paths.get("/forwarded")
+    assertEquals(forwarded, CliCallerContext.resolveCallerCwd(forwarded, launcherCwd = "/launcher"))
+  }
+
+  @Test
+  fun `a blank or relative launcher directory is ignored`() {
+    assertEquals(Paths.get(""), CliCallerContext.resolveCallerCwd(forwarded = null, launcherCwd = " "))
+    assertEquals(Paths.get(""), CliCallerContext.resolveCallerCwd(forwarded = null, launcherCwd = "relative/dir"))
+  }
+
+  @Test
+  fun `a spawned daemon's environment drops the launcher's directory and keeps everything else`() {
+    val env = mutableMapOf(CliCallerContext.LAUNCHER_CWD_ENV to "/caller/dir", "TRAILBLAZE_PORT" to "52525")
+
+    CliCallerContext.removeLauncherCwd(env)
+
+    assertEquals(mapOf("TRAILBLAZE_PORT" to "52525"), env)
+  }
+
   companion object {
     // Random suffix appended to test-only env-var names so they can't collide
     // with anything the host environment happens to set. Picked once per

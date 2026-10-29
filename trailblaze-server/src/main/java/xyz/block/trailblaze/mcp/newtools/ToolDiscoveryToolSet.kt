@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
@@ -28,7 +29,6 @@ import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
@@ -86,10 +86,17 @@ class ToolDiscoveryToolSet(
   private val currentTargetProvider: () -> TrailblazeHostAppTarget? = { null },
   private val currentDriverTypeProvider: () -> TrailblazeDriverType? = { null },
   /**
-   * Resource source used to discover `*.trailhead.yaml` / `*.shortcut.yaml` configs for role
+   * The connected device's classifiers, for tools gated on `trailblaze/requiredClassifiers`.
+   * Consulted only when listing for [currentDriverTypeProvider]'s driver — a listing for another
+   * platform isn't about this device. `null` = unknown, which lists a gated tool rather than hiding
+   * one that may apply.
+   */
+  private val currentDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>? = { null },
+  /**
+   * Resource source used to discover `*.trailhead.yaml` configs for role
    * enrichment. Injected by the host bootstrap when a workspace config dir is in play (so a
    * workspace-authored trailhead can appear in `trailheadTools`); falls back to the platform's
-   * classpath scan otherwise — same default as [ToolYamlLoader.discoverShortcutsAndTrailheads].
+   * classpath scan otherwise — same default as [ToolYamlLoader.discoverTrailheads].
    *
    * This provider exists purely so the host can layer in the same workspace `ConfigResourceSource`
    * it already uses for target / toolset discovery. When the host doesn't thread one through, the
@@ -234,13 +241,13 @@ class ToolDiscoveryToolSet(
       null
     }
 
-    // Enrich the response with role-grouped slim views (trailheads / shortcuts). Trailheads come
-    // from two sources — see computeRoleNames: YAML-side `*.trailhead.yaml` metadata, and scripted
+    // Enrich the response with a slim trailheads view. Trailheads come from two sources — see
+    // computeTrailheadNames: YAML-side `*.trailhead.yaml` metadata, and scripted
     // (.ts) tools that self-declare `trailhead:` inline in their spec (InlineScriptToolConfig.trailhead).
     // Filtered to tool names actually surfaced in the current platform / target toolsets so the
     // role lists never reference tools the CLI can't show details for.
-    val (trailheadToolNames, shortcutToolNames) =
-      computeRoleNames(platformToolsets, targetToolsets, target = currentTarget)
+    val trailheadToolNames =
+      computeTrailheadNames(platformToolsets, targetToolsets, target = currentTarget)
 
     val result = ToolDiscoveryIndexResult(
       currentTarget = listedTarget?.id,
@@ -262,13 +269,12 @@ class ToolDiscoveryToolSet(
         "For direct execution: blaze(objective=\"description\", tools=\"- toolName:\\n    param: value\"). " +
         "For tool details: toolbox(name=\"toolName\").",
       trailheadTools = trailheadToolNames,
-      shortcutTools = shortcutToolNames,
     )
     return jsonFormat.encodeToString(result)
   }
 
   /**
-   * Returns `(trailheadNames, shortcutNames)` filtered to tool names that appear in the in-scope
+   * Returns trailhead tool names filtered to tool names that appear in the in-scope
    * toolsets. The intersection guard means the CLI's "render trailheads grouped" pass never
    * names a tool the user can't drill into via `toolbox --name <id>`.
    *
@@ -278,13 +284,11 @@ class ToolDiscoveryToolSet(
    * `tools` list or the detailed `toolDetails` list — the helper accepts whichever shape the
    * caller has on hand.
    *
-   * Trailhead names are the union of two sources: YAML-side `*.trailhead.yaml` /
-   * `*.shortcut.yaml` metadata (via [ToolYamlLoader.discoverShortcutsAndTrailheads]), and
-   * scripted (`.ts`) tools that self-declare `trailhead:` inline in their
-   * `TrailblazeTypedToolSpec` instead of a sidecar YAML — those land on
-   * [xyz.block.trailblaze.config.InlineScriptToolConfig.trailhead], reachable off [target]'s
-   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget.getInlineScriptTools]. Shortcuts have no
-   * scripted-tool equivalent yet, so that half stays YAML-only.
+   * Trailhead names are the union of two sources: YAML-side `*.trailhead.yaml` metadata (via
+   * [ToolYamlLoader.discoverTrailheads]), and scripted (`.ts`) tools that self-declare
+   * `trailhead:` inline in their `TrailblazeTypedToolSpec` instead of a sidecar YAML — those land
+   * on [xyz.block.trailblaze.config.InlineScriptToolConfig.trailhead], reachable off [target]'s
+   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget.getInlineScriptTools].
    *
    * @param target the app target whose scripted tools to scan for inline trailheads.
    *   [handleIndexMode] passes the daemon's currently-connected target; [handleTargetMode] passes
@@ -293,11 +297,11 @@ class ToolDiscoveryToolSet(
    *   --target=<other>` reporting the daemon's connected target's scripted trailheads instead of
    *   the requested one).
    */
-  private fun computeRoleNames(
+  private fun computeTrailheadNames(
     vararg toolsetSources: List<ToolDiscoveryToolsetInfo>?,
     extraInScopeNames: Collection<String> = emptyList(),
     target: TrailblazeHostAppTarget?,
-  ): Pair<List<String>, List<String>> {
+  ): List<String> {
     val inScopeNames: Set<String> = buildSet {
       toolsetSources.forEach { sets ->
         sets?.forEach { ts ->
@@ -307,24 +311,18 @@ class ToolDiscoveryToolSet(
       }
       addAll(extraInScopeNames)
     }
-    // Use the injected resource source so a workspace-authored *.trailhead.yaml / *.shortcut.yaml
-    // is also visible — otherwise we'd silently drop workspace role tools that ARE present in
-    // the in-scope toolsets (because the host's target/toolset discovery uses a layered source).
-    val allRoles = ToolYamlLoader.discoverShortcutsAndTrailheads(resourceSourceProvider())
-    val yamlTrailheadNames = allRoles.values.filter { it.trailhead != null }.map { it.id }
+    // Use the injected resource source so a workspace-authored *.trailhead.yaml is also
+    // visible — otherwise we'd silently drop workspace trailheads that ARE present in the
+    // in-scope toolsets (because the host's target/toolset discovery uses a layered source).
+    val yamlTrailheadNames = ToolYamlLoader.discoverTrailheads(resourceSourceProvider()).values.map { it.id }
     val scriptedTrailheadNames = target?.getInlineScriptTools()
       .orEmpty()
       .filter { it.trailhead != null }
       .map { it.name }
-    val trailheads = (yamlTrailheadNames + scriptedTrailheadNames)
+    return (yamlTrailheadNames + scriptedTrailheadNames)
       .filter { it in inScopeNames }
       .distinct()
       .sorted()
-    val shortcuts = allRoles.values
-      .filter { it.shortcut != null && it.id in inScopeNames }
-      .map { it.id }
-      .sorted()
-    return trailheads to shortcuts
   }
 
   private fun handleNameMode(name: String, catalog: ScriptedToolCatalog): String {
@@ -339,7 +337,7 @@ class ToolDiscoveryToolSet(
     val currentTarget = currentTargetProvider()
     val currentDriverType = currentDriverTypeProvider()
     val targetTools = if (currentTarget != null && currentDriverType != null) {
-      getCustomToolDescriptors(currentTarget, currentDriverType, catalog).map { descriptor ->
+      getCustomToolDescriptors(currentTarget, currentDriverType, catalog, includeHidden = true).map { descriptor ->
         descriptor to currentTarget.id
       }
     } else {
@@ -350,7 +348,7 @@ class ToolDiscoveryToolSet(
     val allTargets = allTargetAppsProvider()
     val allTargetTools = allTargets.flatMap { appTarget ->
       TrailblazeDevicePlatform.entries.flatMap { platform ->
-        getCustomToolDescriptorsForPlatform(appTarget, platform, catalog).map { descriptor ->
+        getCustomToolDescriptorsForPlatform(appTarget, platform, catalog, includeHidden = true).map { descriptor ->
           descriptor to appTarget.id
         }
       }
@@ -634,7 +632,7 @@ class ToolDiscoveryToolSet(
     // When a device is connected (or platform filter resolves a driver), show grouped tools.
     // Otherwise, show flat tools by platform.
     if (effectiveDriverType != null) {
-      // Apply targetApp's own exclusions so a `excluded_tools: [pressBack]` declaration in the
+      // Apply targetApp's own exclusions so a `excluded_tools: [eraseText]` declaration in the
       // target YAML doesn't leak into the listing — discovery output should reflect what the
       // executor actually accepts when this target is current.
       val excludedToolNames = getExcludedToolNames(targetApp, effectiveDriverType)
@@ -657,7 +655,7 @@ class ToolDiscoveryToolSet(
       // "No trailheads available" for any non-default target. Scope the intersection guard to
       // this target's own toolGroups so we never surface a tool that won't appear when the
       // user drills in via `--name <id>`.
-      val (trailheadToolNames, shortcutToolNames) = computeRoleNames(toolGroups, target = targetApp)
+      val trailheadToolNames = computeTrailheadNames(toolGroups, target = targetApp)
 
       return jsonFormat.encodeToString(
         ToolDiscoveryTargetResult(
@@ -668,7 +666,6 @@ class ToolDiscoveryToolSet(
           systemPrompt = systemPromptForTarget(targetApp),
           toolGroups = toolGroups.ifEmpty { null },
           trailheadTools = trailheadToolNames,
-          shortcutTools = shortcutToolNames,
         )
       )
     }
@@ -677,12 +674,7 @@ class ToolDiscoveryToolSet(
     // listing is filtered by targetApp's exclusions for that platform's drivers, mirroring the
     // device-connected branch above.
     val platformTools = TrailblazeDevicePlatform.entries.mapNotNull { platform ->
-      val excludedForPlatform = TrailblazeDriverType.entries
-        .filter { it.platform == platform }
-        .flatMap { getExcludedToolNames(targetApp, it) }
-        .toSet()
-      val tools = getCustomToolDescriptorsForPlatform(targetApp, platform, catalog)
-        .filter { it.name !in excludedForPlatform }
+      val tools = getPermittedToolDescriptorsForPlatform(targetApp, platform, catalog)
       if (tools.isEmpty()) return@mapNotNull null
       ToolDiscoveryTargetPlatformTools(
         platform = platform.displayName,
@@ -694,8 +686,8 @@ class ToolDiscoveryToolSet(
     // connected. Tool ids here come from the per-platform [TrailblazeToolDescriptor] lists rather
     // than a toolset shape, so feed them via the extraInScopeNames hook.
     val flatInScopeNames = platformTools.flatMap { it.tools.map { d -> d.name } }
-    val (trailheadToolNames, shortcutToolNames) =
-      computeRoleNames(extraInScopeNames = flatInScopeNames, target = targetApp)
+    val trailheadToolNames =
+      computeTrailheadNames(extraInScopeNames = flatInScopeNames, target = targetApp)
 
     return jsonFormat.encodeToString(
       ToolDiscoveryTargetResult(
@@ -705,7 +697,6 @@ class ToolDiscoveryToolSet(
         systemPrompt = systemPromptForTarget(targetApp),
         toolsByPlatform = platformTools.ifEmpty { null },
         trailheadTools = trailheadToolNames,
-        shortcutTools = shortcutToolNames,
       )
     )
   }
@@ -781,7 +772,7 @@ class ToolDiscoveryToolSet(
           }
       } else {
         TrailblazeDevicePlatform.entries.forEach { platform ->
-          getCustomToolDescriptorsForPlatform(target, platform, catalog)
+          getPermittedToolDescriptorsForPlatform(target, platform, catalog)
             .filter { matches(it) }
             .forEach { descriptor ->
               results.add(
@@ -1013,12 +1004,7 @@ class ToolDiscoveryToolSet(
     // exclusions for the same reason as the device-connected branch above.
     val allGroups = targets.flatMap { target ->
       TrailblazeDevicePlatform.entries.mapNotNull { platform ->
-        val excludedForPlatform = TrailblazeDriverType.entries
-          .filter { it.platform == platform }
-          .flatMap { getExcludedToolNames(target, it) }
-          .toSet()
-        val descriptors = getCustomToolDescriptorsForPlatform(target, platform, catalog)
-          .filter { it.name !in excludedForPlatform }
+        val descriptors = getPermittedToolDescriptorsForPlatform(target, platform, catalog)
         if (descriptors.isEmpty()) return@mapNotNull null
         ToolDiscoveryToolsetInfo(
           name = "${target.id} (${platform.displayName})",
@@ -1071,19 +1057,18 @@ class ToolDiscoveryToolSet(
     if (driverType == null || target == null) return systemExclusions
 
     val targetExclusions = try {
-      // One read of the target's `excluded_tools:` surface across all three backings — the same
+      // One read of the target's `excluded_tools:` surface across both backings — the same
       // central accessor the resolver / runtime / on-device paths use. This keeps discovery's
       // hidden set in lockstep with what the agent actually sees: a target's
-      // `excluded_tools: [pressBack]` (YAML) or `[openUrl]` (scripted) is hidden here exactly as
-      // it's dropped from the LLM surface.
+      // `excluded_tools: [openUrl]` (scripted) is hidden here exactly as it's dropped from the
+      // LLM surface.
       val excluded = target.getExcludedToolSurfaceForDriver(driverType)
       // Class exclusions resolve to their advertised descriptor name (the @TrailblazeToolClass
-      // name); YAML + scripted exclusions are already names.
+      // name); scripted exclusions are already names.
       val classExclusions = excluded.toolClasses
         .mapNotNull { it.toTrailblazeToolDescriptorWithSource()?.name }
       (
         classExclusions +
-          excluded.yamlToolNames.map { it.toolName } +
           excluded.scriptedToolNames.map { it.toolName }
         ).toSet()
     } catch (e: Exception) {
@@ -1105,39 +1090,35 @@ class ToolDiscoveryToolSet(
     val resolved = ToolSetCategoryMapping.resolve(category)
     val classDescriptors = resolved.toolClasses
       .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-    // Include YAML-defined tools (e.g. `pressBack` in NAVIGATION) so discovery output
-    // matches what the executor will actually accept.
-    val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(resolved.yamlToolNames)
     // Include scripted tools (e.g. `openUrl` in NAVIGATION) so discovery output matches the
     // executor's accepted set; built from the catalog YAML without launching a QuickJS engine.
     val scriptedDescriptors = InProcessScriptedToolLauncher.describe(resolved.scriptedToolNames, catalog)
-    return (classDescriptors + yamlDescriptors + scriptedDescriptors).sortedWith(compareBy { it.name })
+    return (classDescriptors + scriptedDescriptors).sortedWith(compareBy { it.name })
   }
 
   /**
    * Get custom tool descriptors for a specific driver type.
    * Used when a device is connected and we know the exact driver.
    *
-   * Unions class-backed, YAML-defined, catalog-scripted (toolset / `platforms.<p>.tools:` names),
-   * and inline-scripted (`target.tools:`) tools so name/search/target listings see the same set the
-   * executor accepts. Without the YAML/scripted branches, name-only entries pulled in by a target's
+   * Unions class-backed, catalog-scripted (toolset / `platforms.<p>.tools:` names), and
+   * inline-scripted (`target.tools:`) tools so name/search/target listings see the same set the
+   * executor accepts. Without the scripted branches, name-only entries pulled in by a target's
    * `tool_sets:` or `tools:` would silently drop from these listings even when they execute fine —
-   * the same three-way parity the grouped [TrailblazeHostAppTarget.ToolGroup.toMergedDescriptors]
-   * path enforces.
+   * the same parity the grouped [TrailblazeHostAppTarget.ToolGroup.toMergedDescriptors] path
+   * enforces.
    */
   private fun getCustomToolDescriptors(
     target: TrailblazeHostAppTarget,
     driverType: TrailblazeDriverType,
     catalog: ScriptedToolCatalog,
+    includeHidden: Boolean = false,
   ): List<TrailblazeToolDescriptor> {
     return try {
       val classDescriptors = target.getCustomToolsForDriver(driverType)
         .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-      val yamlDescriptors = KoogToolExt
-        .buildTrailblazeDescriptorsForYamlDefined(target.getCustomYamlToolNamesForDriver(driverType))
       val scriptedDescriptors = InProcessScriptedToolLauncher
         .describe(target.getCustomScriptedToolNamesForDriver(driverType), catalog)
-      (classDescriptors + yamlDescriptors + scriptedDescriptors + getInlineToolDescriptors(target, driverType))
+      (classDescriptors + scriptedDescriptors + getInlineToolDescriptors(target, driverType, includeHidden))
         .distinctBy { it.name }
         .sortedWith(compareBy { it.name })
     } catch (_: Exception) {
@@ -1146,10 +1127,34 @@ class ToolDiscoveryToolSet(
   }
 
   /**
+   * The tools [target] offers on [platform] with no device connected: each driver a run of this
+   * target can reach contributes its own surface minus its `excluded_tools:`, merged. A tool one
+   * driver excludes stays when another reachable driver on the platform supports and permits it. A
+   * driver no run can reach never puts one back: a retired driver, any driver on a platform the
+   * target doesn't declare, or `ANDROID_TEST` on a target with no in-process harness.
+   */
+  private fun getPermittedToolDescriptorsForPlatform(
+    target: TrailblazeHostAppTarget,
+    platform: TrailblazeDevicePlatform,
+    catalog: ScriptedToolCatalog,
+  ): List<TrailblazeToolDescriptor> {
+    if (target.getPossibleAppIdsForPlatform(platform) == null) return emptyList()
+    return TrailblazeDriverType.entries
+      .filter { it.platform == platform && it !in TrailblazeDriverType.RETIRED_DRIVERS }
+      .filter { it != TrailblazeDriverType.ANDROID_TEST || target.getAndroidTestInstrumentationTarget() != null }
+      .flatMap { driverType ->
+        val excluded = getExcludedToolNames(target, driverType)
+        getCustomToolDescriptors(target, driverType, catalog).filter { it.name !in excluded }
+      }
+      .distinctBy { it.name }
+      .sortedWith(compareBy { it.name })
+  }
+
+  /**
    * Get custom tool descriptors for all driver types on a platform.
    * Used as fallback when no device is connected.
    *
-   * Same class+YAML+scripted+inline union as [getCustomToolDescriptors], collapsed across every
+   * Same class+scripted+inline union as [getCustomToolDescriptors], collapsed across every
    * driver for [platform] so a target's full surface area shows up regardless of which driver the
    * caller eventually picks. Scripted names are unioned across drivers first, then described in a
    * single [InProcessScriptedToolLauncher.describe] call against the request's shared [catalog]
@@ -1159,6 +1164,7 @@ class ToolDiscoveryToolSet(
     target: TrailblazeHostAppTarget,
     platform: TrailblazeDevicePlatform,
     catalog: ScriptedToolCatalog,
+    includeHidden: Boolean = false,
   ): List<TrailblazeToolDescriptor> {
     return try {
       val driverTypes = TrailblazeDriverType.entries.filter { it.platform == platform }
@@ -1166,15 +1172,11 @@ class ToolDiscoveryToolSet(
         .flatMap { driverType -> target.getCustomToolsForDriver(driverType) }
         .distinct()
         .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-      val yamlNames = driverTypes
-        .flatMap { driverType -> target.getCustomYamlToolNamesForDriver(driverType) }
-        .toSet()
-      val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(yamlNames)
       val scriptedNames = driverTypes
         .flatMap { driverType -> target.getCustomScriptedToolNamesForDriver(driverType) }
         .toSet()
       val scriptedDescriptors = InProcessScriptedToolLauncher.describe(scriptedNames, catalog)
-      (classDescriptors + yamlDescriptors + scriptedDescriptors + getInlineToolDescriptorsForPlatform(target, platform))
+      (classDescriptors + scriptedDescriptors + getInlineToolDescriptorsForPlatform(target, platform, includeHidden))
         .distinctBy { it.name }
         .sortedWith(compareBy { it.name })
     } catch (_: Exception) {
@@ -1187,10 +1189,13 @@ class ToolDiscoveryToolSet(
     driverType: TrailblazeDriverType,
     detail: Boolean,
   ): List<ToolDiscoveryToolsetInfo> {
+    val excluded = excludedInlineToolNames(target, driverType)
     val grouped = target.getInlineScriptTools()
       .mapNotNull { tool ->
         val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-        if (!meta.shouldRegister(driverType, preferHostAgent = true)) {
+        if (tool.name in excluded || !tool.surfacesToLlm(meta) ||
+          !meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))
+        ) {
           null
         } else {
           (meta.toolset ?: "scripted") to inlineToolToDescriptor(tool)
@@ -1209,31 +1214,58 @@ class ToolDiscoveryToolSet(
     }.sortedBy { it.name }
   }
 
+  /** The connected device's classifiers when [driverType] is its driver; otherwise unknown. */
+  private fun classifiersFor(driverType: TrailblazeDriverType): List<TrailblazeDeviceClassifier>? =
+    if (driverType == currentDriverTypeProvider()) currentDeviceClassifiersProvider() else null
+
+  /** [includeHidden] keeps `surfaceToLlm: false` tools, for lookup by exact name. */
   private fun getInlineToolDescriptors(
     target: TrailblazeHostAppTarget,
     driverType: TrailblazeDriverType,
+    includeHidden: Boolean = false,
+  ): List<TrailblazeToolDescriptor> {
+    val excluded = excludedInlineToolNames(target, driverType)
+    return target.getInlineScriptTools().mapNotNull { tool ->
+      val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
+      if (tool.name in excluded || (!includeHidden && !tool.surfacesToLlm(meta)) ||
+        !meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))
+      ) {
+        null
+      } else {
+        inlineToolToDescriptor(tool)
+      }
+    }
+  }
+
+  /**
+   * The target's own scripted tools that `excluded_tools:` opts out of on [driverType]. A
+   * trailmap's `.ts` tools are on its target unlisted, so the opt-out is the only thing keeping
+   * one out of a listing.
+   */
+  private fun excludedInlineToolNames(target: TrailblazeHostAppTarget, driverType: TrailblazeDriverType): Set<String> =
+    target.getExcludedToolSurfaceForDriver(driverType).scriptedToolNames.mapTo(mutableSetOf()) { it.toolName }
+
+  private fun getInlineToolDescriptorsForPlatform(
+    target: TrailblazeHostAppTarget,
+    platform: TrailblazeDevicePlatform,
+    includeHidden: Boolean = false,
   ): List<TrailblazeToolDescriptor> =
     target.getInlineScriptTools().mapNotNull { tool ->
       val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      if (!meta.shouldRegister(driverType, preferHostAgent = true)) {
+      if ((!includeHidden && !tool.surfacesToLlm(meta)) || !meta.shouldRegisterForPlatform(platform, preferHostAgent = true)) {
         null
       } else {
         inlineToolToDescriptor(tool)
       }
     }
 
-  private fun getInlineToolDescriptorsForPlatform(
-    target: TrailblazeHostAppTarget,
-    platform: TrailblazeDevicePlatform,
-  ): List<TrailblazeToolDescriptor> =
-    target.getInlineScriptTools().mapNotNull { tool ->
-      val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      if (!meta.shouldRegisterForPlatform(platform, preferHostAgent = true)) {
-        null
-      } else {
-        inlineToolToDescriptor(tool)
-      }
-    }
+  /**
+   * Whether the session advertises [this] tool to the LLM: neither its top-level `surfaceToLlm`
+   * nor its `_meta` turns it off. A hidden helper stays dispatchable, but toolbox must not offer
+   * what `step` won't call.
+   */
+  private fun InlineScriptToolConfig.surfacesToLlm(meta: TrailblazeToolMeta): Boolean =
+    surfaceToLlm && meta.surfaceToLlm
 
   private fun inlineToolToDescriptor(tool: InlineScriptToolConfig): TrailblazeToolDescriptor {
     val requiredNames = ((tool.inputSchema["required"] as? JsonArray)
@@ -1551,11 +1583,6 @@ data class ToolDiscoveryIndexResult(
    * flags don't ride on the shared descriptor; this is a response-level enrichment.
    */
   val trailheadTools: List<String> = emptyList(),
-  /**
-   * Tool names whose YAML config carries a non-null `shortcut:` metadata block — i.e. tools
-   * that jump from one named waypoint to another. Same shape and rationale as [trailheadTools].
-   */
-  val shortcutTools: List<String> = emptyList(),
   // `error` is the contract the CLI formatter (`ToolboxCommand.formatToolsResult`) keys off to
   // short-circuit to `Console.error(...)` regardless of which mode-specific formatter would
   // otherwise run. Toolbox-level validation failures (e.g. unknown `--device` platform) set this
@@ -1618,8 +1645,6 @@ data class ToolDiscoveryTargetResult(
    * target-mode envelope, not index-mode, when a non-default target is requested).
    */
   val trailheadTools: List<String> = emptyList(),
-  /** Tool names with shortcut role metadata, scoped to this target. */
-  val shortcutTools: List<String> = emptyList(),
   val error: String? = null,
 )
 
@@ -1643,13 +1668,12 @@ data class ToolDiscoverySearchMatch(
 )
 
 /**
- * Combines class-backed and YAML-defined tools from a [TrailblazeHostAppTarget.ToolGroup] into a
+ * Combines class-backed and scripted tools from a [TrailblazeHostAppTarget.ToolGroup] into a
  * single descriptor list. Shared by every place that renders a [TrailblazeHostAppTarget.ToolGroup]
- * for discovery / summary output, so YAML-only entries (e.g. `eraseText`, `pressBack`) flow
- * through alongside class-backed tools.
+ * for discovery / summary output, so scripted entries flow through alongside class-backed tools.
  *
  * Class descriptors take precedence on name collision (class-backed implementations are
- * authoritative; YAML and scripted names are descriptors only), then YAML, then scripted.
+ * authoritative; scripted names are descriptors only).
  * `distinctBy { name }` defends against a future hand-built `ToolGroup` that lists the same name in
  * more than one backing — today's [YamlBackedHostAppTarget] resolver enforces mutual exclusion via
  * a typed `when`, but the data model itself does not.
@@ -1658,8 +1682,7 @@ data class ToolDiscoverySearchMatch(
  * resolves each name via `ScriptedToolNameDiscoverer` (trailmap `tools/` descriptor YAMLs on the
  * classpath + workspace overlay) — the same resolution the resolved-surface and non-grouped
  * discovery paths use. So a target whose custom tools are scripted shows up in grouped discovery
- * output alongside class- and YAML-backed tools — the discovery-grouping leg of the three-way
- * tool-backing parity.
+ * output alongside class-backed tools — the discovery-grouping leg of the tool-backing parity.
  *
  * Scripted descriptors are read through [catalog]; a caller merging many groups in one request
  * passes the same catalog to each so the descriptor tree is walked once. Required, not defaulted,
@@ -1671,7 +1694,6 @@ internal fun TrailblazeHostAppTarget.ToolGroup.toMergedDescriptors(
 ): List<TrailblazeToolDescriptor> {
   val classDescriptors = toolClasses
     .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-  val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(yamlToolNames)
   val scriptedDescriptors = InProcessScriptedToolLauncher.describe(scriptedToolNames, catalog)
-  return (classDescriptors + yamlDescriptors + scriptedDescriptors).distinctBy { it.name }
+  return (classDescriptors + scriptedDescriptors).distinctBy { it.name }
 }

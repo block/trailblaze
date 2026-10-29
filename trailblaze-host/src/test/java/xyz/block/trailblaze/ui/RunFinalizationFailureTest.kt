@@ -8,23 +8,28 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.events.FileEventSink
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.report.models.failureCodeOf
+import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -57,8 +62,6 @@ class RunFinalizationFailureTest {
     defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
     currentTrailblazeLlmModelProvider = { error("LLM not available in tests") },
     initialAppTargets = emptySet(),
-    appIconProvider = AppIconProvider.DefaultAppIconProvider,
-    deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
     runYamlLambda = { error("YAML runner not available in tests") },
     installedAppIdsProviderBlocking = { emptySet() },
     appVersionInfoProviderBlocking = { _, _ -> null },
@@ -89,7 +92,7 @@ class RunFinalizationFailureTest {
     )
   }
 
-  private fun runThatEnded(end: SessionStatus.Ended) {
+  private fun runThatStarted() {
     writeStatus(
       SessionStatus.Started(
         trailConfig = null,
@@ -107,6 +110,10 @@ class RunFinalizationFailureTest {
         trailblazeDeviceId = deviceId,
       ),
     )
+  }
+
+  private fun runThatEnded(end: SessionStatus.Ended) {
+    runThatStarted()
     writeStatus(end)
   }
 
@@ -175,6 +182,98 @@ class RunFinalizationFailureTest {
     runThatEnded(SessionStatus.Ended.Failed(durationMs = 4_200, exceptionMessage = "Login button not found"))
 
     deviceManager.failSucceededSessionOnFinalization(sessionId, noEvidence)
+
+    assertEquals("Login button not found", assertIs<SessionStatus.Ended.Failed>(diskStatus()).exceptionMessage)
+  }
+
+  private fun recordCrash(summary: String) {
+    FileEventSink(logsRepo.getSessionDir(sessionId)).use { sink ->
+      sink.appendChecked(
+        "crash",
+        timeMs = 1_772_846_522_234,
+        data = buildJsonObject {
+          put("kind", "fatal_exception")
+          put("platform", "android")
+          put("summary", summary)
+          put("source", buildJsonObject { put("path", "device.log"); put("line", JsonPrimitive(812)) })
+        },
+      )
+    }
+  }
+
+  @Test
+  fun `a passed run whose app crashed ends failed with the crash, and the daemon fails it`() {
+    runThatEnded(SessionStatus.Ended.Succeeded(durationMs = 4_200))
+    recordCrash("FATAL EXCEPTION: main")
+
+    val message = assertNotNull(deviceManager.failSucceededSessionIfAppCrashed(sessionId))
+
+    assertEquals("App crashed: FATAL EXCEPTION: main (device.log line 812)", message)
+    val status = assertIs<SessionStatus.Ended.Failed>(diskStatus())
+    assertEquals(message, status.exceptionMessage)
+    // Classified, so CI can group crash failures: the kind, and the code reports lift as failure_code.
+    assertEquals("APP_CRASHED", status.failureKind)
+    assertEquals("app_crashed", failureCodeOf(failurePayloadOf(status)))
+    val verdict = daemonVerdict(latchSuccess = false, latchError = message, finalizationError = message)
+    assertFalse(verdict.success)
+    assertEquals(message, verdict.error)
+  }
+
+  @Test
+  fun `a self-healed pass whose app crashed keeps its self-heal and gains the crash code`() {
+    runThatEnded(SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 4_200))
+    recordCrash("FATAL EXCEPTION: main")
+
+    deviceManager.failSucceededSessionIfAppCrashed(sessionId)
+
+    val status = assertIs<SessionStatus.Ended.FailedWithSelfHeal>(diskStatus())
+    assertEquals("APP_CRASHED", status.failureKind)
+    assertEquals("app_crashed", failureCodeOf(failurePayloadOf(status)))
+  }
+
+  @Test
+  fun `a crash recorded before the end lands fails that end with the crash code`() {
+    recordCrash("FATAL EXCEPTION: main")
+    val message = assertNotNull(deviceManager.failSucceededSessionIfAppCrashed(sessionId))
+    runThatEnded(SessionStatus.Ended.Succeeded(durationMs = 4_200))
+
+    val status = assertIs<SessionStatus.Ended.Failed>(diskStatus())
+    assertEquals(message, status.exceptionMessage)
+    assertEquals("app_crashed", failureCodeOf(failurePayloadOf(status)))
+  }
+
+  @Test
+  fun `a passed run whose app did not crash still passes`() {
+    runThatEnded(SessionStatus.Ended.Succeeded(durationMs = 4_200))
+
+    assertNull(deviceManager.failSucceededSessionIfAppCrashed(sessionId))
+
+    assertIs<SessionStatus.Ended.Succeeded>(diskStatus())
+  }
+
+  @Test
+  fun `a crash in a run whose end never landed fails it, though the session reads abandoned`() {
+    // An on-device run whose wait for its end timed out: the session stopped logging at Started.
+    runThatStarted()
+    recordCrash("FATAL EXCEPTION: main")
+    val stale = System.currentTimeMillis() - 10 * 60_000
+    logsRepo.getSessionDir(sessionId).walk().forEach { it.setLastModified(stale) }
+
+    val message = assertNotNull(deviceManager.failSucceededSessionIfAppCrashed(sessionId))
+
+    val verdict = daemonVerdict(latchSuccess = true, latchError = null, finalizationError = message)
+    assertFalse(verdict.success)
+    assertEquals(message, verdict.error)
+  }
+
+  @Test
+  fun `a run that already failed keeps its own failure when its app also crashed`() {
+    runThatEnded(SessionStatus.Ended.Failed(durationMs = 4_200, exceptionMessage = "Login button not found"))
+    recordCrash("FATAL EXCEPTION: main")
+
+    // No crash message either: an on-device run's in-memory result passes whatever its session's
+    // end, so a message here would replace the run's real failure.
+    assertNull(deviceManager.failSucceededSessionIfAppCrashed(sessionId))
 
     assertEquals("Login button not found", assertIs<SessionStatus.Ended.Failed>(diskStatus()).exceptionMessage)
   }

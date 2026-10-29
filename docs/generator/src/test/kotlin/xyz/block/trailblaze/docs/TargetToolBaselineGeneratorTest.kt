@@ -1,21 +1,26 @@
 package xyz.block.trailblaze.docs
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
-import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 /**
  * Focused tests for [TargetToolBaselineGenerator]. The full `generate()` walks the
  * framework classpath (`AppTargetYamlLoader.discoverConfigs()` + companions) which is
  * exercised end-to-end by `./gradlew :internal-docs-generator:run` + CI's
  * static-checks `git diff --exit-code` assertion. This file pins the part of the
- * generator that *can* be tested without that setup: the per-tool sidecar orphan-prune
- * behavior, which is the dogfood contract with the workspace `ResolvedTargetReportEmitter`
- * — stale emitter-owned sidecars must be removed, hand-authored siblings must survive.
+ * generator that *can* be tested without that setup: the token estimate and stale-file pruning.
  */
 class TargetToolBaselineGeneratorTest {
 
@@ -33,54 +38,77 @@ class TargetToolBaselineGeneratorTest {
     return File(parent, name).apply { mkdirs() }
   }
 
+  private fun scripted(config: InlineScriptToolConfig) = ToolDetail.Scripted(
+    name = config.name,
+    config = config,
+    originTrailmapId = "t",
+    consumerTrailmapId = "t",
+  )
+
   @Test
-  fun `pruneStaleSidecars deletes emitter-owned files not in the keep set`() {
-    val sidecarDir = newDir("sidecars")
-    val stale = File(sidecarDir, "stale_tool.md").apply {
-      writeText(
-        """
-        ${ResolvedTargetToolDetailRenderer.GENERATED_BANNER}
-        # stale
-        """.trimIndent(),
-      )
-    }
-    val current = File(sidecarDir, "current_tool.md").apply {
-      writeText(
-        """
-        ${ResolvedTargetToolDetailRenderer.GENERATED_BANNER}
-        # current
-        """.trimIndent(),
-      )
-    }
+  fun `pruning removes stale generated files and keeps hand-written ones`() {
+    val dir = newDir("targets")
+    val header = TargetToolBaselineGenerator.GENERATED_HEADER
+    File(dir, "kept.md").writeText("$header\n\n# kept\n")
+    File(dir, "stale.md").writeText("$header\n\n# stale\n")
+    File(dir, "notes.md").writeText("# Hand-written notes\n")
 
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = sidecarDir, keepNames = setOf("current_tool.md"))
+    TargetToolBaselineGenerator(generatedDir = newDir("ignored")).pruneStaleFiles(dir, keep = setOf("kept.md"))
 
-    assertFalse("stale emitter-owned sidecar should be deleted") { stale.exists() }
-    assertTrue("current emitter-owned sidecar should be preserved") { current.exists() }
+    assertEquals(setOf("kept.md", "notes.md"), dir.list()!!.toSet())
   }
 
   @Test
-  fun `pruneStaleSidecars leaves hand-authored files alone even if not in keep set`() {
-    val sidecarDir = newDir("sidecars")
-    val handAuthored = File(sidecarDir, "design_notes.md").apply {
-      writeText("# Hand-authored — must survive\n\nLong-form design notes that don't belong to any tool.\n")
-    }
+  fun `llmDescriptionTokens counts the tool description plus every parameter description`() {
+    val config = InlineScriptToolConfig(
+      script = "./tools/t.ts",
+      name = "t",
+      description = "a".repeat(10),
+      inputSchema = JsonObject(
+        mapOf(
+          "properties" to JsonObject(
+            mapOf(
+              "first" to JsonObject(mapOf("description" to JsonPrimitive("b".repeat(5)))),
+              "second" to JsonObject(mapOf("type" to JsonPrimitive("string"))),
+            ),
+          ),
+        ),
+      ),
+    )
 
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = sidecarDir, keepNames = emptySet())
-
-    assertTrue("hand-authored file without the banner must survive") { handAuthored.exists() }
+    // 10 + 5 characters, rounded up to whole tokens at four characters each.
+    assertEquals(4, TargetToolBaselineGenerator(generatedDir = newDir("ignored")).llmDescriptionTokens(scripted(config)))
   }
 
   @Test
-  fun `pruneStaleSidecars is a no-op when the sidecar directory does not exist`() {
-    // Catches the early-return path so it never throws if a target has never had any
-    // tools (e.g. a newly added target that hasn't been generated yet).
-    val nonexistent = File(newDir("parent"), "tools")
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = nonexistent, keepNames = emptySet())
-    // No exception thrown is the assertion; reaching here means the no-op path holds.
-    assertFalse("dir should still not exist after a no-op prune") { nonexistent.exists() }
+  fun `llmDescriptionTokens is null for a tool hidden from the LLM`() {
+    val generator = TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
+    val hidden = InlineScriptToolConfig(script = "./tools/t.ts", name = "t", description = "text", surfaceToLlm = false)
+    val hiddenByMeta = hidden.copy(
+      surfaceToLlm = true,
+      meta = JsonObject(mapOf("trailblaze/surfaceToLlm" to JsonPrimitive(false))),
+    )
+
+    assertNull(generator.llmDescriptionTokens(scripted(hidden)))
+    assertNull(generator.llmDescriptionTokens(scripted(hiddenByMeta)))
+    assertEquals(1, generator.llmDescriptionTokens(scripted(hidden.copy(surfaceToLlm = true))))
+  }
+
+  @Test
+  fun `llmDescriptionTokens counts the field descriptions of a nested object parameter`() {
+    val detail = ToolDetail.ClassBacked(name = "nestedFixture", kclass = NestedFixtureTool::class)
+
+    // "aaaa" + "cccc" + the nested field's "bbbb": 12 characters, 3 tokens.
+    assertEquals(3, TargetToolBaselineGenerator(generatedDir = newDir("ignored")).llmDescriptionTokens(detail))
   }
 }
+
+@Serializable
+data class NestedFixtureItem(@property:LLMDescription("bbbb") val name: String)
+
+@Serializable
+@TrailblazeToolClass("nestedFixture")
+@LLMDescription("aaaa")
+data class NestedFixtureTool(
+  @param:LLMDescription("cccc") val items: List<NestedFixtureItem>,
+) : TrailblazeTool

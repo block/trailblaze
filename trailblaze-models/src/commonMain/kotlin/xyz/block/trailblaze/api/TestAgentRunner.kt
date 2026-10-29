@@ -23,5 +23,21 @@ interface TestAgentRunner {
   ): AgentTaskStatus = run(prompt, stepStatus)
 
   fun recover(promptStep: PromptStep, recordingResult: PromptRecordingResult.Failure): AgentTaskStatus
+
+  /**
+   * Suspend version of recover(), so self-heal runs in the trail's coroutine and is cancelled with it.
+   * Default implementation calls the blocking version.
+   */
+  suspend fun recoverSuspend(
+    promptStep: PromptStep,
+    recordingResult: PromptRecordingResult.Failure,
+  ): AgentTaskStatus = recover(promptStep, recordingResult)
+
   fun appendToSystemPrompt(context: String)
+
+  /**
+   * Drops everything [appendToSystemPrompt] added, so the next trail run on this runner starts from
+   * the base prompt. A runner that keeps appended context must override this.
+   */
+  fun resetSystemPrompt() = Unit
 }

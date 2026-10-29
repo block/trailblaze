@@ -1,15 +1,16 @@
 package xyz.block.trailblaze.tools
 
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.model.CustomTrailblazeTools
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.allToolNameStrings
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -32,51 +33,6 @@ import xyz.block.trailblaze.yaml.VerificationStep
 class DynamicToolSetTest {
 
   // -- withDynamicToolSets: everything the driver supports is advertised up front --
-
-  @Test
-  fun `getCurrentToolDescriptors surfaces YAML-defined tools alongside class-backed tools`() {
-    // Regression test for the empty-descriptors bug: before the fix, YAML-defined tools like
-    // `eraseText` were silently dropped from `getCurrentToolDescriptors()` because it only
-    // iterated class-backed `KClass` entries. A target whose toolset ended up containing only
-    // YAML-defined tools would send zero descriptors to the LLM, which combined with
-    // `toolChoice=Required` produced an opaque OpenAI 400.
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "probe",
-        toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
-        yamlToolNames = setOf(ToolName("eraseText")),
-      ),
-    )
-    val names = repo.getCurrentToolDescriptors().map { it.name }.toSet()
-    assertTrue("eraseText" in names, "YAML-defined eraseText must surface in tool descriptors")
-    assertTrue("hideKeyboard" in names, "class-backed hideKeyboard must surface in tool descriptors")
-  }
-
-  @Test
-  fun `toolCallToTrailblazeTool can deserialize YAML-defined tool calls`() {
-    // Pair to the descriptor test above — keeps advertise/execute in sync. If
-    // getCurrentToolDescriptors() advertises a YAML-defined tool like `eraseText`, the LLM can
-    // legally select it, and the executor path routes through toolCallToTrailblazeTool() to deserialize the tool call. That deserialization
-    // used to only resolve class-backed tools, so YAML picks would crash the executor with
-    // "Could not find Trailblaze tool class". Now YAML tool names resolve via the registered
-    // ToolYamlConfig + YamlDefinedToolSerializer.
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "probe",
-        toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
-        yamlToolNames = setOf(ToolName("eraseText")),
-      ),
-    )
-    val tool = repo.toolCallToTrailblazeTool(
-      toolName = "eraseText",
-      toolContent = """{"charactersToErase":3}""",
-    )
-    assertNotNull(tool, "Should deserialize YAML tool call without throwing")
-    assertTrue(
-      tool is xyz.block.trailblaze.config.YamlDefinedTrailblazeTool,
-      "Expected YamlDefinedTrailblazeTool, got ${tool::class.simpleName}",
-    )
-  }
 
   @Test
   fun `getToolDescriptorsForStep scopes a VerificationStep to the verify surface`() {
@@ -198,11 +154,7 @@ class DynamicToolSetTest {
     // the LLM surface and offer tools that don't exist on those runtimes.
     val composeResolved =
       TrailblazeToolSetCatalog.resolveForDriver(TrailblazeDriverType.COMPOSE, requestedIds = emptyList())
-    val composeNames =
-      (
-        composeResolved.toolClasses.map { it.toolName().toolName } +
-          composeResolved.yamlToolNames.map { it.toolName }
-        ).toSet()
+    val composeNames = composeResolved.allToolNameStrings
     assertFalse("tap" in composeNames, "core_interaction 'tap' must not leak into COMPOSE resolution")
     assertFalse("inputText" in composeNames, "core_interaction 'inputText' must not leak into COMPOSE resolution")
     assertTrue("objectiveStatus" in composeNames, "meta 'objectiveStatus' is always enabled for every driver")
@@ -214,11 +166,7 @@ class DynamicToolSetTest {
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       requestedIds = emptyList(),
     )
-    val mobileNames =
-      (
-        mobileResolved.toolClasses.map { it.toolName().toolName } +
-          mobileResolved.yamlToolNames.map { it.toolName }
-        ).toSet()
+    val mobileNames = mobileResolved.allToolNameStrings
     assertTrue("tap" in mobileNames, "Mobile drivers should receive core_interaction 'tap'")
     assertTrue("inputText" in mobileNames, "Mobile drivers should receive core_interaction 'inputText'")
   }
@@ -266,7 +214,24 @@ class DynamicToolSetTest {
     assertTrue("assertEquals" in names, "memory tool 'assertEquals' must be in DefaultLlmTrailblazeTools")
     assertTrue("assertNotVisibleWithText" in names, "verification tool must be in DefaultLlmTrailblazeTools")
     assertTrue("tap" in names, "core_interaction tool must be in DefaultLlmTrailblazeTools")
-    assertTrue("tapOnPoint" in names, "device_control tool must be in DefaultLlmTrailblazeTools")
+  }
+
+  @Test
+  fun `the LLM is not offered tapOnPoint by default but a recorded tapOnPoint still decodes`() {
+    // Offered beside `tap`, a model picks x/y over refs and misses; the framework computes the
+    // point from a ref instead. Recorded trails still carry tapOnPoint steps, so it stays decodable.
+    val offered = TrailblazeToolSetCatalog
+      .defaultToolClassesForDriver(TrailblazeDriverType.IOS_HOST)
+      .map { it.toolName().toolName }
+    assertFalse("tapOnPoint" in offered, "tapOnPoint must not be in the default LLM toolbox")
+    assertTrue("tap" in offered, "tap by ref is the LLM's tap")
+
+    val decodable = CustomTrailblazeTools(
+      registeredAppSpecificLlmTools = emptySet(),
+      config = TrailblazeConfig.DEFAULT,
+      driverType = TrailblazeDriverType.IOS_HOST,
+    ).allForSerializationTools().map { it.toolName().toolName }
+    assertTrue("tapOnPoint" in decodable, "a recorded tapOnPoint step must still decode")
   }
 
   @Test
@@ -589,38 +554,5 @@ class DynamicToolSetTest {
       .map { it.toolName().toolName }.toSet()
     assertTrue("tap" in androidNames, "Android is a compatible driver for core_interaction")
     assertTrue("hideKeyboard" in androidNames, "Android sees core_interaction tools")
-  }
-
-  // -- YAML tool name symmetry --
-
-  @Test
-  fun `defaultYamlToolNamesForDriver mirrors defaultToolClassesForDriver for YAML tools`() {
-    // Symmetric with defaultToolClassesForDriver. Android sees core_interaction's YAML tools
-    // (like `eraseText`); Playwright does not because core_interaction is mobile-only.
-    val android = TrailblazeToolSetCatalog
-      .defaultYamlToolNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
-      .map { it.toolName }.toSet()
-    assertTrue("eraseText" in android, "core_interaction YAML-defined 'eraseText' should appear for Android")
-
-    val playwright = TrailblazeToolSetCatalog
-      .defaultYamlToolNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
-      .map { it.toolName }.toSet()
-    assertFalse("eraseText" in playwright, "core_interaction's 'eraseText' is mobile-only")
-  }
-
-  @Test
-  fun `withDynamicToolSets forwards customYamlToolNames into the initial repo surface`() {
-    // Rule authors contributing a YAML-defined tool name should see it advertised to the LLM
-    // without needing a backing KClass — symmetric with customToolClasses for class-backed
-    // tools. If the repo drops customYamlToolNames from the forward, this test fails.
-    val repo = TrailblazeToolRepo.withDynamicToolSets(
-      customYamlToolNames = setOf(ToolName("eraseText")),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-    )
-    val descriptorNames = repo.getCurrentToolDescriptors().map { it.name }.toSet()
-    assertTrue(
-      "eraseText" in descriptorNames,
-      "customYamlToolNames must reach the tool descriptor registry",
-    )
   }
 }

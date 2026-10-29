@@ -90,13 +90,17 @@ trail:
   - step: "Verify the text \"Form submitted!\" is visible"
     recording:
       web:
-        - web_verifyTextVisible:
-            text: Form submitted!
-            reasoning: The current objective is to verify that the text 'Form submitted!' is visible. The view hierarchy confirms that this text appears in a strong tag after the form is submitted. Verifying its visibility ensures the objective is met.
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: strong
+                ariaNameRegex: Form submitted!
 
   - step: "Verify the text \"Trail Blaze\" is visible in the form summary"
     recording:
       web:
-        - web_verifyTextVisible:
-            text: Trail Blaze
-            reasoning: 'The objective requires verifying that the text ''Trail Blaze'' is visible in the form summary. The paragraph element [e19] includes ''Name: Trail Blaze'', so verifying the presence of ''Trail Blaze'' fulfills the objective.'
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: "Name: Trail Blaze, Email: trail@example.com, Category: feedback, Message: Trailblaze is great"

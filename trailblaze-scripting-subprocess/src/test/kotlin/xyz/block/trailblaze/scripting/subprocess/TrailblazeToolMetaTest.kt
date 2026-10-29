@@ -11,6 +11,8 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
+import xyz.block.trailblaze.devices.RequiredDeviceClassifiers
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import kotlin.test.Test
@@ -31,7 +33,6 @@ class TrailblazeToolMetaTest {
       put("trailblaze/surfaceToLlm", false)
       put("trailblaze/isRecordable", false)
       put("trailblaze/requiresHost", true)
-      put("trailblaze/requiresContext", true)
       put("trailblaze/sessionResourceFinalizer", true)
       put("trailblaze/toolset", "auth")
       put("trailblaze/supportedDrivers", buildJsonArray { add("android-ondevice-accessibility"); add("ios-host") })
@@ -44,7 +45,6 @@ class TrailblazeToolMetaTest {
         surfaceToLlm = false,
         isRecordable = false,
         requiresHost = true,
-        requiresContext = true,
         isSessionResourceFinalizer = true,
         toolset = "auth",
         supportedDrivers = listOf("android-ondevice-accessibility", "ios-host"),
@@ -169,4 +169,61 @@ class TrailblazeToolMetaTest {
     assertThat(malformed.sensitiveArgs.resolve(setOf("email", "password")))
       .isEqualTo(setOf("email", "password"))
   }
+
+  @Test fun `shouldRegister - requiredClassifiers needs every segment on the session device`() {
+    val parsed = TrailblazeToolMeta.fromJsonObject(
+      buildJsonObject { put("trailblaze/requiredClassifiers", buildJsonArray { add("rig") }) },
+    )
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone", "rig")))
+      .isTrue()
+    assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("ANDROID", "PHONE", "RIG")))
+      .isTrue()
+    assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone")))
+      .isFalse()
+    // A known device with no classifiers at all still fails the requirement.
+    assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = emptyList())).isFalse()
+    // The multi-device overload judges the launch device's classifiers.
+    assertThat(
+      parsed.shouldRegister(listOf(driver, TrailblazeDriverType.PLAYWRIGHT_NATIVE), true, classifiers("android", "phone")),
+    ).isFalse()
+  }
+
+  @Test fun `shouldRegister - requiredClassifiers is skipped when the device is unknown`() {
+    // Static reports and device-less tool listings pass null: they list a tool that MAY apply.
+    val parsed = TrailblazeToolMeta.fromJsonObject(
+      buildJsonObject { put("trailblaze/requiredClassifiers", buildJsonArray { add("rig") }) },
+    )
+    assertThat(parsed.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true))
+      .isTrue()
+  }
+
+  @Test fun `shouldRegister - a tool without requiredClassifiers registers on any device`() {
+    assertThat(
+      TrailblazeToolMeta().shouldRegister(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        preferHostAgent = true,
+        classifiers = emptyList(),
+      ),
+    ).isTrue()
+  }
+
+  @Test fun `shouldRegister - a malformed requiredClassifiers registers on no known device`() {
+    // An MCP server's `_meta` skips descriptor validation. Reading a scalar as "no requirement"
+    // would load a tool meant for specially equipped devices everywhere.
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    for (malformed in listOf(
+      buildJsonObject { put("trailblaze/requiredClassifiers", "rig") },
+      buildJsonObject { put("trailblaze/requiredClassifiers", buildJsonArray { add("rig"); add(3) }) },
+    )) {
+      val parsed = TrailblazeToolMeta.fromJsonObject(malformed)
+      assertThat(parsed.requiredClassifiers).isEqualTo(RequiredDeviceClassifiers.Unreadable)
+      assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone", "rig")))
+        .isFalse()
+      assertThat(parsed.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone")))
+        .isFalse()
+    }
+  }
+
+  private fun classifiers(vararg segments: String) = segments.map(::TrailblazeDeviceClassifier)
 }

@@ -241,8 +241,7 @@ class BuiltInToolsBindingDriftTest {
   /**
    * Reflectively compute the set of tool names the generated recordable surface emits — the mirror of
    * `PerTrailmapClientDtsEmitter.resolveKotlinToolDescriptorsForTrailmap`: every `isRecordable`
-   * class-backed tool the Koog descriptor path can lower, plus every recordable YAML-defined tool,
-   * MINUS [HandCuratedRecordableTools.NAMES] (which the emitter skips so they can stay hand-typed in
+   * class-backed tool the Koog descriptor path can lower, MINUS [HandCuratedRecordableTools.NAMES] (which the emitter skips so they can stay hand-typed in
    * built-in-tools.ts).
    */
   private fun generatedRecordableToolNames(): Set<String> {
@@ -252,27 +251,19 @@ class BuiltInToolsBindingDriftTest {
       // typically live in HandCuratedRecordableTools.NAMES anyway).
       .filter { it.toScriptedToolDescriptor() != null }
       .map { it.trailblazeToolClassAnnotation().name }
-    val yamlDefined = TrailblazeSerializationInitializer.buildYamlDefinedTools()
-      .filterValues { it.isRecordable != false }
-      .keys.map { it.toolName }
-    return (classBacked + yamlDefined).toSet() - HandCuratedRecordableTools.NAMES
+    return classBacked.toSet() - HandCuratedRecordableTools.NAMES
   }
 
   @Test
   fun `every HandCuratedRecordableTools name is a real recordable tool (allowlist can't rot)`() {
     // The shared allowlist is the ONE place the emitter and this test agree to skip. If a listed tool
     // is renamed or deleted, its name silently stops matching anything and the allowlist rots into a
-    // no-op. Assert every entry still resolves to a genuinely recordable tool (class-backed or
-    // YAML-defined) so that drift fails loudly here instead.
-    val recordableClassNames = TrailblazeSerializationInitializer.buildAllTools().values
+    // no-op. Assert every entry still resolves to a genuinely recordable class-backed tool so that
+    // drift fails loudly here instead.
+    val recordable = TrailblazeSerializationInitializer.buildAllTools().values
       .filter { it.trailblazeToolClassAnnotation().isRecordable }
       .map { it.trailblazeToolClassAnnotation().name }
       .toSet()
-    val recordableYamlNames = TrailblazeSerializationInitializer.buildYamlDefinedTools()
-      .filterValues { it.isRecordable != false }
-      .keys.map { it.toolName }
-      .toSet()
-    val recordable = recordableClassNames + recordableYamlNames
     // Same vacuity guard as the disjointness test — a short classpath would make this trivially pass.
     assertTrue("Reflective recordable-tool discovery returned only ${recordable.size} tools") {
       recordable.size >= 20

@@ -70,7 +70,7 @@ class KoogRunInstrumentationTest {
     // carries on. Treating one as the cause would blame a tap the agent recovered from at turn 2
     // for a budget exhaustion at turn 20.
     val instrumentation = recorded(
-      toolFailures = listOf("tapOnElementWithText" to "no such element"),
+      toolFailures = listOf("tapOnElementBySelector" to "no such element"),
       llmCallsCompleted = 20,
     )
 
@@ -85,7 +85,7 @@ class KoogRunInstrumentationTest {
     val instrumentation = recorded(
       nodeFailures = listOf("callLlm" to IllegalStateException("connection reset")),
       toolFailures = listOf(
-        "tapOnElementWithText" to "no such element",
+        "tapOnElementBySelector" to "no such element",
         "swipe" to "gesture rejected",
       ),
     )

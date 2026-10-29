@@ -42,11 +42,13 @@ class MultiDeviceConfigurationResolverTest {
     primaryDeviceId: TrailblazeDeviceId,
     rawDeviceBindings: String?,
     sessionDriverType: TrailblazeDriverType? = null,
+    boundDevicePlatforms: Map<String, TrailblazeDevicePlatform> = emptyMap(),
   ) = MultiDeviceConfigurationResolver.resolve(
     yaml = yaml,
     primaryDeviceId = primaryDeviceId,
     rawDeviceBindings = rawDeviceBindings,
     sessionDriverType = sessionDriverType,
+    boundDevicePlatforms = boundDevicePlatforms,
   )
 
   /** The configuration a run that names none selects, before any device-side work. */
@@ -266,6 +268,100 @@ class MultiDeviceConfigurationResolverTest {
     assertThat(message).contains("seller")
     assertThat(message).contains("PLAYWRIGHT_NATIVE")
     assertThat(message).contains("ANDROID_ONDEVICE_INSTRUMENTATION")
+  }
+
+  /** [pairTrail] with an iOS simulator buyer, optionally pinning [driver] on it. */
+  private fun iosBuyerTrail(driver: String? = null) = pairTrail(buyerClassifier = "ios-iphone").let { trail ->
+    if (driver == null) {
+      trail
+    } else {
+      trail.replace(
+        "        buyer:\n          classifier: ios-iphone",
+        "        buyer:\n          classifier: ios-iphone\n          driver: $driver",
+      )
+    }
+  }
+
+  private fun resolveIosBuyer(driver: String? = null) = resolve(
+    yaml = iosBuyerTrail(driver),
+    primaryDeviceId = launchDevice,
+    rawDeviceBindings = "buyer=SIM-UDID-1",
+    sessionDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+  )
+
+  @Test
+  fun `an iOS companion of an Android launch device runs IOS_HOST by default`() {
+    val resolved = resolveIosBuyer()!!
+
+    assertThat(resolved.companionDeviceIds.getValue("buyer").trailblazeDevicePlatform)
+      .isEqualTo(TrailblazeDevicePlatform.IOS)
+    assertThat(resolved.companionDriverTypes).isEqualTo(mapOf("buyer" to TrailblazeDriverType.IOS_HOST))
+  }
+
+  @Test
+  fun `an iOS companion's IOS_AXE or IOS_HOST pin is honored whatever the session's Android driver`() {
+    assertThat(resolveIosBuyer("IOS_AXE")!!.companionDriverTypes)
+      .isEqualTo(mapOf("buyer" to TrailblazeDriverType.IOS_AXE))
+    assertThat(resolveIosBuyer("IOS_HOST")!!.companionDriverTypes)
+      .isEqualTo(mapOf("buyer" to TrailblazeDriverType.IOS_HOST))
+  }
+
+  @Test
+  fun `an iOS companion pinned to a driver no companion path builds is rejected`() {
+    val message = assertFailsWith<TrailblazeException> { resolveIosBuyer("REVYL_IOS") }.message.orEmpty()
+
+    assertThat(message).contains("buyer")
+    assertThat(message).contains("REVYL_IOS")
+  }
+
+  @Test
+  fun `an Android companion of an Android launch device runs the session's driver`() {
+    val resolved = resolve(
+      yaml = pairTrail(),
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=emulator-5562",
+      sessionDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )!!
+
+    assertThat(resolved.companionDriverTypes)
+      .isEqualTo(mapOf("buyer" to TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION))
+  }
+
+  @Test
+  fun `an Android companion of an iOS launch device runs the default Android driver`() {
+    val resolved = resolve(
+      yaml = pairTrail(sellerClassifier = "ios-iphone"),
+      primaryDeviceId = TrailblazeDeviceId(
+        instanceId = "SIM-UDID-0",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      ),
+      rawDeviceBindings = "buyer=emulator-5562",
+      sessionDriverType = TrailblazeDriverType.IOS_HOST,
+    )!!
+
+    assertThat(resolved.companionDriverTypes)
+      .isEqualTo(mapOf("buyer" to TrailblazeDriverType.DEFAULT_ANDROID))
+  }
+
+  @Test
+  fun `a companion whose classifier names no platform takes its bound device's platform`() {
+    // `lab-a` carries no platform prefix. Beside an iOS launch device, falling back to the launch
+    // platform would stamp an Android emulator as an iOS simulator and connect to it as one.
+    val resolved = resolve(
+      yaml = pairTrail(sellerClassifier = "ios-iphone", buyerClassifier = "lab-a"),
+      primaryDeviceId = TrailblazeDeviceId(
+        instanceId = "SIM-UDID-0",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      ),
+      rawDeviceBindings = "buyer=emulator-5562",
+      sessionDriverType = TrailblazeDriverType.IOS_HOST,
+      boundDevicePlatforms = mapOf("emulator-5562" to TrailblazeDevicePlatform.ANDROID),
+    )!!
+
+    assertThat(resolved.companionDeviceIds.getValue("buyer").trailblazeDevicePlatform)
+      .isEqualTo(TrailblazeDevicePlatform.ANDROID)
+    assertThat(resolved.companionDriverTypes)
+      .isEqualTo(mapOf("buyer" to TrailblazeDriverType.DEFAULT_ANDROID))
   }
 
   @Test
@@ -560,13 +656,51 @@ class MultiDeviceConfigurationResolverTest {
 
   @Test
   fun `an unselected two-configuration trail names both selection mechanisms`() {
+    // `customer` is a device neither configuration declares, so the bindings pick out neither.
     val message = assertFailsWith<TrailblazeException> {
-      resolve(twoConfigurations, launchDevice, "buyer=emulator-5562")
+      resolve(twoConfigurations, launchDevice, "customer=emulator-5562")
     }.message.orEmpty()
 
     assertThat(message).contains("2 device configurations")
+    assertThat(message).contains("[customer]")
     assertThat(message).contains("RunYamlRequest.deviceConfiguration")
     assertThat(message).contains("TRAILBLAZE_DEVICE_CONFIGURATION")
+  }
+
+  /**
+   * How a CI lane replays a trail carrying one cast per cell: each cell's runner exports only its
+   * own companions, and those names are exactly one configuration's devices beyond its start device.
+   */
+  @Test
+  fun `the bindings select the configuration that declares exactly those devices`() {
+    val fromEnvironment = MultiDeviceConfigurationResolver.resolve(
+      yaml = twoConfigurations,
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=emulator-5562",
+      sessionDriverType = null,
+    )!!
+    assertThat(fromEnvironment.configurationName).isEqualTo("pos-pair")
+    assertThat(fromEnvironment.startDeviceName).isEqualTo("seller")
+
+    val fromRequest = MultiDeviceConfigurationResolver.resolve(
+      yaml = twoConfigurations,
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=emulator-9999",
+      requestDeviceBindings = mapOf("dashboard" to "playwright-native"),
+      sessionDriverType = null,
+    )!!
+    assertThat(fromRequest.configurationName).isEqualTo("web-phone")
+    assertThat(fromRequest.companionDeviceIds.keys).isEqualTo(setOf("dashboard"))
+  }
+
+  @Test
+  fun `bindings covering more than one configuration's devices select none`() {
+    val message = assertFailsWith<TrailblazeException> {
+      resolve(twoConfigurations, launchDevice, "buyer=emulator-5562,dashboard=playwright-native")
+    }.message.orEmpty()
+
+    assertThat(message).contains("2 device configurations")
+    assertThat(message).contains("[buyer, dashboard]")
   }
 
   @Test
@@ -1009,18 +1143,25 @@ class MultiDeviceConfigurationResolverTest {
     val shapes = mapOf(
       "configuration-only" to pairTrail(),
       "mixed" to mixedTrail,
+      "two configurations" to twoConfigurations,
       "two configurations beside single-device entries" to mixedTwoConfigurations,
       "single-device" to singleDeviceTrail,
     )
-    val bindingCases = mapOf<String?, Boolean>(null to false, "buyer=emulator-5562" to true)
+    val bindingCases = mapOf<String?, Set<String>>(
+      null to emptySet(),
+      "buyer=emulator-5562" to setOf("buyer"),
+      "dashboard=playwright-native" to setOf("dashboard"),
+      "customer=emulator-5562" to setOf("customer"),
+    )
     shapes.forEach { (shape, yaml) ->
-      bindingCases.forEach { (rawBindings, bindsCompanions) ->
+      bindingCases.forEach { (rawBindings, names) ->
         val where = "$shape trail, bindings=$rawBindings"
         val config = TrailblazeYaml.Default.decodeUnifiedTrailConfig(yaml)
-        if (config.requiresExplicitMultiDeviceConfiguration(bindsCompanions)) {
+        val binds = names.isNotEmpty()
+        if (config.requiresExplicitMultiDeviceConfiguration(binds, names)) {
           assertFailsWith<TrailblazeException>(where) { selectUnnamed(yaml, rawBindings) }
         } else {
-          assertThat(config.implicitMultiDeviceConfigurationName(bindsCompanions), where)
+          assertThat(config.implicitMultiDeviceConfigurationName(binds, names), where)
             .isEqualTo(selectUnnamed(yaml, rawBindings))
         }
       }
@@ -1029,7 +1170,8 @@ class MultiDeviceConfigurationResolverTest {
 
   /**
    * Two configurations beside single-device entries: without companions the run is single-device
-   * like any mixed trail; with them it must name one, exactly as a configuration-only trail must.
+   * like any mixed trail; with them it binds the configuration they pick out, and otherwise must
+   * name one, exactly as a configuration-only trail must.
    */
   private val mixedTwoConfigurations = twoConfigurations.replace(
     "config:\n  devices:\n",
@@ -1039,9 +1181,11 @@ class MultiDeviceConfigurationResolverTest {
   @Test
   fun `a mixed trail with two configurations runs single-device without companions and must name one with them`() {
     assertThat(selectUnnamed(mixedTwoConfigurations)).isNull()
+    assertThat(selectUnnamed(mixedTwoConfigurations, rawDeviceBindings = "buyer=emulator-5562"))
+      .isEqualTo("pos-pair")
     assertThat(
       assertFailsWith<TrailblazeException> {
-        selectUnnamed(mixedTwoConfigurations, rawDeviceBindings = "buyer=emulator-5562")
+        selectUnnamed(mixedTwoConfigurations, rawDeviceBindings = "customer=emulator-5562")
       }.message.orEmpty(),
     ).contains("2 device configurations")
   }

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.scripting.subprocess
 
 import java.io.File
+import xyz.block.trailblaze.util.BunBinaryResolver
 
 /**
  * Resolved bun runtime that Trailblaze will spawn subprocess MCP servers under.
@@ -36,22 +37,17 @@ object BunRuntimeDetector {
    * Detects the runtime on first access. Subsequent accesses return the same instance.
    * Throws [NoBunRuntimeException] on first access if bun is not present.
    */
-  val cached: BunRuntime by lazy { detect(::findOnPath) }
+  val cached: BunRuntime by lazy { detect(pathResolver = ::findOnPath) }
 
   /**
-   * Pure detection — scans [pathResolver] for `bun` (then `bun.exe` for Windows-checkout
-   * walk-ups). Exposed for tests so they can inject a stub PATH lookup without relying on
-   * the developer environment. Mirrors `ScriptedToolDefinitionAnalyzer.resolveBunBinary`'s
-   * dual-name probe so both bun-resolving sites agree on which binaries count.
+   * Pure detection — asks [pathResolver] for [binaryName], the one name bun has on this host (see
+   * [BunBinaryResolver.BUN_BINARY_NAME], which the other bun-resolving site uses too). Exposed for
+   * tests so they can inject a stub PATH lookup without relying on the developer environment.
    */
-  internal fun detect(pathResolver: (name: String) -> File?): BunRuntime {
-    for (name in BUN_BINARY_NAMES) {
-      pathResolver(name)?.let { return BunRuntime(it) }
-    }
-    throw NoBunRuntimeException()
-  }
-
-  private val BUN_BINARY_NAMES = listOf("bun", "bun.exe")
+  internal fun detect(
+    binaryName: String = BunBinaryResolver.BUN_BINARY_NAME,
+    pathResolver: (name: String) -> File?,
+  ): BunRuntime = pathResolver(binaryName)?.let(::BunRuntime) ?: throw NoBunRuntimeException()
 
   /**
    * Resolves [name] against each entry of the `PATH` env var. Returns the first executable

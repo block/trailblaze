@@ -4,15 +4,8 @@
 
 # `compose_request_details`
 
-Request additional detail in the next view hierarchy snapshot.
-Call this when you need more information than the default compact element list provides.
-The next turn's view hierarchy will include the requested details for ALL elements,
-then automatically revert to the compact format on subsequent turns.
-
-Available detail types:
-- BOUNDS: Include bounding box coordinates {x,y,w,h} for each element.
-  Useful for spatial reasoning, determining element positions, checking viewport visibility,
-  or disambiguating visually similar elements by location.
+Add detail to the NEXT snapshot only (all elements), then revert to the compact list.
+- BOUNDS: {x,y,w,h} per element, for spatial reasoning or telling similar elements apart.
 
 ## Source
 
@@ -30,7 +23,7 @@ Available detail types:
 ### Required parameters
 
 - `include` — `array<enum(BOUNDS)>`
-  List of detail types to include in the next view hierarchy. Supported: ["BOUNDS"]. Example: ["BOUNDS"] to see element positions.
+  Detail types to include.
 
 ## Output
 

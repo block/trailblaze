@@ -91,6 +91,27 @@ class PlaywrightCacheReuseTest {
   }
 
   @Test
+  fun `a test cached without the app's LLM client is rebuilt around its browser`() {
+    // Connecting a browser for viewing caches a test built with the open-source default client.
+    // Reusing it for a run whose model comes from a provider the app registers failed every
+    // tool with "Unsupported provider" even though model, cap and logs all matched.
+    val resolution = resolvePlaywrightCacheReuse(
+      cachedModel = openaiGpt4,
+      cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
+      cachedLogsDir = null,
+      cachedNoLogging = false,
+      cachedHasCallerLlmClient = false,
+      requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = null,
+      requestedLogsDir = null,
+      requestedNoLogging = false,
+    )
+    val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
+    assertSame(fakeBrowserManager, rebuild.browser)
+  }
+
+  @Test
   fun `max-llm-calls differs means rebuild around the cached browser`() {
     // The lazy agent runner inside BasePlaywrightNativeTest bakes the LLM call cap at
     // construction time, so a cap change (e.g. cap=10 first run, cap=1 second run) needs

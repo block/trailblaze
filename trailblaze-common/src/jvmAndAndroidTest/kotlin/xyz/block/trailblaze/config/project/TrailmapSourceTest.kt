@@ -227,7 +227,7 @@ class TrailmapSourceTest {
     val trailmapDir = newTempDir()
     val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
     File(toolsDir, "foo.tool.yaml").writeText("id: foo")
-    File(toolsDir, "bar.shortcut.yaml").writeText("id: bar")
+    File(toolsDir, "bar.waypoint.yaml").writeText("id: bar")
     File(toolsDir, "baz.trailhead.yaml").writeText("id: baz")
     // Files that should NOT match: wrong suffix, nested deeper than direct children.
     File(toolsDir, "readme.md").writeText("not a tool")
@@ -238,12 +238,12 @@ class TrailmapSourceTest {
     val source = TrailmapSource.Filesystem(trailmapDir = trailmapDir)
     val results = source.listSiblings(
       relativeDir = "tools",
-      suffixes = listOf(".tool.yaml", ".shortcut.yaml", ".trailhead.yaml"),
+      suffixes = listOf(".tool.yaml", ".waypoint.yaml", ".trailhead.yaml"),
     )
 
     assertEquals(
       listOf(
-        "tools/bar.shortcut.yaml",
+        "tools/bar.waypoint.yaml",
         "tools/baz.trailhead.yaml",
         "tools/foo.tool.yaml",
       ),
@@ -340,7 +340,7 @@ class TrailmapSourceTest {
     val root = newTempDir()
     val toolsDir = File(root, "trails/config/trailmaps/sample/tools").apply { mkdirs() }
     File(toolsDir, "foo.tool.yaml").writeText("id: foo")
-    File(toolsDir, "bar.shortcut.yaml").writeText("id: bar")
+    File(toolsDir, "bar.waypoint.yaml").writeText("id: bar")
     File(toolsDir, "readme.md").writeText("not a tool")
     File(toolsDir, "subdir").mkdirs()
     File(toolsDir, "subdir/nested.tool.yaml").writeText("id: nested")
@@ -349,12 +349,12 @@ class TrailmapSourceTest {
       val source = TrailmapSource.Classpath(resourceDir = "trails/config/trailmaps/sample")
       val results = source.listSiblings(
         relativeDir = "tools",
-        suffixes = listOf(".tool.yaml", ".shortcut.yaml"),
+        suffixes = listOf(".tool.yaml", ".waypoint.yaml"),
       )
 
       assertEquals(
         listOf(
-          "tools/bar.shortcut.yaml",
+          "tools/bar.waypoint.yaml",
           "tools/foo.tool.yaml",
         ),
         results,

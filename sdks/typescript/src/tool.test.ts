@@ -452,7 +452,7 @@ describe("tool() overload — typed authoring surface", () => {
     // likewise undefined here). Order matches the order the adapter constructs the
     // object literal in `defineTypedTool` — the test pins all five keys present
     // (an explicitly-set key is enumerable even when its value is `undefined`).
-    expect(observedCtxShape).toEqual(["tools", "memory", "device", "target", "session"]);
+    expect(observedCtxShape).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
 
     // Nothing was queued for MCP registration — the typed form is declarative, not imperative.
     // Verify by running registerPendingTools and asserting the capturing server saw no tools.
@@ -465,12 +465,14 @@ describe("tool() overload — typed authoring surface", () => {
     // Pin the typed handler's `ctx.tools.X(args)` namespace identity with the legacy
     // `client.tools.X(args)` it bridges from. This is the load-bearing contract for
     // migrated tools (e.g. `contacts_ios_searchContacts`) whose handler body calls
-    // `ctx.tools.tapOnElementWithText(...)` and expects it to dispatch identically.
+    // `ctx.tools.tapOnElementBySelector(...)` and expects it to dispatch identically.
     interface Input { count: number }
     const calls: Array<{ name: string; args: unknown }> = [];
     const handler = async (input: Input, ctx: { tools: Record<string, (a: unknown) => Promise<unknown>> }): Promise<string> => {
       for (let i = 0; i < input.count; i++) {
-        await ctx.tools.tapOnElementWithText({ text: `row-${i}` });
+        await ctx.tools.tapOnElementBySelector({
+          nodeSelector: { androidAccessibility: { textRegex: `(?is).*row-${i}.*` } },
+        });
       }
       return `tapped ${input.count} rows`;
     };
@@ -493,14 +495,16 @@ describe("tool() overload — typed authoring surface", () => {
     const result = await definition({ count: 3 }, undefined, fakeClient);
     expect(result).toBe("tapped 3 rows");
     expect(calls.map((c) => c.name)).toEqual([
-      "tapOnElementWithText",
-      "tapOnElementWithText",
-      "tapOnElementWithText",
+      "tapOnElementBySelector",
+      "tapOnElementBySelector",
+      "tapOnElementBySelector",
     ]);
-    expect(calls.map((c) => (c.args as { text: string }).text)).toEqual([
-      "row-0",
-      "row-1",
-      "row-2",
+    expect(calls.map((c) => (c.args as {
+      nodeSelector: { androidAccessibility: { textRegex: string } };
+    }).nodeSelector.androidAccessibility.textRegex)).toEqual([
+      "(?is).*row-0.*",
+      "(?is).*row-1.*",
+      "(?is).*row-2.*",
     ]);
   });
 
@@ -541,6 +545,46 @@ describe("tool() overload — typed authoring surface", () => {
     observedTarget = "<unset>";
     await definition({ x: "hi" }, undefined, fakeClient);
     expect(observedTarget).toBeUndefined();
+  });
+
+  test("typed handler reads the host computer as ctx.host.os and ctx.host.arch, null on a device", async () => {
+    let observed: unknown = "<unset>";
+    const definition = tool<{ x: string }>(async (_input, ctx) => {
+      observed = { os: ctx.host.os, arch: ctx.host.arch };
+      return "ok";
+    });
+    const fakeClient = { tools: {} } as never;
+
+    // The in-process host ctx literal carries the block as plain data.
+    await definition({ x: "hi" }, { hostPlatform: { os: "windows", arch: "x64" } } as never, fakeClient);
+    expect(observed).toEqual({ os: "windows", arch: "x64" });
+
+    // An Android device sends null; an older host omits it; an unknown OS is drift. All read null.
+    for (const legacyCtx of [{ hostPlatform: null }, {}, { hostPlatform: { os: "plan9", arch: "x64" } }, undefined]) {
+      observed = "<unset>";
+      await definition({ x: "hi" }, legacyCtx as never, fakeClient);
+      expect(observed).toEqual({ os: null, arch: null });
+    }
+  });
+
+  test("ctx.host still calls host functions alongside os and arch", async () => {
+    const calls: string[] = [];
+    const hostFunctions = new Proxy(
+      {},
+      { get: (_t, prop) => async () => { calls.push(String(prop)); return { ok: true }; } },
+    );
+    let result: unknown;
+    const definition = tool<{ x: string }>(async (_input, ctx) => {
+      result = await (ctx.host as unknown as Record<string, () => Promise<unknown>>)["myapp_lookup"]!();
+      return "ok";
+    });
+    await definition(
+      { x: "hi" },
+      { hostPlatform: { os: "linux", arch: "arm64" } } as never,
+      { tools: {}, host: hostFunctions } as never,
+    );
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual(["myapp_lookup"]);
   });
 
   test("typed handler receives canonical device.driverType when legacy ctx only has driver alias", async () => {
@@ -773,7 +817,7 @@ describe("tool() overload — typed authoring surface", () => {
     const result = await definition({ x: "hello" }, undefined, { tools: {} } as never);
     expect(result).toEqual({ y: 5 });
     expect(observed.input).toEqual({ x: "hello" });
-    expect(observed.ctxKeys).toEqual(["tools", "memory", "device", "target", "session"]);
+    expect(observed.ctxKeys).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
   });
 
   test("typed tool(handler) with NO type arguments — bare function + defaults", async () => {
@@ -849,7 +893,7 @@ describe("tool() overload — typed authoring surface", () => {
 describe("tool() overload — typed with-spec authoring surface", () => {
   // The typed `tool<I, O>(spec, handler)` overload is the destination shape for
   // YAML-free authoring (#3352). Authors set structured config (supportedPlatforms,
-  // requiresContext, requiresHost, supportedDrivers) on the spec object; the
+  // requiresHost, supportedDrivers) on the spec object; the
   // build-time analyzer extracts those from the AST and synthesizes the runtime
   // `_meta` for MCP advertisement. At runtime the spec is discarded — these tests
   // pin (a) the dispatch routes correctly, (b) the handler runs as if no spec
@@ -860,7 +904,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
     interface Input { x: string }
     interface Output { y: number }
     const definition = tool<Input, Output>(
-      { supportedPlatforms: ["web"], requiresContext: true },
+      { supportedPlatforms: ["web"], requiresHost: true },
       async (input) => ({ y: input.x.length }),
     );
 
@@ -947,7 +991,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
       handler: (input: I, ctx: { tools: Record<string, unknown> }) => Promise<O>,
     ) {
       return tool<I, O>(
-        { supportedPlatforms: ["web"], requiresContext: true, ...spec },
+        { supportedPlatforms: ["web"], requiresHost: true, ...spec },
         handler,
       );
     }
@@ -964,23 +1008,23 @@ describe("tool() overload — typed with-spec authoring surface", () => {
   test("factory helper can override individual spec fields via spread", async () => {
     // The Partial<spec> pattern lets each tool file selectively override fields
     // its factory pre-filled. Pin that override semantics work (last-write-wins
-    // via spread), which is how a "web trailmap" tool can opt out of requiresContext
+    // via spread), which is how a "web trailmap" tool can opt out of requiresHost
     // for a specific tool without restating the whole spec.
     function webTool<I, O>(
       spec: Partial<TrailblazeTypedToolSpec>,
       handler: (input: I, ctx: { tools: Record<string, unknown> }) => Promise<O>,
     ) {
       return tool<I, O>(
-        { supportedPlatforms: ["web"], requiresContext: true, ...spec },
+        { supportedPlatforms: ["web"], requiresHost: true, ...spec },
         handler,
       );
     }
 
-    // Override `requiresContext` to false on a single tool; verify the call still
+    // Override `requiresHost` to false on a single tool; verify the call still
     // produces a working definition (spec is discarded at runtime, but the
     // typed-with-spec dispatch must still route correctly).
     const definition = webTool<{ x: number }, number>(
-      { requiresContext: false },
+      { requiresHost: false },
       async (input) => input.x * 2,
     );
     const result = await definition({ x: 21 }, undefined, { tools: {} } as never);
@@ -1023,7 +1067,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
     interface Input { v: number }
     const bare = tool<Input, number>(async (input) => input.v + 1);
     const withSpec = tool<Input, number>(
-      { requiresContext: true },
+      { requiresHost: true },
       async (input) => input.v + 1,
     );
     expect(typeof bare).toBe("function");
@@ -1397,13 +1441,13 @@ describe("ajv input validation at the dispatch boundary", () => {
     });
 
     test("typed spec WITHOUT inputSchema skips validation (other spec fields still apply)", async () => {
-      // An author who declares `supportedPlatforms` / `requiresContext` but omits
+      // An author who declares `supportedPlatforms` / `requiresHost` but omits
       // `inputSchema` opts out of runtime validation. Pin that the dispatch still
       // works without a schema — the spec's other fields are captured by the
       // analyzer and don't gate runtime dispatch.
       interface Input { x: number }
       const definition = tool<Input, number>(
-        { supportedPlatforms: ["web"], requiresContext: true },
+        { supportedPlatforms: ["web"], requiresHost: true },
         async (input) => input.x * 2,
       );
       const result = await definition({ x: 21 }, undefined, { tools: {} } as never);

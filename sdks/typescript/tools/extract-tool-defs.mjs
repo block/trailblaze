@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Static-analysis shim invoked by `ScriptedToolDefinitionAnalyzer` (Kotlin) to extract
-// the input/output JSON Schemas of every `export const X = trailblaze.tool<I, O>({...})`
-// declaration in a set of `.ts` files.
+// the input/output JSON Schemas of every `export const X = trailblaze.tool<I, O>({...})` (or
+// `trailblaze.trailhead<I, O>(...)`) declaration in a set of `.ts` files.
 //
 // Usage:
 //   bun extract-tool-defs.mjs <file1.ts> [<file2.ts> ...]
@@ -25,9 +25,9 @@
 //           // the implementation below.
 //           "description": "Open the sample app.",
 //           "supportedPlatforms": ["web"],
-//           "requiresContext": true,
 //           "requiresHost": false,
 //           "supportedDrivers": ["playwright-native"],
+//           // Always present for `trailblaze.trailhead(...)`; `to` only when authored.
 //           "trailhead": { "to": "myapp/android/home_signed_in" }
 //         }
 //       },
@@ -113,42 +113,69 @@ const TRAILBLAZE_SDK_PACKAGE =
  * SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set must stay
  * in lockstep with:
  *   - `sdks/typescript/src/tool-core.ts`                  (the SDK's TS surface — `TrailblazeTypedToolSpec`)
- *   - `trailblaze-host/.../AnalyzerScriptedToolEnrichment.kt`
+ *   - `trailblaze-common/.../ScriptedToolDefProjection.kt`
  *     `projectAnalyzerSpec`                              (Kotlin projection into `_meta`)
  *   - `.../TrailblazeToolMeta.fromJsonObject`            (MCP/subprocess runtime parser)
  *   - `.../QuickJsToolMeta.fromSpec`                     (in-process runtime parser)
  * Adding a new field to `TrailblazeTypedToolSpec` requires updating all these
  * sites; there is no compile-time check that they agree.
  *
- * **`description` and `trailhead` are exceptions — primary-descriptor fields, NOT
- * `_meta` keys.** Both are captured here like any other recognized field, but on the
- * Kotlin side `AnalyzerScriptedToolEnrichment` routes them elsewhere instead of
- * projecting them into `_meta`: `description` into the resolved tool description
- * (YAML sidecar `description:` > spec `description` > TSDoc), `trailhead` into
- * `InlineScriptToolConfig.trailhead` (the same `TrailheadMetadata` shape a
- * `*.trailhead.yaml` sidecar's `trailhead:` block produces). So `projectAnalyzerSpec`
- * deliberately does NOT forward either, and the two runtime `_meta` parsers above
- * never read them — neither is a dispatch gate, so they never need to affect
- * registration or execution, only discovery surfaces (`toolbox trailheads`, the
- * Trail Runner "Use as Trailhead" picker).
+ * **`description`, `trailhead` and `runtime` are exceptions — primary-descriptor fields, NOT
+ * `_meta` keys.** All three are captured here like any other recognized field, but
+ * `ScriptedToolDefProjection` routes them into the tool config directly instead of projecting
+ * them into `_meta`:
+ *   - `description` → the resolved tool description (YAML `description:` > spec > TSDoc);
+ *   - `trailhead` → `InlineScriptToolConfig.trailhead` (the shape a `*.trailhead.yaml` sidecar's
+ *     `trailhead:` block produces), read only by discovery surfaces (`toolbox trailheads`, the
+ *     Trail Runner "Use as Trailhead" picker);
+ *   - `runtime` → `InlineScriptToolConfig.runtime` (a descriptor's `runtime:` still wins), which
+ *     DOES select the execution engine — in-process QuickJS or a Bun subprocess. That is why an
+ *     unreadable or unknown `runtime` is an error (see [specRuntimeError]) rather than a skip.
+ * So `projectAnalyzerSpec` forwards none of the three, and the runtime `_meta` parsers above
+ * never read them. A new field goes in `projectAnalyzerSpec` when it is a `_meta` gate, or in
+ * `ScriptedToolDefProjection.descriptorlessConfig` when it is a config field.
  */
+/**
+ * The values a spec `runtime` may take; mirrors `TrailblazeTypedToolSpec.runtime`. At module top
+ * for the same temporal-dead-zone reason as [RECOGNIZED_SPEC_FIELDS].
+ */
+const SPEC_RUNTIMES = ["inProcess", "subprocess"];
+
 const RECOGNIZED_SPEC_FIELDS = new Set([
   "description",
   "supportedPlatforms",
-  "requiresContext",
   "requiresHost",
   "supportedDrivers",
+  "requiredClassifiers",
   "surfaceToLlm",
   "isRecordable",
   "sensitiveArgNames",
   "trailhead",
+  "runtime",
+]);
+
+/**
+ * The [RECOGNIZED_SPEC_FIELDS] that restrict where or how a tool runs. Unlike `description` or
+ * `trailhead`, losing one of these widens the tool, so [unreadableSpecGates] reports an unreadable
+ * one instead of skipping it. `runtime` is absent because [specRuntimeError] already rejects it.
+ * [specRequiredClassifiersError] rejects an unreadable `requiredClassifiers` value too; it is listed
+ * here for the computed keys and getters that check doesn't see.
+ */
+const SPEC_GATE_FIELDS = new Set([
+  "supportedPlatforms",
+  "supportedDrivers",
+  "requiredClassifiers",
+  "requiresHost",
+  "surfaceToLlm",
+  "isRecordable",
+  "sensitiveArgNames",
 ]);
 
 /**
  * Maximum recursion depth for [literalValueOf]. Most recognized
  * `TrailblazeTypedToolSpec` fields are 1-level shapes (boolean, string,
- * string array — `sensitiveArgNames` among them) — `trailhead` is the one 2-level shape (`{ to: string,
- * dynamic: boolean }`) — so depth 2 covers `supportedPlatforms: ["web"]`,
+ * string array — `sensitiveArgNames` among them) — `trailhead` is the one 2-level shape (`{ to: string }`)
+ * — so depth 2 covers `supportedPlatforms: ["web"]`,
  * `trailhead: { to: "..." }`, and friends with headroom. A pathological
  * author literal like `[[[[[[[["web"]]]]]]]]`
  * (deliberate or accidental, perhaps via `as any`) won't exhaust the JS stack
@@ -264,7 +291,10 @@ for (const arg of args) {
       if (!init || !ts.isCallExpression(init)) continue;
       const callee = init.expression;
       if (!ts.isPropertyAccessExpression(callee)) continue;
-      if (callee.name.text !== "tool") continue;
+      // `trailblaze.trailhead(...)` is a typed tool that is also a trailhead: same call shapes,
+      // and its spec becomes a tool spec with a `trailhead` block (see [extractToolSpec]).
+      const isTrailhead = callee.name.text === "trailhead";
+      if (callee.name.text !== "tool" && !isTrailhead) continue;
       // Tighten the receiver: only match when `<expr>.tool` is rooted at the
       // Trailblaze SDK's `trailblaze` export (by bare name OR an aliased
       // import we collected above). Eliminates false-positive matches against
@@ -365,16 +395,18 @@ for (const arg of args) {
       // **Inline-literal only.** Only inline JSON-compatible literals are captured
       // today:
       //
-      //   { supportedPlatforms: ["web"], requiresContext: true }    // OK — literals
-      //   { ...sharedDefaults, requiresHost: true }                 // partial — spread skipped
-      //   { supportedPlatforms: PLATFORMS_CONST }                   // skipped — identifier
+      //   { supportedPlatforms: ["web"], requiresHost: true }       // OK — literals
+      //   { ...sharedDefaults, requiresHost: true }                 // partial — spread flagged
+      //   { supportedPlatforms: PLATFORMS_CONST }                   // skipped + flagged — identifier
+      //   { description: DESCRIPTION }                              // skipped — not a gate
       //
       // Resolving spread expressions and identifier references is deferred
       // (#3352's "factory helper" path). When the analyzer sees an unrecognized
       // expression shape for a value, it skips that field — the runtime falls
       // back to the framework default (false for booleans, empty for the
-      // platform/driver gates). Authors who need a captured value can inline the
-      // literal at the call site for now.
+      // platform/driver gates). A skipped GATE field or a spread also sets
+      // `uncapturedSpec` (see [unreadableSpecGates]), because that default widens
+      // the tool; the Kotlin layer fails a descriptor-less tool on it.
       //
       // **Why "skip" rather than "fail".** A future PR will resolve helper
       // function returns through the TypeScript Program, and "fail on unknown
@@ -383,12 +415,23 @@ for (const arg of args) {
       // behavior is unchanged, just the build-time metadata extraction lags.
       // Skipping unknown shapes lets authors use the pattern today and benefit
       // from full metadata extraction once the resolver lands.
-      const spec = extractToolSpec(init);
+      const spec = extractToolSpec(init, isTrailhead);
       // Footgun guard: the (spec, handler) overload was used but the spec arg is a non-inline
       // reference the analyzer can't read (`const SPEC = {...}` / a factory call), so the WHOLE
       // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
       // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
-      const uncapturedSpec = !spec && specArgIsUncapturedReference(init);
+      // The same hazard inside an inline literal: a gate field written as a reference
+      // (`supportedPlatforms: ANDROID_ONLY`), a shorthand (`{ supportedPlatforms }`) or hidden in a
+      // spread (`{ ...SPEC }`) is dropped while the readable fields are kept, so the tool still
+      // registers — just without that gate. Name what was unreadable so the error can point at it.
+      const uncapturedSpecFields = unreadableSpecGates(init);
+      const uncapturedSpec =
+        uncapturedSpecFields.length > 0 || (!capturedAnySpecField(spec) && specArgIsUncapturedReference(init));
+      const runtimeError = specRuntimeError(init) ?? specRequiredClassifiersError(init);
+      if (runtimeError) {
+        errors.push({ file: absFile, name, message: `tool '${name}': ${runtimeError}` });
+        continue;
+      }
 
       const { line } = sourceFile.getLineAndCharacterOfPosition(decl.getStart(sourceFile));
 
@@ -445,9 +488,11 @@ for (const arg of args) {
         // shape stable for existing consumers and lets the Kotlin decoder
         // treat absent-spec the same way it treats no-such-field.
         ...(spec ? { spec } : {}),
-        // Emitted only in the dangerous "spec ref, nothing captured" case (see above) so existing
-        // consumers that don't read it see an unchanged envelope.
+        // Emitted only when a gate may have been dropped (see above) so existing consumers that
+        // don't read it see an unchanged envelope. `uncapturedSpecFields` is empty when the whole
+        // spec is a reference, and otherwise names each unreadable gate field or `...spread`.
         ...(uncapturedSpec ? { uncapturedSpec: true } : {}),
+        ...(uncapturedSpecFields.length > 0 ? { uncapturedSpecFields } : {}),
       });
     }
   }
@@ -710,7 +755,8 @@ function describeGeneratorError(e) {
 }
 
 /**
- * Extract the typed-tool spec object from a `trailblaze.tool(...)` call expression.
+ * Extract the typed-tool spec object from a `trailblaze.tool(...)` or `trailblaze.trailhead(...)`
+ * call expression.
  *
  * Returns:
  *   - `null` when the call is a bare-handler form (arg 0 is a function/arrow) —
@@ -725,29 +771,25 @@ function describeGeneratorError(e) {
  *     case.
  *   - An object carrying each recognized field whose value at the call site is
  *     an inline JSON-compatible literal. Spread expressions, computed property
- *     names, and non-literal values are silently skipped.
+ *     names, and non-literal values are skipped here; [unreadableSpecGates]
+ *     reports the skipped ones that could have carried a gate.
+ *
+ * `trailhead` is the marker that makes a tool a trailhead, so any inline object there counts,
+ * even `{}` or one holding only a `teardown` function, and only its string `to` is kept. For
+ * [isTrailhead] (a `trailblaze.trailhead(...)` call) the marker is the call itself: the result
+ * always carries a `trailhead` block, built from the spec's top-level `to`.
  */
-function extractToolSpec(callExpression) {
-  const args = callExpression.arguments;
-  if (!args || args.length === 0) return null;
-  const arg0 = args[0];
-  // Bare-handler form: arg 0 is a function/arrow. Nothing to extract.
-  if (
-    ts.isArrowFunction(arg0) ||
-    ts.isFunctionExpression(arg0)
-  ) {
-    return null;
-  }
-  // With-spec form requires an object literal at arg 0. Anything else (identifier
-  // reference, call expression, etc.) we skip — see the inline-literal caveat at
-  // the call site.
-  if (!ts.isObjectLiteralExpression(arg0)) return null;
-
+function extractToolSpec(callExpression, isTrailhead = false) {
   const captured = {};
-  for (const prop of arg0.properties) {
+  const arg0 = callExpression.arguments?.[0];
+  // With-spec form requires an object literal at arg 0. A function/arrow is the bare-handler
+  // form; anything else (identifier reference, call expression, etc.) we skip — see the
+  // inline-literal caveat at the call site.
+  const specLiteral = arg0 && ts.isObjectLiteralExpression(arg0) ? arg0 : null;
+  for (const prop of specLiteral?.properties ?? []) {
     // Spread elements (`...sharedDefaults`) — skip. A future PR can resolve the
-    // spread source through the TypeScript Program; today we accept the
-    // partial-extraction outcome to keep the helper-function pattern working.
+    // spread source through the TypeScript Program; until then
+    // [unreadableSpecGates] flags the spread.
     if (!ts.isPropertyAssignment(prop)) continue;
     // Computed property names (`{ [key]: value }`) — skip. The recognized field
     // set is identifier-based; computed keys can't match.
@@ -755,12 +797,152 @@ function extractToolSpec(callExpression) {
     // Both `Identifier` and `StringLiteral` AST nodes expose `.text` (the guard
     // above is what makes this safe), so no branch on the kind is needed here.
     const fieldName = prop.name.text;
+    if (isTrailhead && fieldName === "to") {
+      const to = literalValueOf(prop.initializer);
+      if (typeof to === "string") captured.trailhead = { to };
+      continue;
+    }
     if (!RECOGNIZED_SPEC_FIELDS.has(fieldName)) continue;
+    if (fieldName === "trailhead") {
+      // A `trailblaze.trailhead` spec has no `trailhead` field; its block comes from `to`.
+      const block = unwrapTypeAssertions(prop.initializer);
+      if (isTrailhead || !ts.isObjectLiteralExpression(block)) continue;
+      const to = literalValueOf(block)?.to;
+      captured.trailhead = typeof to === "string" ? { to } : {};
+      continue;
+    }
     const captured_value = literalValueOf(prop.initializer);
     if (captured_value === undefined) continue; // unresolvable value — skip
     captured[fieldName] = captured_value;
   }
+  if (isTrailhead && !captured.trailhead) captured.trailhead = {};
   return Object.keys(captured).length > 0 ? captured : null;
+}
+
+/**
+ * [node] with any parentheses, `as` and `satisfies` around it removed: `({ to: "a/b" } as const)`
+ * is the object literal it wraps.
+ */
+function unwrapTypeAssertions(node) {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    node = node.expression;
+  }
+  return node;
+}
+
+/**
+ * True when [spec] holds a field read from the call site's spec argument. A `trailblaze.trailhead`
+ * spec always holds a `trailhead` block, so that alone doesn't count.
+ */
+function capturedAnySpecField(spec) {
+  if (!spec) return false;
+  return Object.keys(spec).some((k) => k !== "trailhead") || Object.keys(spec.trailhead ?? {}).length > 0;
+}
+
+/**
+ * Why the inline spec's `runtime` can't be used, or null when it is absent or valid. Unlike the
+ * other fields, an unreadable `runtime` is an error rather than a skip: dropping it silently runs
+ * the tool in-process, where the Node APIs a subprocess tool needs don't exist.
+ */
+function specRuntimeError(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+  const expected = SPEC_RUNTIMES.map((r) => `"${r}"`).join(" or ");
+  const props = arg0.properties;
+  const isRuntime = (p) =>
+    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+    p.name.text === "runtime";
+  // Later properties win in an object literal, so only the last `runtime`, or a spread after it,
+  // decides the value.
+  const lastRuntime = props.findLastIndex(isRuntime);
+  const lastSpread = props.findLastIndex((p) => ts.isSpreadAssignment(p));
+  if (lastSpread > lastRuntime) {
+    return `the spec spreads \`${props[lastSpread].expression.getText()}\`, which may set \`runtime\` where the analyzer can't read it. Add an inline \`runtime:\` (${expected}) after the spread.`;
+  }
+  if (lastRuntime < 0) return null;
+  const prop = props[lastRuntime];
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    return `spec \`runtime\` must be written inline as \`runtime: ${expected}\`; the analyzer can't read the shorthand \`{ runtime }\`.`;
+  }
+  const value = literalValueOf(prop.initializer);
+  if (value === undefined) {
+    return `spec \`runtime\` must be a string literal (${expected}); the analyzer can't read \`${prop.initializer.getText()}\`.`;
+  }
+  if (!SPEC_RUNTIMES.includes(value)) {
+    return `spec \`runtime\` is ${JSON.stringify(value)}, expected ${expected}.`;
+  }
+  return null;
+}
+
+/**
+ * Why the inline spec's `requiredClassifiers` can't be used, or null when it is absent or valid.
+ * An error rather than a skip for the same reason as [specRuntimeError]: the field restricts which
+ * devices load the tool, so dropping it would load the tool on every device.
+ */
+function specRequiredClassifiersError(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+  const props = arg0.properties;
+  const isField = (p) =>
+    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+    p.name.text === "requiredClassifiers";
+  const lastField = props.findLastIndex(isField);
+  const lastSpread = props.findLastIndex((p) => ts.isSpreadAssignment(p));
+  if (lastSpread > lastField) {
+    // With no inline field, a trailing spread is already rejected by [specRuntimeError] unless an
+    // inline `runtime` follows it — the existing partial-capture case for every other field.
+    if (lastField < 0) return null;
+    return `the spec spreads \`${props[lastSpread].expression.getText()}\` after \`requiredClassifiers\`, which may replace it where the analyzer can't read it. Move the inline \`requiredClassifiers\` after the spread.`;
+  }
+  if (lastField < 0) return null;
+  const prop = props[lastField];
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    return "spec `requiredClassifiers` must be written inline as `requiredClassifiers: [\"...\"]`; the analyzer can't read the shorthand `{ requiredClassifiers }`.";
+  }
+  const value = literalValueOf(prop.initializer);
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    return `spec \`requiredClassifiers\` must be an inline array of string literals (e.g. \`["rig"]\`); the analyzer can't read \`${prop.initializer.getText()}\`, and dropping it would load the tool on every device.`;
+  }
+  return null;
+}
+
+/**
+ * The gate fields of an inline spec literal that the analyzer can't read (a reference, shorthand,
+ * getter or method, or a computed key naming the gate), plus a `...expr` entry for each spread and
+ * a `[expr]` entry for each computed key that can't be evaluated (either may carry any gate). Empty
+ * when arg 0 isn't an object literal or every gate is an inline literal. Dropping a gate silently widens the tool (every platform and driver, surfaced to
+ * the LLM, run on-device), so these are flagged rather than skipped like other unreadable fields.
+ */
+function unreadableSpecGates(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return [];
+  const unreadable = [];
+  for (const prop of arg0.properties) {
+    if (ts.isSpreadAssignment(prop)) {
+      unreadable.push(`...${prop.expression.getText()}`);
+      continue;
+    }
+    // [extractToolSpec] never reads a computed key, so flag one that names a gate or might.
+    // A computed key that evaluates to a gate is reported under the gate's own name, so a
+    // descriptor that sets that gate can settle it.
+    if (ts.isComputedPropertyName(prop.name)) {
+      const key = literalValueOf(prop.name.expression);
+      if (typeof key !== "string") unreadable.push(`[${prop.name.expression.getText()}]`);
+      else if (SPEC_GATE_FIELDS.has(key)) unreadable.push(key);
+      continue;
+    }
+    // Numeric and private names can't name a gate.
+    if (!ts.isIdentifier(prop.name) && !ts.isStringLiteral(prop.name)) continue;
+    const fieldName = prop.name.text;
+    if (!SPEC_GATE_FIELDS.has(fieldName)) continue;
+    // A shorthand holds only a reference, and a getter or method has no initializer to read.
+    if (!ts.isPropertyAssignment(prop) || literalValueOf(prop.initializer) === undefined) {
+      unreadable.push(fieldName);
+    }
+  }
+  return unreadable;
 }
 
 /**
@@ -797,8 +979,8 @@ function specArgIsUncapturedReference(callExpression) {
  *
  * Recognized shapes (matched against the value-shapes used by the recognized
  * `TrailblazeTypedToolSpec` fields — boolean / string / string[] for most,
- * plus the one nested-object shape `trailhead: { to, dynamic }`):
- *   - `"text"` / `'text'` → string
+ * plus the one nested-object shape `trailhead: { to }`):
+ *   - `"text"` / `'text'` → string, including a `"a" + "b"` chain of them
  *   - `true` / `false` → boolean
  *   - `[expr, expr, ...]` → array (recursively; an element that doesn't
  *     resolve to a literal causes the whole array to return `undefined`)
@@ -826,6 +1008,30 @@ function literalValueOf(node, depth = 0) {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
   }
+  // `"a" + "b"`: lets a long description wrap across source lines without a template literal,
+  // which would keep the line breaks.
+  // Walked iteratively so a long chain doesn't count against [MAX_LITERAL_DEPTH].
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const parts = [];
+    let current = node;
+    while (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      parts.unshift(current.right);
+      current = current.left;
+    }
+    parts.unshift(current);
+    let joined = "";
+    for (const part of parts) {
+      const value = literalValueOf(part, depth + 1);
+      if (typeof value !== "string") return undefined;
+      joined += value;
+    }
+    return joined;
+  }
+  if (ts.isParenthesizedExpression(node)) return literalValueOf(node.expression, depth + 1);
+  // `"subprocess" as const` / `[...] satisfies X`: the annotation doesn't change the value.
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return literalValueOf(node.expression, depth + 1);
+  }
   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (ts.isArrayLiteralExpression(node)) {
@@ -850,7 +1056,7 @@ function literalValueOf(node, depth = 0) {
 }
 
 /**
- * Resolve a nested object literal (e.g. `trailhead: { to: "...", dynamic: true }`) into a
+ * Resolve a nested object literal (e.g. `trailhead: { to: "..." }`) into a
  * plain JSON-compatible object, or `undefined` if NOTHING on it resolved.
  *
  * **Partial-capture, unlike arrays.** A spread property, computed key, or unresolvable value

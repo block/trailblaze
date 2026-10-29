@@ -21,7 +21,7 @@ interface SectionInfo {
 const SECTION_INFO: Readonly<Record<SectionKey, SectionInfo>> = Object.freeze({
   tfa: { anchorCss: "#mp-tfa", headingText: "From today's featured article" },
   itn: { anchorCss: "#mp-itn", headingText: "In the news" },
-  dyk: { anchorCss: "#mp-dyk", headingText: "Did you know" },
+  dyk: { anchorCss: "#mp-dyk", headingText: "Did you know ..." },
   otd: { anchorCss: "#mp-otd", headingText: "On this day" },
 });
 
@@ -40,20 +40,14 @@ function isOnMainPage(currentUrl: string | null): boolean {
 }
 
 export interface OpenMainPageSectionArgs {
-  /** Section short code: tfa | itn | dyk | otd. */
+  /** `tfa` (featured article), `itn` (in the news), `dyk` (did you know), or `otd` (on this day). */
   section?: string;
-  /** Open Main_Page first if not there (default true). */
+  /** Open Main_Page first if not already there. Default true. */
   ensureOnMainPage?: boolean;
 }
 
 /**
- * Verify one of Wikipedia's four Main_Page sections is present and visible.
- * Use this whenever the task is to verify a main-page section: "Did you
- * know", "In the news", "On this day", or "From today's featured article"
- * (also known as DYK, ITN, OTD, TFA). Pass the section short code to pick
- * which one. The tool anchors verification on the section's stable wrapper
- * element id (`#mp-dyk` etc.) — which survives Wikipedia's day-to-day copy
- * drift — rather than the visible heading text (which rotates daily).
+ * Verify one of Wikipedia's Main_Page sections is visible.
  */
 // Anchors verification on the section's stable wrapper id (`#mp-tfa` /
 // `#mp-itn` / `#mp-dyk` / `#mp-otd`) — those have outlasted multiple skin
@@ -62,7 +56,7 @@ export interface OpenMainPageSectionArgs {
 // which broke recorded trails — now it's only a sanity belt-and-suspenders
 // applied when the anchor is reachable.
 export const wikipedia_web_openMainPageSection = trailblaze.tool<OpenMainPageSectionArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // Normalize to a lowercase short code if the caller supplied a string;
     // anything else (number, missing, etc.) collapses to "" which fails the
@@ -116,7 +110,7 @@ export const wikipedia_web_openMainPageSection = trailblaze.tool<OpenMainPageSec
     // exists). The recording captures both calls so a future day's text
     // shift can't break the test.
     const textVisible = await tryOrFalse(() =>
-      ctx.tools.web_verifyTextVisible({ text: info.headingText }),
+      ctx.tools.web_verifyElementVisible({ ref: `heading "${info.headingText}"` }),
     );
 
     return textVisible

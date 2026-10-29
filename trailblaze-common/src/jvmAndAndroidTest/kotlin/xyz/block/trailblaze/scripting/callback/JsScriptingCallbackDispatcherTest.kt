@@ -23,6 +23,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.history.HistoryToolCallOutcome
+import xyz.block.trailblaze.history.ToolCallHistory
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -38,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TypeTrailblazeTool
 
 /**
  * Direct coverage of [JsScriptingCallbackDispatcher.dispatch]. The HTTP endpoint test
@@ -89,7 +92,7 @@ class CallbackDispatcherTest {
   private fun makeRepo(): TrailblazeToolRepo = TrailblazeToolRepo(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       "callback-dispatcher-test-toolset",
-      setOf(InputTextTrailblazeTool::class),
+      setOf(InputTextTrailblazeTool::class, TypeTrailblazeTool::class),
     ),
   )
 
@@ -281,6 +284,39 @@ class CallbackDispatcherTest {
     }
   }
 
+  @Test
+  fun `a tool run with no nested executor is recorded in the session's history, failure included`() = runBlocking {
+    val failingTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "button missing")
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("failingTool")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Always fails.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = failingTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("no-nested-executor-history")
+    ToolCallHistory.clear()
+    val handle = register(sessionId = sessionId, repo = repo)
+    try {
+      JsScriptingCallbackDispatcher.dispatch(buildCallToolRequest(sessionId.value, handle.invocationId, "failingTool"))
+      assertThat(ToolCallHistory.toolCalls(sessionId).map { it.outcome })
+        .isEqualTo(listOf(HistoryToolCallOutcome(success = false, message = "button missing")))
+    } finally {
+      handle.close()
+      ToolCallHistory.clear()
+    }
+  }
+
   /**
    * Repo registering no tool classes and no YAML names, so any resolution must come from the
    * global (unfiltered) tiers that `TrailblazeSerializationInitializer` builds. This is the
@@ -290,7 +326,6 @@ class CallbackDispatcherTest {
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "empty-session-toolset",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 
@@ -332,14 +367,45 @@ class CallbackDispatcherTest {
   }
 
   @Test
+  fun `a call that fails to decode keeps its argument values out of the log and the error`() = runBlocking {
+    // Launch arguments carry credentials, and a call that fails to decode has no tool to mask
+    // them; the decoder's own message quotes the input.
+    val token = "fixture-session-token-7f3a"
+    val sessionId = SessionId("decode-failure-masking")
+    val handle = register(sessionId = sessionId, repo = emptySessionRepo())
+    val output = try {
+      captureConsoleLog {
+        val result = JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(
+            sessionId.value,
+            handle.invocationId,
+            "ios_openApp",
+            """{"appId":null,"arguments":{"SessionToken":"$token"}}""",
+          ),
+        )
+        val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+        assertThat(cap.success).isEqualTo(false)
+        val message = cap.errorMessage ?: error("Expected errorMessage on a decode failure")
+        assertThat(message).contains("Failed to deserialize tool call 'ios_openApp'")
+        assertThat(message).doesNotContain(token)
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("DESERIALIZE_FAILED tool 'ios_openApp'")
+    assertThat(output).doesNotContain(token)
+  }
+
+  @Test
   fun `unknown tool name keeps the did-you-mean suggestions and is tagged UNKNOWN_TOOL`() = runBlocking {
     // Guards the OTHER branch of resolution: the unfiltered lookup returns null (rather than
     // throwing) on a miss, so the rich unknown-tool message has to be harvested deliberately.
     // A NEAR-MISS name is required for this to have any power — `unknownToolSuggestions`
     // only offers candidates within edit distance min(3, len/3), so a wildly wrong name like
     // `tool_that_does_not_exist` yields ZERO suggestions and would pass even if the
-    // suggestion-bearing lookup were dropped entirely. `inputTex` is one deletion away from
-    // the registered `inputText`.
+    // suggestion-bearing lookup were dropped entirely. `typ` is one deletion away from
+    // the registered `type`. (Not a near-miss of `inputText`: suggestions name only tools the LLM
+    // sees, and `inputText` is hidden from it.)
     //
     // Also pins the log tag: an unknown NAME must not be reported as DESERIALIZE_FAILED,
     // which is reserved for payloads that failed to decode against a schema that does exist.
@@ -348,20 +414,20 @@ class CallbackDispatcherTest {
     val output = try {
       captureConsoleLog {
         val result = JsScriptingCallbackDispatcher.dispatch(
-          buildCallToolRequest(sessionId.value, handle.invocationId, "inputTex", """{"text":"hi"}"""),
+          buildCallToolRequest(sessionId.value, handle.invocationId, "typ", """{"text":"hi"}"""),
         )
         val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
         assertThat(cap.success).isEqualTo(false)
         val message = cap.errorMessage ?: error("Expected errorMessage on unknown tool")
-        assertThat(message).contains("Could not find Trailblaze tool for name: inputTex")
-        assertThat(message).contains("Did you mean `inputText`?")
+        assertThat(message).contains("Could not find Trailblaze tool for name: typ")
+        assertThat(message).contains("Did you mean `type`?")
         assertThat(message).contains("Accepted arguments")
         assertThat(message).doesNotContain("Failed to deserialize")
       }
     } finally {
       handle.close()
     }
-    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool 'inputTex'")
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool 'typ'")
     assertThat(output).doesNotContain("DESERIALIZE_FAILED")
   }
 

@@ -7,15 +7,11 @@ import xyz.block.trailblaze.config.DriverTypeKey
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -49,7 +45,7 @@ import xyz.block.trailblaze.util.Console
  *
  * For every tool surfaced in the index report, the emitter also writes a per-tool Markdown
  * detail page to `<outputDir>/<targetId>/tools/<toolName>.md`. Each sidecar carries
- * description, source (class FQN / scripted path / YAML tool id), input schema (required +
+ * description, source (class FQN / scripted path), input schema (required +
  * optional parameters with name / type / description), and the literal current return shape
  * (opaque string). The index report links to each sidecar so the tables stay scannable while
  * readers can drill into any tool. Each sidecar carries
@@ -77,20 +73,6 @@ object ResolvedTargetReportEmitter {
     }
     val trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id }
     val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    // Discover YAML-defined tools once (classpath scan) and look up by name when rendering
-    // sidecars for `yamlOnly` toolbox entries. Fall back to an empty map if discovery throws
-    // — sidecars will render the YAML tool as "no description / parameter list available"
-    // rather than failing the whole emission for a broken classpath.
-    val yamlDefinedToolsByName: Map<String, ToolYamlConfig> = runCatching {
-      ToolYamlLoader.discoverYamlDefinedTools()
-    }.onFailure { e ->
-      Console.error(
-        "ResolvedTargetReportEmitter: ToolYamlLoader.discoverYamlDefinedTools() failed — " +
-          "sidecars for YAML-defined tools will render without description/parameter " +
-          "metadata. ${e::class.simpleName}: ${e.message}",
-      )
-    }.getOrNull().orEmpty().mapKeys { it.key.toolName }
-    val yamlToolConfigsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
     // Scripted-tool descriptor index (`trails/config/trailmaps/**/tools/*.yaml` → descriptor),
     // used to resolve toolset-delivered scripted names (e.g. `openUrl` via `navigation`) to their
     // `InlineScriptToolConfig` for sidecars. Discovered AT MOST once per `emit(...)` — the recursive
@@ -119,7 +101,6 @@ object ResolvedTargetReportEmitter {
         ownTrailmap = trailmap,
         trailmapsById = trailmapsById,
         catalog = catalog,
-        yamlToolConfigsByName = yamlToolConfigsByName,
         scriptedDescriptorsByName = { scriptedDescriptorsByName },
       )
       val runtimeRegistry = runtimeRegistryWithProvenance(trailmap.manifest.id, trailmapsById)
@@ -128,7 +109,6 @@ object ResolvedTargetReportEmitter {
         agentToolbox = agentToolbox,
         runtimeRegistry = runtimeRegistry,
         catalog = catalog,
-        yamlDefinedToolsByName = yamlDefinedToolsByName,
         trailmapsById = trailmapsById,
       )
       val rendered = renderReport(
@@ -217,17 +197,16 @@ object ResolvedTargetReportEmitter {
 
   /**
    * Builds a `toolName -> ToolDetail` map for every tool that appears in the index report
-   * (runtime registry, agent toolbox class-backed/yaml-only/additions across every
+   * (runtime registry, agent toolbox class-backed/additions across every
    * (platform, driver) slice, scripted tools). Tools the report names but for which no
    * metadata is reachable (e.g. raw `tools:` additions that don't resolve to a known
-   * KClass / YAML config) are omitted — the renderer falls back to a plain non-clickable
+   * KClass) are omitted — the renderer falls back to a plain non-clickable
    * cell.
    */
   private fun collectToolDetails(
     agentToolbox: AgentToolbox,
     runtimeRegistry: Map<String, Map<String, List<String>>>,
     catalog: List<ToolSetCatalogEntry>,
-    yamlDefinedToolsByName: Map<String, ToolYamlConfig>,
     trailmapsById: Map<String, ResolvedTrailmap>,
   ): Map<String, ResolvedTargetToolDetailRenderer.ToolDetail> {
     val out = linkedMapOf<String, ResolvedTargetToolDetailRenderer.ToolDetail>()
@@ -244,18 +223,6 @@ object ResolvedTargetReportEmitter {
       if (out.containsKey(name)) return
       classByName[name]?.let {
         out[name] = ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked(name = name, kclass = it)
-        return
-      }
-      // Any tool name with a registered YAML config gets a sidecar — the runtime resolver
-      // (`ToolNameResolver.resolveYamlNameOrNull`) accepts these via direct `platforms.<p>.
-      // tools:` additions too, not just toolset membership. Pre-fix, the gate also required
-      // `name in yamlNamesSeen` (i.e. the catalog has to list the name in some toolset's
-      // `yamlToolNames`), which dropped direct YAML additions on the floor and left the
-      // tool name un-linkified in the matrix. The `yamlDefinedToolsByName` map is the
-      // authoritative "this is a YAML-defined tool" check at this layer.
-      yamlDefinedToolsByName[name]?.let { yamlConfig ->
-        out[name] = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(name = name, config = yamlConfig)
-        return
       }
     }
 
@@ -267,21 +234,14 @@ object ResolvedTargetReportEmitter {
     agentToolbox.perPlatform.values.forEach { platformBox ->
       platformBox.drivers.forEach { driver ->
         driver.classBacked.forEach(::consider)
-        driver.yamlOnly.forEach(::consider)
       }
       platformBox.additions.forEach(::consider)
     }
     agentToolbox.scriptedTools.forEach { entry ->
       val name = entry.tool.name
       val existing = out[name]
-      if (existing is ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked ||
-        existing is ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined
-      ) {
-        val existingKind = if (existing is ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked) {
-          "class-backed (${existing.kclass.qualifiedName ?: existing.kclass.simpleName})"
-        } else {
-          "YAML-defined"
-        }
+      if (existing is ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked) {
+        val existingKind = "class-backed (${existing.kclass.qualifiedName ?: existing.kclass.simpleName})"
         Console.error(
           "ResolvedTargetReportEmitter: scripted tool `$name` from trailmap " +
             "`${entry.originTrailmapId}` is shadowed by a $existingKind tool of the same name. " +
@@ -404,7 +364,7 @@ object ResolvedTargetReportEmitter {
         .toSet()
       val netAgentToolNames = agentToolbox.perPlatform.values.flatMap { platformBox ->
         platformBox.drivers.flatMap { driver ->
-          val included = driver.classBacked + driver.yamlOnly + platformBox.additions
+          val included = driver.classBacked + platformBox.additions
           included - platformBox.exclusions
         }
       }.toSet()
@@ -416,7 +376,7 @@ object ResolvedTargetReportEmitter {
       // counted under `totalExcluded`, not as part of the advertised scripted surface.
       val totalScripted = agentToolbox.scriptedTools.count { it.tool.name !in allExclusions }
       appendLine("- ${runtimeToolNames.size} tool(s) in runtime registry across ${runtimeRegistry.size} platform(s)")
-      appendLine("- $totalAgentTools class-backed/YAML tool(s) in agent toolbox (after `tools:` additions + `excluded_tools:` removals)")
+      appendLine("- $totalAgentTools class-backed tool(s) in agent toolbox (after `tools:` additions + `excluded_tools:` removals)")
       appendLine("- $totalExcluded tool(s) excluded by `excluded_tools:`")
       appendLine("- $totalScripted scripted tool(s) in typed surface (trailmap-local + transitive exports)")
     }
@@ -497,15 +457,13 @@ object ResolvedTargetReportEmitter {
           appendLine("#### Driver `${driver.driverYamlKey}`")
           appendLine()
           val classBacked = (driver.classBacked - exclusions).toSortedSet()
-          val yamlOnly = (driver.yamlOnly - exclusions).toSortedSet()
           val additions = (platformBox.additions - exclusions).toSortedSet()
-          if (classBacked.isEmpty() && yamlOnly.isEmpty() && additions.isEmpty()) {
-            appendLine("_(no class-backed or YAML tools resolved for this driver)_")
+          if (classBacked.isEmpty() && additions.isEmpty()) {
+            appendLine("_(no class-backed tools resolved for this driver)_")
             appendLine()
             continue
           }
           classBacked.forEach { appendLine("- ${toolCell(it, targetId, toolDetails)}") }
-          yamlOnly.forEach { appendLine("- ${toolCell(it, targetId, toolDetails)} (YAML-defined)") }
           additions.forEach { appendLine("- ${toolCell(it, targetId, toolDetails)} (individual `tools:` addition)") }
           appendLine()
         }
@@ -564,14 +522,14 @@ object ResolvedTargetReportEmitter {
    * The "Toolset(s)" column walks the runtime registry's catalog membership for each tool
    * name so a reader can see which `tool_sets:` declaration brought it in. It is a pure
    * grouping view, so a tool delivered per-target via `target.tools:` (with no toolset)
-   * renders `-` there. The separate "Kind" (Kotlin / YAML / TypeScript) and "Source"
-   * (class / tool id / `.ts` file) columns report each tool's backing instead.
+   * renders `-` there. The separate "Kind" (Kotlin / TypeScript) and "Source"
+   * (class / `.ts` file) columns report each tool's backing instead.
    *
    * **Tracked retirement.** `TargetToolBaselineGenerator` (in `:docs:generator`) currently
    * emits the same matrix shape into per-target docs via a Gradle generator task. Once
    * classpath-discovered targets migrate to workspace trailmaps, that generator becomes
    * redundant and the workspace report (this function) is the single source of truth.
-   * The data sources this function covers — class-backed toolsets, YAML-defined tools,
+   * The data sources this function covers — class-backed toolsets,
    * individual `tools:` additions, exclusions, and `target.tools:` scripted tools (with
    * `supportedPlatforms` scoping) — mirror the legacy generator's coverage so the
    * retirement doesn't lose any tool surface from the matrix.
@@ -672,14 +630,13 @@ object ResolvedTargetReportEmitter {
       .filter { it.deliveredByToolset }
       .associateBy { it.tool.name }
 
-    // Class-backed / YAML-only / additions per (platform, driver). Apply exclusions
+    // Class-backed / additions per (platform, driver). Apply exclusions
     // upfront so they only count as ❌ when the tool would otherwise have been included
     // (mirrors `YamlBackedHostAppTarget.getExcludedToolsForDriver` semantics).
     for ((platform, platformBox) in agentToolbox.perPlatform) {
       for (driver in platformBox.drivers) {
         val cell = platform to driver.driverYamlKey
         val classBacked = driver.classBacked
-        val yamlOnly = driver.yamlOnly
         val additions = platformBox.additions
         // Toolset-delivered scripted names this driver resolved, further narrowed by each tool's
         // `supportedPlatforms` meta (a tool whose toolset is compatible with the driver but that
@@ -688,7 +645,7 @@ object ResolvedTargetReportEmitter {
           val scripted = toolsetScriptedByName[name] ?: return@filter true
           cell in scriptedToolApplicableColumns(scripted.tool, driverColumns)
         }.toSet()
-        val candidates = classBacked + yamlOnly + additions + driverScripted
+        val candidates = classBacked + additions + driverScripted
         val included = candidates - platformBox.exclusions
         val excluded = platformBox.exclusions intersect candidates
         for (toolName in included) {
@@ -834,7 +791,6 @@ object ResolvedTargetReportEmitter {
   private data class DriverToolbox(
     val driverYamlKey: String,
     val classBacked: Set<String>,
-    val yamlOnly: Set<String>,
     /**
      * Scripted (`.ts` / `.js`) tool names this driver's *toolsets* delivered (e.g. `openUrl`
      * via the `navigation` toolset). Scoped per (platform, driver) because `resolveForDriver`
@@ -865,7 +821,6 @@ object ResolvedTargetReportEmitter {
     ownTrailmap: ResolvedTrailmap,
     trailmapsById: Map<String, ResolvedTrailmap>,
     catalog: List<ToolSetCatalogEntry>,
-    yamlToolConfigsByName: Map<ToolName, ToolYamlConfig>,
     scriptedDescriptorsByName: () -> Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor>,
   ): AgentToolbox {
     val perPlatform = mutableMapOf<String, PlatformToolbox>()
@@ -889,30 +844,11 @@ object ResolvedTargetReportEmitter {
           .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
           .mapNotNull { kclass -> runCatching { kclass.toolName().toolName }.getOrNull() }
           .toSet()
-        val yamlOnly = resolved.yamlToolNames
-          .filter { name ->
-            val config = yamlToolConfigsByName[name]
-            when {
-              config == null -> {
-                Console.log(
-                  "ResolvedTargetReportEmitter: no YAML config registered for tool " +
-                    "'${name.toolName}' on platform=$platformKey driver=${driverType.yamlKey}; " +
-                    "will be skipped at LLM registration.",
-                )
-                false
-              }
-              config.surfaceToLlm == false -> false
-              else -> true
-            }
-          }
-          .map { it.toolName }
-          .toSet()
         val driverToolsetScripted = resolved.scriptedToolNames.map { it.toolName }.toSet()
         toolsetScriptedNames += driverToolsetScripted
         DriverToolbox(
           driverYamlKey = driverType.yamlKey,
           classBacked = classBacked,
-          yamlOnly = yamlOnly,
           toolsetScripted = driverToolsetScripted,
         )
       }
@@ -1021,7 +957,7 @@ object ResolvedTargetReportEmitter {
       toolsetScriptedToolNames.forEach { name ->
         if (byName.containsKey(name)) return@forEach
         val descriptor = discovered[ToolName(name)] ?: return@forEach
-        val config = descriptor.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name }
+        val config = descriptor.toolConfigs().firstOrNull { it.name == name }
           ?: return@forEach
         // relPath is `<trailmap-id>/tools/...`; its first segment is the origin trailmap. The
         // scripted-sidecar pass derives `originTrailmapDir` from this id via [trailmapsById].
@@ -1146,6 +1082,7 @@ object ResolvedTargetReportEmitter {
       Triple("tool_sets", own.toolSets) { it.toolSets },
       Triple("tools", own.tools) { it.tools },
       Triple("excluded_tools", own.excludedTools) { it.excludedTools },
+      Triple("always_shown_tools", own.alwaysShownTools) { it.alwaysShownTools },
       Triple("drivers", own.drivers) { it.drivers },
       Triple("base_url", own.baseUrl) { it.baseUrl },
       Triple("min_build_version", own.minBuildVersion) { it.minBuildVersion },

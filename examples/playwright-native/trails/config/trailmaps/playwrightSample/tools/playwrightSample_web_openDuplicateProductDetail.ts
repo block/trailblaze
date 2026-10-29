@@ -11,7 +11,7 @@ export interface OpenDuplicateProductDetailArgs {
   relativePath?: string;
   /** data-id of the item whose View button to click. */
   itemId?: string;
-  /** Visible category text to assert in detail view. */
+  /** Category the detail panel must show. */
   expectedCategory?: string;
 }
 
@@ -19,7 +19,7 @@ export interface OpenDuplicateProductDetailArgs {
  * Open the duplicate-list demo, click a specific product row, and verify its detail panel.
  */
 export const playwrightSample_web_openDuplicateProductDetail = trailblaze.tool<OpenDuplicateProductDetailArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (args, ctx) => {
     const relativePath = nonEmptyString(args.relativePath, DEFAULT_RELATIVE_PATH);
     const itemId = nonEmptyString(args.itemId, DEFAULT_ITEM_ID);
@@ -32,7 +32,9 @@ export const playwrightSample_web_openDuplicateProductDetail = trailblaze.tool<O
     await ctx.tools.web_click({
       ref: `css=[data-id='${itemId}'] button`,
     });
-    await ctx.tools.web_verifyTextVisible({ text: expectedCategory });
+    await ctx.tools.web_verifyElementVisible({
+      ref: `css=#detail-category:text-is(${JSON.stringify(expectedCategory)})`,
+    });
 
     return `Opened duplicate-list item ${itemId} and verified category "${expectedCategory}".`;
   },

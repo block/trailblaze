@@ -18,15 +18,11 @@ import xyz.block.trailblaze.util.Console
  */
 @Serializable
 @TrailblazeToolClass("revyl_tap")
-@LLMDescription(
-  "Tap a UI element on the device screen. Describe the element in natural language " +
-    "(e.g. 'Sign In button', 'search icon', 'first product card'). " +
-    "Set longPress to true for a long-press gesture.",
-)
+@LLMDescription("Tap or long-press an element.")
 data class RevylNativeTapTool(
-  @param:LLMDescription("Element to tap, described in natural language.")
+  @param:LLMDescription("Element to tap, in natural language, e.g. 'Sign In button'.")
   val target: String,
-  @param:LLMDescription("If true, perform a long-press instead of a tap.")
+  @param:LLMDescription("Long-press instead of tap.")
   val longPress: Boolean = false,
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {

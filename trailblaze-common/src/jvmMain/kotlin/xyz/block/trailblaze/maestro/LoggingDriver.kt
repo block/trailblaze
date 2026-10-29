@@ -6,6 +6,9 @@ import maestro.DeviceInfo
 import maestro.Driver
 import maestro.KeyCode
 import maestro.Point
+import maestro.orchestra.MaestroCommand
+import maestro.orchestra.TapOnElementCommand
+import maestro.orchestra.TapOnPointV2Command
 import maestro.ScreenRecording
 import maestro.SwipeDirection
 import maestro.TreeNode
@@ -17,6 +20,8 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
+import xyz.block.trailblaze.utils.Ext.asJsonObject
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
@@ -33,7 +38,41 @@ class LoggingDriver(
   private val screenStateProvider: () -> ScreenState,
   private val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
+  private val sensitiveValues: Collection<String> = emptyList(),
+  /**
+   * False while running a batch that contains a repeated tap (a double-tap): taps are then logged
+   * without screen capture, because a capture or screenshot write between the taps can stretch
+   * their gap past the platform's double-tap window and turn one double-tap into two single taps.
+   */
+  private val captureScreenPerTap: Boolean = true,
+  /** Resolved before a repeated tap starts so no device round trip lands between its taps. */
+  private val prefetchedDeviceInfo: DeviceInfo? = null,
 ) : Driver {
+
+  /** A batch-local wrapper avoids sharing credentials between concurrent host command batches. */
+  fun forMaestroBatch(commands: List<MaestroCommand>): LoggingDriver {
+    val values = commands.flatMap { maestroLaunchArgumentSecrets(it.asJsonObject()) }
+    val hasRepeatedTap = commands.any { it.hasRepeatedTap() }
+    return if (values.isEmpty() && !hasRepeatedTap) this else LoggingDriver(
+      delegate, screenStateProvider, trailblazeLogger, sessionProvider, values,
+      captureScreenPerTap = !hasRepeatedTap,
+      prefetchedDeviceInfo = if (hasRepeatedTap) delegate.deviceInfo() else null,
+    )
+  }
+
+  private fun MaestroCommand.hasRepeatedTap(): Boolean {
+    val repeat = when (val command = asCommand()) {
+      is TapOnPointV2Command -> command.repeat
+      is TapOnElementCommand -> command.repeat
+      else -> null
+    }
+    return (repeat?.repeat ?: 1) > 1
+  }
+
+  private fun AgentDriverAction.safeForLog(): AgentDriverAction = when (this) {
+    is AgentDriverAction.EnterText -> copy(text = redactSensitiveValuesIn(text, sensitiveValues))
+    else -> this
+  }
 
   private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
     Console.log("Maestro-${delegate::class.java.simpleName}-$name()")
@@ -78,7 +117,7 @@ class LoggingDriver(
         (screenState as? xyz.block.trailblaze.api.MigrationScreenState)
           ?.driverMigrationTreeNode,
       screenshotFile = screenshotFilename,
-      action = action,
+      action = action.safeForLog(),
       durationMs = executionTimeMs,
       timestamp = startTime,
       session = session.sessionId,
@@ -88,8 +127,17 @@ class LoggingDriver(
     trailblazeLogger.log(session, log)
   }
 
-  private fun logActionWithoutScreenshot(action: AgentDriverAction, block: () -> Unit = {}) {
-    val deviceInfo = delegate.deviceInfo()
+  /**
+   * [gridDimensions] logs Maestro's grid size instead of the pixel size: an action whose
+   * coordinates are grid points (a tap) must carry the same coordinate space the screen-captured
+   * logs use, or the report places its marker by the wrong scale.
+   */
+  private fun logActionWithoutScreenshot(
+    action: AgentDriverAction,
+    gridDimensions: Boolean = false,
+    block: () -> Unit = {},
+  ) {
+    val deviceInfo = prefetchedDeviceInfo ?: delegate.deviceInfo()
     val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
       traceMaestroDriverAction(action) {
@@ -102,12 +150,12 @@ class LoggingDriver(
     val log = TrailblazeLog.AgentDriverLog(
       viewHierarchy = null,
       screenshotFile = null,
-      action = action,
+      action = action.safeForLog(),
       durationMs = executionTimeMs,
       timestamp = startTime,
       session = session.sessionId,
-      deviceWidth = deviceInfo.widthPixels,
-      deviceHeight = deviceInfo.heightPixels,
+      deviceWidth = if (gridDimensions) deviceInfo.widthGrid else deviceInfo.widthPixels,
+      deviceHeight = if (gridDimensions) deviceInfo.heightGrid else deviceInfo.heightPixels,
     )
     trailblazeLogger.log(session, log)
   }
@@ -166,8 +214,12 @@ class LoggingDriver(
     delegate.isShutdown()
   }
 
-  override fun isUnicodeInputSupported(): Boolean = traceMaestroDriver("isUnicodeInputSupported") {
-    delegate.isUnicodeInputSupported()
+  override fun isDarkModeEnabled(): Boolean = traceMaestroDriver("isDarkModeEnabled") {
+    delegate.isDarkModeEnabled()
+  }
+
+  override fun setDarkMode(enabled: Boolean) = traceMaestroDriver("setDarkMode") {
+    delegate.setDarkMode(enabled)
   }
 
   override fun killApp(appId: String) = logActionWithoutScreenshot(AgentDriverAction.KillApp(appId)) {
@@ -197,8 +249,7 @@ class LoggingDriver(
   }
 
   override fun setPermissions(appId: String, permissions: Map<String, String>) {
-    val filteredPermissions = permissions.filter { it.key != "all" }
-    if (filteredPermissions.isNotEmpty()) {
+    if (permissions.isNotEmpty()) {
       logActionWithoutScreenshot(
         AgentDriverAction.GrantPermissions(
           appId = appId,
@@ -289,8 +340,13 @@ class LoggingDriver(
     )
   }
 
-  override fun tap(point: Point) = logActionWithScreenshot(AgentDriverAction.TapPoint(point.x, point.y)) {
-    delegate.tap(point)
+  override fun tap(point: Point) {
+    val action = AgentDriverAction.TapPoint(point.x, point.y)
+    if (captureScreenPerTap) {
+      logActionWithScreenshot(action) { delegate.tap(point) }
+    } else {
+      logActionWithoutScreenshot(action, gridDimensions = true) { delegate.tap(point) }
+    }
   }
 
   override fun waitForAppToSettle(

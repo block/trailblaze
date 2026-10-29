@@ -13,19 +13,17 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("compose_scroll")
 @LLMDescription(
   """
-Scroll a scrollable container to bring content into view.
-Identify the container using its element ID or text.
-Leave all identifiers empty to scroll the first scrollable container found.
+Scroll a container to an item index. Identify the container by elementId, testTag, or text; omit all to use the first scrollable container.
 """,
 )
 data class ComposeScrollTool(
-  @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e2'.")
+  @param:LLMDescription("Container element ID, e.g. 'e2'.")
   val elementId: String? = null,
-  @param:LLMDescription("Accessibility identifier of the scrollable container.")
+  @param:LLMDescription("Container testTag.")
   val testTag: String? = null,
-  @param:LLMDescription("The text content to scroll towards.")
+  @param:LLMDescription("Container text, exact whole-text match.")
   val text: String? = null,
-  @param:LLMDescription("Index to scroll to within the scrollable container. Defaults to 0.")
+  @param:LLMDescription("Item index to scroll to (default 0).")
   val index: Int = 0,
 ) : ComposeExecutableTool {
 

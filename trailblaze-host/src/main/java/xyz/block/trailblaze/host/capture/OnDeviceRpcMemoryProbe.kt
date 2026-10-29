@@ -1,6 +1,9 @@
 package xyz.block.trailblaze.host.capture
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.capture.memory.AdbMemoryProbe
 import xyz.block.trailblaze.capture.memory.AppMemoryLimits
 import xyz.block.trailblaze.capture.memory.AppMemorySample
@@ -35,6 +38,7 @@ class OnDeviceRpcMemoryProbe(
   rpc: ((deviceId: String, request: GetMemoryInfoRequest) -> RpcResult<GetMemoryInfoResponse>)? = null,
   private val clock: () -> Long = System::currentTimeMillis,
   private val backoffMs: Long = DEFAULT_BACKOFF_MS,
+  private val finalReadBudgetMs: Long = FINAL_READ_BUDGET_MS,
 ) : MemoryProbe {
 
   private val clients = mutableMapOf<String, OnDeviceRpcClient>()
@@ -43,10 +47,24 @@ class OnDeviceRpcMemoryProbe(
   private val unreachableCountByDevice = mutableMapOf<String, Int>()
   private var announced = false
 
-  override fun read(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? {
+  override fun read(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
+    readWithin(deviceId, appId, forceGc, budgetMs = null)
+
+  /**
+   * The closing reading gets [finalReadBudgetMs] instead of the request's full timeout. A runner
+   * that has not answered by then is not going to answer quickly, and the session's end is waiting.
+   * Measured on an in-process runner after the trail: the request took the whole 5 s
+   * [GetMemoryInfoRequest.TIMEOUT_MS] and then the final row came from adb in about 0.5 s anyway.
+   */
+  override fun readFinal(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
+    readWithin(deviceId, appId, forceGc, budgetMs = finalReadBudgetMs)
+
+  private fun readWithin(deviceId: String, appId: String?, forceGc: Boolean, budgetMs: Long?): MemorySnapshot? {
     val now = clock()
     if ((backoffUntilByDevice[deviceId] ?: 0L) > now) return fallback.read(deviceId, appId, forceGc)
-    return when (val result = rpc(deviceId, GetMemoryInfoRequest(appId = appId, forceGc = forceGc))) {
+    val request = GetMemoryInfoRequest(appId = appId, forceGc = forceGc)
+    val result = if (budgetMs == null) rpc(deviceId, request) else rpcWithin(budgetMs) { rpc(deviceId, request) }
+    return when (result) {
       is RpcResult.Success -> {
         unreachableCountByDevice.remove(deviceId)
         if (!announced) {
@@ -69,6 +87,20 @@ class OnDeviceRpcMemoryProbe(
       }
     }
   }
+
+  /**
+   * [call] with a deadline. The call blocks a thread, so it runs interruptibly and is interrupted at
+   * the deadline: the real runner call is a `runBlocking`, which an interrupt cancels.
+   */
+  private fun rpcWithin(
+    budgetMs: Long,
+    call: () -> RpcResult<GetMemoryInfoResponse>,
+  ): RpcResult<GetMemoryInfoResponse> = runBlocking {
+    withTimeoutOrNull(budgetMs) { runInterruptible(Dispatchers.IO) { call() } }
+  } ?: RpcResult.Failure(
+    errorType = RpcResult.ErrorType.NETWORK_ERROR,
+    message = "no answer within ${budgetMs}ms",
+  )
 
   override fun close() {
     synchronized(clients) {
@@ -134,6 +166,12 @@ class OnDeviceRpcMemoryProbe(
 
     /** How long a device with no reachable runner is read over adb before the runner is tried again. */
     const val DEFAULT_BACKOFF_MS: Long = 15_000
+
+    /**
+     * How long the closing reading waits for the runner before reading over adb. A healthy runner
+     * answers in a few hundred milliseconds (about 0.1 s standalone, 0.4 s in-process).
+     */
+    const val FINAL_READ_BUDGET_MS: Long = 1_500
 
     /** Consecutive unreachable attempts after which the runner is not asked again by this probe. */
     const val MAX_UNREACHABLE_ATTEMPTS: Int = 3

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Install the trailblaze CLI from a `trailblaze.jar` + `trailblaze` (launcher)
-# artifact pair previously uploaded by the upstream `build-uber-jar` job in
+# Install the trailblaze CLI from a `trailblaze.jar` artifact (plus, for older
+# builds, a sibling `trailblaze` launcher) previously uploaded by the upstream
+# `build-uber-jar` job in
 # `.github/workflows/pr-checks.yml` (and sibling workflows). Mirrors
 # `install-trailblaze-source.sh`'s install logic (lay down JAR + launcher,
 # write wrapper, symlink onto $PATH) but skips the Gradle build — used by
@@ -17,8 +18,9 @@
 #
 # Expected input: the caller has already run
 #   actions/download-artifact@v4 with name: trailblaze-uber-jar
-# so `${PWD}/trailblaze.jar` and `${PWD}/trailblaze` (the launcher script)
-# exist in the workflow's working directory. Override the download
+# so `${PWD}/trailblaze.jar` exists in the workflow's working directory. The
+# launcher is extracted from it; a sibling `${PWD}/trailblaze` is used only when
+# the JAR predates the embedded launcher. Override the download
 # directory by setting `TRAILBLAZE_ARTIFACT_DIR=<path>` before running.
 #
 # Always uninstalls any prior trailblaze install first (a stale binary from
@@ -28,6 +30,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=extract-jar-entry.sh
+source "${SCRIPT_DIR}/extract-jar-entry.sh"
 
 INSTALL_DIR="${HOME}/.trailblaze/install"
 ARTIFACT_DIR="${TRAILBLAZE_ARTIFACT_DIR:-$(pwd)}"
@@ -38,6 +42,13 @@ if command -v brew >/dev/null 2>&1; then
   BIN_DIR="$(brew --prefix)/bin"
 else
   BIN_DIR="/usr/local/bin"
+fi
+
+# The launcher comes out of the JAR, or from a sibling file for an older JAR. Refuse before
+# removing the existing install if neither can work.
+if ! jar_extractor_available && [ ! -s "${ARTIFACT_DIR}/trailblaze" ]; then
+  echo "Error: installing needs unzip, bsdtar, or python3 to extract the launcher from the JAR." >&2
+  exit 1
 fi
 
 # ── Uninstall prior install ─────────────────────────────────────────────────
@@ -69,21 +80,25 @@ if [ ! -s "$JAR_SRC" ]; then
   echo "  to have been downloaded into ${ARTIFACT_DIR} before this script ran." >&2
   exit 1
 fi
-if [ ! -s "$LAUNCHER_SRC" ]; then
-  echo "Error: ${LAUNCHER_SRC} is missing or empty." >&2
-  echo "  The trailblaze-uber-jar artifact should contain both the JAR and" >&2
-  echo "  the launcher script (laid down side-by-side by the releaseArtifacts" >&2
-  echo "  Gradle task). Check the upstream build-uber-jar job upload step." >&2
-  exit 1
-fi
 echo "Found artifact:"
 echo "  JAR:      ${JAR_SRC} ($(du -h "$JAR_SRC" | cut -f1))"
-echo "  Launcher: ${LAUNCHER_SRC}"
 
 # ── Install into ~/.trailblaze/install/ ─────────────────────────────────────
+# The launcher comes out of the JAR (its `trailblaze-launcher` entry), so it is
+# always the one that JAR was built with. The sibling `trailblaze` file is the
+# fallback for a JAR built before the launcher was embedded.
 mkdir -p "$INSTALL_DIR"
 cp "$JAR_SRC" "${INSTALL_DIR}/trailblaze.jar"
-cp "$LAUNCHER_SRC" "${INSTALL_DIR}/trailblaze-launcher"
+if extract_jar_entry "${INSTALL_DIR}/trailblaze.jar" trailblaze-launcher "${INSTALL_DIR}/trailblaze-launcher"; then
+  echo "  Launcher: extracted from the JAR"
+elif [ -s "$LAUNCHER_SRC" ]; then
+  echo "  Launcher: ${LAUNCHER_SRC}"
+  cp "$LAUNCHER_SRC" "${INSTALL_DIR}/trailblaze-launcher"
+else
+  echo "Error: ${JAR_SRC} has no 'trailblaze-launcher' entry and ${LAUNCHER_SRC} is missing." >&2
+  echo "  Check the upstream build-uber-jar job's upload step." >&2
+  exit 1
+fi
 chmod 755 "${INSTALL_DIR}/trailblaze-launcher"
 
 # Wrapper script — matches install-trailblaze-source.sh exactly. The launcher

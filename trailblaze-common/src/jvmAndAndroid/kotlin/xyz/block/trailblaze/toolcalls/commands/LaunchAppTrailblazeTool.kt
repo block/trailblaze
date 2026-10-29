@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
@@ -14,6 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Decides whether an Android launch actually took, re-issuing it once when it didn't.
@@ -157,7 +157,7 @@ internal sealed interface ForegroundVerdict {
  * in the call:
  * - To open an app as-is: `openApp` ([OpenAppTrailblazeTool]).
  * - To start a test from a known state: the target's trailhead, composing `mobile_clearAppData`,
- *   `android_forceStop` / `ios_terminate`, `android_grantPermissions` / `ios_grantPrivacy`, then
+ *   `android_forceStop` / `ios_terminate`, `android_grantPermissions` / `ios_setPermissions`, then
  *   `openApp`. Mode by mode: `RESUME` → `openApp`; `FORCE_RESTART` → force-stop/terminate, then
  *   `openApp`; `REINSTALL` → `mobile_clearAppData`, then `openApp` (plus whatever grants the app
  *   needs, which this tool used to apply on iOS without saying so).
@@ -215,7 +215,7 @@ Available App Launch Modes:
         // The poll blocks (PollingUtils sleeps the calling thread), so it must not run on the
         // caller's dispatcher.
         awaitForeground = { maxWaitMs ->
-          runBlocking(Dispatchers.IO) {
+          runBlocking(TrailblazeDispatchers.IO) {
             androidDeviceCommandExecutor.waitUntilAppInForeground(
               appId = appId,
               maxWaitMs = maxWaitMs,

@@ -4,11 +4,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { SurveySession, purposeOf, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
+import { SurveySession, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFinding, runSurveys, renderMarkdown, targetsOf } from "./index.js";
 import { redactUrl } from "./session.js";
+import { withId } from "./survey.js";
 
 const LOG = "xyz.block.trailblaze.logs.client.TrailblazeLog";
 const STATUS = "xyz.block.trailblaze.logs.model.SessionStatus";
@@ -176,7 +177,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe("loading a session", () => {
   test("hash-named log files are ordered by record time, and the metadata sidecar is ignored", () => {
     const s = SurveySession.load(hashed);
-    expect(s.logs.all().map((l) => l.type)).toEqual([
+    expect(s.trailblazeLogs.all().map((l) => l.type)).toEqual([
       "TrailblazeSessionStatusChangeLog",
       "ObjectiveStartLog",
       "TrailblazeToolLog",
@@ -311,7 +312,7 @@ describe("loading a session", () => {
     const s = SurveySession.load(hashed);
     const g = /tapOn/g;
     expect(s.tools.filter({ name: g }).length).toBe(2);
-    expect(s.logs.filter({ contains: /tapOn/g }).length).toBe(2);
+    expect(s.trailblazeLogs.filter({ contains: /tapOn/g }).length).toBe(2);
   });
 });
 
@@ -354,6 +355,28 @@ describe("analytics and other streams", () => {
     expect(s.analytics.has({ name: "Payment Complete", properties: { payment_id: "p-2" } })).toBe(false);
   });
 
+  test("ofType keeps only the Trailblaze logs of the types it names, and any verb takes a plain function", () => {
+    const s = SurveySession.load(hashed);
+    const taps = s.trailblazeLogs.ofType("TrailblazeToolLog").filter((r) => r.log.toolName === "tapOn");
+    expect(taps.map((r) => [r.type, r.log.toolName])).toEqual([["TrailblazeToolLog", "tapOn"], ["TrailblazeToolLog", "tapOn"]]);
+    expect(s.trailblazeLogs.ofType("ObjectiveStartLog", "ObjectiveCompleteLog").all().map((r) => r.type)).toEqual(["ObjectiveStartLog", "ObjectiveCompleteLog", "ObjectiveStartLog", "ObjectiveCompleteLog"]);
+    expect(s.tools.count((t) => t.name === "tapOn")).toBe(2);
+    expect(s.trailblazeLogs.findLast((r) => r.type === "TrailblazeSessionStatusChangeLog")).toBe(s.trailblazeLogs.findLast({ type: "TrailblazeSessionStatusChangeLog" }));
+  });
+
+  test("`logs` is the old name of the Trailblaze logs, not a second list", () => {
+    const s = SurveySession.load(hashed);
+    expect(s.logs).toBe(s.trailblazeLogs);
+  });
+
+  test("a stream read with a named shape hands back its rows typed, as they were captured", () => {
+    const s = SurveySession.load(hashed);
+    const crashes = s.stream<{ reason: string }>("crash");
+    // The shape only types the rows; they are the captured ones, unchanged.
+    expect(crashes.map((c) => c.data.reason.toLowerCase())).toEqual(["sigsegv"]);
+    expect(crashes).toEqual(s.stream("crash"));
+  });
+
   test("unparseable property strings keep the event and expose the raw text", () => {
     const s = SurveySession.load(hashed);
     const broken = s.analytics.find({ name: "Broken Properties" });
@@ -367,6 +390,36 @@ describe("analytics and other streams", () => {
     expect(s.events.has({ stream: "crash", data: { reason: "SIGSEGV" } })).toBe(true);
     expect(s.screenText.has({ text: /^Total \$/ })).toBe(true);
     expect(s.deviceLog.has({ text: "fatal signal" })).toBe(true);
+  });
+
+  test("XCTest's logging inside the app is left out of an iOS device log, continuation lines too", () => {
+    const dir = join(root, "ios-xctest-chatter");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "001_TrailblazeToolLog.json"), JSON.stringify(toolLog(1_700_000_400_000, "tapOn", {})));
+    writeFileSync(join(dir, "device.log"), [
+      "Timestamp               Ty Process[PID:TID]",
+      "2026-10-15 11:44:54.364 Df Sample[7:a1] [com.apple.dt.xctest:Default] Other faulted in {",
+      '    "XC_kAXXCAttributeChildren" = ();',
+      "}: (no error)",
+      "2026-10-15 11:44:54.365 Df Sample[7:a1] [com.example.sample:payments] payment complete",
+      "    receipt sent",
+      "2026-10-15 11:44:54.366 Df Sample[7:a1] [com.apple.dt.xctest:Default] Got attributes",
+      // A dotted sub-subsystem, which the capture's prefix match leaves out too.
+      "2026-10-15 11:44:54.366 Df Sample[7:a1] [com.apple.dt.xctest.automation:Default] Snapshot",
+      // The app's own entry, quoting XCTest output in its message, stays.
+      "2026-10-15 11:44:54.367 E  Sample[7:a1] [com.example.sample:diagnostics] Previous error: [com.apple.dt.xctest:Default] query failed",
+      "    retrying",
+    ].join("\n") + "\n");
+    const lines = SurveySession.load(dir).deviceLog.all();
+    expect(lines.map((l) => l.text)).toEqual([
+      "Timestamp               Ty Process[PID:TID]",
+      "2026-10-15 11:44:54.365 Df Sample[7:a1] [com.example.sample:payments] payment complete",
+      "    receipt sent",
+      "2026-10-15 11:44:54.367 E  Sample[7:a1] [com.example.sample:diagnostics] Previous error: [com.apple.dt.xctest:Default] query failed",
+      "    retrying",
+    ]);
+    // Still the file's line numbers, so evidence points at the line that holds it.
+    expect(lines.map((l) => l.line)).toEqual([1, 5, 6, 9, 10]);
   });
 
   test("a capture written as a repeat of an earlier screen still shows that screen, at its own time", () => {
@@ -476,126 +529,165 @@ describe("analytics and other streams", () => {
 });
 
 describe("surveys and the runner", () => {
-  const paid = survey({ feature: "sample.payment", description: "A payment completed" }, (session) => {
-    const req = session.network.find({ method: "POST", path: "/v1/orders/checkout", status: "ok" });
-    const evt = session.analytics.find({ name: "Payment Complete" });
-    if (!req || !evt) return;
-    return { summary: `Paid ${String(evt.properties.amount)}`, evidence: [req, evt], data: { paymentId: evt.properties.payment_id } };
-  });
-  const crashed = survey({ feature: "sample.crashed", footprint: { summary: "Crashed", events: { stream: "crash" } } });
-  const cleanRun = survey({ feature: "sample.clean-run", footprint: { tools: { successful: true }, absent: { events: { stream: "crash" } } } });
-  const iosOnly = survey({ feature: "sample.ios", platforms: ["ios"], footprint: { tools: {} } });
-  const broken = survey({ feature: "sample.broken" }, () => {
-    throw new Error("survey bug");
-  });
+  // Discovery names a survey by its export; a survey built in a test gets its name the same way.
+  const paid = withId(
+    survey({ description: "A payment completed" }, (session) => {
+      const req = session.network.find({ method: "POST", path: "/v1/orders/checkout", status: "ok" });
+      const evt = session.analytics.find({ name: "Payment Complete" });
+      if (!req || !evt) return;
+      return { summary: `Paid ${String(evt.properties.amount)}`, evidence: [req, evt], data: { paymentId: evt.properties.payment_id } };
+    }),
+    "paid",
+  );
+  const crashed = withId(survey({ finding: { summary: "Crashed", events: { stream: "crash" } } }), "crashed");
+  const cleanRun = withId(survey({ description: "Ran clean", finding: { tools: { successful: true }, absent: { events: { stream: "crash" } } } }), "cleanRun");
+  const iosOnly = withId(survey({ description: "Ran on iOS", platforms: ["ios"], finding: { tools: {} } }), "iosOnly");
+  const broken = withId(
+    survey({}, () => {
+      throw new Error("survey bug");
+    }),
+    "broken",
+  );
+  const surveysFound = (r: { findings: Array<{ survey: string }> }) => r.findings.map((f) => f.survey).sort();
 
-  test("findings carry the feature, the survey, evidence with file locations, and data", async () => {
+  test("findings carry their survey, evidence with file locations, and the data the survey gave them", async () => {
     const report = await runSurveys({ surveys: [paid, crashed, cleanRun, iosOnly, broken], sessions: [hashed, sequential] });
     const ci = report.sessions.find((s) => s.session.id === "ci-session-42")!;
-    const payment = ci.findings.find((f) => f.feature === "sample.payment")!;
-    expect(payment).toMatchObject({ survey: "sample.payment", summary: "Paid 500", data: { paymentId: "p-1" } });
+    const payment = ci.findings.find((f) => f.survey === "paid")!;
+    expect(payment).toEqual({ survey: "paid", session: "ci-session-42", summary: "Paid 500", evidence: expect.any(Array), data: { paymentId: "p-1" } });
     expect(payment.evidence.map((e) => `${e.kind}:${e.file}:${e.line}`)).toEqual(["network:network.ndjson:1", "analytics:events/app.analytics.ndjson:1"]);
   });
 
   test("rules require every query to match and honour absent queries and platform filters", async () => {
     const report = await runSurveys({ surveys: [crashed, cleanRun, iosOnly], sessions: [hashed, sequential] });
     const byId = Object.fromEntries(report.sessions.map((s) => [s.session.id, s]));
-    expect(byId["ci-session-42"]!.findings.map((f) => f.feature).sort()).toEqual(["sample.crashed"]);
-    expect(byId["seq"]!.findings.map((f) => f.feature).sort()).toEqual(["sample.clean-run", "sample.ios"]);
-    expect(byId["ci-session-42"]!.skipped).toContain("sample.ios");
+    expect(surveysFound(byId["ci-session-42"]!)).toEqual(["crashed"]);
+    expect(surveysFound(byId["seq"]!)).toEqual(["cleanRun", "iosOnly"]);
+    expect(byId["ci-session-42"]!.skipped).toContain("iosOnly");
   });
 
-  test("one matching absent query vetoes the footprint even when its other absent queries miss", async () => {
-    const strict = survey({ feature: "sample.strict", footprint: { tools: {}, absent: { events: { stream: "crash" }, analytics: { name: "never-logged" } } } });
+  test("one matching absent query vetoes the finding even when its other absent queries miss", async () => {
+    const strict = withId(survey({ description: "Strict", finding: { tools: {}, absent: { events: { stream: "crash" }, analytics: { name: "never-logged" } } } }), "strict");
     const report = await runSurveys({ surveys: [strict], sessions: [hashed, sequential] });
     const byId = Object.fromEntries(report.sessions.map((s) => [s.session.id, s]));
     expect(byId["ci-session-42"]!.findings).toEqual([]);
-    expect(byId["seq"]!.findings.map((f) => f.feature)).toEqual(["sample.strict"]);
-  });
-
-  test("a never-matched footprint keeps its own kind in the feature table", async () => {
-    const mixed = survey({ feature: "sample.mixed", footprints: { "sample.seen": { tools: {} }, "sample.gap": { kind: "gap", analytics: { name: "never-logged" } } } });
-    const report = await runSurveys({ surveys: [mixed], sessions: [sequential] });
-    expect(report.features.map((f) => [f.feature, f.kind, f.findings])).toEqual([
-      ["sample.seen", "feature", 1],
-      ["sample.gap", "gap", 0],
-    ]);
+    expect(surveysFound(byId["seq"]!)).toEqual(["strict"]);
   });
 
   test("a throwing survey is reported per session and does not stop the others", async () => {
     const report = await runSurveys({ surveys: [broken, crashed], sessions: [hashed] });
     const only = report.sessions[0]!;
-    expect(only.errors).toEqual([expect.objectContaining({ survey: "sample.broken", message: expect.stringContaining("survey bug") })]);
-    expect(only.findings.map((f) => f.feature)).toEqual(["sample.crashed"]);
+    expect(only.errors).toEqual([{ survey: "broken", message: expect.stringContaining("survey bug") }]);
+    expect(surveysFound(only)).toEqual(["crashed"]);
+  });
+
+  test("ctx.error reports a failure as the session's error and keeps what the handler still found", async () => {
+    const partial = withId(
+      survey({}, (session, ctx) => {
+        ctx.error?.("odd Message");
+        return { summary: "The other check still ran", evidence: [session.stream("crash")[0]!] };
+      }),
+      "partial",
+    );
+    const only = (await runSurveys({ surveys: [partial], sessions: [hashed] })).sessions[0]!;
+    expect(only.errors).toEqual([{ survey: "partial", message: "odd Message" }]);
+    expect(only.findings.map((f) => f.summary)).toEqual(["The other check still ran"]);
   });
 
   test("a finding with no evidence is rejected, so nothing reaches the report unproven", async () => {
-    const unproven = survey({ feature: "sample.unproven" }, () => ({ summary: "The run looked fine to me", evidence: [] }));
+    const unproven = withId(survey({}, () => ({ summary: "The run looked fine to me", evidence: [] })), "unproven");
     const report = await runSurveys({ surveys: [unproven, crashed], sessions: [hashed] });
     const only = report.sessions[0]!;
-    expect(only.errors).toEqual([expect.objectContaining({ survey: "sample.unproven", message: expect.stringContaining("no evidence") })]);
-    expect(only.findings.map((f) => f.feature)).toEqual(["sample.crashed"]);
+    expect(only.errors).toEqual([expect.objectContaining({ survey: "unproven", message: expect.stringContaining("no evidence") })]);
+    expect(surveysFound(only)).toEqual(["crashed"]);
   });
 
-  test("the feature summary counts sessions once even when a survey reports several findings", async () => {
-    const twice = survey({ feature: "sample.twice" }, (session) => session.tools.filter({ name: "tapOn" }).map((t) => ({ summary: t.summary, evidence: [t] })));
+  test("a survey's row counts each session once even when it reports several findings there", async () => {
+    const twice = withId(survey({ description: "Each tap" }, (session) => session.tools.filter({ name: "tapOn" }).map((t) => ({ summary: t.summary, evidence: [t] }))), "taps");
     const report = await runSurveys({ surveys: [twice], sessions: [hashed, sequential] });
-    expect(report.features).toEqual([expect.objectContaining({ feature: "sample.twice", sessionsMatched: 1, sessionIds: ["ci-session-42"] })]);
-    expect(report.features[0]!.findings).toBe(2);
-    expect(renderMarkdown(report)).toContain("| sample.twice | 1/2 | 2 | sample.twice |");
+    expect(report.surveys).toEqual([{ id: "taps", description: "Each tap", sessionsMatched: 1, sessionIds: ["ci-session-42"], findings: 2, labels: 0 }]);
+    expect(renderMarkdown(report)).toContain("| taps | 1/2 | 2 | Each tap |");
   });
 
   test("a markdown cell escapes a backslash before it escapes a pipe, so neither can break the table", async () => {
     // A summary that already carries an escaped pipe: `a\|b`. Escaping the pipe alone would
     // produce `a\\|b`, which markdown reads as a literal backslash followed by a column break.
-    const tricky = survey({ feature: "sample.tricky" }, (session) => session.tools.filter({ name: "tapOn" }).slice(0, 1)
-      .map((t) => ({ summary: "a\\|b", evidence: [t] })));
+    const tricky = withId(survey({}, (session) => session.tools.filter({ name: "tapOn" }).slice(0, 1)
+      .map((t) => ({ summary: "a\\|b", evidence: [t] }))), "tricky");
     const report = await runSurveys({ surveys: [tricky], sessions: [hashed] });
     expect(renderMarkdown(report)).toContain("— a\\\\\\|b");
   });
 
-  test("one survey can declare many features and reports each that matched under its own id", async () => {
-    const catalog = survey({
-      feature: "sample.catalog",
-      description: "Sample feature catalog",
-      footprints: {
-        checkout: { summary: "Checked out", network: { method: "POST", path: "/v1/orders/checkout", status: "ok" } },
-        "crash-free": { kind: "quality", tools: { successful: true }, absent: { events: { stream: "crash" } } },
-        never: { analytics: { name: "No Such Event" } },
-      },
-    });
-    const report = await runSurveys({ surveys: [catalog], sessions: [hashed, sequential] });
-    const byId = Object.fromEntries(report.sessions.map((s) => [s.session.id, s]));
-    expect(byId["ci-session-42"]!.findings.map((f) => [f.feature, f.kind, f.summary, f.survey])).toEqual([["checkout", "feature", "Checked out", "sample.catalog"]]);
-    expect(byId["seq"]!.findings.map((f) => [f.feature, f.kind, f.summary])).toEqual([["crash-free", "quality", "crash-free"]]);
-    // Declared features are report rows even at zero matches; the survey's family name is not.
-    expect(report.features.map((f) => `${f.feature}:${f.kind}:${f.sessionsMatched}`)).toEqual(["checkout:feature:1", "crash-free:quality:1", "never:feature:0"]);
-    expect(report.surveys[0]).toMatchObject({ id: "sample.catalog", features: ["checkout", "crash-free", "never"] });
-    expect(renderMarkdown(report)).toContain("| crash-free | quality | 1/2 | 1 | sample.catalog |");
-    expect(() => survey({ feature: "sample.empty", footprints: {} })).toThrow(/no entries/);
-    expect(() => survey({ feature: "sample.both", footprint: { tools: {} }, footprints: { a: { tools: {} } } })).toThrow(/use one/);
-    // An empty query list is not a query: unrejected, it would match every session with no evidence.
-    expect(() => survey({ feature: "sample.hollow", footprint: { network: [] } })).toThrow(/no queries/);
-    expect(() => survey({ feature: "sample.hollow", footprints: { a: { network: [], analytics: [] } } })).toThrow(/no queries/);
-    expect(matchFootprint(SurveySession.load(hashed), { network: [], analytics: { name: "No Such Event" } })).toBeUndefined();
-  });
-
-  test("a handler can place each finding under a feature and kind of its own", async () => {
-    const perTool = survey({ feature: "sample.tools", kind: "gap", features: ["tool.tapOn", "tool.swipe"] }, (session) =>
-      session.tools.filter({ name: "tapOn" }).map((t) => ({ feature: `tool.${t.name}`, summary: t.summary, evidence: [t] })),
+  test("a finding's data is whatever its survey chose, carried to the report as given", async () => {
+    interface Journey { journey: { variant: string; tags: string[] } }
+    const journey = withId(
+      survey<Journey>({ description: "Payment completed and the app logged it" }, (session) => {
+        const evt = session.analytics.find({ name: "Payment Complete" });
+        if (!evt) return;
+        return { summary: "Payment logged", evidence: [evt], data: { journey: { variant: "card", tags: ["fast"] } } };
+      }),
+      "paymentJourney",
     );
-    const report = await runSurveys({ surveys: [perTool], sessions: [hashed] });
-    expect(report.sessions[0]!.findings.map((f) => [f.feature, f.kind])).toEqual([["tool.tapOn", "gap"], ["tool.tapOn", "gap"]]);
-    expect(report.features.find((f) => f.feature === "tool.tapOn")).toMatchObject({ kind: "gap", sessionsMatched: 1, findings: 2, surveys: ["sample.tools"] });
-    // Declared but unreported features are rows; the family name is not one when features are declared.
-    expect(report.features.map((f) => `${f.feature}:${f.sessionsMatched}`)).toEqual(["tool.tapOn:1", "tool.swipe:0"]);
-    expect(renderMarkdown(report)).toContain("**gap: tool.tapOn**");
+    const report = await runSurveys({ surveys: [journey], sessions: [hashed, sequential] });
+    const [finding, ...rest] = report.sessions.flatMap((s) => s.findings);
+    expect(rest).toEqual([]);
+    expect(finding).toEqual({ survey: "paymentJourney", session: "ci-session-42", summary: "Payment logged", evidence: [expect.objectContaining({ kind: "analytics" })], data: { journey: { variant: "card", tags: ["fast"] } } });
+    const md = renderMarkdown(report);
+    expect(md).toContain("| paymentJourney | 1/2 | 1 | Payment completed and the app logged it |");
+    expect(md).toContain('- **paymentJourney** — Payment logged `{"journey":{"variant":"card","tags":["fast"]}}`');
   });
 
-  test("matchFootprint evaluates one declarative footprint against a loaded session", () => {
+  test("a finding's data reads in the report exactly as its JSON, backslashes, pipes and backticks included", async () => {
+    const odd = withId(survey({}, (session) => session.tools.filter({ name: "tapOn" }).slice(0, 1)
+      .map((t) => ({ summary: "Odd data", evidence: [t], data: { path: "C:\\logs", pick: "a|b", tick: "`x`" } }))), "odd");
+    const report = await runSurveys({ surveys: [odd], sessions: [hashed] });
+    const json = JSON.stringify({ path: "C:\\logs", pick: "a|b", tick: "`x`" });
+    expect(renderMarkdown(report)).toContain(`— Odd data \`\`${json}\`\``);
+  });
+
+  test("ctx.found records a finding with its data, the same as returning it", async () => {
+    const found = withId(
+      survey<{ tool: string }>({}, (session, ctx) => {
+        for (const t of session.tools.filter({ name: "tapOn" }).slice(0, 1)) ctx.found("Tapped", [t], { tool: t.name });
+      }),
+      "tapped",
+    );
+    const report = await runSurveys({ surveys: [found], sessions: [hashed] });
+    expect(report.sessions[0]!.findings.map((f) => [f.survey, f.summary, f.data])).toEqual([["tapped", "Tapped", { tool: "tapOn" }]]);
+  });
+
+  test("a declarative survey takes its summary from its description, carries its finding's data, and needs a query", async () => {
+    const crash = withId(survey({ description: "The app crashed", finding: { events: { stream: "crash" }, data: { severity: "fatal" } } }), "appCrashed");
+    const report = await runSurveys({ surveys: [crash], sessions: [hashed] });
+    expect(report.sessions[0]!.findings.map((f) => [f.survey, f.summary, f.data])).toEqual([["appCrashed", "The app crashed", { severity: "fatal" }]]);
+    // An empty query list is not a query: unrejected, it would match every session with no evidence.
+    expect(() => survey({ description: "Hollow", finding: { network: [] } })).toThrow(/no queries/);
+    expect(() => survey({ description: "Nothing" })).toThrow(/needs a find phase, a label phase, or both/);
+    expect(matchFinding(SurveySession.load(hashed), { network: [], analytics: { name: "No Such Event" } })).toBeUndefined();
+  });
+
+  test("a survey written before findings were free-form still reports its feature, kind and confidence, in data", async () => {
+    // Its spec defaulted `kind`, and its findings set `feature` and `confidence` beside `summary`.
+    const declared = withId(survey({ feature: "app.crash", kind: "feature", finding: { events: { stream: "crash" }, kind: "signal", confidence: "high" } } as never), "crashFinding");
+    const legacy = withId(
+      survey({ kind: "gap" } as never, (session) =>
+        session.tools.filter({ name: "tapOn" }).slice(0, 2).map((t, i) => ({ summary: t.summary, evidence: [t], feature: "tool.tapOn", confidence: "low", ...(i === 1 ? { data: { kind: "own" } } : {}) }) as never),
+      ),
+      "legacyTaps",
+    );
+    const report = await runSurveys({ surveys: [legacy, declared], sessions: [hashed] });
+    expect(report.sessions[0]!.findings.map((f) => [f.summary === "Matched the survey's finding", f.data])).toEqual([
+      [false, { feature: "tool.tapOn", kind: "gap", confidence: "low" }],
+      [false, { feature: "tool.tapOn", kind: "own", confidence: "low" }],
+      [true, { feature: "app.crash", kind: "signal", confidence: "high" }],
+    ]);
+    expect(report.sessions[0]!.findings[0]).not.toHaveProperty("feature");
+  });
+
+  test("matchFinding evaluates one declarative finding against a loaded session", () => {
     const session = SurveySession.load(hashed);
-    expect(matchFootprint(session, { events: { stream: "crash" } })?.map((e) => e.kind)).toEqual(["event"]);
-    expect(matchFootprint(session, { tools: {}, absent: { events: { stream: "crash" } } })).toBeUndefined();
+    expect(matchFinding(session, { events: { stream: "crash" } })?.map((e) => e.kind)).toEqual(["event"]);
+    expect(matchFinding(session, { tools: {}, absent: { events: { stream: "crash" } } })).toBeUndefined();
   });
 
   test("a session filter keeps only matching sessions and lists the rest as excluded", async () => {
@@ -617,14 +709,14 @@ describe("surveys and the runner", () => {
 
 describe("targets", () => {
   test("a survey scoped to a target also runs on sessions that drove one of the target's apps", async () => {
-    const acmeOnly = survey({ feature: "acme.any", targets: ["acme"], footprint: { tools: {} } });
+    const acmeOnly = withId(survey({ description: "Any acme session", targets: ["acme"], finding: { tools: {} } }), "acmeAny");
     // The fixture's trail named `sampleapp`, so without a catalog `acme` is a different target.
     const bare = await runSurveys({ surveys: [acmeOnly], sessions: [hashed] });
-    expect(bare.sessions[0]!.skipped).toEqual(["acme.any"]);
+    expect(bare.sessions[0]!.skipped).toEqual(["acmeAny"]);
     // With a catalog saying acme owns the app the session drove, it belongs to acme too.
     const catalog = { acme: { id: "acme", appIds: ["com.example.sample"], platforms: { android: ["com.example.sample"] } } };
     const withCatalog = await runSurveys({ surveys: [acmeOnly], sessions: [hashed], targets: catalog });
-    expect(withCatalog.sessions[0]!.findings.map((f) => f.feature)).toEqual(["acme.any"]);
+    expect(withCatalog.sessions[0]!.findings.map((f) => f.survey)).toEqual(["acmeAny"]);
     expect(targetsOf(withCatalog.sessions[0]!.session, catalog)).toEqual(["sampleapp", "acme"]);
   });
 
@@ -670,7 +762,7 @@ describe("discovery", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "one.survey.ts"),
-      `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const helper = 1;\nexport const alpha = trailblaze.survey({ feature: "a", footprint: { tools: {} } });\n`,
+      `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const helper = 1;\nexport const alpha = trailblaze.survey({ description: "a", finding: { tools: {} } });\n`,
     );
     writeFileSync(join(dir, "ignored.ts"), `export const beta = 2;\n`);
     const loaded = await loadSurveys([dir]);
@@ -681,7 +773,7 @@ describe("discovery", () => {
     const dir = join(root, "once");
     mkdirSync(dir, { recursive: true });
     const file = join(dir, "solo.survey.ts");
-    writeFileSync(file, `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const solo = trailblaze.survey({ feature: "a", footprint: { tools: {} } });\n`);
+    writeFileSync(file, `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const solo = trailblaze.survey({ description: "a", finding: { tools: {} } });\n`);
     const loaded = await loadSurveys([dir, file]);
     expect(loaded.map((c) => c.definition.id)).toEqual(["solo"]);
   });
@@ -697,6 +789,136 @@ describe("discovery", () => {
     const extractDir = join(root, "zips", "extracted");
     const found = await discoverSessions([join(a, "logs.zip"), join(b, "logs.zip")], { extractDir });
     expect(found.map((p) => basename(p)).sort()).toEqual(["session-a", "session-b"]);
+  });
+
+  test("a zip replaced at the same path is unpacked again, not served from the old copy", async () => {
+    // A download cache replaces a zip in place, and a reused extract directory still holds what the
+    // old one unpacked to. Reading that would put the old archive's session under the new one.
+    const dir = join(root, "zips", "replaced");
+    const zipAt = join(dir, "run.zip");
+    const extractDir = join(root, "zips", "replaced-extracted");
+    writeSequentialSession(join(dir, "old-session"));
+    expect(spawnSync("zip", ["-qr", "run.zip", "old-session"], { cwd: dir }).status).toBe(0);
+    expect((await discoverSessions([zipAt], { extractDir })).map((p) => basename(p))).toEqual(["old-session"]);
+    rmSync(zipAt);
+    writeSequentialSession(join(dir, "new-session"));
+    expect(spawnSync("zip", ["-qr", "run.zip", "new-session"], { cwd: dir }).status).toBe(0);
+    utimesSync(zipAt, new Date(), new Date(Date.now() + 60_000));
+    expect((await discoverSessions([zipAt], { extractDir })).map((p) => basename(p))).toEqual(["new-session"]);
+  });
+
+  test("an extract directory inside an input is read only through the zips it unpacks", async () => {
+    // Zips unpack early, so walking the extract directory as part of the input could read a
+    // session a failing zip only half wrote, or one an earlier run left behind for a zip now gone.
+    const input = join(root, "zips", "with-extract-inside");
+    const extractDir = join(input, "a-extracted");
+    writeSequentialSession(join(input, "src", "live-session"));
+    expect(spawnSync("zip", ["-qr", join(input, "b-run.zip"), "live-session"], { cwd: join(input, "src") }).status).toBe(0);
+    rmSync(join(input, "src"), { recursive: true });
+    writeSequentialSession(join(extractDir, "gone-zip-abc", "leftover-session"));
+    const found = await discoverSessions([input], { extractDir });
+    expect(found.map((p) => basename(p))).toEqual(["live-session"]);
+  });
+
+  test("a link into the extract directory is not a way into it", async () => {
+    // Skipping the extract directory by name alone left every link into it open: a link to a
+    // leftover from an earlier run handed that session back as though it were part of the input.
+    const input = join(root, "zips", "with-link-inside");
+    const extractDir = join(input, "a-extracted");
+    writeSequentialSession(join(input, "live-session"));
+    writeSequentialSession(join(extractDir, "gone-zip-abc", "leftover-session"));
+    symlinkSync(join(extractDir, "gone-zip-abc"), join(input, "b-alias"));
+    const found = await discoverSessions([input], { extractDir });
+    expect(found.map((p) => basename(p))).toEqual(["live-session"]);
+  });
+
+  test("an extract directory that does not exist yet is skipped once the first unzip creates it", async () => {
+    // Created by the first zip, partway through the input that contains it. Deciding the skip when
+    // the input started left it off, and the walk then read the unzipped archive unconfined,
+    // following a link the archive carried out to sessions that were never in it.
+    const input = join(root, "zips", "extract-created-late");
+    const elsewhere = join(root, "zips", "extract-created-late-elsewhere");
+    writeSequentialSession(elsewhere);
+    writeSequentialSession(join(input, "src", "box", "from-the-zip"));
+    symlinkSync(elsewhere, join(input, "src", "box", "borrowed"));
+    expect(spawnSync("zip", ["-qry", join(input, "a.zip"), "from-the-zip", "borrowed"], { cwd: join(input, "src", "box") }).status).toBe(0);
+    rmSync(join(input, "src"), { recursive: true });
+    mkdirSync(join(input, "z"));
+    const found = await discoverSessions([input], { extractDir: join(input, "z", "out") });
+    expect(found.map((p) => basename(p))).toEqual(["from-the-zip"]);
+  });
+
+  test("a zip that links into the extract directory is never unpacked", async () => {
+    // The walk skips it, so an unzip started for it early would never be awaited, and discovery
+    // would return with it still writing.
+    const input = join(root, "zips", "zip-link-inside");
+    const extractDir = join(input, "a-extracted");
+    const bin = join(root, "zips", "zip-link-inside-bin");
+    const log = join(root, "zips", "zip-link-inside.log");
+    mkdirSync(extractDir, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(extractDir, "stale.zip"), "");
+    symlinkSync(join(extractDir, "stale.zip"), join(input, "b-link.zip"));
+    writeFileSync(log, "");
+    writeFileSync(join(bin, "unzip"), `#!/bin/sh\necho "$3" >> "${log}"\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      expect(await discoverSessions([input], { extractDir })).toEqual([]);
+      expect(readFileSync(log, "utf8")).toBe("");
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  test("an extract directory the caller names, or a folder inside it, is still walked", async () => {
+    // Only an extract directory met BELOW an input is skipped. Naming it, or one of its folders,
+    // is asking for what is there.
+    const extractDir = join(root, "zips", "named-extract");
+    writeSequentialSession(join(extractDir, "here-session"));
+    writeSequentialSession(join(extractDir, "nested", "deeper-session"));
+    expect((await discoverSessions([extractDir], { extractDir })).map((p) => basename(p))).toEqual(["here-session", "deeper-session"]);
+    expect((await discoverSessions([join(extractDir, "nested")], { extractDir })).map((p) => basename(p))).toEqual(["deeper-session"]);
+  });
+
+  test("a failed discovery leaves no unzip running or waiting to start", async () => {
+    // Zips unpack ahead of the walk, a few at a time. When the walk fails, the ones still queued
+    // must not start, and the ones running must finish, before the failure reaches the caller.
+    // A stub `unzip` makes that observable: 00.zip finishes at once and fails the walk, while every
+    // other zip is still running or queued behind it.
+    const input = join(root, "zips", "failing-walk");
+    const bin = join(root, "zips", "failing-walk-bin");
+    const log = join(root, "zips", "failing-walk.log");
+    mkdirSync(input, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    for (let i = 0; i < 40; i++) writeFileSync(join(input, `${String(i).padStart(2, "0")}.zip`), "");
+    writeFileSync(log, "");
+    writeFileSync(
+      join(bin, "unzip"),
+      `#!/bin/sh\necho start >> "${log}"\ncase "$3" in */00.zip) ;; *) sleep 1 ;; esac\necho done >> "${log}"\n`,
+      { mode: 0o755 },
+    );
+    const lines = (word: string) => readFileSync(log, "utf8").split("\n").filter((l) => l === word).length;
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const failed = await discoverSessions([input], {
+        extractDir: join(root, "zips", "failing-walk-extracted"),
+        onExtract: () => {
+          throw new Error("stop here");
+        },
+      }).catch((e: Error) => e.message);
+      expect(failed).toBe("stop here");
+      // Everything that started had finished when the failure arrived...
+      const started = lines("start");
+      expect(lines("done")).toBe(started);
+      // ...and nothing queued starts afterwards.
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(lines("start")).toBe(started);
+      expect(started).toBeLessThan(40);
+    } finally {
+      process.env.PATH = path;
+    }
   });
 
   test("a zip that links out of itself does not hand over the machine's own sessions", async () => {
@@ -728,16 +950,16 @@ describe("discovery", () => {
     const maps = join(root, "survey-trailmaps");
     mkdirSync(join(maps, "acme", "surveys", "nested"), { recursive: true });
     writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
-    writeFileSync(join(maps, "acme", "surveys", "nested", "checkout.survey.ts"), `import { trailblaze } from ${sdk};\nexport const acmeCheckout = trailblaze.survey({ feature: "checkout", targets: ["acme"], footprint: { tools: {} } });\n`);
+    writeFileSync(join(maps, "acme", "surveys", "nested", "checkout.survey.ts"), `import { trailblaze } from ${sdk};\nexport const acmeCheckout = trailblaze.survey({ description: "checkout", targets: ["acme"], finding: { tools: {} } });\n`);
     // Only surveys/ counts: a survey file elsewhere in the trailmap is not picked up.
     mkdirSync(join(maps, "acme", "tools"), { recursive: true });
-    writeFileSync(join(maps, "acme", "tools", "stray.survey.ts"), `import { trailblaze } from ${sdk};\nexport const stray = trailblaze.survey({ feature: "x", footprint: { tools: {} } });\n`);
+    writeFileSync(join(maps, "acme", "tools", "stray.survey.ts"), `import { trailblaze } from ${sdk};\nexport const stray = trailblaze.survey({ description: "x", finding: { tools: {} } });\n`);
     // A trailmap with no surveys/ contributes nothing and says nothing.
     mkdirSync(join(maps, "plain"), { recursive: true });
     writeFileSync(join(maps, "plain", "trailmap.yaml"), "id: plain\n");
     const direct = join(root, "survey-direct");
     mkdirSync(direct, { recursive: true });
-    writeFileSync(join(direct, "generic.survey.ts"), `import { trailblaze } from ${sdk};\nexport const generic = trailblaze.survey({ feature: "g", footprint: { tools: {} } });\n`);
+    writeFileSync(join(direct, "generic.survey.ts"), `import { trailblaze } from ${sdk};\nexport const generic = trailblaze.survey({ description: "g", finding: { tools: {} } });\n`);
 
     const said: string[] = [];
     const loaded = await loadSurveys([direct], (m) => said.push(m), { trailmaps: [maps] });
@@ -748,7 +970,7 @@ describe("discovery", () => {
   });
 
   test("a survey in a trailmap and one passed directly cannot share a name", async () => {
-    const src = `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const clash = trailblaze.survey({ feature: "a", footprint: { tools: {} } });\n`;
+    const src = `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const clash = trailblaze.survey({ description: "a", finding: { tools: {} } });\n`;
     const maps = join(root, "clash-trailmaps");
     mkdirSync(join(maps, "acme", "surveys"), { recursive: true });
     writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
@@ -757,6 +979,31 @@ describe("discovery", () => {
     mkdirSync(direct, { recursive: true });
     writeFileSync(join(direct, "b.survey.ts"), src);
     await expect(loadSurveys([direct], undefined, { trailmaps: [maps] })).rejects.toThrow(/exported by both/);
+  });
+
+  test("a staged trailmap's surveys get the loader's SDK, whatever their own tsconfig points at", async () => {
+    // A trailmap's home repo maps the SDK to its own materialized copy (`.trailblaze/sdk/dist/`),
+    // which does not exist where the trailmap is staged. The loader's copy must win, for both
+    // public subpaths, and a helper the survey imports from a sibling trailmap must see it too.
+    const maps = join(root, "staged-trailmaps");
+    mkdirSync(join(maps, "acme", "surveys"), { recursive: true });
+    mkdirSync(join(maps, "kiosk", "surveys"), { recursive: true });
+    writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
+    writeFileSync(join(maps, "kiosk", "trailmap.yaml"), "id: kiosk\n");
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { "@trailblaze/scripting/*": ["../../../no-such-sdk/dist/*"] } } });
+    writeFileSync(join(maps, "acme", "surveys", "tsconfig.json"), tsconfig);
+    writeFileSync(join(maps, "kiosk", "surveys", "tsconfig.json"), tsconfig);
+    writeFileSync(
+      join(maps, "acme", "surveys", "shared.ts"),
+      `import { matchesPattern } from "@trailblaze/scripting/matcher";\nexport const literal = (s: string) => matchesPattern("$5.00", s, "native");\n`,
+    );
+    writeFileSync(
+      join(maps, "kiosk", "surveys", "kiosk.survey.ts"),
+      `import { trailblaze, isSurvey } from "@trailblaze/scripting/surveys";\nimport { literal } from "../../acme/surveys/shared";\nexport const kioskPrice = trailblaze.survey({ description: literal("$5.00") && isSurvey ? "price" : "none", finding: { tools: {} } });\n`,
+    );
+
+    const loaded = await loadSurveys([], undefined, { trailmaps: [maps] });
+    expect(loaded.map((c) => [c.definition.id, c.definition.spec.description])).toEqual([["kioskPrice", "price"]]);
   });
 
   test("a workspace is found from anywhere inside it, and carries its own and its trailmaps' surveys", async () => {
@@ -768,11 +1015,11 @@ describe("discovery", () => {
     mkdirSync(join(config, "trailmaps", "acme", "surveys"), { recursive: true });
     mkdirSync(join(ws, "deep", "er"), { recursive: true });
     writeFileSync(join(config, "trailblaze.yaml"), "trailmaps: []\n");
-    writeFileSync(join(config, "surveys", "any.survey.ts"), `import { trailblaze } from ${sdk};\nexport const anyTarget = trailblaze.survey({ feature: "any", footprint: { tools: {} } });\n`);
+    writeFileSync(join(config, "surveys", "any.survey.ts"), `import { trailblaze } from ${sdk};\nexport const anyTarget = trailblaze.survey({ description: "any", finding: { tools: {} } });\n`);
     writeFileSync(join(config, "trailmaps", "acme", "trailmap.yaml"), "id: acme\ntarget:\n  platforms:\n    android:\n      app_ids: [com.example.acme]\n");
     // The public specifier, with no tsconfig `paths` or installed package: a trailmap from another
     // repo has neither, so the loader must serve the SDK itself.
-    writeFileSync(join(config, "trailmaps", "acme", "surveys", "pay.survey.ts"), `import { trailblaze } from "@trailblaze/scripting/surveys";\nexport const acmePay = trailblaze.survey({ feature: "pay", targets: ["acme"], footprint: { tools: {} } });\n`);
+    writeFileSync(join(config, "trailmaps", "acme", "surveys", "pay.survey.ts"), `import { trailblaze } from "@trailblaze/scripting/surveys";\nexport const acmePay = trailblaze.survey({ description: "pay", targets: ["acme"], finding: { tools: {} } });\n`);
 
     const saved = process.env.TRAILBLAZE_CONFIG_DIR;
     delete process.env.TRAILBLAZE_CONFIG_DIR;
@@ -810,7 +1057,7 @@ describe("discovery", () => {
   test("two files exporting the same survey name is an error", async () => {
     const dir = join(root, "dupes");
     mkdirSync(dir, { recursive: true });
-    const src = `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const same = trailblaze.survey({ feature: "a", footprint: { tools: {} } });\n`;
+    const src = `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const same = trailblaze.survey({ description: "a", finding: { tools: {} } });\n`;
     writeFileSync(join(dir, "a.survey.ts"), src);
     writeFileSync(join(dir, "b.survey.ts"), src);
     await expect(loadSurveys([dir])).rejects.toThrow(/exported by both/);
@@ -846,7 +1093,7 @@ describe("a session the runtime restarted partway through", () => {
   test("and so never goes backwards in time, which is what the lookups over it assume", () => {
     const dir = join(root, "restart-collision-monotonic");
     writeResumedSession(dir);
-    const times = SurveySession.load(dir).logs.all().map((l) => l.timeMs ?? 0);
+    const times = SurveySession.load(dir).trailblazeLogs.all().map((l) => l.timeMs ?? 0);
     expect(times).toEqual([...times].sort((a, b) => a - b));
     // `findLast` is the lookup that a non-monotonic order answers wrongly rather than incompletely.
     expect(SurveySession.load(dir).tools.findLast({})?.name).toBe("after-restart-second");
@@ -966,10 +1213,4 @@ describe("the blob a captured body points at", () => {
     expect(request?.bodyFiles).toEqual(["blobs/body.json"]);
     expect(request?.detail).toMatchObject({ at: expect.arrayContaining(["blobs/body.json"]) });
   });
-});
-
-test("a finding is diagnosis when it is about how the run went, and coverage otherwise", () => {
-  expect(["diagnosis", "signal", "measure"].map(purposeOf)).toEqual(["diagnosis", "diagnosis", "diagnosis"]);
-  // The default kind, the kinds this repo's surveys use, one a survey invents, and none at all.
-  expect(["feature", "waypoint", "gap", "job", undefined].map(purposeOf)).toEqual(["coverage", "coverage", "coverage", "coverage", "coverage"]);
 });

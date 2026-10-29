@@ -46,7 +46,8 @@ async function rowSelectorFor(args: SearchContactsArgs): Promise<TrailblazeNodeS
   const client = createMockClient();
   stubRowVisible(client);
   await contacts_ios_searchContacts(args, createMockContext({ platform: "ios" }), client);
-  const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
+  const selectorCalls = client.calls.filter((c) => c.tool === "tapOnElementBySelector");
+  const tapCall = selectorCalls[selectorCalls.length - 1];
   expect(tapCall).toBeDefined();
   return tapCall!.args.nodeSelector as TrailblazeNodeSelector;
 }
@@ -77,7 +78,7 @@ describe("contacts_ios_searchContacts", () => {
       "launchApp", // ensureContactsRoot — force-restart Contacts
       "assertVisibleWithAccessibilityText", // ensureContactsRoot — "Contacts" list-root anchor
       "swipe", // pull the search field into view
-      "tapOnElementWithText", // focus the "Search" input
+      "tapOnElementBySelector", // focus the "Search" input
       "inputText", // type the query
       "assertNotVisibleWithText", // no-results pre-flight probe — stubbed to fail (banner present), fires the branch
     ]);
@@ -91,7 +92,9 @@ describe("contacts_ios_searchContacts", () => {
     });
     expect(client.calls[1]?.args).toMatchObject({ accessibilityText: "Contacts" });
     expect(client.calls[2]?.args).toMatchObject({ direction: "DOWN" });
-    expect(client.calls[3]?.args).toMatchObject({ text: "Search" });
+    expect(client.calls[3]?.args).toMatchObject({
+      nodeSelector: { iosMaestro: { textRegex: expect.stringContaining("Search") } },
+    });
     expect(client.calls[4]?.args).toMatchObject({ text: "Nobody" });
     // The pre-flight probe ran with the right needle — a regex that matches the real
     // `No Results for "<query>"` banner, not just the exact string "No Results".
@@ -118,7 +121,7 @@ describe("contacts_ios_searchContacts", () => {
       "launchApp", // ensureContactsRoot — force-restart Contacts
       "assertVisibleWithAccessibilityText", // ensureContactsRoot — "Contacts" list-root anchor
       "swipe", // pull the search field into view
-      "tapOnElementWithText", // focus the "Search" input
+      "tapOnElementBySelector", // focus the "Search" input
       "inputText", // type the query
       "assertNotVisibleWithText", // no-results probe — passes (no banner) → results present
       "findSelectorMatches", // wait for the result row to render
@@ -155,16 +158,15 @@ describe("contacts_ios_searchContacts", () => {
       client,
     );
 
-    // No bare text tap ever targets the row text (the only tapOnElementWithText allowed is
-    // the "Search" field focus).
-    const bareTextTaps = client.calls
-      .filter((c) => c.tool === "tapOnElementWithText")
-      .map((c) => c.args.text);
-    expect(bareTextTaps).toEqual(["Search"]);
-
-    const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
-    expect(tapCall).toBeDefined();
-    const selector = tapCall!.args.nodeSelector as TrailblazeNodeSelector;
+    // Both the search-field focus and row tap use the selector tool; no bare text tap of
+    // `rowText` is dispatched at all.
+    const selectorCalls = client.calls.filter((c) => c.tool === "tapOnElementBySelector");
+    expect(selectorCalls).toHaveLength(2);
+    expect(selectorCalls[0]?.args).toMatchObject({
+      nodeSelector: { iosMaestro: { textRegex: expect.stringContaining("Search") } },
+    });
+    const selector = selectorCalls[selectorCalls.length - 1]!.args
+      .nodeSelector as TrailblazeNodeSelector;
     // Label-scoped only: no predicate that a text field's typed value can satisfy.
     expect(selector.iosMaestro?.accessibilityTextRegex).toBeDefined();
     expect(selector.iosMaestro?.textRegex).toBeUndefined();
@@ -176,7 +178,7 @@ describe("contacts_ios_searchContacts", () => {
   test("row selector matches the row label literally, anywhere in the label (contains)", async () => {
     // The emitted accessibilityTextRegex is a wire contract the device resolves. Verify its
     // BEHAVIOR (not its exact string). Node selectors full-match their regex, so the emitted
-    // pattern must preserve the CONTAINS semantics the old `tapOnElementWithText` had:
+    // pattern must preserve the CONTAINS semantics the retired text tap had:
     // `rowText` may appear anywhere in the row label — a last-name-only query (rowText
     // defaults to the query) must match the full-name row, and labels may append detail
     // text after the name. A name containing regex metacharacters is matched literally,
@@ -191,7 +193,8 @@ describe("contacts_ios_searchContacts", () => {
       client,
     );
 
-    const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
+    const selectorCalls = client.calls.filter((c) => c.tool === "tapOnElementBySelector");
+    const tapCall = selectorCalls[selectorCalls.length - 1];
     const selector = tapCall!.args.nodeSelector as TrailblazeNodeSelector;
     const pattern = anchored(selector.iosMaestro?.accessibilityTextRegex);
     expect(pattern.test("Dr. O'Brien (Work)")).toBe(true);
@@ -259,7 +262,7 @@ describe("contacts_ios_searchContacts", () => {
       contacts_ios_searchContacts({ query: "John", rowText: "Johnny Nonexistent" }, ctx, client),
     ).rejects.toThrow(/shows no "No Results" banner, but no row labeled "Johnny Nonexistent"/);
 
-    expect(client.calls.map((c) => c.tool)).not.toContain("tapOnElementBySelector");
+    expect(client.calls.filter((c) => c.tool === "tapOnElementBySelector")).toHaveLength(1);
   });
 
   test("returns early without probing No Results when openFirstResult is false", async () => {
@@ -280,7 +283,7 @@ describe("contacts_ios_searchContacts", () => {
       "launchApp",
       "assertVisibleWithAccessibilityText",
       "swipe",
-      "tapOnElementWithText",
+      "tapOnElementBySelector",
       "inputText",
     ]);
     expect(result).toContain("stopped (no result tapped)");
@@ -331,7 +334,7 @@ describe("contacts_ios_searchContacts", () => {
       "launchApp",
       "assertVisibleWithAccessibilityText",
       "swipe",
-      "tapOnElementWithText",
+      "tapOnElementBySelector",
       "inputText", // thrown by the stub
     ]);
   });

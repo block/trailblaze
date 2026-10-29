@@ -5,16 +5,20 @@
     "Implemented twice, because the profiler runs in a browser over raw JSON and cannot call the",
     "Kotlin one: `deviceClockOffsets()` / `normalizedMs()` in TrailblazeLogClockNormalization.kt",
     "(every Kotlin reader — LogsRepo, the recording generator, session info, the session viewers),",
-    "and `deviceClockOffsets()` / `logHostMs()` in perf-extract.ts (the interactive report's",
-    "profiler). Consumed by ClockNormalizationParityFixturesTest (Kotlin) and perf-extract.test.ts",
+    "and `deviceClockOffsets()` / `logOffsetMs()` in run-report-extract.ts (the interactive report and",
+    "its profiler). Consumed by ClockNormalizationParityFixturesTest (Kotlin) and perf-extract.test.ts",
     "(TS). Change a derivation rule in both implementations AND here, in one change — a drift makes",
     "a session's profile and its recording disagree about where a device's spans sit.",
     "",
     "Encoding: `timestampMs` / `hostReceivedAtMs` are epoch ms (each side converts to its own",
     "timestamp type); absent `durationMs` means 0; absent `deviceName` means the log carries none,",
-    "which both sides collapse to ONE key, spelled \"\" in `expectedOffsets.byDeviceName`.",
-    "`type` is `tool` for a TrailblazeToolLog (the only class that anchors an offset) and `status`",
-    "for any other log class. `expectedOffsets: null` means the session yielded no offsets at all.",
+    "which both sides collapse to ONE key, spelled \"\" in `expectedOffsets.byDeviceName` — unless a",
+    "host-clock tool log naming a device (a handover, dated at its completion) preceded its",
+    "`hostReceivedAtMs`, which keys it to that device, or it is a non-tool log whose `traceId` a",
+    "tool log carries, which keys it to that tool's device. `type` is `tool` for a TrailblazeToolLog",
+    "(the only class that anchors an offset; `toolName` defaults to `tapOn`, `successful` to true),",
+    "`snapshot` for a TrailblazeSnapshotLog (a traced non-tool log), and `status` for any other log",
+    "class. `expectedOffsets: null` means the session yielded no offsets at all.",
     "",
     "Not covered here, deliberately: a log with NO `clock` field. The TS side falls back to the log",
     "class for those (`MaestroDriverLog` == device), which is the only signal a pre-field log",
@@ -156,6 +160,60 @@
       "expectedOffsets": { "byDeviceName": { "": 3000, "seller-emulator": 4000 }, "sessionWideMs": 3000 }
     },
     {
+      "name": "unnamed device logs belong to the binding the host had handed over to when it received them",
+      "logs": [
+        {
+          "id": "before-any-handover",
+          "type": "status",
+          "clock": "device",
+          "timestampMs": 9500,
+          "hostReceivedAtMs": 9000,
+          "expectedHostMs": 9000
+        },
+        { "id": "to-front", "type": "tool", "clock": "host", "timestampMs": 10000, "deviceName": "front", "expectedHostMs": 10000 },
+        {
+          "id": "front-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8500,
+          "durationMs": 500,
+          "hostReceivedAtMs": 11000,
+          "expectedHostMs": 10500
+        },
+        { "id": "front-frame", "type": "status", "clock": "device", "timestampMs": 8700, "hostReceivedAtMs": 11000, "expectedHostMs": 10700 },
+        { "id": "to-back", "type": "tool", "clock": "host", "timestampMs": 12000, "deviceName": "back", "expectedHostMs": 12000 },
+        {
+          "id": "back-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 12700,
+          "durationMs": 500,
+          "hostReceivedAtMs": 12700,
+          "expectedHostMs": 12200
+        },
+        { "id": "back-frame", "type": "status", "clock": "device", "timestampMs": 13000, "hostReceivedAtMs": 12800, "expectedHostMs": 12500 },
+        {
+          "id": "failed-switch-to-front",
+          "type": "tool",
+          "clock": "host",
+          "toolName": "switchDevice",
+          "successful": false,
+          "timestampMs": 13500,
+          "deviceName": "front",
+          "expectedHostMs": 13500
+        },
+        {
+          "id": "back-tap-after-failed-switch",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 14000,
+          "hostReceivedAtMs": 13600,
+          "expectedHostMs": 13500
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "front": 2000, "back": -500 }, "sessionWideMs": -500 }
+    },
+    {
       "name": "a device-stamped session with no ingestion anchor reads raw",
       "logs": [
         { "id": "start", "type": "status", "clock": "host", "timestampMs": 10000, "expectedHostMs": 10000 },
@@ -185,6 +243,152 @@
         }
       ],
       "expectedOffsets": { "byDeviceName": { "emulator-5554": 3000 }, "sessionWideMs": 3000 }
+    },
+    {
+      "name": "a log received before any handover belongs to the device the session started on",
+      "logs": [
+        {
+          "id": "start-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8500,
+          "durationMs": 500,
+          "hostReceivedAtMs": 11000,
+          "expectedHostMs": 10500
+        },
+        {
+          "id": "start-frame",
+          "type": "snapshot",
+          "clock": "device",
+          "timestampMs": 8700,
+          "hostReceivedAtMs": 11100,
+          "expectedHostMs": 10700
+        },
+        {
+          "id": "to-back",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 12000,
+          "deviceName": "back",
+          "toolName": "switchDevice",
+          "expectedHostMs": 12000
+        },
+        {
+          "id": "back-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 12700,
+          "durationMs": 500,
+          "hostReceivedAtMs": 12700,
+          "expectedHostMs": 12200
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "": 2000, "back": -500 }, "sessionWideMs": -500 }
+    },
+    {
+      "name": "a driver log that uploads after the next switch keeps the device of the tool it was captured under",
+      "logs": [
+        {
+          "id": "to-front",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 10000,
+          "deviceName": "front",
+          "toolName": "switchDevice",
+          "expectedHostMs": 10000
+        },
+        {
+          "id": "front-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8500,
+          "durationMs": 500,
+          "hostReceivedAtMs": 11000,
+          "traceId": "t-front",
+          "expectedHostMs": 10500
+        },
+        {
+          "id": "to-back",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 12000,
+          "deviceName": "back",
+          "toolName": "switchDevice",
+          "expectedHostMs": 12000
+        },
+        {
+          "id": "late-front-frame",
+          "type": "snapshot",
+          "clock": "device",
+          "timestampMs": 8800,
+          "hostReceivedAtMs": 12100,
+          "traceId": "t-front",
+          "expectedHostMs": 10800
+        },
+        {
+          "id": "back-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 12700,
+          "durationMs": 500,
+          "hostReceivedAtMs": 12700,
+          "traceId": "t-back",
+          "expectedHostMs": 12200
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "front": 2000, "back": -500 }, "sessionWideMs": -500 }
+    },
+    {
+      "name": "a host wrapper that switches devices hands over when it finishes, not when it starts",
+      "logs": [
+        {
+          "id": "to-front",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 9000,
+          "deviceName": "front",
+          "toolName": "switchDevice",
+          "expectedHostMs": 9000
+        },
+        {
+          "id": "wrapper",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 10000,
+          "durationMs": 3000,
+          "deviceName": "back",
+          "toolName": "checkoutFlow",
+          "expectedHostMs": 10000
+        },
+        {
+          "id": "front-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8500,
+          "durationMs": 500,
+          "hostReceivedAtMs": 11000,
+          "expectedHostMs": 10500
+        },
+        {
+          "id": "switch",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 12000,
+          "deviceName": "back",
+          "toolName": "switchDevice",
+          "expectedHostMs": 12000
+        },
+        {
+          "id": "back-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 12700,
+          "durationMs": 500,
+          "hostReceivedAtMs": 12700,
+          "expectedHostMs": 12200
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "front": 2000, "back": -500 }, "sessionWideMs": -500 }
     }
   ]
 }

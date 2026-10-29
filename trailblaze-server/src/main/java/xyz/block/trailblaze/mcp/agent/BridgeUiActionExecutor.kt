@@ -183,7 +183,7 @@ class BridgeUiActionExecutor(
   /**
    * Maps a tool name and JSON args to a TrailblazeTool by routing through a
    * [TrailblazeToolRepo]. The repo dispatches by toolName and decodes the flat args via
-   * the matching class-backed or YAML-defined serializer.
+   * the matching class-backed or scripted serializer.
    *
    * Sessions can legitimately be wired without either repo (e.g. raw bridge use without a
    * scripting host). In that case we fall back to wrapping the args verbatim as an

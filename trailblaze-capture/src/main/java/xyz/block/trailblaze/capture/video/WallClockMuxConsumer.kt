@@ -37,6 +37,12 @@ interface WallClockVideoMux {
    */
   fun hasContent(): Boolean
 
+  /**
+   * True once the feed has carried a coded picture. Stricter than [hasContent]: an encoder that
+   * cannot read its display sends codec config and no frames, which is content but not footage.
+   */
+  fun hasPicture(): Boolean = hasContent()
+
   fun stop(): MuxResult?
 }
 
@@ -346,6 +352,8 @@ class WallClockMuxConsumer(
 
   /** True once at least one byte has flowed into ffmpeg (i.e. the recording has real content). */
   override fun hasContent(): Boolean = firstFrameEpochMs.get() >= 0L
+
+  override fun hasPicture(): Boolean = tee.hasDeliveredPicture
 
   /** Starts the ffmpeg mux and the tee-drain thread. Must be called once. */
   override fun start() {

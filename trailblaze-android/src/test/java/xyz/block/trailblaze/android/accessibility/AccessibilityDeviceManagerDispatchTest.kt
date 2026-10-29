@@ -91,4 +91,25 @@ class AccessibilityDeviceManagerDispatchTest {
       "finally-exception is the visible one (Kotlin try/finally semantics); got '${thrown.message}'",
     )
   }
+
+  /**
+   * The capture gate may reuse a stable-tree proof only until this driver touches the device. A
+   * dispatch must drop it before the input lands, so the capture after the action — the one the
+   * gate exists for — waits the screen out instead of reusing the screen from before the tap.
+   * It drops it again after the action, because a scripted tool can read the tree after its input
+   * and set a fresh proof before the screen has reacted.
+   */
+  @Test
+  fun `dispatchAndAwaitSettle drops the stable-tree proof before the input and again before the settle`() {
+    val log = CallLog()
+    val manager =
+      AccessibilityDeviceManager(
+        awaitSettle = { log.events.add("settle") },
+        forgetStableTree = { log.events.add("forget") },
+      )
+
+    runBlocking { manager.dispatchAndAwaitSettle { log.events.add("action") } }
+
+    assertEquals(listOf("forget", "action", "forget", "settle"), log.events)
+  }
 }

@@ -4,9 +4,7 @@
 
 # `web_pressKey`
 
-Press a keyboard key or key combination.
-Supports keys like 'Enter', 'Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp',
-and combinations like 'Control+A', 'Meta+C', 'Shift+Tab'.
+Press a key or key combination.
 
 ## Source
 
@@ -24,7 +22,7 @@ and combinations like 'Control+A', 'Meta+C', 'Shift+Tab'.
 ### Required parameters
 
 - `key` — `String`
-  The key or key combination to press (e.g., 'Enter', 'Tab', 'Control+A', 'Meta+C').
+  Playwright key name, e.g. 'Enter', 'Escape', 'ArrowDown', 'Control+A', 'Shift+Tab'.
 
 ### Optional parameters
 

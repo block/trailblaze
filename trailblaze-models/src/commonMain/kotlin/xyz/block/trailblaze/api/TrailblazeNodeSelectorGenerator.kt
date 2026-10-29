@@ -203,12 +203,17 @@ object TrailblazeNodeSelectorGenerator {
       consider(name, TrailblazeNodeSelector.withMatch(match))
     }
 
-    val ranked = bySelector.entries
-      .map { NamedSelector(it.key, it.value) }
-      .sortedBy { selectorStabilityRank(it.selector) }
-      .take(maxResults)
-    return ranked.mapIndexed { i, named -> named.copy(isBest = i == 0) }
+    return rankByStability(bySelector.entries.map { NamedSelector(it.key, it.value) }).take(maxResults)
+      .mapIndexed { i, named -> named.copy(isBest = i == 0) }
   }
+
+  /**
+   * Orders [selectors] most-stable first, as [enumerateSelectorCandidates] does, keeping their
+   * given order within a tier. For callers that merge or filter several candidate lists.
+   * [NamedSelector.isBest] marks the first.
+   */
+  fun rankByStability(selectors: List<NamedSelector>): List<NamedSelector> =
+    selectors.sortedBy { selectorStabilityRank(it.selector) }.mapIndexed { i, named -> named.copy(isBest = i == 0) }
 
   /**
    * Finds the best **structural** selector that uniquely identifies [target] within the [root]
@@ -296,6 +301,39 @@ object TrailblazeNodeSelectorGenerator {
     // Absolute last resort: index among all nodes (should never fail)
     return computeIndexSelector(root, target)
   }
+
+  /**
+   * [selector] narrowed to also require exactly the text of the one element it matches in [root],
+   * for a recorded assertion.
+   *
+   * The minimizer keeps only the fields uniqueness needs, so an element with a unique resource ID
+   * records the ID alone, and its text patterns tolerate changing numbers ("iPhone 17" matches
+   * "iPhone 18"). An assertion recorded either way passes when the element shows something else.
+   * An assertion claims what the element shows, so its exact text goes in.
+   *
+   * Returns [selector] unchanged when it does not match exactly one element, when that element
+   * shows no text (or is a password field), or when the narrowed selector would stop resolving to
+   * that element alone.
+   */
+  fun withMatchedElementText(root: TrailblazeNode, selector: TrailblazeNodeSelector): TrailblazeNodeSelector {
+    val target = (TrailblazeNodeSelectorResolver.resolve(root, selector) as? TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch)
+      ?.node ?: return selector
+    val narrowed = selector.withTextOf(target.driverDetail) ?: return selector
+    if (narrowed.index == null) return if (isUniqueMatch(root, target, narrowed)) narrowed else selector
+    // An index counts among every match of the selector, so the text changes which position the
+    // element is in: none is needed when the text alone tells it apart, otherwise count again.
+    val unindexed = narrowed.copy(index = null)
+    val reindexed = when (val result = TrailblazeNodeSelectorResolver.resolve(root, unindexed)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> unindexed
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
+        result.nodes.indexOfFirst { it.nodeId == target.nodeId }.takeIf { it >= 0 }?.let { unindexed.copy(index = it) }
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
+    }
+    return reindexed?.takeIf { isUniqueMatch(root, target, it) } ?: selector
+  }
+
+  /** Whether [node] shows text that [withMatchedElementText] would record. */
+  fun showsText(node: TrailblazeNode): Boolean = TrailblazeNodeSelector().withTextOf(node.driverDetail) != null
 
   // ---------------------------------------------------------------------------
   // Coordinate-based API: tap (x, y) → node → selector → verify

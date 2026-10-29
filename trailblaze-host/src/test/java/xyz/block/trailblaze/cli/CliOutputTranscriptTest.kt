@@ -4,6 +4,7 @@ import org.junit.Test
 import xyz.block.trailblaze.logs.server.endpoints.CliExecStream
 import java.util.concurrent.CountDownLatch
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -79,6 +80,25 @@ class CliOutputTranscriptTest {
       "the marker must be recorded once, not once per rejected write: '$text'",
     )
     assertTrue(!text.contains("klmnopqrst"), "writes after the cap must be dropped: '$text'")
+  }
+
+  @Test fun `a transcript reports whether it dropped anything`() {
+    val transcript = CliOutputTranscript(limit = 16)
+    transcript.write(CliExecStream.STDOUT, "0123456789")
+    assertFalse(transcript.isTruncated, "output under the cap is complete")
+
+    transcript.write(CliExecStream.STDOUT, "abcdefghij")
+    assertTrue(transcript.isTruncated, "output past the cap is not")
+  }
+
+  @Test fun `a forwarded command that succeeded but lost output past the cap does not report success`() {
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, TrailblazeCli.exitCodeAfterCapture(0, truncated = true))
+    assertEquals(TrailblazeExitCode.SUCCESS.code, TrailblazeCli.exitCodeAfterCapture(0, truncated = false))
+    assertEquals(
+      TrailblazeExitCode.ASSERTION_FAILED.code,
+      TrailblazeCli.exitCodeAfterCapture(TrailblazeExitCode.ASSERTION_FAILED.code, truncated = true),
+      "a failure keeps its own code",
+    )
   }
 
   @Test fun `a command writing from two threads loses nothing`() {

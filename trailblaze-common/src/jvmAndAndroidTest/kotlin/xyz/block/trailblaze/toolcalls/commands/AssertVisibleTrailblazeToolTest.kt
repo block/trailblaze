@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
@@ -132,7 +134,8 @@ class AssertVisibleTrailblazeToolTest {
     assertEquals("verify the submit button", delegated.reason)
     val textRegex = delegated.nodeSelector?.androidMaestro?.textRegex
       ?: delegated.nodeSelector?.androidAccessibility?.textRegex
-    assertEquals("Submit", textRegex)
+    // Maestro matching ignores case, so the recorded text says it is case-sensitive.
+    assertEquals("(?-i)Submit", textRegex)
     // nodeSelector is generated inside a try/catch that silently nulls on failure; a
     // regression in TrailblazeNodeSelectorGenerator would still produce a passing
     // TapSelectorV2-converted nodeSelector but strip the richer on-device playback path.
@@ -141,7 +144,7 @@ class AssertVisibleTrailblazeToolTest {
   }
 
   @Test
-  fun `expectedText propagates through to AssertVisibleBySelector on the maestro path`() {
+  fun `maestro path records the asserted element's text`() {
     val trailblazeTree = TrailblazeNode(
       nodeId = 1,
       bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
@@ -176,19 +179,20 @@ class AssertVisibleTrailblazeToolTest {
     val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
       AssertVisibleTrailblazeTool(
         ref = "y778",
-        expectedText = "Charge \$5.00",
         reasoning = "verify the checkout total",
       ).toExecutableTrailblazeTools(context).single(),
     )
-    assertEquals("Charge \$5.00", delegated.expectedText)
-    // The visibility-only fields still propagate as before so non-expectedText callers
-    // are unaffected.
+    val textRegex = assertNotNull(delegated.nodeSelector?.androidMaestro?.textRegex)
+    assertTrue(Regex(textRegex).matches("Charge \$5.00"), "recorded: $textRegex")
     assertEquals("verify the checkout total", delegated.reason)
-    assertNotNull(delegated.nodeSelector)
   }
 
+  /**
+   * The id alone tells this element apart, so the minimized selector would drop its text and the
+   * recorded assertion would pass whatever the element shows.
+   */
   @Test
-  fun `expectedText propagates through on the accessibility path with nodeSelector-only`() {
+  fun `accessibility path records the text of an element its id already identifies`() {
     val trailblazeTree = TrailblazeNode(
       nodeId = 1,
       bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
@@ -198,20 +202,18 @@ class AssertVisibleTrailblazeToolTest {
           nodeId = 2,
           ref = "y778",
           bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
-          driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Active"),
+          driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example:id/status", text = "Active"),
         ),
       ),
     )
     val context = contextWithTree(trailblazeNodeTree = trailblazeTree)
 
     val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
-      AssertVisibleTrailblazeTool(
-        ref = "y778",
-        expectedText = "Active",
-      ).toExecutableTrailblazeTools(context).single(),
+      AssertVisibleTrailblazeTool(ref = "y778").toExecutableTrailblazeTools(context).single(),
     )
-    assertEquals("Active", delegated.expectedText)
-    assertNotNull(delegated.nodeSelector)
+    val match = assertNotNull(delegated.nodeSelector?.androidAccessibility)
+    assertEquals("Active", match.textRegex)
+    assertNull(delegated.expectedText)
   }
 
   @Test
@@ -246,7 +248,8 @@ class AssertVisibleTrailblazeToolTest {
   fun `accessibility driver records the asserted control, not an occluded label under it`() {
     // Same shape as the tap regression: a smaller label from the screen underneath is still in
     // the tree behind the asserted button. The recording must describe the button the ref
-    // named, not the occluded label the whole-tree hit-test prefers.
+    // named, not the occluded label the whole-tree hit-test prefers. The button shows no text of
+    // its own, so the assertion checks the label inside it.
     val occludedTitle = TrailblazeNode(
       nodeId = 2,
       bounds = TrailblazeNode.Bounds(389, 2168, 691, 2222),
@@ -285,7 +288,7 @@ class AssertVisibleTrailblazeToolTest {
     val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(
       TrailblazeNodeSelectorResolver.resolve(root, selector),
     )
-    assertEquals(chargeButton.nodeId, resolved.node.nodeId)
+    assertEquals(chargeTitle.nodeId, resolved.node.nodeId)
   }
 
   @Test
@@ -364,7 +367,7 @@ class AssertVisibleTrailblazeToolTest {
       AssertVisibleTrailblazeTool(ref = "b1").toExecutableTrailblazeTools(context).single(),
     )
     val lowered = delegated.nodeSelector?.toTrailblazeElementSelector()
-    assertEquals("Bagel", lowered?.textRegex)
+    assertEquals("(?-i)Bagel", lowered?.textRegex)
     assertEquals(null, lowered?.idRegex)
   }
 

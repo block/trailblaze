@@ -31,8 +31,6 @@ import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -108,8 +106,6 @@ class DeviceRosterSessionTest {
       defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
       currentTrailblazeLlmModelProvider = { error("LLM not available in tests") },
       initialAppTargets = setOf(target),
-      appIconProvider = AppIconProvider.DefaultAppIconProvider,
-      deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
       runYamlLambda = { error("YAML runner not available in tests") },
       installedAppIdsProviderBlocking = { emptySet() },
       appVersionInfoProviderBlocking = { _, _ -> null },
@@ -140,6 +136,21 @@ class DeviceRosterSessionTest {
     val onBuyer = manager.getOrCreateSessionResolution(buyer)
     assertEquals(false, onBuyer.isNewSession, "a handover must not open a second session")
     assertEquals(opened.sessionId, onBuyer.sessionId)
+  }
+
+  @Test
+  fun `a cast member is named by its roster name, a device outside a cast by none`() {
+    val manager = manager()
+    manager.setDeviceRoster("mcp-1", listOf(member("seller", seller), member("buyer", buyer)))
+    assertEquals("buyer", manager.castMemberName(buyer))
+    assertNull(manager.castMemberName(kitchen))
+  }
+
+  @Test
+  fun `a cast of one keeps the unsuffixed streams single-device readers look for`() {
+    val manager = manager()
+    manager.setDeviceRoster("mcp-1", listOf(member("seller", seller)))
+    assertNull(manager.castMemberName(seller))
   }
 
   @Test

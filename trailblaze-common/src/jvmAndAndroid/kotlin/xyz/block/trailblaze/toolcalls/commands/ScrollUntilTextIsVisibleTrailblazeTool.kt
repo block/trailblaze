@@ -29,55 +29,54 @@ import xyz.block.trailblaze.viewmatcher.models.ElementMatches
 import xyz.block.trailblaze.util.Console
 import kotlin.math.abs
 
+/**
+ * Scrolls until a target element is visible.
+ *
+ * Target semantics: `text` is a substring match; `textRegex` is an anchored full-match regex used
+ * verbatim (the same semantics selector tools use), so `Loyalty` matches only "Loyalty" and not
+ * "Loyalty Enroll". If both are given, `textRegex` takes precedence. A call with none of
+ * text/textRegex/id is rejected, because it would match every element.
+ *
+ * `centerElement` defaults per driver: true for vertical scrolls on the Android accessibility
+ * driver, which needs the extra travel so a tab bar, sticky footer or promo banner cannot intercept
+ * a tap aimed at the target; false elsewhere, including horizontal scrolls, where a correction can
+ * carry the target off the opposite edge.
+ *
+ * `scrollDurationMs` defaults per driver (400ms on Android on-device).
+ */
 @Serializable
 @TrailblazeToolClass("scrollUntilTextIsVisible")
 @LLMDescription(
-  """
-Scrolls the screen in the specified direction until a target element becomes visible in the view hierarchy.
-
-Provide EXACTLY ONE target:
-- 'text' — substring match: finds elements where this text appears anywhere within the element's text.
-- 'textRegex' — anchored full-match regex, used verbatim (the same semantics selector tools use), so
-  'Loyalty' matches only "Loyalty" and not "Loyalty Enroll". Use this when you need an exact match.
-- (or 'id' alone) — scroll until the element with this id is visible.
-
-At least one of 'text', 'textRegex', or 'id' is required; a call with none is rejected (it would match
-every element). If both 'text' and 'textRegex' are given, 'textRegex' takes precedence. Only provide the
-additional disambiguation fields (e.g. 'index') when multiple elements match the same target.
-""",
+  "Scroll until the target element is visible. Give one target: 'text' (substring), " +
+    "'textRegex' (whole-text regex), or 'id'.",
 )
 data class ScrollUntilTextIsVisibleTrailblazeTool(
-  @param:LLMDescription("Text to search for while scrolling (substring match). Provide this OR 'textRegex'.")
+  @param:LLMDescription("Text to scroll to (substring match).")
   val text: String = "",
   @param:LLMDescription(
-    "Full-match regex to scroll until visible, used verbatim (anchored, like selector tools). " +
-      "Use instead of 'text' for an exact match, e.g. 'Loyalty' won't match 'Loyalty Enroll'.",
+    "Regex that must match the element's whole text, e.g. 'Loyalty' won't match 'Loyalty Enroll'. " +
+      "Overrides 'text'.",
   )
   val textRegex: String? = null,
-  @param:LLMDescription("The element id to scroll until. At least one of 'text', 'textRegex', or 'id' is required.")
+  @param:LLMDescription("Element id to scroll to.")
   val id: String? = null,
-  @param:LLMDescription("A 0-based index to disambiguate multiple views with the same text. Default is '0'.")
+  @param:LLMDescription("0-based index when several elements match. Default 0.")
   val index: Int = 0,
-  @param:LLMDescription("Direction to scroll. Default is 'DOWN'.")
+  @param:LLMDescription("Scroll direction. Default DOWN.")
   @Serializable(with = LenientScrollDirectionSerializer::class)
   val direction: ScrollDirection = ScrollDirection.DOWN,
-  @param:LLMDescription("Percentage of element visible in viewport. Default is '100'.")
+  @param:LLMDescription("Percent of the element that must be visible. Default 100.")
   val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,
   @param:LLMDescription(
-    "If true, keeps scrolling until the found element is near the screen center instead of " +
-      "stopping at first visibility — so a tab bar, sticky footer or promo banner cannot " +
-      "intercept a tap aimed at it. Omit to use the driver-tuned default (true for vertical " +
-      "scrolls on the Android accessibility driver, which needs the extra travel; false " +
-      "elsewhere, including horizontal scrolls, where a correction can carry the target off " +
-      "the opposite edge).",
+    "Keep scrolling until the element is near screen center, so bars or banners can't intercept " +
+      "a tap. Omit for the driver default.",
   )
   val centerElement: Boolean? = null,
-  @param:LLMDescription("Which part of the screen to scroll from. Default is 'CENTER'.")
+  @param:LLMDescription("Screen region each swipe starts from. Default CENTER.")
   val scrollStartPosition: TrailblazeScrollStartPosition = TrailblazeScrollStartPosition.CENTER,
   @param:LLMDescription(
-    "Duration in milliseconds of each scroll swipe gesture. Lower is a faster swipe. Omit to use " +
-      "the driver-tuned default (400ms on Android on-device). Set a lower value (e.g. '200') on " +
-      "screens where a slower swipe is misread as a tap.",
+    "Duration of each swipe in ms; lower is faster. Omit for the driver default; lower it " +
+      "(e.g. 200) if swipes register as taps.",
   )
   val scrollDurationMs: Int? = null,
   override val reasoning: String? = null,

@@ -62,7 +62,7 @@ import xyz.block.trailblaze.util.Console
  * ```kotlin
  * val agent = DirectMcpAgent(
  *   samplingSource = localLlmSamplingSource,
- *   trailblazeAgent = androidMaestroAgent,
+ *   trailblazeAgent = accessibilityAgent,
  *   screenStateProvider = { captureScreenState() },
  * )
  * val result = agent.run("Tap the login button")
@@ -89,7 +89,7 @@ class DirectMcpAgent(
    *
    * When null, the agent falls back to [TrailblazeToolSet.DefaultLlmTrailblazeTools] for
    * descriptor generation — sufficient for basic use, but `setActiveToolSets` becomes a
-   * no-op ("Dynamic toolsets not configured") and YAML-defined tools are not advertised
+   * no-op ("Dynamic toolsets not configured") and scripted tools are not advertised
    * (they require a repo to resolve).
    */
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
@@ -113,7 +113,7 @@ class DirectMcpAgent(
 
 You MUST respond with a tool call. Available tools include:
 - Tap: tap (use the ref ID from the snapshot, shown in square brackets e.g. [y778])
-- Other UI: swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
+- Other UI: swipe, inputText, pressKey (BACK on Android, HOME, ENTER), hideKeyboard, eraseText
 - Navigation: openApp, openUrl, scrollUntilTextIsVisible
 - Verification: assertVisible (assert an element IS visible by ref from the snapshot), assertNotVisibleWithText (assert text is NOT visible)
 - Control flow: objectiveStatus (to report COMPLETED, IN_PROGRESS, or FAILED status)
@@ -329,8 +329,8 @@ GUIDELINES:
 
   /**
    * Maps a tool name and JSON args to a TrailblazeTool by routing through the
-   * [trailblazeToolRepo]. The repo dispatches by toolName to the matching class-backed or
-   * YAML-defined serializer and decodes the flat args directly. Returns null when no repo
+   * [trailblazeToolRepo]. The repo dispatches by toolName to the matching tool's
+   * serializer and decodes the flat args directly. Returns null when no repo
    * is configured or the lookup fails — the caller logs and continues to the next iteration.
    */
   private fun mapToTrailblazeTool(toolName: String, args: JsonObject): TrailblazeTool? {
@@ -510,7 +510,7 @@ GUIDELINES:
     if (trailblazeToolRepo != null) {
       return trailblazeToolRepo.getCurrentTrailblazeToolDescriptors()
     }
-    // Fallback: class-backed tools only. YAML-defined tools need a repo to resolve.
+    // Fallback: class-backed tools only. Scripted tools need a repo to resolve.
     return TrailblazeToolSet.DefaultLlmTrailblazeTools.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }

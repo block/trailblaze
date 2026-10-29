@@ -114,12 +114,8 @@ internal object CliPathUtils {
   /**
    * Windows-aware `PATHEXT`-list. On Windows, derived from the `PATHEXT` env var
    * (falling back to `.COM;.EXE;.BAT;.CMD`); on POSIX, just `""` so the bare
-   * command name is probed unchanged.
-   *
-   * Mirrors the shape used by
-   * [xyz.block.trailblaze.ui.utils.toolavailability.ToolAvailabilityChecker] so the
-   * two PATH-lookup implementations agree on cross-platform handling. Cached lazily
-   * because PATHEXT doesn't change during a JVM lifetime.
+   * command name is probed unchanged. Cached lazily because PATHEXT doesn't change
+   * during a JVM lifetime.
    */
   private val executableExtensions: List<String> by lazy {
     if (isWindows()) {
@@ -133,9 +129,8 @@ internal object CliPathUtils {
   /**
    * Returns true when [executable] resolves to an executable file on the system
    * `PATH`. On Windows, every `PATHEXT` extension is probed so `bun` matches
-   * `bun.exe` / `bun.cmd` etc. Pure filesystem lookup — no subprocess spawn —
-   * matching the discipline the existing `ToolAvailabilityChecker` uses for
-   * `adb` / `xcrun`. Returns false when `PATH` is unset or no matching file is
+   * `bun.exe` / `bun.cmd` etc. Pure filesystem lookup — no subprocess spawn.
+   * Returns false when `PATH` is unset or no matching file is
    * found.
    */
   fun isCommandOnPath(executable: String): Boolean {

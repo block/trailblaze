@@ -3,7 +3,6 @@ package xyz.block.trailblaze.mobile.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import java.util.Base64
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
@@ -18,6 +17,7 @@ import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * **Low-level framework primitive**: writes raw bytes to an absolute path on the Android device,
@@ -229,7 +229,7 @@ data class AndroidWriteBytesToFileTrailblazeTool(
       executor.writeFileAs(appId = appId, devicePath = devicePath, content = bytes)
     } else {
       withTimeoutOrNull(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS) {
-        runInterruptible(Dispatchers.IO) {
+        runInterruptible(TrailblazeDispatchers.IO) {
           executor.writeFileAs(appId = appId, devicePath = devicePath, content = bytes)
         }
       } ?: return TrailblazeToolResult.Error.ExceptionThrown(

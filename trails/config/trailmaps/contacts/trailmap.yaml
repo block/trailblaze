@@ -24,16 +24,9 @@ target:
       app_ids:
         - com.google.android.contacts
         - com.android.contacts
-      # Scripted tool declared under its platform (rather than at `target.tools:`) so the
-      # platform↔tool association is explicit in the YAML; the trailmap loader hoists it
-      # into the delivered top-level tool list at load time.
-      tools:
-        - contacts_android_launchApp
     ios:
       app_ids:
         - com.apple.MobileAddressBook
-      tools:
-        - contacts_ios_launchApp
     web: {}
     compose: {}
 waypoints:

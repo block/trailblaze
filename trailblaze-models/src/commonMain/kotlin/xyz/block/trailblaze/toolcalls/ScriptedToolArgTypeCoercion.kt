@@ -167,7 +167,7 @@ private fun declaredScalarType(propSchema: JsonObject): String? =
   }
 
 /** The root schema's `definitions` + `$defs` object entries, keyed by name (both blocks merged). */
-private fun collectDefinitions(root: JsonObject): Map<String, JsonObject> {
+internal fun collectDefinitions(root: JsonObject): Map<String, JsonObject> {
   val out = LinkedHashMap<String, JsonObject>()
   (root["definitions"] as? JsonObject)?.forEach { (name, v) -> (v as? JsonObject)?.let { out[name] = it } }
   (root["\$defs"] as? JsonObject)?.forEach { (name, v) -> (v as? JsonObject)?.let { out[name] = it } }
@@ -179,7 +179,7 @@ private fun collectDefinitions(root: JsonObject): Map<String, JsonObject> {
  * point at. A schema with no `$ref`, a non-local ref, an unresolvable name, or a ref cycle resolves
  * to itself (conservative — coercion then finds no `type`/`properties` and leaves the value alone).
  */
-private fun resolveRef(schema: JsonObject, definitions: Map<String, JsonObject>): JsonObject {
+internal fun resolveRef(schema: JsonObject, definitions: Map<String, JsonObject>): JsonObject {
   // Fast path — the overwhelmingly common inline schema has no `$ref`; skip the HashSet alloc.
   if (schema["\$ref"] == null) return schema
   var current = schema

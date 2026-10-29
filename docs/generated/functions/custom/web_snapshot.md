@@ -4,8 +4,7 @@
 
 # `web_snapshot`
 
-Take a snapshot of the current page state and save it with the provided screen name.
-This captures a screenshot and the page's accessibility tree for logging and debugging.
+Save a named screenshot and accessibility tree of the current page to the logs.
 
 ## Source
 
@@ -23,7 +22,7 @@ This captures a screenshot and the page's accessibility tree for logging and deb
 ### Required parameters
 
 - `screenName` — `String`
-  Name for the screen being captured (e.g., 'login_page', 'dashboard').
+  Screen name, e.g. 'login_page'.
 
 ### Optional parameters
 

@@ -339,6 +339,24 @@ class TrailDiscoveryTest {
     assertEquals(listOf("inside.trail.yaml"), names)
   }
 
+  @Test
+  fun `discoverTrailFilesFollowingRoot walks a symlinked root and reports paths under the link`() {
+    Assume.assumeTrue("Symlink support required", supportsSymlinks())
+    val shared = File(root, "shared-trails").apply { mkdirs() }
+    File(shared, "flows").mkdirs()
+    File(shared, "flows/login.trail.yaml").writeText("")
+    File(shared, ".claude/worktrees/agent-1").mkdirs()
+    File(shared, ".claude/worktrees/agent-1/other.trail.yaml").writeText("")
+    val link = File(root, "trails").toPath()
+    Files.createSymbolicLink(link, shared.toPath())
+
+    // The plain walk refuses a symlinked root; the helper must not.
+    assertEquals(emptyList(), TrailDiscovery.discoverTrailFiles(link))
+    val found = TrailDiscovery.discoverTrailFilesFollowingRoot(link)
+
+    assertEquals(listOf(link.resolve("flows/login.trail.yaml").toFile()), found)
+  }
+
   private fun newFile(relativePath: String): File {
     val file = File(root, relativePath)
     file.parentFile?.mkdirs()

@@ -247,7 +247,7 @@ class TrailRunnerIntegrationTest {
     // Parse as JSON (throws on malformed) and assert it declares the key tool-definition properties.
     val parsed = TrailblazeJsonInstance.parseToJsonElement(body)
     assertTrue(body.contains("\"id\""), "schema should describe the required `id` property")
-    assertTrue(body.contains("\"parameters\"") && body.contains("\"shortcut\""), "schema should describe tool keys")
+    assertTrue(body.contains("\"class\"") && body.contains("\"trailhead\""), "schema should describe tool keys")
     assertTrue(parsed is kotlinx.serialization.json.JsonObject, "schema root should be a JSON object")
   }
 

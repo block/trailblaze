@@ -121,15 +121,19 @@ export interface LoginArgs {
 }
 
 /**
- * Sign into MyApp with the supplied credentials. Use this whenever the
+ * Sign into the Android MyApp target with the supplied credentials. Use this whenever the
  * task is to authenticate as a known user before exercising other flows.
  */
 export const myapp_login = trailblaze.tool<LoginArgs>(
   async (input, ctx) => {
-    await ctx.tools.tapOnElementWithText({ text: "Sign in" });
+    await ctx.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Sign in.*" } },
+    });
     await ctx.tools.inputText({ text: input.email });
     await ctx.tools.inputText({ text: input.password });
-    await ctx.tools.tapOnElementWithText({ text: "Continue" });
+    await ctx.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Continue.*" } },
+    });
     return `Signed in as ${input.email}.`;
   },
 );
@@ -146,10 +150,9 @@ the typed-authoring devlog in this repo's `docs/` for the contract.)
 # trails/config/trailmaps/myapp/tools/myapp_login.yaml
 script: ./myapp_login.ts        # descriptor-relative: resolves next to this YAML
 name: myapp_login
-description: Sign into MyApp with the supplied credentials.
+description: Sign into the Android MyApp target with the supplied credentials.
 _meta:
-  trailblaze/supportedPlatforms: [android, ios, web]
-  trailblaze/requiresContext: true
+  trailblaze/supportedPlatforms: [android]
 inputSchema:
   email:
     type: string
@@ -177,8 +180,6 @@ target:
   platforms:
     android:
       app_ids: [com.example.myapp]
-    ios: {}
-    web: {}
 ```
 
 > The legacy authoring path (full YAML descriptor + `export async
@@ -228,9 +229,9 @@ agent, walk the four checkpoints in order:
 1. **Run `trailblaze check --show-typed-tools`** — if the tool is in
    that output, it's analyzer-visible; the bug is downstream (steps 2–4).
    If it's not, the analyzer didn't see your `.ts` source; jump to 3.
-2. **Confirm the trailmap declares the tool** in `trailmap.yaml`'s
-   `target.tools:` list (matching the sibling YAML's filename or the
-   bare tool name, depending on which authoring path you're on).
+2. **Confirm the trailmap doesn't exclude the tool.** Every scripted
+   tool under `<trailmap>/tools/` is on the target; a
+   `target.platforms.<platform>.excluded_tools:` entry removes it on that platform.
 3. **Confirm the sibling YAML's `script:` path resolves.** The path
    is resolved against the JVM's working directory (repo root), not
    the trailmap directory — the conventional shape is
@@ -385,10 +386,9 @@ Be honest with the user about which corners are still being shaped:
   `trailblaze waypoint locate/validate` discovery commands, and
   trailmap (`trailmap.yaml`) composition via `dependencies:`.
 - **Active prototype:** trail-as-tool (expose a saved trail as a tool
-  callable from other trails), the waypoint navigation graph and
-  shortcut routing (`trailblaze waypoint graph` and `trailblaze
-  waypoint shortcut`), step-level waypoint matching as a single
-  `matchWaypoint` tool, and npm-based trailmap distribution.
+  callable from other trails), the waypoint navigation graph
+  (`trailblaze waypoint graph`), step-level waypoint matching as a
+  single `matchWaypoint` tool, and npm-based trailmap distribution.
 
 When the user hits an edge case in one of the "active prototype"
 areas, point them at the [devlog index](https://block.github.io/trailblaze/devlog/)

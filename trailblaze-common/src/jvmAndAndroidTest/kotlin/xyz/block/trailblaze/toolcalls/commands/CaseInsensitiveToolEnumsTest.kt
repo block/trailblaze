@@ -64,13 +64,6 @@ class CaseInsensitiveToolEnumsTest {
       .isEqualTo(ElementRetrieverTrailblazeTool.LocatorType.RESOURCE_ID)
   }
 
-  @Test
-  fun `textMatchMode decodes lowercase`() {
-    assertThat(
-      TrailblazeJsonInstance.decodeFromString(TextMatchMode.serializer(), "\"prefix\""),
-    ).isEqualTo(TextMatchMode.PREFIX)
-  }
-
   /**
    * Exhaustive backstop for every [CaseInsensitiveEnumSerializer] reachable from this module.
    * Driven by each enum's `entries`, so adding a constant is covered automatically; only a
@@ -81,7 +74,6 @@ class CaseInsensitiveToolEnumsTest {
    */
   @Test
   fun `every constant of every case-insensitive serializer round-trips in any casing`() {
-    assertRoundTripsEveryConstant(TextMatchMode.Serializer, TextMatchMode.entries)
     assertRoundTripsEveryConstant(Status.Serializer, Status.entries)
     assertRoundTripsEveryConstant(
       ElementRetrieverTrailblazeTool.LocatorType.Serializer,

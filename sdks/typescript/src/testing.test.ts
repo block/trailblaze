@@ -24,11 +24,11 @@ describe("createMockClient: call recording", () => {
       "web_navigate"
     ]({ action: "GOTO", url: "https://example.test" });
     await (client.tools as Record<string, (a: Record<string, unknown>) => Promise<unknown>>)[
-      "web_verifyTextVisible"
-    ]({ text: "Hello" });
-    expect(client.calls.map((c) => c.tool)).toEqual(["web_navigate", "web_verifyTextVisible"]);
+      "web_verifyElementVisible"
+    ]({ ref: 'heading "Hello"' });
+    expect(client.calls.map((c) => c.tool)).toEqual(["web_navigate", "web_verifyElementVisible"]);
     expect(client.calls[0]?.args).toEqual({ action: "GOTO", url: "https://example.test" });
-    expect(client.calls[1]?.args).toEqual({ text: "Hello" });
+    expect(client.calls[1]?.args).toEqual({ ref: 'heading "Hello"' });
   });
 
   test("default unstubbed response unwraps to an empty string", async () => {
@@ -74,11 +74,11 @@ describe("createMockClient: stub", () => {
 
   test("stub with errorMessage throws with production wording", async () => {
     const client = createMockClient();
-    client.stub("web_verifyTextVisible", { textContent: "", errorMessage: "no match" });
+    client.stub("web_verifyElementVisible", { textContent: "", errorMessage: "no match" });
     await expect(
       (
         client.tools as Record<string, (a: Record<string, unknown>) => Promise<unknown>>
-      )["web_verifyTextVisible"]({ text: "missing" }),
+      )["web_verifyElementVisible"]({ ref: 'heading "missing"' }),
     ).rejects.toThrow(/tool failed: no match/);
   });
 
@@ -148,6 +148,17 @@ describe("createMockClient: tools Proxy guards", () => {
 });
 
 describe("createMockContext", () => {
+  test("memory.interpolate keeps a literal $ before a {{token}}", () => {
+    const ctx = createMockContext({ platform: "ios", memory: { amount: "5" } });
+    expect(ctx.memory.interpolate("pay ${{amount}}")).toBe("pay $5");
+  });
+
+  test("memory.interpolate follows the Mustache-style grammar of the real memory", () => {
+    const ctx = createMockContext({ platform: "ios", memory: { amount: "5", template: "{{amount}}" } });
+    expect(ctx.memory.interpolate("pay {{ amount }} {{{amount}}} ${ amount }")).toBe("pay 5 5 5");
+    expect(ctx.memory.interpolate("{{template}}")).toBe("{{amount}}");
+  });
+
   test("fills defaults for everything except platform", () => {
     const ctx = createMockContext({ platform: "web" });
     expect(ctx.device.platform).toBe("web");

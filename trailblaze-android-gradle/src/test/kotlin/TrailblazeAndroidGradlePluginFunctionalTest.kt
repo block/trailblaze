@@ -842,8 +842,8 @@ class TrailblazeAndroidGradlePluginFunctionalTest {
   fun `apply() auto-wires androidTest-shaped tasks to depend on generateTask`() {
     // The matcher inside `apply()` covers four task-name families. Without real AGP in the
     // fixture (see AndroidGradleTestFixtures.kt), we register stand-in tasks that exactly match
-    // each family AFTER the plugin is applied and assert they all carry
-    // `dependsOn(:generateAndroidTrailJUnitShells)`. This relies on the matcher being live
+    // each family AFTER the plugin is applied and assert their execution plans put
+    // `generateAndroidTrailJUnitShells` first. This relies on the matcher being live
     // (`tasks.matching` returns a filtered view that updates as tasks are added, and
     // `configureEach` is the lazy variant that applies to current AND future matching tasks).
     //
@@ -868,42 +868,32 @@ class TrailblazeAndroidGradlePluginFunctionalTest {
         // Negative-case: same prefix as the compile family but not for androidTest.
         val compileDebugKotlin by tasks.registering
 
-        // Forces the matcher's `configureEach` to fire by realizing each task, then asserts the
-        // resulting dependsOn sets.
-        tasks.register("assertAutoWiringApplied") {
-          doLast {
-            val expected = setOf(
-              "compileDebugAndroidTestKotlin",
-              "generateDebugAndroidTestLintModel",
-              "lintAnalyzeDebugAndroidTest",
-              "lintReportDebugAndroidTest",
-            )
-            expected.forEach { name ->
-              val deps = tasks.named(name).get().taskDependencies.getDependencies(null)
-                .map { it.name }
-              check("generateAndroidTrailJUnitShells" in deps) {
-                "expected ${'$'}name.dependsOn to include generateAndroidTrailJUnitShells; got ${'$'}deps"
-              }
-            }
-            val unrelated = tasks.named("compileDebugKotlin").get().taskDependencies
-              .getDependencies(null).map { it.name }
-            check("generateAndroidTrailJUnitShells" !in unrelated) {
-              "expected compileDebugKotlin NOT to depend on generateAndroidTrailJUnitShells; got ${'$'}unrelated"
-            }
-          }
-        }
         """
         ),
         tempDirs,
       )
     writeTrail(projectDir, className = "FooLongTest", method = "alpha")
 
-    val result = gradleRunner(projectDir, "assertAutoWiringApplied").build()
-    assertEquals(
-      TaskOutcome.SUCCESS,
-      result.task(":assertAutoWiringApplied")?.outcome,
-      "expected the auto-wiring assertion task to pass; got ${result.output}",
-    )
+    listOf(
+      "compileDebugAndroidTestKotlin",
+      "generateDebugAndroidTestLintModel",
+      "lintAnalyzeDebugAndroidTest",
+      "lintReportDebugAndroidTest",
+    ).forEach { name ->
+      val result = gradleRunner(projectDir, name, "--dry-run").build()
+      val generateIndex = result.output.indexOf(":generateAndroidTrailJUnitShells SKIPPED")
+      val targetIndex = result.output.indexOf(":$name SKIPPED")
+      assertTrue("expected generation before $name; got ${result.output}") {
+        generateIndex >= 0 && targetIndex > generateIndex
+      }
+    }
+    val unrelated = gradleRunner(projectDir, "compileDebugKotlin", "--dry-run").build()
+    assertTrue("expected the unrelated task in the plan: ${unrelated.output}") {
+      unrelated.output.contains(":compileDebugKotlin SKIPPED")
+    }
+    assertTrue("unrelated compilation must not run generation: ${unrelated.output}") {
+      !unrelated.output.contains(":generateAndroidTrailJUnitShells SKIPPED")
+    }
   }
 
   @Test

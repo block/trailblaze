@@ -23,6 +23,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=extract-jar-entry.sh
+source "${SCRIPT_DIR}/extract-jar-entry.sh"
 
 INSTALL_DIR="${HOME}/.trailblaze/install"
 # `:trailblaze-desktop` is the open-source uber JAR module. Override only if
@@ -83,6 +85,13 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
+# The launcher is extracted from the built JAR below. Check that something can do that before
+# the existing install is removed, not after a full build.
+if ! jar_extractor_available; then
+  echo "Error: installing needs unzip, bsdtar, or python3 to extract the launcher from the JAR." >&2
+  exit 1
+fi
+
 echo "--- Removing any existing trailblaze install"
 uninstall
 
@@ -115,17 +124,16 @@ if command -v brew >/dev/null 2>&1 && brew list --formula trailblaze &>/dev/null
 fi
 
 # ── Build the release artifacts ─────────────────────────────────────────────
-# `:releaseArtifacts` runs `packageUberJarForCurrentOS` and then copies the
-# launcher script (scripts/trailblaze) alongside the JAR into
-# build/release/. That gives us a self-contained {trailblaze.jar, trailblaze}
-# pair without having to extract the launcher from inside the JAR (the OSS
-# desktop module ships the launcher as a sibling, not an embedded resource).
+# `:releaseArtifacts` runs `packageUberJarForCurrentOS` and lays the JAR down
+# in build/release/. The launcher is extracted from the JAR's
+# `trailblaze-launcher` entry below — the same path a release install takes —
+# so a source install exercises the launcher the JAR actually carries.
 #
 # `-Ptrailblaze.variant=source` overrides the default in gradle.properties so
-# the JAR's bundled version.properties announces itself as `(source)` in the
-# GUI tray menu and `trailblaze --version`. This keeps a developer's locally-
-# built install visibly distinct from an officially-published Homebrew/release
-# binary which carry the inherited `Internal` variant.
+# the JAR's bundled version.properties announces itself as `(source)` in
+# `trailblaze --version`. This keeps a developer's locally-built install
+# visibly distinct from an officially-published Homebrew/release binary which
+# carry the inherited `Internal` variant.
 echo "--- Building trailblaze release artifacts (${TRAILBLAZE_MODULE}:releaseArtifacts)"
 cd "$REPO_ROOT"
 
@@ -161,28 +169,25 @@ fi
   -Ptrailblaze.variant=source \
   ${TRAILBLAZE_GRADLE_EXTRA_ARGS:-}
 
-# Locate the built JAR + launcher. `releaseArtifacts` lays them down with
-# stable names (no timestamp) — no need to hunt with `ls -t`.
+# Locate the built JAR. `releaseArtifacts` lays it down with a stable name
+# (no timestamp) — no need to hunt with `ls -t`.
 module_dir="${TRAILBLAZE_MODULE#:}"
 module_dir="${module_dir//://}"
 RELEASE_DIR="${REPO_ROOT}/${module_dir}/build/release"
 JAR_PATH="${RELEASE_DIR}/trailblaze.jar"
-LAUNCHER_PATH="${RELEASE_DIR}/trailblaze"
 if [ ! -f "$JAR_PATH" ]; then
   echo "Error: expected JAR not found at ${JAR_PATH}" >&2
   exit 1
 fi
-if [ ! -s "$LAUNCHER_PATH" ]; then
-  echo "Error: expected launcher not found (or empty) at ${LAUNCHER_PATH}" >&2
-  exit 1
-fi
 echo "Built JAR:      ${JAR_PATH}"
-echo "Built launcher: ${LAUNCHER_PATH}"
 
 # ── Install into ~/.trailblaze/install/ ─────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
 cp "$JAR_PATH" "${INSTALL_DIR}/trailblaze.jar"
-cp "$LAUNCHER_PATH" "${INSTALL_DIR}/trailblaze-launcher"
+if ! extract_jar_entry "${INSTALL_DIR}/trailblaze.jar" trailblaze-launcher "${INSTALL_DIR}/trailblaze-launcher"; then
+  echo "Error: could not extract 'trailblaze-launcher' from ${JAR_PATH}" >&2
+  exit 1
+fi
 chmod 755 "${INSTALL_DIR}/trailblaze-launcher"
 
 # Wrapper script — points the launcher at the bundled JAR. Same shape as the

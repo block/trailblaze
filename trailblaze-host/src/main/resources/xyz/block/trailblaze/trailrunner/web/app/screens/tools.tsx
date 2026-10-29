@@ -7,16 +7,9 @@ const TOOL_FLAVORS = {
   scripted: {
     short: 'Scripted', label: 'Scripted TypeScript', ico: 'file-code-2', color: 'var(--tb-pass)', tag: 'Recommended', lang: 'typescript',
     what: 'A typed .ts tool that runs on Bun - a handler over the typed ctx.tools.<name>(args) surface. One file per tool.',
-    when: 'Branching, retries, async, or composition beyond a literal substitution.',
+    when: 'Composing other tools, branching, retries, or async work.',
     where: '<trailmap>/tools/<name>.ts · listed in trailmap.yaml under target.tools',
-    snippet: 'export const clock_clearAlarms = trailblaze.tool(\n  { supportedPlatforms: ["android"], requiresContext: true },\n  async (input, ctx) => {\n    await ctx.tools.android_adbShell({ command: ["pm", "clear", appId] });\n    return `Cleared.`;\n  },\n);',
-  },
-  yaml: {
-    short: 'YAML', label: 'YAML-composed', ico: 'file-text', color: 'var(--tb-running)', tag: null, lang: 'yaml',
-    what: 'A declarative <id>.tool.yaml that substitutes params into existing framework tool calls. No code; auto-discovered.',
-    when: 'Thin wrappers where a TypeScript handler would be more ceremony than the wrapper deserves.',
-    where: '<trailmap>/tools/<id>.tool.yaml',
-    snippet: 'id: eraseText\ndescription: Erase text from the focused field.\nparameters:\n  - name: charactersToErase\n    type: integer\n    required: false\ntools:\n  - mobile_maestro:\n      commands:\n        - eraseText:\n            charactersToErase: "{{params.charactersToErase}}"',
+    snippet: 'export const clock_clearAlarms = trailblaze.tool(\n  { supportedPlatforms: ["android"] },\n  async (input, ctx) => {\n    await ctx.tools.android_adbShell({ command: ["pm", "clear", appId] });\n    return `Cleared.`;\n  },\n);',
   },
   kotlin: {
     short: 'Kotlin', label: 'Kotlin-backed', ico: 'box', color: 'var(--tb-amber)', tag: 'Advanced', lang: 'yaml',
@@ -27,7 +20,7 @@ const TOOL_FLAVORS = {
   },
   unknown: { short: 'Unknown', label: 'Unparsed', ico: 'file-question', color: 'var(--text-subtle)', lang: 'yaml' },
 };
-const FLAVOR_ORDER = ['scripted', 'yaml', 'kotlin'];
+const FLAVOR_ORDER = ['scripted', 'kotlin'];
 const flavorOf = (f) => TOOL_FLAVORS[f] || TOOL_FLAVORS.unknown;
 
 function FlavorBadge({ flavor, dot }) {
@@ -80,8 +73,8 @@ function toolUsageSnippet(t) {
 
 function ToolSummary({ t, go }) {
   // Scripted (.ts) tools carry no params in the static catalog (the TypeScript arg-schema analyzer
-  // is too slow to run catalog-wide), so resolve them on demand here; Kotlin/yaml tools already
-  // ship their params inline on the catalog entry.
+  // is too slow to run catalog-wide), so resolve them on demand here; Kotlin tools already ship
+  // their params inline on the catalog entry.
   const isScripted = t.flavor === 'scripted';
   const scripted = TB.useScriptedToolParams(isScripted ? t.trailmap : null, isScripted ? t.id : null);
   // Gate on `loading` alone (not `!data`): useFetched keeps the PREVIOUS tool's data while the next

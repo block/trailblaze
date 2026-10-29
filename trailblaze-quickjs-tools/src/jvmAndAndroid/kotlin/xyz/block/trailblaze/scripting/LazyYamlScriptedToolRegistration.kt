@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import xyz.block.trailblaze.util.isWindows
 
 /**
  * Session-scoped registration for an inline scripted tool declared under a trailmap manifest's
@@ -39,7 +42,8 @@ import java.io.File
  * **Why one [QuickJsToolHost] per registration**: the host's `evalMutex` is non-reentrant. If
  * one scripted tool's body calls `client.callTool("otherScriptedTool", …)` and both shared a
  * single host, the nested call would deadlock on the same mutex. Per-registration hosts mean
- * the nested call hits a *different* host's mutex, so re-entry is safe by construction.
+ * the nested call hits a *different* host's mutex. A tool composing ITSELF still lands on its own
+ * host, so the binding's same-host guard refuses that (see [SessionScopedHostBinding.ownHost]).
  *
  * **Naming note**: the "Lazy" prefix is from the planning doc and implies on-first-dispatch
  * host construction. In practice the host is constructed eagerly via [create] at session
@@ -62,6 +66,8 @@ class LazyYamlScriptedToolRegistration private constructor(
   // are byte-identical (`{type: object, properties: {}}`), and only the former is the tool's
   // complete contract. See [InlineScriptToolConfig.inputSchemaExhaustive].
   override val declaresExhaustiveParameters: Boolean = toolConfig.inputSchemaExhaustive
+
+  private val declaredArgNames: Set<String>? = declaredArgNames(toolConfig)
 
   // Honor BOTH the typed [InlineScriptToolConfig] field AND the namespaced `_meta` key, combined by
   // opt-out AND (a `false` from either side wins). The typed field is the source of truth for the
@@ -103,7 +109,7 @@ class LazyYamlScriptedToolRegistration private constructor(
     // QuickJS asyncFunction callback (Dispatchers.Default) to find null context and return
     // "no execution context installed" for every nested client.callTool() call.
     val serializer =
-      QuickJsToolSerializer(name, host, binding, effectiveIsRecordable, effectiveSensitiveArgs)
+      QuickJsToolSerializer(name, host, binding, effectiveIsRecordable, effectiveSensitiveArgs, declaredArgNames)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -115,7 +121,8 @@ class LazyYamlScriptedToolRegistration private constructor(
         // itself executing the tool rather than going through agent.runTrailblazeTools).
         binding.activeContext = context
         val result = try {
-          args.execute(context)
+          // The model calls this directly, not through an agent's dispatch, so record it here.
+          ToolCallHistory.recordExecution(context, args) { args.execute(context) }
         } finally {
           binding.activeContext = null
         }
@@ -132,8 +139,12 @@ class LazyYamlScriptedToolRegistration private constructor(
     val serializer = QuickJsToolSerializer(
       name,
       host,
+      // The inner tool carries the binding too, so a call that reaches it without this wrapper
+      // (a trailhead's `teardown`, run after the trail by the framework) still has a context.
+      binding = binding,
       isRecordable = effectiveIsRecordable,
       sensitiveArgs = effectiveSensitiveArgs,
+      declaredArgNames = declaredArgNames,
     )
     val inner = Json.decodeFromString(serializer, argumentsJson) as QuickJsTrailblazeTool
     // Wrap the deserialized `QuickJsTrailblazeTool` so its outer `execute(...)` sets the
@@ -170,8 +181,8 @@ class LazyYamlScriptedToolRegistration private constructor(
    * Without it, a scripted tool's declared credential arg would be masked on the on-device path and
    * leak on the host path — the wrapper surfaces [rawToolArguments] verbatim.
    */
-  private class ContextSettingScriptedTool(
-    private val inner: QuickJsTrailblazeTool,
+  internal class ContextSettingScriptedTool(
+    internal val inner: QuickJsTrailblazeTool,
     private val binding: SessionScopedHostBinding,
   ) : xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool,
     xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool,
@@ -256,11 +267,29 @@ class LazyYamlScriptedToolRegistration private constructor(
       if (pathEnv == null) return null
       for (dir in pathEnv.split(File.pathSeparator)) {
         if (dir.isBlank()) continue
-        val candidate = File(dir, "esbuild")
-        if (candidate.exists() && candidate.canExecute()) return candidate
+        for (name in ESBUILD_PATH_NAMES) {
+          val candidate = File(dir, name)
+          if (candidate.exists() && candidate.canExecute()) return candidate
+        }
       }
       return null
     }
+
+    /**
+     * On Windows only a native `esbuild.exe` qualifies. npm's extensionless `esbuild` is a shell
+     * shim that `canExecute` accepts (it is true for any readable file) and that cannot be started,
+     * and its `esbuild.cmd` shim would run through cmd.exe, which re-parses the tool paths passed to
+     * it. Without one on `PATH`, the walk-up below finds the SDK's own `esbuild.exe`.
+     */
+    private val ESBUILD_PATH_NAMES: List<String> =
+      if (isWindows()) listOf("esbuild.exe") else listOf("esbuild")
+
+    /**
+     * Where an SDK package's `node_modules` keeps the esbuild binary. On Windows `.bin/esbuild` is a
+     * shell shim, so the walk-up goes straight to the platform package npm installs the real one in.
+     */
+    private val ESBUILD_NODE_MODULES_RELPATH: String =
+      if (isWindows()) "node_modules/@esbuild/win32-x64/esbuild.exe" else "node_modules/.bin/esbuild"
 
     /**
      * Walk-up half of [resolveEsbuildBinary], pulled out so a unit test can pin the
@@ -280,7 +309,7 @@ class LazyYamlScriptedToolRegistration private constructor(
      * cryptic "Unsupported tool type for RPC execution" at trail-dispatch time.
      */
     internal fun resolveEsbuildViaWalkup(startDir: File): File? {
-      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/node_modules/.bin/esbuild" }
+      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/$ESBUILD_NODE_MODULES_RELPATH" }
       var current: File? = startDir
       while (current != null) {
         for (rel in relativeCandidates) {
@@ -757,6 +786,8 @@ class LazyYamlScriptedToolRegistration private constructor(
         // available in both runtimes.
         engineExtension = engineExtension,
       )
+      // Lets the binding refuse this tool composing itself, which would re-enter this same host.
+      binding.ownHost = host
       return LazyYamlScriptedToolRegistration(toolConfig, host, binding)
     }
 
@@ -768,6 +799,31 @@ class LazyYamlScriptedToolRegistration private constructor(
      */
     fun buildScriptedToolDescriptor(config: InlineScriptToolConfig): TrailblazeToolDescriptor =
       buildDescriptor(config)
+
+    /**
+     * The argument names a call to [config]'s tool may carry, or null to keep every key. Only a
+     * plain object schema that is the whole contract names them all: a root union, `$ref`,
+     * conditional, or any open-ended property rule could accept keys that `properties` doesn't
+     * list. The schema is the whole contract when its provenance says so
+     * ([InlineScriptToolConfig.inputSchemaExhaustive]) or when it closes itself with
+     * `additionalProperties: false`, which the analyzer writes and compiled target YAML keeps after
+     * the transient provenance flag is lost on load.
+     */
+    fun declaredArgNames(config: InlineScriptToolConfig): Set<String>? {
+      val schema = config.inputSchema
+      val additional = schema["additionalProperties"]
+      if (!config.inputSchemaExhaustive && additional != JsonPrimitive(false)) return null
+      if (OPEN_ENDED_SCHEMA_KEYWORDS.any { it in schema }) return null
+      if (additional != null && additional != JsonPrimitive(false)) return null
+      val type = (schema["type"] as? JsonPrimitive)?.contentOrNull
+      if (type != "object" && "properties" !in schema) return null
+      return (schema["properties"] as? JsonObject)?.keys.orEmpty()
+    }
+
+    private val OPEN_ENDED_SCHEMA_KEYWORDS = setOf(
+      "anyOf", "oneOf", "allOf", "not", "if", "then", "else", "\$ref",
+      "patternProperties", "dependentSchemas", "dependencies", "unevaluatedProperties", "propertyNames",
+    )
 
     /**
      * Builds a [TrailblazeToolDescriptor] from the YAML-declared `inputSchema:` block.

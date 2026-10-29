@@ -5,7 +5,9 @@
     "(1) fileNames — how a file name maps to a stream name (including the legacy `.json` style-segment",
     "strip), implemented by Kotlin `SessionEvents.parseFileName` and TS `parseStreamFileName`;",
     "(2) lines — how one NDJSON line decodes to an ordering timestamp + payload (the `{timeMs, data}`",
-    "envelope rule), implemented by the Kotlin `SessionEventsReader` and TS `decodeEventLine`;",
+    "envelope rule, plus the `clock` marker: `\"device\"` marks a device-clock stamp, any other value",
+    "or none means host; an absent `clock` in a case means host), implemented by the Kotlin",
+    "`SessionEventsReader` (with no `session_device_clock.json`, so the stamp stays raw) and TS `decodeEventLine`;",
     "(3) attachments — which embedded objects a decoded payload's sweep reports as attachment refs",
     "(the `\"$attachment\": true` exact-dispatch contract), implemented by Kotlin",
     "`AttachmentRef.findAll` and TS `findAttachmentRefs`;",
@@ -42,7 +44,9 @@
     { "line": "{\"timeMs\":5,\"x\":2}", "t": 5, "payload": { "timeMs": 5, "x": 2 } },
     { "line": "{\"data\":{\"x\":1}}", "t": null, "payload": { "data": { "x": 1 } } },
     { "line": "not json", "t": null, "payload": null },
-    { "line": "\"just a string\"", "t": null, "payload": null }
+    { "line": "\"just a string\"", "t": null, "payload": null },
+    { "line": "{\"timeMs\":7000,\"data\":{\"app\":1},\"clock\":\"device\"}", "t": 7000, "payload": { "app": 1 }, "clock": "device" },
+    { "line": "{\"timeMs\":7001,\"data\":{\"app\":2},\"clock\":\"host\"}", "t": 7001, "payload": { "app": 2 } }
   ],
   "attachments": [
     {

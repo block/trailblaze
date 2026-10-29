@@ -171,10 +171,11 @@ So for a trail that must replay with no LLM, seed the value with
 
 Recall a stored variable in any later step by interpolating it as
 `{{variable}}` or `${variable}` — in an `inputText`, a search field, an
-`assertVisibleWithText`, etc. The token is substituted at the dispatch
-boundary before the step's tool executes. (This trail-step recall is a
-separate mechanism from a YAML-*defined* tool's `tools:` body, which
-interpolates only `{{params.*}}`.)
+`assertVisibleBySelector`, etc. The token is substituted at the dispatch
+boundary before the step's tool executes. Tokens follow Mustache's rules:
+spaces inside the braces are ignored (`{{ variable }}`), `{{{variable}}}`
+works too, a `$` right before a token stays a literal `$` (`${{amount}}`
+gives `$5`), and a substituted value is never scanned for tokens again.
 
 ## Inspecting a session — generate an HTML report
 
@@ -204,28 +205,25 @@ Use this when:
 ## Inspecting a session in the desktop Trace Viewer
 
 For interactive inspection (multiple sessions side-by-side, frame
-scrubbing, view-hierarchy editing), launch the Trailblaze desktop
-application:
+scrubbing, view-hierarchy editing), open Trailblaze App:
 
 ```bash
-trailblaze app                  # launch the legacy desktop app
-trailblaze app --v2             # launch Trail Runner (boots the daemon if needed)
-trailblaze app --headless       # daemon-only, no GUI
+trailblaze app                  # open Trailblaze App (boots the daemon if needed)
+trailblaze app --headless       # daemon-only, no window
 trailblaze app --status         # is the daemon running?
 trailblaze app --stop           # stop the running daemon
 ```
 
-The default invocation (`trailblaze app`, no flags) opens the legacy desktop
-GUI. Use `--v2` to open Trail Runner. Both headed apps start the daemon, which
-drives devices and serves session data; every CLI call can boot it on demand too.
-Use `--headless` only on a machine with no display (CI agent, remote shell) when
-you want subsequent CLI calls to reuse the daemon.
+`trailblaze app` starts the daemon, which drives devices and serves session
+data; every CLI call can boot it on demand too. Use `--headless` on a machine
+with no display (CI agent, remote shell) when you want subsequent CLI calls to
+reuse the daemon.
 
 The HTML report is still the right artifact for sharing or for
 attaching to a bug report — it's self-contained and portable. The
-desktop app is the right surface for live local inspection.
+Trailblaze App is the right surface for live local inspection.
 
-If a daemon is already running on the bound port, `trailblaze app --v2`
+If a daemon is already running on the bound port, `trailblaze app`
 reuses it (no second daemon spawns). If startup fails — port already
 held by an unrelated process, no display available on the host, missing
 JVM dependency — the error surfaces via the standard structured envelope

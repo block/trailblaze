@@ -83,8 +83,7 @@ dependencies:
   - trailblaze                                # pulls in core_interaction, navigation, …
 target:
   display_name: MyApp
-  tools:
-    - myapp_login                             # the name your .ts exports, see Step 4
+  # No tools list: every tools/*.ts that exports a trailblaze.tool(...) is on this target.
   platforms:
     android:
       app_ids: [com.example.myapp]
@@ -97,11 +96,11 @@ Three things to notice:
 
 - `dependencies: [trailblaze]` brings the framework's standard tool sets and defaults
   into scope. Without it you get a minimal target with no built-in interaction tools.
-- `target.tools:` lists tool **names** (not file paths). The loader auto-discovers every
-  `tools/*.ts` that exports a `trailblaze.tool(...)` declaration and resolves the names
-  here into the runtime tool list. When a trailmap ships both iOS and Android tools,
-  platform-specific tools go under `platforms.<p>.tools:` instead — see
-  [Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools).
+- There is no tools list. The loader auto-discovers every `tools/*.ts` that exports a
+  `trailblaze.tool(...)` declaration and puts it on this target; each tool's own
+  `supportedPlatforms` / `supportedDrivers` scope it. To keep one off, name it under
+  `platforms.<p>.excluded_tools:` — see
+  [Trailmaps → Per-file scripted tools](trailmaps.md#per-file-scripted-tools).
 - `tool_sets:` names framework-shipped bundles of Kotlin tools to expose. `core_interaction`
   brings in primitives like `tapOnElement`, `inputText`, `swipe`; `verification` brings in
   `assertVisible` / `assertNotVisible`. See [Trailmaps → Discovery](trailmaps.md) for the
@@ -158,7 +157,7 @@ export interface MyappLoginArgs {
  * to log in, sign in, authenticate, or otherwise reach a signed-in state.
  */
 export const myapp_login = trailblaze.tool<MyappLoginArgs>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (input, ctx) => {
     await ctx.tools.tapOnElement({ ref: "Email" });
     await ctx.tools.inputText({ text: input.email });
@@ -181,14 +180,15 @@ What the typed surface gives you:
   parameter's LLM-facing description.
 - The TSDoc on the exported `const` becomes the tool's description — what the agent reads
   when deciding whether to call this tool.
-- The spec object (`{ supportedPlatforms, requiresContext }`) becomes the runtime's
+- The spec object (`{ supportedPlatforms }`) becomes the runtime's
   registration gates and metadata hints — no separate `_meta:` YAML required.
 - `ctx.tools.<name>(args)` is the typed composition surface. Every framework tool, every
   sibling trailmap-local tool, and every tool inherited via a dep's `exports:` is a
   method on it. Unknown names are `tsc` errors.
 
-The export name (`myapp_login`) is the load-bearing identifier — the manifest's
-`target.tools:` names this export and the runtime registers a tool by exactly that name.
+The export name (`myapp_login`) is the load-bearing identifier — the runtime registers a
+tool by exactly that name. There's nothing to add to `trailmap.yaml`: the tool is on the
+target once the file exists.
 See [Scripted Tools (TypeScript) — The shape](scripted-tools-typed-authoring.md#the-shape)
 for the full reference.
 
@@ -264,7 +264,7 @@ tool's behavior matches what your agent should see at the top of `toolbox`.
   it as a **trailhead** — the trail's deterministic step 0, backed by a single specialized
   launch tool per platform instead of an enumerated tap sequence. Author it as its own
   tool type (`*.trailhead.yaml`) and reference it from a trail's top-level `trailhead:`
-  block. See [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
+  block. See [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-trailheadyaml).
 
 - **Compose multiple tools.** Sibling tools call each other through
   `ctx.tools.<name>(args)` — see the

@@ -42,6 +42,9 @@ class CliOutputTranscript(private val limit: Int, private val maxSegments: Int =
   private var totalBytes = 0
   private var truncated = false
 
+  /** True once any write was dropped for going past [limit]. */
+  val isTruncated: Boolean get() = synchronized(lock) { truncated }
+
   /** Set once [maxSegments] is reached; from then on writes go to [terminalSegments]. */
   private var coalescing = false
   private val terminalSegments = mutableMapOf<CliExecStream, ByteArrayOutputStream>()

@@ -6,6 +6,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import xyz.block.trailblaze.devices.RequiredDeviceClassifiers
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
@@ -43,9 +45,14 @@ data class TrailblazeToolMeta(
    * uppercase) so the normalization keeps that path branch-free.
    */
   val supportedPlatforms: List<String> = emptyList(),
+  /**
+   * Device-classifier segments the session device must carry — see
+   * [requiredClassifiersSatisfiedBy]. A malformed declaration never registers on a known device;
+   * see [RequiredDeviceClassifiers].
+   */
+  val requiredClassifiers: RequiredDeviceClassifiers = RequiredDeviceClassifiers.None,
   /** Null = global registry (pull-based). Non-null = pushed into that toolset at registration. */
   val toolset: String? = null,
-  val requiresContext: Boolean = false,
   /**
    * Reserved runtime capability: this hidden MCP tool drains process-local opaque session
    * resources immediately before the host closes the subprocess. It is never registered in the
@@ -68,7 +75,7 @@ data class TrailblazeToolMeta(
    * applies; `false` when any of the filter rules rejects it.
    *
    * Implements the scope devlog's § Capability filtering order: drivers → platforms →
-   * requiresHost. `requiresContext` is not a filter — it's UX-only per § 1.
+   * requiresHost → requiredClassifiers.
    *
    * On-device callers pass `preferHostAgent = false`, which is what makes
    * `trailblaze/requiresHost: true` tools skip at registration without any extra branching
@@ -77,6 +84,7 @@ data class TrailblazeToolMeta(
   fun shouldRegister(
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): Boolean {
     if (supportedDrivers.isNotEmpty() && driver.yamlKey !in supportedDrivers) {
       return false
@@ -89,19 +97,35 @@ data class TrailblazeToolMeta(
     if (requiresHost && !preferHostAgent && driver.executesToolsOnDevice) {
       return false
     }
-    return true
+    return requiredClassifiersSatisfiedBy(classifiers)
   }
+
+  /**
+   * Whether the session device's [classifiers] satisfy [requiredClassifiers]: every listed segment
+   * must appear (case-insensitively) in the device's classifier list, e.g. `[rig]` is satisfied by
+   * `[android, phone, rig]`.
+   *
+   * `null` [classifiers] means the caller doesn't know the device — a static report or a tool
+   * listing with no session — and skips this gate rather than hiding a tool that may apply. An
+   * empty list is a known device with no classifiers, and fails any requirement.
+   */
+  fun requiredClassifiersSatisfiedBy(classifiers: List<TrailblazeDeviceClassifier>?): Boolean =
+    requiredClassifiers.isSatisfiedBy(classifiers)
 
   /**
    * Multi-device overload: the tool registers when it applies to ANY of the session's drivers.
    * A heterogeneous session (e.g. an Android launch device with a web browser companion)
    * advertises one merged tool surface; each registered tool still executes only on a device
    * whose driver accepted it.
+   *
+   * [classifiers] are the launch device's: multi-device sessions carry no per-companion
+   * classifiers here, so [requiredClassifiers] is judged against the device the run launched on.
    */
   fun shouldRegister(
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
-  ): Boolean = drivers.any { shouldRegister(it, preferHostAgent) }
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): Boolean = drivers.any { shouldRegister(it, preferHostAgent, classifiers) }
 
   companion object {
 
@@ -114,7 +138,6 @@ data class TrailblazeToolMeta(
     private const val KEY_SUPPORTED_DRIVERS = "${PREFIX}supportedDrivers"
     private const val KEY_SUPPORTED_PLATFORMS = "${PREFIX}supportedPlatforms"
     private const val KEY_TOOLSET = "${PREFIX}toolset"
-    private const val KEY_REQUIRES_CONTEXT = "${PREFIX}requiresContext"
     private const val KEY_SESSION_RESOURCE_FINALIZER = "${PREFIX}sessionResourceFinalizer"
 
     /**
@@ -138,8 +161,10 @@ data class TrailblazeToolMeta(
       // to the same canonical form before downstream `!in` checks against
       // TrailblazeDevicePlatform.name (always uppercase).
       supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
+      // NOT `readStringList` — a malformed shape read as absent would register a tool meant for
+      // specially equipped devices on every device. See [RequiredDeviceClassifiers].
+      requiredClassifiers = RequiredDeviceClassifiers.fromMeta(meta),
       toolset = meta.readString(KEY_TOOLSET),
-      requiresContext = meta.readBoolean(KEY_REQUIRES_CONTEXT, default = false),
       isSessionResourceFinalizer = meta.readBoolean(KEY_SESSION_RESOURCE_FINALIZER, default = false),
       // NOT `readStringList` — that treats a malformed shape as absent, which for this key means
       // "mask nothing" and silently leaks the credential. See [DeclaredSensitiveArgs].
@@ -167,8 +192,8 @@ fun Tool.trailblazeMeta(): TrailblazeToolMeta = TrailblazeToolMeta.fromTool(this
  * Convenience overload mirroring [TrailblazeToolMeta.shouldRegister] for a full session —
  * takes the resolved [platform] explicitly in case the caller has it but not the driver enum.
  *
- * Not called by the runtime today; there for tests and for future callers that don't have a
- * [TrailblazeDriverType] in hand.
+ * Used by tool discovery when no device is connected, so [TrailblazeToolMeta.requiredClassifiers]
+ * is not judged here — there is no device to judge it against.
  */
 fun TrailblazeToolMeta.shouldRegisterForPlatform(
   platform: TrailblazeDevicePlatform,

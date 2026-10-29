@@ -36,7 +36,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
  *    and points at the producer contract on
  *    [TrailblazeToolExecutionContext.toolRepo]'s kdoc.
  *  - **Unknown tool name**. The repo's unfiltered lookup searches session-registered
- *    classes, YAML-defined tools, and the global classpath registry; if all three miss,
+ *    classes and the global classpath registry; if both miss,
  *    we fail loudly with the searched name so the caller can spot a typo or a missing
  *    `@TrailblazeToolClass` registration.
  *  - **Resolved tool is not executable**. Some framework tools are pure data
@@ -93,7 +93,7 @@ internal suspend fun TrailblazeToolExecutionContext.invokeFrameworkToolByJson(
   val tool = repo.toolCallToTrailblazeToolUnfiltered(toolName, argsJson)
     ?: error(
       "Unknown framework tool: \"$toolName\". The repo's unfiltered lookup searched " +
-        "session-registered class-backed tools, YAML-defined tools, and the global " +
+        "session-registered class-backed tools and the global " +
         "classpath registry; no match. Confirm the target tool's `@TrailblazeToolClass(name=...)` " +
         "annotation value matches the requested name, and that the tool's module is on the " +
         "session's classpath.",

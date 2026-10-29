@@ -5,9 +5,9 @@ package xyz.block.trailblaze.android.accessibility
  *
  * Shared by every path that can produce one, because an assertion's window must not depend on how
  * it reached the driver: [AccessibilityTrailblazeAgent] dispatches node-selector assertions
- * directly, while [MaestroCommandConverter] lowers Maestro-shaped ones (legacy
- * `assertVisibleWithText`, accessibility-text and resource-id assertions, and the not-visible
- * fallback). Those two used to carry independent defaults, so the same unpinned assertion got a
+ * directly, while [MaestroCommandConverter] lowers Maestro-shaped command assertions (including
+ * accessibility-text and resource-id assertions, plus the not-visible fallback). Those two used
+ * to carry independent defaults, so the same unpinned assertion got a
  * different window depending on its route.
  *
  * 17s is not a Trailblaze judgement about how long a screen should take. It is upstream Maestro's
@@ -22,7 +22,7 @@ package xyz.block.trailblaze.android.accessibility
  * makes a failure take longer to report.
  *
  * That asymmetry inverts for a probe whose expected outcome is the failing one — a
- * `block_runIf`/`block_dismissIfPresent` condition polls to exhaustion every time the dialog isn't
+ * `runIf`/`block_dismissIfPresent` condition polls to exhaustion every time the dialog isn't
  * there, and pays the whole window. Such conditions should pin a short `timeoutMs` rather than
  * inherit this default.
  */

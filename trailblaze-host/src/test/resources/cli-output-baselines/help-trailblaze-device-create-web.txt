@@ -31,9 +31,8 @@ Examples:
                              force a hidden window.
       --instance-id=<id>   Slot name. Subsequent commands address this slot as
                              `--device web/<id>`. Defaults to the singleton
-                             `playwright-native` when omitted (the same slot
-                             the desktop app's Launch Browser button operates
-                             on).
+                             `playwright-native` when omitted (the default web
+                             device).
   -V, --version            Print version information and exit.
       --viewport=<WxH>     Raw viewport size, e.g. '375x812' or '1920x1080'.
                              Sets ONLY the viewport box — does not change

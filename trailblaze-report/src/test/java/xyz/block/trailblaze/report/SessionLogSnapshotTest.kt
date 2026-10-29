@@ -31,6 +31,9 @@ import xyz.block.trailblaze.util.BunBinaryResolver
  */
 class SessionLogSnapshotTest {
 
+  private val trailSourceUrl =
+    "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/example.trail.yaml"
+
   private fun statusLog(sessionId: SessionId, status: SessionStatus, atMs: Long) =
     TrailblazeLog.TrailblazeSessionStatusChangeLog(
       sessionStatus = status,
@@ -55,6 +58,7 @@ class SessionLogSnapshotTest {
       ),
       trailblazeDeviceId = deviceId,
       rawYaml = "trail:\n  - step: Open the app",
+      trailSourceUrl = trailSourceUrl,
     )
   }
 
@@ -86,6 +90,7 @@ class SessionLogSnapshotTest {
 
       assertEquals(logsRepo.getLogsForSession(sessionId), snapshot.logs)
       assertEquals(2, snapshot.logs.size)
+      assertEquals(trailSourceUrl, logsRepo.getSessionInfo(sessionId)?.trailSourceUrl)
 
       // Raw view: all three hex-prefixed records, filename order, undecodable one included.
       assertEquals(3, snapshot.rawLogsJson.size)
@@ -243,13 +248,75 @@ class SessionLogSnapshotTest {
     }
   }
 
-  private fun deviceToolLog(sessionId: SessionId, deviceName: String, stampedMs: Long, receivedAtMs: Long) =
+  @Test
+  fun capture_ordersUnnamedDeviceLogsByTheHandoverActiveWhenTheyArrived() {
+    // Device-dispatched tool logs carry no deviceName (the device never learns its binding), so
+    // what tells two devices apart is which one the host had handed over to when each log arrived.
+    // `back` runs 200ms ahead of the host; `front` keeps time. Blended into one offset, front's
+    // tool is dragged 195ms early — ahead of the handover that started it, which is the order the
+    // report's extractor would then fold into the previous device's step.
+    val tmp = Files.createTempDirectory("snapshot-handover-clock-").toFile()
+    try {
+      val writerRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("unnameddevices")
+      writerRepo.saveLogToDisk(statusLog(sessionId, startedStatus(), 10_000L))
+      writerRepo.saveLogToDisk(switchDeviceLog(sessionId, "back", atMs = 10_005L))
+      // Ran at host 10_100 for 100ms: stamped 200ms ahead, received 5ms after it finished.
+      writerRepo.saveLogToDisk(deviceToolLog(sessionId, null, stampedMs = 10_300L, receivedAtMs = 10_205L, durationMs = 100))
+      writerRepo.saveLogToDisk(switchDeviceLog(sessionId, "front", atMs = 10_405L))
+      writerRepo.saveLogToDisk(deviceToolLog(sessionId, null, stampedMs = 10_450L, receivedAtMs = 10_555L, durationMs = 100))
+      writerRepo.saveLogToDisk(statusLog(sessionId, SessionStatus.Ended.Succeeded(durationMs = 700L), 10_700L))
+      writerRepo.close()
+
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val snapshot = SessionLogSnapshot.capture(logsRepo, sessionId)
+
+      assertEquals(
+        listOf(10_000L, 10_005L, 10_105L, 10_405L, 10_455L, 10_700L),
+        snapshot.logs.map { it.timestamp.toEpochMilliseconds() },
+        "each device's tool must land at the host time it ran",
+      )
+      // The raw view keeps each record's own stamp; its ORDER must still put front's tool after
+      // the handover to front.
+      assertEquals(
+        listOf(10_000L, 10_005L, 10_300L, 10_405L, 10_450L, 10_700L),
+        snapshot.rawLogsJson.map {
+          Instant.parse(it.jsonObject["timestamp"]!!.jsonPrimitive.content).toEpochMilliseconds()
+        },
+      )
+      logsRepo.close()
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  /** The host runs `switchDevice` itself and logs it, on the host clock, under its destination. */
+  private fun switchDeviceLog(sessionId: SessionId, destination: String, atMs: Long) =
+    TrailblazeLog.TrailblazeToolLog(
+      trailblazeTool = OtherTrailblazeTool(toolName = "switchDevice"),
+      toolName = "switchDevice",
+      successful = true,
+      traceId = null,
+      durationMs = 2,
+      session = sessionId,
+      timestamp = Instant.fromEpochMilliseconds(atMs),
+      deviceName = destination,
+      clock = TrailblazeClockDomain.HOST,
+    )
+
+  private fun deviceToolLog(
+    sessionId: SessionId,
+    deviceName: String?,
+    stampedMs: Long,
+    receivedAtMs: Long,
+    durationMs: Long = 0,
+  ) =
     TrailblazeLog.TrailblazeToolLog(
       trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
       toolName = "tapOn",
       successful = true,
       traceId = null,
-      durationMs = 0,
+      durationMs = durationMs,
       session = sessionId,
       timestamp = Instant.fromEpochMilliseconds(stampedMs),
       deviceName = deviceName,

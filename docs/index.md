@@ -116,7 +116,7 @@ the full LLM transcript (when an LLM was involved), and video replay when captur
 
 Same viewer surface, three ways:
 
-- **Trail Runner desktop app** — `trailblaze app --v2` opens one workspace for trails,
+- **Trailblaze App** — `trailblaze app` opens one workspace for trails,
   live and completed runs, recording, and integrations, with rich trace inspection
   and inline editing.
 - **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install
@@ -162,7 +162,7 @@ opt-in so real flakes don't get silently masked.
   `trails/` directory required. Run by path or shell glob; auto-discovered.
 - **[Trace Viewer](#trace-viewer)** — every run produces a rich session: per-step
   screenshots, hierarchies, recorded tool calls, LLM transcripts, video replay. CI
-  exposes it inline; the desktop app shows the same UI for local sessions.
+  exposes it inline; Trailblaze App (`trailblaze app`) shows the same UI for local sessions.
 - **[External config bundles](generated/external-config.md)** — layer app targets,
   YAML toolsets, and TypeScript scripted tools on top of the binary without rebuilding
   Trailblaze.
@@ -271,7 +271,9 @@ and project context to the loop, which the built-in agent can't.
   it's the workspace-to-passing-run walkthrough and links onward to the per-tool
   [Scripted Tools (TypeScript) reference](scripted-tools-typed-authoring.md),
   the [Trailmaps](trailmaps.md) manifest schema, and the [Trailblaze Tools](tools.md)
-  catalog of scripted / pure-YAML / Kotlin flavors.
+  catalog of scripted and Kotlin flavors.
+- **Running trails in CI on GitHub?** See [GitHub Actions](github-actions.md) — one request
+  file lists devices and trails; a reusable workflow shards them and reports on the PR.
 - **Gating CI on which trails a tool change affects?** See the
   [`usages --json` report contract](usages-json.md) — field semantics, the diagnostic-kind
   registry, exit codes, and the versioning policy.

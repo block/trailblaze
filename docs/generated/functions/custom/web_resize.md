@@ -4,12 +4,7 @@
 
 # `web_resize`
 
-Resize the browser viewport to the given dimensions.
-
-Use to test responsive CSS at different breakpoints (e.g., 375x812 for phone,
-768x1024 for tablet). Does NOT change User-Agent or device emulation flags —
-pages that UA-sniff still see desktop Chrome. For full mobile emulation set
-the device's profile at creation time, not via this tool.
+Resize the browser viewport, e.g. to test responsive breakpoints. Does not change the User-Agent or enable mobile emulation.
 
 ## Source
 
@@ -27,9 +22,9 @@ the device's profile at creation time, not via this tool.
 ### Required parameters
 
 - `width` — `Integer`
-  Width of the viewport in CSS pixels. Must be positive.
+  Viewport width in CSS pixels.
 - `height` — `Integer`
-  Height of the viewport in CSS pixels. Must be positive.
+  Viewport height in CSS pixels.
 
 ### Optional parameters
 

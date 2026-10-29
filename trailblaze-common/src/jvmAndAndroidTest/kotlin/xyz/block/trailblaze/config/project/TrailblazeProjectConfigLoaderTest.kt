@@ -256,6 +256,108 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `every scripted tool in tools dir is on the target, listed ones first`() {
+    // Same contract as the build-time generator's test of the same name — the baked target and
+    // the runtime-loaded one must agree.
+    val trailmapDir = File(tempFolder.root, "trailmaps/myapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: MyApp
+        tools:
+          - listedTool
+        platforms:
+          android:
+            drivers: [android-ondevice-accessibility]
+            excluded_tools: [excludedTool, androidOnlyExcluded, iosOnlyTool]
+          ios:
+            excluded_tools: [excludedTool, partlyExcluded]
+      """.trimIndent(),
+    )
+    File(trailmapDir, "tools").mkdirs()
+    // A YAML-described tool nobody lists.
+    File(trailmapDir, "tools/described.yaml").writeText(
+      """
+      script: ./described.js
+      name: describedTool
+      description: Described by YAML.
+      """.trimIndent(),
+    )
+    // Bare `.ts` tools, described by the (stubbed) analyzer: name to its `_meta` gates.
+    val metaByTool = mapOf(
+      "listedTool" to emptyMap(),
+      "unlistedTool" to emptyMap(),
+      "excludedTool" to emptyMap(),
+      "partlyExcluded" to emptyMap(),
+      "iosOnlyTool" to mapOf("trailblaze/supportedPlatforms" to listOf("ios")),
+      "androidOnlyExcluded" to mapOf("trailblaze/supportedPlatforms" to listOf("android")),
+      "webOnlyTool" to mapOf("trailblaze/supportedPlatforms" to listOf("web")),
+      "iosHostTool" to mapOf("trailblaze/supportedDrivers" to listOf("ios-host")),
+      "instrumentationOnlyTool" to mapOf(
+        "trailblaze/supportedPlatforms" to listOf("android"),
+        "trailblaze/supportedDrivers" to listOf("android-ondevice-instrumentation"),
+      ),
+    )
+    metaByTool.keys.forEach { name ->
+      File(trailmapDir, "tools/$name.ts")
+        .writeText("export const $name = trailblaze.tool(async () => \"ok\");\n")
+    }
+    val stub = StubEnrichment { _, _, _, deferred ->
+      deferred.map { d ->
+        val name = d.relativePath.substringAfterLast('/').removeSuffix(".ts")
+        ScriptedToolEnrichment.EnrichmentResult.Resolved(
+          relativePath = d.relativePath,
+          configs = listOf(
+            xyz.block.trailblaze.config.InlineScriptToolConfig(
+              script = File(trailmapDir, d.relativePath).absolutePath,
+              name = name,
+              meta = metaByTool.getValue(name).takeIf { it.isNotEmpty() }?.let { gates ->
+                JsonObject(gates.mapValues { (_, values) -> JsonArray(values.map(::JsonPrimitive)) })
+              },
+            ),
+          ),
+        )
+      }
+    }
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - myapp
+      """.trimIndent(),
+    )
+
+    val target = TrailblazeProjectConfigLoader.resolveRuntime(
+      TrailblazeProjectConfigLoader.load(file)!!,
+      includeClasspathTrailmaps = false,
+      scriptedToolEnrichment = stub,
+    ).targets.single()
+
+    assertEquals(
+      listOf(
+        // Listed first, then every other tool in name order. Nothing is pruned for platform,
+        // driver or `excluded_tools:` — each session applies those gates per driver.
+        "listedTool",
+        "androidOnlyExcluded",
+        "describedTool",
+        "excludedTool",
+        "instrumentationOnlyTool",
+        "iosHostTool",
+        "iosOnlyTool",
+        "partlyExcluded",
+        "unlistedTool",
+        "webOnlyTool",
+      ),
+      target.tools.orEmpty().map { it.name },
+    )
+    // A platform-scoped tool keeps its own scoping, which is what limits it to that platform.
+    assertEquals(
+      JsonArray(listOf(JsonPrimitive("ios"))),
+      target.tools.orEmpty().single { it.name == "iosOnlyTool" }.meta?.get("trailblaze/supportedPlatforms"),
+    )
+  }
+
+  @Test
   fun `per-platform strip preserves empty list so deps don't override an author-cleared tools field`() {
     // Pins the Codex P2 fix: a `platforms.<p>.tools:` list that was originally non-null but
     // entirely scripted (all names hoisted out) must remain `emptyList()`, not `null`, so the
@@ -381,11 +483,7 @@ class TrailblazeProjectConfigLoaderTest {
     File(trailmapDir, "tools/trailmap-tool.tool.yaml").writeText(
       """
       id: pack_tool
-      description: Trailmap tool
-      parameters: []
-      tools:
-        - tapOnElementWithText:
-            text: "{{params.label}}"
+      class: com.example.tools.PackTool
       """.trimIndent(),
     )
     val file = tempFolder.writeConfig(
@@ -573,12 +671,7 @@ class TrailblazeProjectConfigLoaderTest {
     File(trailmapDir, "tools/wrong_listed.tool.yaml").writeText(
       """
       id: wrong_listed
-      description: Pure-YAML composed tool that doesn't belong in target.tools:
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
+      class: com.example.tools.WrongListedTool
       """.trimIndent(),
     )
     File(trailmapDir, "trailmap.yaml").writeText(
@@ -1918,6 +2011,8 @@ class TrailblazeProjectConfigLoaderTest {
     withBakedTargetYaml: Boolean,
     withExports: Boolean = true,
     explicitTargetId: String? = null,
+    withGeneratedToolDefs: Boolean = false,
+    generatedSpecRuntime: String? = null,
   ): File {
     // The build-time generator names the baked file after the EFFECTIVE target id — `target.id`
     // when the author set one ([explicitTargetId]), else the trailmap id.
@@ -1943,6 +2038,18 @@ class TrailblazeProjectConfigLoaderTest {
     File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "sharedlib_createEntity.ts").writeText(
       "export const sharedlib_createEntity = trailblaze.tool({}, async () => {})",
     )
+    if (withGeneratedToolDefs) {
+      // What the framework build writes beside a `.ts` with no descriptor YAML.
+      File(classpathTrailmapDir, "tools/sharedlib_createEntity.tooldefs.json").writeText(
+        """
+        {"tools": [{
+          "name": "sharedlib_createEntity",
+          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+          "spec": {"description": "Create an entity, from the generated definitions."${generatedSpecRuntime?.let { ", \"runtime\": \"$it\"" }.orEmpty()}}
+        }]}
+        """.trimIndent(),
+      )
+    }
     if (withBakedTargetYaml) {
       val targetsDir = File(classpathRoot, "trails/config/targets").apply { mkdirs() }
       File(targetsDir, "$bakedTargetId.yaml").writeText(
@@ -2026,6 +2133,57 @@ class TrailblazeProjectConfigLoaderTest {
       listOf("sharedlib_createEntity"),
       dep.tools.orEmpty().map { it.name },
     )
+  }
+
+  @Test
+  fun `a classpath bare ts tool resolves from its generated tooldefs without a baked target yaml`() {
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(
+      classpathRoot,
+      withBakedTargetYaml = false,
+      withGeneratedToolDefs = true,
+    )
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    val inherited = assertNotNull(
+      resolved.targets.single { it.id == "consumerapp" }.tools.orEmpty().singleOrNull { it.name == "sharedlib_createEntity" },
+      "Consumer must inherit the dep's exported scripted tool; got: ${resolved.targets.map { it.id }}",
+    )
+    assertEquals("Create an entity, from the generated definitions.", inherited.description)
+    assertEquals("trails/config/trailmaps/sharedlib/tools/sharedlib_createEntity.ts", inherited.script)
+  }
+
+  @Test
+  fun `a generated tooldefs file with an unknown runtime falls back instead of failing the resolve`() {
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(
+      classpathRoot,
+      withBakedTargetYaml = true,
+      withGeneratedToolDefs = true,
+      generatedSpecRuntime = "subproces",
+    )
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    val inherited = assertNotNull(
+      resolved.targets.single { it.id == "consumerapp" }.tools.orEmpty().singleOrNull { it.name == "sharedlib_createEntity" },
+      "The bad file must not take the trailmap down; got: ${resolved.targets.map { it.id }}",
+    )
+    // The baked target YAML, the next fallback, supplied the tool.
+    assertEquals("Create a fresh entity in the system.", inherited.description)
   }
 
   @Test
@@ -3719,12 +3877,10 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
-  fun `multi-export ts without YAML surfaces a clear analyzer-side failure`() {
-    // The synthetic meta-only descriptor cannot disambiguate a multi-export `.ts` —
-    // matches the same contract the YAML-declared meta-only path enforces. The
-    // analyzer impl emits a Failed result with a specific reason; the loader's
-    // atomic-per-trailmap catch drops the trailmap. Pin the drop here; the
-    // analyzer-side message is covered in AnalyzerScriptedToolEnrichmentTest.
+  fun `multi-export ts without YAML registers every export`() {
+    // A bare `.ts` reaches enrichment as one synthetic descriptor however many tools it exports,
+    // and every config enrichment returns for it lands in the target. How the analyzer turns one
+    // file into several configs is covered in AnalyzerScriptedToolEnrichmentTest.
     val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(
       """
@@ -3758,18 +3914,18 @@ class TrailblazeProjectConfigLoaderTest {
     )
 
     val stub = StubEnrichment { _, _, _, deferred ->
-      // Auto-discovery produced exactly one synthetic descriptor for `tools/multi.ts`
-      // — same shape the analyzer-real impl receives. Pin that, then return Failed
-      // with the multi-export reason.
-      assertEquals(1, deferred.size, "expected exactly one synthetic descriptor")
-      val d = deferred.single()
-      assertTrue(d.relativePath.endsWith(".ts"))
+      assertEquals(listOf("tools/multi.ts"), deferred.map { it.relativePath })
       listOf(
-        ScriptedToolEnrichment.EnrichmentResult.Failed(
-          relativePath = d.relativePath,
-          reason = "script declares more than one `trailblaze.tool` export ([firstTool, secondTool]); " +
-            "meta-only descriptors can't disambiguate. Split the .ts into one export per file, " +
-            "or author a YAML descriptor with a `tools:` list.",
+        ScriptedToolEnrichment.EnrichmentResult.Resolved(
+          relativePath = deferred.single().relativePath,
+          configs = listOf("firstTool", "secondTool").map { name ->
+            xyz.block.trailblaze.config.InlineScriptToolConfig(
+              script = File(trailmapDir, "tools/multi.ts").absolutePath,
+              name = name,
+              description = "The $name tool.",
+              inputSchema = JsonObject(mapOf("type" to JsonPrimitive("object"))),
+            )
+          },
         ),
       )
     }
@@ -3781,9 +3937,9 @@ class TrailblazeProjectConfigLoaderTest {
       scriptedToolEnrichment = stub,
     )
 
-    assertTrue(
-      resolved.targets.isEmpty(),
-      "expected the trailmap to drop on multi-export `.ts` without a disambiguating YAML",
+    assertEquals(
+      setOf("firstTool", "secondTool"),
+      resolved.targets.single().tools.orEmpty().map { it.name }.toSet(),
     )
   }
 

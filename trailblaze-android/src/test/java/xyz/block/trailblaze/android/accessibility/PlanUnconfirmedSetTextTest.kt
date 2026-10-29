@@ -22,9 +22,9 @@ class PlanUnconfirmedSetTextTest {
   }
 
   @Test
-  fun `a plain WebView field that did not change gives up rather than typing a second copy`() {
+  fun `a plain WebView field keeps reading back rather than typing a second copy`() {
     assertEquals(
-      UnconfirmedSetTextPlan.GIVE_UP,
+      UnconfirmedSetTextPlan.AWAIT_WEBVIEW_READBACK,
       planUnconfirmedSetText(inWebView = true, isPassword = false),
     )
   }

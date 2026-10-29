@@ -80,13 +80,10 @@ export interface OpenArticleArgs {
 }
 
 /**
- * Open a Wikipedia article by title. Use this whenever the task is to
- * navigate to a specific article — e.g. "open the Albert Einstein article",
- * "go to the Python article". Asserts the destination's #firstHeading is
- * visible.
+ * Open a Wikipedia article by title and verify its heading is visible.
  */
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, "Wikipedia");
 
@@ -109,10 +106,10 @@ Read the full file:
 
 | From | Becomes |
 |---|---|
-| The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name listed under `target.tools:` in `trailmap.yaml`. |
+| The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name you use in `trailmap.yaml` (`exports:`, `excluded_tools:`). |
 | The TSDoc above `export const` | The tool's LLM-facing description (and IDE hover text on `ctx.tools.wikipedia_web_openArticle(...)`). |
 | The `<I, O>` type parameters | The tool's input JSON Schema and (when O is given) typed result shape. Per-field TSDoc on each interface property becomes that field's JSON Schema `description`. |
-| The spec object (`{ supportedPlatforms, requiresContext, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
+| The spec object (`{ supportedPlatforms, requiresHost, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
 | The handler body | The runtime behavior. |
 
 ### Three overloads, simplest-to-richest
@@ -125,7 +122,7 @@ when the tool's contract calls for them.
 // 1. Typed input, string return — the workhorse for "drive UI, report what happened".
 //    This is what 90%+ of scripted tools end up looking like.
 export const search = trailblaze.tool<SearchArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => { /* ... */ return `Searched for "${input.query}".`; },
 );
 
@@ -141,7 +138,7 @@ export const ping = trailblaze.tool(async () => "pong");
 ```
 
 The spec object is also optional — pass it as the first positional argument when the tool
-needs gating (`supportedPlatforms`, `requiresContext`, etc.); omit it for a bare-handler
+needs gating (`supportedPlatforms`, `requiresHost`, etc.); omit it for a bare-handler
 shape:
 
 ```ts
@@ -150,7 +147,7 @@ trailblaze.tool<Args>(async (input, ctx) => { ... });
 
 // With spec.
 trailblaze.tool<Args>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => { ... },
 );
 ```
@@ -168,7 +165,7 @@ my-workspace/trails/config/
 ├── trailblaze.yaml                          # workspace anchor
 └── trailmaps/
     └── wikipedia/
-        ├── trailmap.yaml                    # target manifest (display_name, platforms, tools list)
+        ├── trailmap.yaml                    # target manifest (display_name, platforms)
         ├── wikipedia-system-prompt.md       # optional LLM tool-selection guidance
         └── tools/
             ├── wikipedia_shared.ts          # shared helpers (selectors, label constants)
@@ -177,20 +174,18 @@ my-workspace/trails/config/
             └── ...
 ```
 
-The trailmap manifest lists each tool by **bare export name** under `target.tools:`:
+The trailmap manifest doesn't need to list the tools. The loader walks `tools/` for
+every `.ts` that exports a `trailblaze.tool(...)` declaration and puts each one on the
+target; its own `supportedPlatforms` / `supportedDrivers` scope it to platforms and drivers. To
+keep a tool off — a typed demo or a work-in-progress draft — name it under
+`platforms.<p>.excluded_tools:`:
 
 ```yaml
-# examples/wikipedia/trails/config/trailmaps/wikipedia/trailmap.yaml
+# examples/wikipedia/trails/config/trailmaps/wikipedia/trailmap.yaml (excerpt)
 id: wikipedia
 target:
   display_name: Wikipedia (en)
   system_prompt_file: wikipedia-system-prompt.md
-  tools:
-    - wikipedia_web_openMainPage
-    - wikipedia_web_openArticle
-    - wikipedia_web_searchAndOpenFirstResult
-    - wikipedia_web_verifyArticleStructure
-    # … more …
   platforms:
     web:
       drivers: [playwright-native, playwright-electron]
@@ -198,22 +193,17 @@ target:
         - web_core
         - web_verification
         - memory
+      excluded_tools:
+        - wikipedia_typed_demo
+        - wikipedia_conditional_action_demo
 ```
 
-The trailmap loader walks `tools/` for every `.ts` that exports a `trailblaze.tool(...)`
-declaration; the names listed under `target.tools:` decide which of those tools are
-**advertised to the agent** for this target. Files in `tools/` that are imported as
-helpers (`wikipedia_shared.ts`) but don't export a tool are ignored by the loader. Tools
-that DO export but aren't listed under `target.tools:` (e.g. typed-demo or
-work-in-progress drafts) live in the candidate pool but stay invisible to the agent
-until you add their name to the list.
-
-When a trailmap ships **both** iOS and Android tools (or otherwise has tools that only
-make sense for one platform), declare each platform-specific tool under
-`platforms.<p>.tools:` and keep genuinely cross-platform tools at the top level under
-`target.tools:`. See
-[Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools)
-for the example shape and the single-platform validation rule.
+Files in `tools/` that are imported as helpers (`wikipedia_shared.ts`) but don't export a
+tool are ignored by the loader. `target.tools:` and `platforms.<p>.tools:` still work,
+but listing a tool there is redundant. Sharing a tool with other trailmaps stays
+explicit: list it under `exports:`. See
+[Trailmaps → Per-file scripted tools](trailmaps.md#per-file-scripted-tools) for the
+exclusion rules.
 
 See [Trailmaps](trailmaps.md) for the full manifest schema (dependencies, defaults,
 toolsets, waypoints).
@@ -231,7 +221,7 @@ export interface SearchAndOpenFirstResultArgs {
   query?: string;
   /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /** Submit the search form (default true). */
+  /** Submit the search and verify the article. Default true; false only types the query. */
   openFirstResult?: boolean;
 }
 ```
@@ -257,7 +247,7 @@ export interface ArticleMetadata {
 }
 
 export const wikipedia_web_describeArticle = trailblaze.tool<DescribeArticleArgs, ArticleMetadata>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // ... read the page ...
     return { title: input.title, lengthBytes: 12345 };
@@ -276,7 +266,7 @@ For the no-input case, import `EmptyInput`:
 import { trailblaze, type EmptyInput } from "@trailblaze/scripting";
 
 export const wikipedia_web_openMainPage = trailblaze.tool<EmptyInput>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (_, ctx) => { /* ... */ return "Opened main page."; },
 );
 ```
@@ -290,9 +280,10 @@ in the legacy YAML descriptor. Every field is optional:
 |---|---|
 | `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
-| `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
-| `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with `runtime: subprocess` in its descriptor (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
+| `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with the `runtime` field below (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
+| `requiredClassifiers?: string[]` | Registration gate on the session device's classifier. The tool registers only when the device's classifiers include every listed segment — `["rig"]` registers on a device classified `android-phone-rig`, not on `android-phone`. Use for tools that need hardware or infrastructure only some devices have. A tool listing with no connected device still shows the tool. Empty/omitted = any device. |
+| `runtime?: "inProcess" \| "subprocess"` | Where the handler runs; the same values as a descriptor's `runtime:`, which wins when both are set. `"inProcess"` (embedded QuickJS) is the default. Must be a string literal: an unreadable or unknown value fails the build rather than silently running in-process. For `"subprocess"`, still set `runtime: subprocess` in a descriptor YAML as well: the in-process APK packagers decide what to bundle from the descriptor and don't read the spec. |
 | `sensitiveArgNames?: (keyof TInput)[]` | Argument names whose values are masked in the tool-execution log — see [Keeping a credential out of the session log](#keeping-a-credential-out-of-the-session-log) for exactly what that covers. Not a registration gate. |
 
 ### Keeping a credential out of the session log
@@ -426,9 +417,9 @@ construction, which is what you want for almost every tool. Reach for spec
 `description` when you specifically want to keep implementation notes in TSDoc and ship
 a different agent-facing string.
 
-A tool whose spec is `{ supportedPlatforms: ["web"], requiresContext: true }` is the
+A tool whose spec is `{ supportedPlatforms: ["web"] }` is the
 canonical shape for a UI-driving web tool. Mobile UI tools use
-`{ supportedPlatforms: ["ios"], requiresContext: true }` or `["android"]`. Cross-platform
+`{ supportedPlatforms: ["ios"] }` or `["android"]`. Cross-platform
 helpers omit `supportedPlatforms` entirely.
 
 ## Composing other tools via `ctx.tools.<name>(args)`
@@ -438,7 +429,7 @@ typed Proxy that exposes every tool reachable from this trailmap:
 
 - **Framework primitives** brought in by the trailmap's `platforms.<p>.tool_sets:`
   declarations (e.g. `web_core` → `web_navigate`, `web_click`, `web_type`).
-- **Sibling scripted tools** in this trailmap's own `target.tools:` list.
+- **Sibling scripted tools** in this trailmap's own `tools/` folder.
 - **Transitively-inherited scripted tools** that this trailmap's `dependencies:` publish
   via their own `exports:` field.
 
@@ -477,7 +468,7 @@ higher-level workflow:
 
 ```ts
 export const contacts_ios_searchAndVerify = trailblaze.tool<SearchAndVerifyArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const query = nonEmptyString(input?.query, "John Appleseed");
     const expectedName = nonEmptyString(input?.expectedName, query);
@@ -505,6 +496,137 @@ The agent sees one tool-call worth of latency — the whole composition runs ins
 QuickJS invocation. Each sub-tool's selector knowledge, retry behavior, and assertion
 shape stays in one place; the wrapper just chooses which primitives to run.
 
+## Calling Kotlin helpers via `ctx.host.<name>(args)`
+
+Some helpers a script needs can only run in Kotlin: reading a sensitive value from agent memory,
+calling an internal RPC client, or reading the host's environment. Expose these as **host
+functions** instead of hidden tools. A tool call is a step: it's written to the session log and
+report (arguments and result included), and it drops the cached screen. A host function call is
+neither. The LLM can't see it, and recordings can't capture it.
+
+```ts
+const account = await ctx.host.myapp_resolveAccount({ key: "defaults/admin" });
+await ctx.tools.inputText({ text: account.email });
+```
+
+Calls are typed by the same generated `trailblaze-client.d.ts`. A host function resolves to its
+typed result object, not JSON text, and throws an `Error` carrying the function's message on
+failure.
+
+**Writing one.** A host function is a `@Serializable` Kotlin class whose properties are its
+arguments. It implements `TrailblazeHostFunction<R>` and names itself and its result type with
+`@TrailblazeHostFunctionClass`:
+
+```kotlin
+@Serializable
+@TrailblazeHostFunctionClass(name = "myapp_resolveAccount", result = Account::class)
+internal data class ResolveAccount(val key: String) : TrailblazeHostFunction<Account> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext): Account =
+    AccountStore.load(key) ?: throw TrailblazeHostFunctionException("No account '$key'.")
+}
+```
+
+Register it with `trails/config/trailmaps/<trailmap>/host/<name>.host.yaml`:
+
+```yaml
+id: myapp_resolveAccount
+class: com.example.myapp.ResolveAccount
+```
+
+Scripts in that trailmap, and in every trailmap that depends on it, get a typed binding. The
+function runs on the JVM that runs the script: the host daemon, or the device when a trail runs
+entirely inside a test APK. Argument keys the class doesn't declare fail the call, at any level
+of nesting. A host call counts against the same recursion cap as a tool call. Never put a secret
+in an exception message, because the script sees it.
+
+Make something a tool only when a trail or the LLM must call it, or its calls must show up as
+steps. `os` and `arch` are reserved: they are values on `ctx.host` (see below), so no host function
+can use either name.
+
+## Branching on the host computer via `ctx.host.os`
+
+A tool that runs on the host can read which computer that is. `ctx.host.os` is `"macos"`,
+`"windows"` or `"linux"`, and `ctx.host.arch` is `"arm64"` or `"x64"` (`null` for any other
+architecture). Both are `null` when the tool runs on an Android device, where there is no host
+computer. The SDK exports both lists as `TRAILBLAZE_HOST_OS` and `TRAILBLAZE_HOST_ARCH`, so a typo
+such as `ctx.host.os === "windwos"` fails type-checking. Use them for what
+differs between hosts, such as file paths:
+
+```ts
+const sep = ctx.host.os === "windows" ? "\\" : "/";
+```
+
+Command names don't need them. `exec` resolves a bare name the way a Windows command prompt does,
+so `["adb", "devices"]` runs `adb.exe` and `["sdkmanager", "--list"]` runs `sdkmanager.bat`,
+and the same `argv` works on every host. A bare name that isn't on `PATH` fails rather than
+running a file from the working directory. A batch file runs through cmd.exe, which would
+reinterpret `%`, `!`, `&`, `|`, `<`, `>`, `^` and quotes in its path or arguments, so `exec` refuses such a
+call; write `["cmd", "/c", ...]` when you want cmd.exe's reading. Commands also inherit the host's
+environment variables.
+
+## Reading what ran via `ctx.history`
+
+`ctx.history` is the session's record of tool calls, written as they happen. A call is in it from
+the moment it starts and has its outcome the moment it returns, so a read never misses a call
+that has already finished. A trailhead's `teardown` uses it to see what the trail did:
+
+```ts
+async teardown(args, ctx, trailRun) {
+  const calls = await ctx.history.toolCalls("trail");
+  const added = calls.filter((c) => c.name === "myapp_addItem" && c.outcome?.success);
+  for (const c of added) await deleteItem(ctx, c.args.itemId as string);
+  return { reusable: false, reason: `removed ${added.length} items` };
+}
+```
+
+- **`toolCalls(section?)`** lists the calls the trail, the AI and the trailhead made, in the order
+  they started. Each has `name`, `args`, `rawArgs`, `outcome` (`{ success, message }`, or `null`
+  while running), `startedAt` / `endedAt` (epoch ms), `device` (the device binding in a
+  multi-device session), `calls`: the calls it made, nested the same way, and `memory`: the
+  memory changes it committed, each `{ op: "set", key, value }` or `{ op: "delete", key, value: null }`.
+- **`section`** is `"trailhead"` (the setup), `"trail"` (everything after it) or `"teardown"`, for
+  the current run; each starts the moment the previous one ends. A section that hasn't started has
+  no calls.
+- **`formatToolCalls(calls)`** prints them as indented text, for a log line or a report:
+
+  ```
+  ✓ myapp_addItem(itemId: "item-1")  2.2s
+    ✓ tapOnElement(text: "Add")  0.7s
+    = newItemId ← "item-1"
+  ✗ assertVisible(text: "item-1")  1.8s  Element not found
+  ```
+
+  A memory change prints after the calls the call made, as `= key ← "value"` or `= key deleted`.
+
+- **`args` are what the tool received; `rawArgs` are as written.** A step written as
+  `{ id: "{{newItemId}}" }` has `args` `{ id: "item-1" }` and `rawArgs` `{ id: "{{newItemId}}" }`,
+  resolved when the call started. Sensitive values stay tokens such as `{{password}}` in both,
+  declared sensitive args are masked, and a secret a nested call received already resolved goes
+  back to its token.
+  `message` has known secret values masked, including one the call replaced while it ran, and is
+  capped in length. A tool whose result is a credential (a Kotlin tool implementing
+  `SecretResultTrailblazeTool`) succeeds with `message` `"<redacted>"`.
+- **`memory` is what a call changed, recorded when it returned.** It compares memory before and
+  after the call, so a key set and set back reads as unchanged, and reads never appear. A change a
+  nested call made is on that call, not on the one it ran inside; a call that puts back a key a
+  nested call changed records that. A scripted tool's `ctx.memory`
+  writes commit when it returns successfully, so a failed scripted tool has no changes even if it
+  called `ctx.memory.set` first; a Kotlin tool's writes stick, failed or not. Changes a device
+  call sends back to the host are on that call. A sensitive key's value is its token, such as
+  `{{password}}`, a secret inside another value is masked the same way, and a value is capped in
+  length like `message`.
+- **Nesting assumes a tool runs its calls one at a time.** Of two calls a tool starts at once
+  (`Promise.all`), one can land under the other.
+- **Where it works:** `trailblaze run`, the daemon, and trails running inside an Android test APK.
+  When the host drives an Android device, a tool that runs on the device appears as one call; the
+  calls it makes inside itself are not in the host's record.
+- **Limits:** a session keeps its latest 10,000 calls, dropping the oldest finished ones first, and its latest 1,000 sections, dropping the oldest finished run first.
+  Steps replayed one at a time over MCP each run as their own run, so there `toolCalls("trail")`
+  holds only the latest step; read `toolCalls()` for the whole session.
+- **In a test**, stub the read with `client.stubHost("trailblaze.history.toolCalls", { value: [...] })`.
+  The value is the host's flat list: each call also has an `id` and the `parentId` of the call it
+  ran inside (`null` for a top-level one), which the SDK nests into `calls`.
+
 ## Worked examples
 
 ### Wikipedia: a typed web tool with conditional UI
@@ -521,17 +643,16 @@ export interface SearchAndOpenFirstResultArgs {
   query?: string;
   /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /** Submit the search form (default true). */
+  /** Submit the search and verify the article. Default true; false only types the query. */
   openFirstResult?: boolean;
 }
 
 /**
- * Search Wikipedia from the header search box. Use this whenever the task
- * is to search Wikipedia for something — e.g. "search for Albert Einstein",
- * "look up Python on Wikipedia", "find articles about Mount Everest"...
+ * Search Wikipedia from the header search box, submit, and verify the
+ * resulting article's heading.
  */
 export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndOpenFirstResultArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const query = nonEmptyString(input.query, "Trailblazer");
     const expectedHeading = nonEmptyString(input.expectedHeading, query);
@@ -547,7 +668,7 @@ export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndO
 
     await ctx.tools.web_click({ ref: SELECTORS.searchSubmit });
     await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
-    await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+    await ctx.tools.web_verifyElementVisible({ ref: `heading "${expectedHeading}"` });
 
     return `Searched for "${query}" and verified result heading "${expectedHeading}".`;
   },
@@ -578,7 +699,7 @@ export interface VerifyContactStructureArgs {
  * labels ("phone", "email", "home", etc.)...
  */
 export const contacts_ios_verifyContactStructure = trailblaze.tool<VerifyContactStructureArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_NAME);
     const requireFields = filterNonEmptyStrings(input?.requireFields);
@@ -735,8 +856,9 @@ mock client + mock context from `@trailblaze/scripting/testing` — no daemon, n
 no MCP roundtrip:
 
 ```bash
-trailblaze check                  # materialize + tsc + bun test
-trailblaze check --no-typecheck   # tests only, skip tsc
+trailblaze check                  # materialize + tsc + bun test + trail validation
+trailblaze check --no-typecheck   # the same, without tsc
+trailblaze check --tests-only     # materialize + bun test, nothing else
 ```
 
 The mock helpers satisfy the handler signature:
@@ -746,6 +868,9 @@ The mock helpers satisfy the handler signature:
   shapes against that array. `client.stub(toolName, { textContent, errorMessage })`
   registers a canned response — a non-empty `errorMessage` makes the call throw with
   production's wording, which exercises `try/catch` recovery branches.
+- **`client.stubHost(name, { value } | { error })`** sets what `ctx.host.<name>(...)` resolves
+  to or rejects with. Calls are recorded in `client.hostCalls`. A host call with no stub
+  rejects, so a test never silently runs against an `undefined` credential.
 - **`createMockContext({ platform, sessionId?, target?, memory? })`** — returns a
   context with a no-op logger and sensible test defaults.
 
@@ -806,9 +931,9 @@ runtime globals (`URL`, `fetch`, `AbortController`, `console`); Node-flavored bu
 If your tool needs full Node-compatible APIs — `node:fs`, persistent state, native
 modules — select the **host subprocess** runtime by setting `runtime: subprocess` in the
 tool's descriptor. The framework spawns a Bun subprocess for that tool's invocations,
-where the Node surface exists; the rest of your trailmap stays in-process. `runtime` is a
-descriptor field, not part of the typed `trailblaze.tool(...)` spec, so the tool carries a
-`<name>.yaml` descriptor that sets it:
+where the Node surface exists; the rest of your trailmap stays in-process. Set it in a
+`<name>.yaml` descriptor: the spec's `runtime` field selects it too, but the in-process APK
+packagers read only the descriptor, so without one they'd bundle the tool for the device:
 
 ```yaml
 # myapp_writeArtifact.yaml
@@ -919,11 +1044,11 @@ If you don't recognize yourself in those three cases, you don't need a YAML — 
 
 | Error | What's wrong |
 |---|---|
-| `Tool not registered: foo (registered tools: alpha, beta)` | The tool wasn't in the runtime registry when the dispatch fired. Either you didn't list it under `target.tools:` in `trailmap.yaml`, or the daemon hasn't been restarted since you added the file. Re-run `trailblaze check` and restart the daemon. |
+| `Tool not registered: foo (registered tools: alpha, beta)` | The tool wasn't in the runtime registry when the dispatch fired. Either an `excluded_tools:` entry in `trailmap.yaml` names it, its `supportedPlatforms` doesn't include the session's platform, or the daemon hasn't been restarted since you added the file. Re-run `trailblaze check` and restart the daemon. |
 | `ValidationError: tool 'foo' received invalid arguments — /query: must be string` | The agent sent a payload that doesn't match the interface. Often a sign the TSDoc on a field needs sharper guidance, or that a field marked required should be optional. The LLM self-corrects on the next round. |
 | `esbuild failed (exit 1) bundling scripted-tool source /path/to/foo.ts` | Syntax error or unresolved import in your `.ts`. The full esbuild stderr follows in the same message. |
-| `Trailmap '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...` | You put a pure-YAML tool path under `target.tools:`. That list is for scripted tools only. Drop the entry; the YAML tool auto-discovers. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
-| `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match what `target.tools:` is asking for. Either rename the export or update the manifest entry. |
+| `Tool '<id>' declares a 'tools:' body. YAML-composed tools are no longer supported...` | A `*.tool.yaml` / `*.trailhead.yaml` composes other tool calls in a `tools:` list. Port it to a `.ts` tool (each listed call becomes an `await ctx.tools.<name>({ ... })` line) in the trailmap's `tools/` folder. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
+| `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match the tool name the runtime is resolving (a `target.tools:` entry or a YAML descriptor's `name:`). Either rename the export or fix that entry. |
 | `ctx.tools.<X>` is a `tsc` error in the IDE | The per-trailmap `trailblaze-client.d.ts` is stale or missing. Run `trailblaze check` — the codegen rewrites bindings against the current registry. |
 
 ## Where to go next

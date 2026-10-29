@@ -109,6 +109,13 @@ val bundlePerfReportCore by tasks.registering(Exec::class) {
     "generated-resources/perf-report/xyz/block/trailblaze/trailrunner/web/app/perf-core.js",
   )
   inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
+  // perf-extract.ts inlines ../report/device-clock-sync.ts; same hazard as bundleRunReportCore's.
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/report")) {
+      include("**/*.ts")
+      exclude("**/*.test.ts")
+    },
+  ).withPropertyName("reportCliSources")
   outputs.file(out)
   workingDir(srcDir)
   commandLine(
@@ -255,21 +262,8 @@ dependencies {
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kaml)
-  // Encodes the frames CaptureVideoFrames saves from a recording as WebP, as the host encodes
-  // screenshots: ffmpeg builds commonly ship without a WebP encoder, and the JVM has none.
-  implementation(libs.skiko)
 
   runtimeOnly(libs.slf4j.simple)
-  // The native half of Skiko, one artifact per host. The same set trailblaze-host ships, for the
-  // reasons given there; without it a report generated on CI (this module's own `run`, not the CLI
-  // JAR) fails to load Skia and saves no frames.
-  listOf(
-    "linux-x64",
-    "linux-arm64",
-    "macos-arm64",
-  ).forEach { target ->
-    runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-$target:${libs.versions.skiko.get()}")
-  }
 
   testImplementation(libs.kotlin.test.junit4)
 }

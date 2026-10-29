@@ -12,6 +12,7 @@ import java.net.URI
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * CLI command that turns one or more `test_report.json` files into a RUN INDEX — the report's
@@ -59,7 +60,7 @@ class GenerateRunIndexCliCommand(
       runCatching { JSON.decodeFromString<CiSummaryReport>(file.readText()) }
         .getOrElse { error("Could not read ${file.absolutePath} as a Trailblaze test report: ${it.message}") }
     }
-    val rowCount = reports.sumOf { it.results.size }
+    val rowCount = reports.sumOf { RunIndexGenerator.indexResults(it).size }
     if (rowCount == 0) {
       // Not an error: a config whose every shard was skipped legitimately reports nothing, and
       // failing here would turn an empty run into a red step for the wrong reason.
@@ -85,7 +86,7 @@ class GenerateRunIndexCliCommand(
 
     val written = generator.generate(reports, viewerBaseUrl.takeIf { it.isNotBlank() }, output)
       ?: error("Could not generate the run index. See the [RunReportGenerator] output above.")
-    Console.log("file://${written.absolutePath}")
+    Console.log("${written.fileUrl()}")
   }
 
   companion object {

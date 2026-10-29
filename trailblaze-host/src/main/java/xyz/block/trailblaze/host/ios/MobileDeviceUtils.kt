@@ -187,39 +187,47 @@ object MobileDeviceUtils {
     )
   }
 
+  /**
+   * Returns whether the apps were stopped, so a caller can tell a real stop from a no-op: on Android,
+   * at least one installed app was force-stopped; on iOS, every candidate is confirmed not running.
+   */
   fun ensureAppsAreForceStopped(
     possibleAppIds: Set<String>,
     trailblazeDeviceId: TrailblazeDeviceId,
-  ) {
+  ): Boolean {
     val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
-    when (trailblazeDeviceId.trailblazeDevicePlatform) {
+    return when (trailblazeDeviceId.trailblazeDevicePlatform) {
       TrailblazeDevicePlatform.ANDROID -> {
-        installedAppIds
-          .filter { installedAppId -> possibleAppIds.any { installedAppId == it } }
-          .forEach { appId ->
-            AndroidHostAdbUtils.forceStopApp(
-              deviceId = trailblazeDeviceId,
-              appId = appId,
-            )
-          }
+        val stoppedAppIds = installedAppIds.filter { installedAppId -> possibleAppIds.any { installedAppId == it } }
+        stoppedAppIds.forEach { appId ->
+          AndroidHostAdbUtils.forceStopApp(
+            deviceId = trailblazeDeviceId,
+            appId = appId,
+          )
+        }
+        stoppedAppIds.isNotEmpty()
       }
 
       TrailblazeDevicePlatform.IOS -> {
-        possibleAppIds.forEach { appId ->
+        // Every candidate must be confirmed not running; a failed terminate leaves the restart owed.
+        val confirmed = possibleAppIds.map { appId ->
           IosHostUtils.killAppOnSimulator(
             deviceId = trailblazeDeviceId.instanceId,
             appId = appId,
           )
         }
+        confirmed.isNotEmpty() && confirmed.all { it }
       }
 
       TrailblazeDevicePlatform.WEB -> {
         // Currently nothing to do here
+        false
       }
 
       TrailblazeDevicePlatform.DESKTOP -> {
         // Compose desktop driver doesn't manage app processes — the desktop *is* the
         // app. No-op for parity with WEB.
+        false
       }
     }
   }

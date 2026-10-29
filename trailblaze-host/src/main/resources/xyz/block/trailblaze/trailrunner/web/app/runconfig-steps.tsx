@@ -173,7 +173,7 @@ function BehaviorSection(p) {
         <RcInput value={p.maxLlmCalls} onChange={p.setMaxLlmCalls} type="number" style={{ width: 90 }} />
       </CompactField>
       <CompactField label="Model override" flag="--llm">
-        <RcInput value={p.llm} onChange={p.setLlm} placeholder="openai/gpt-4-1" style={{ width: 200 }} />
+        <RcInput value={p.llm} onChange={p.setLlm} placeholder="openai/gpt-6-luna" style={{ width: 200 }} />
       </CompactField>
       <ToggleRow label="Verbose logs" flag="--verbose" on={p.verbose} set={p.setVerbose} />
       {p.web && <ToggleRow label="Headless browser" flag="--headless" on={p.headless} set={p.setHeadless} />}

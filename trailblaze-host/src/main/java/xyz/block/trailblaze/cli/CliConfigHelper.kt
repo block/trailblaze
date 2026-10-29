@@ -19,6 +19,7 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.hostExecutable
 
 /**
  * Describes a single config key: how to read it, write it, and what values are valid.
@@ -53,7 +54,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "llm",
     description = "LLM provider and model (shorthand: provider/model)",
-    validValues = "provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) or 'none' to disable",
+    validValues = "provider/model (e.g., openai/gpt-6-luna, anthropic/claude-sonnet-4-20250514) or 'none' to disable",
     get = { config ->
       if (config.llmProvider == LLM_NONE) LLM_NONE
       else "${config.llmProvider}/${config.llmModel}"
@@ -87,7 +88,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "llm-model",
     description = "LLM model ID",
-    validValues = "e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable",
+    validValues = "e.g., gpt-6-luna, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable",
     get = { config -> config.llmModel },
     set = { config, value ->
       if (value.isLlmNoneValue()) {
@@ -325,12 +326,11 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ),
   ConfigKey(
     // Plain boolean like the sibling capture toggles (`captureLogcat` / `captureIosLogs`), just
-    // defaulting OFF: recordings are large and their timing drifts on some hosts. This is the
-    // persistent opt-in that reaches entry points with no
-    // positive per-run flag — interactive `session start` and MCP sessions. Per-run
-    // `--capture-video` / `--no-capture-video` and `TRAILBLAZE_CAPTURE_VIDEO` both override it.
+    // defaulting OFF: an interactive session can run for hours with no goal. This is the
+    // persistent opt-in for entry points with no per-run flag — `session start` and MCP.
+    // `trailblaze run` records by default regardless of this (`--no-capture-video` skips it).
     name = "capture-video",
-    description = "Record device screen video for each session (default: off — video is opt-in)",
+    description = "Record video in interactive sessions (default: off; `trailblaze run` records by default regardless of this setting)",
     validValues = "true or false",
     get = { config -> config.captureVideo.toString() },
     set = { config, value -> value.toBooleanStrictOrNull()?.let { config.copy(captureVideo = it) } },
@@ -439,7 +439,7 @@ object CliConfigHelper {
   }
 
   private fun resolveGitRoot(): File? = try {
-    val process = ProcessBuilder("git", "rev-parse", "--show-toplevel")
+    val process = ProcessBuilder(hostExecutable("git"), "rev-parse", "--show-toplevel")
       .redirectErrorStream(false)
       .start()
     val finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)

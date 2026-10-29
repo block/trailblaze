@@ -5,6 +5,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Typed envelopes for the SDK's `TrailblazeToolResult` shape and the per-invocation `ctx`
@@ -88,6 +89,25 @@ internal data class QuickJsToolCtxEnvelope(
    * boundaries if a consumer ever needs read-your-nested-writes within one invocation.
    */
   val memory: Map<String, String> = emptyMap(),
+  /**
+   * What the last run of this trailhead on this device handed over
+   * ([xyz.block.trailblaze.trailhead.PreviousRun]). Present only on a trailhead's own invocation,
+   * after an exact match whose `teardown` said reusable; the SDK reads it into
+   * `ctx.previousRun`, which is `null` otherwise.
+   */
+  val previousRun: JsonObject? = null,
+  /**
+   * The computer the tool runs on (`ctx.host.os` / `ctx.host.arch`), or null on an Android device,
+   * where the device is the only computer. See [xyz.block.trailblaze.util.HostPlatform].
+   */
+  val hostPlatform: QuickJsHostPlatform? = null,
+)
+
+@Serializable
+internal data class QuickJsHostPlatform(
+  val os: String,
+  /** Null for an architecture [xyz.block.trailblaze.util.HostArch] doesn't name. */
+  val arch: String?,
 )
 
 /**

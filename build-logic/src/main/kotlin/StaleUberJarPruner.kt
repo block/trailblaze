@@ -5,8 +5,8 @@ import java.io.IOException
  * Deletes stale packaged uber-JAR artifacts from a jar output directory, leaving only the current
  * build's output.
  *
- * Compose's `packageUberJarForCurrentOS` names its output after the working tree's state (e.g. the
- * commit timestamp), so successive builds accumulate siblings in the same directory, and consumers
+ * `packageUberJarForCurrentOS` ([registerPackageUberJarForCurrentOs]) names its output after the
+ * working tree's state (e.g. the commit timestamp), so successive builds accumulate siblings in the same directory, and consumers
  * that pick "the newest JAR" by mtime (`dev_find_jar` in `scripts/dev-jar-cache.sh`) can
  * hand a stale build's bytes to whatever asked for the current one. Wiring this as the action of a
  * task with no declared outputs (never UP-TO-DATE, so it runs on every invocation) closes the gap a

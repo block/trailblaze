@@ -25,23 +25,20 @@ import xyz.block.trailblaze.util.Console
 @Serializable
 @TrailblazeToolClass(name = "dragTo", isRecordable = false)
 @LLMDescription(
-  "Drag an element to another element or to a point, in one continuous press-move-release " +
-    "gesture. Use the short hash refs from the snapshot (e.g. y778 from [y778]). Provide the " +
-    "source `ref`, then EITHER `toRef` (drag onto another element) OR `toX`/`toY` (drag to a " +
-    "screen point). Use for reordering list items, moving a card onto a target, dragging a " +
-    "slider/handle to a position, or repositioning a pin. Optional `durationMs` paces the drag " +
-    "(default 1000ms — slow and deliberate so it registers as a drag, not a flick).",
+  "Drag an element by snapshot ref onto another element (`toRef`) or to a point (`toX`/`toY`), " +
+    "in one continuous press-move-release gesture. Use to reorder items, move a card, or drag a " +
+    "slider.",
 )
 data class DragToTrailblazeTool(
-  @param:LLMDescription("The source element ref to drag (e.g., 'y778')")
+  @param:LLMDescription("Ref of the element to drag, e.g. 'y778'.")
   val ref: String,
-  @param:LLMDescription("Target element ref to drag onto. Provide this OR toX/toY.")
+  @param:LLMDescription("Ref of the element to drop onto.")
   val toRef: String? = null,
-  @param:LLMDescription("Target X coordinate to drag to. Provide toX and toY together, OR use toRef.")
+  @param:LLMDescription("Target X coordinate; set with toY.")
   val toX: Int? = null,
-  @param:LLMDescription("Target Y coordinate to drag to. Provide toX and toY together, OR use toRef.")
+  @param:LLMDescription("Target Y coordinate; set with toX.")
   val toY: Int? = null,
-  @param:LLMDescription("How long the drag takes end-to-end, in ms. Default 1000 (deliberate drag).")
+  @param:LLMDescription("Drag duration in ms. Default 1000, slow enough to register as a drag, not a flick.")
   val durationMs: Long = 1000L,
   override val reasoning: String? = null,
 ) : DelegatingTrailblazeTool, ReasoningTrailblazeTool {

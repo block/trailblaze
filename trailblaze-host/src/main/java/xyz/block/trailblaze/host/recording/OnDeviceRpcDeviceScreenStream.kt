@@ -67,6 +67,9 @@ class OnDeviceRpcDeviceScreenStream(
   override val deviceWidth: Int = initialDeviceWidth
   override val deviceHeight: Int = initialDeviceHeight
 
+  /** The session every tap and run on this connection logs into. */
+  val logSessionId: String? get() = runYamlRequestTemplate.config.overrideSessionId?.value
+
   // Reuse the shared default — recording dispatches the same built-in tool set every
   // existing trail YAML uses, so building a private instance per recorder would just re-scan
   // the classpath for no reason.
@@ -209,11 +212,13 @@ class OnDeviceRpcDeviceScreenStream(
    * Replay button so a manual replay feels as immediate as the user's own tap on the
    * device. Same direct rpc path the live tap dispatch uses (no `deviceManager.runYaml`
    * session bookkeeping, no awaitCompletion polling); the on-device handler accepts the
-   * request and the next frame poll picks up the result.
+   * request and the next frame poll picks up the result. [useRecordedSteps] replays a step's
+   * recording instead of handing its prose to the AI.
    */
-  suspend fun dispatchYaml(yaml: String) {
+  suspend fun dispatchYaml(yaml: String, useRecordedSteps: Boolean = false) {
     val request = runYamlRequestTemplate.copy(
       yaml = yaml,
+      useRecordedSteps = useRecordedSteps,
       awaitCompletion = false,
     )
     when (val result: RpcResult<RunYamlResponse> = rpc.rpcCall(request)) {

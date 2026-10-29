@@ -83,8 +83,7 @@ jobs:
     needs: build-uber-jar
     env:
       # Recordings-only — LLM is never invoked. A non-empty sentinel value is
-      # required to satisfy the provider/client wiring (see android-tests-host-rpc
-      # in pr-checks.yml for the same pattern).
+      # required to satisfy the provider/client wiring.
       OPENAI_API_KEY: no-key-set
       # Record each session's screen so the report plays the recording (off by default).
       TRAILBLAZE_CAPTURE_VIDEO: "true"

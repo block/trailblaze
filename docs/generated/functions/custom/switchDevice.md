@@ -4,11 +4,7 @@
 
 # `switchDevice`
 
-Hand the session over to another device bound to this multi-device session. All subsequent
-screen observations and tool calls act on that device until the next switchDevice call.
-Address devices by the names declared in the trail's multi-device configuration (e.g.
-'buyer' or 'seller'). Only available when the session bound a multi-device configuration.
-Issue a switch as its own step, then act on the new device's screen.
+Hand the session to another device in this multi-device session; later observations and tool calls act on it until the next switchDevice. Call it as its own step.
 
 ## Source
 
@@ -26,7 +22,7 @@ Issue a switch as its own step, then act on the new device's screen.
 ### Required parameters
 
 - `name` — `String`
-  Name of the device to hand the session to — a name declared in the trail's multi-device configuration.
+  Device name from the trail's multi-device configuration, e.g. 'buyer'.
 
 ## Output
 

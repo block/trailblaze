@@ -97,6 +97,7 @@ class RunReportGeneratorTest {
     trailId: String? = "checkout/refund",
     target: String? = "shop",
     metadata: Map<String, TrailMetadataValue>? = null,
+    context: String? = null,
   ) = SkippedTrail(
     trail_path = "trails/checkout/refund.trail.yaml",
     title = "Refund an order",
@@ -107,6 +108,7 @@ class RunReportGeneratorTest {
     platform = "android",
     device_classifier = "android-phone",
     metadata = metadata,
+    context = context,
     recorded_at_epoch_ms = 1_700_000_000_000L,
   )
 
@@ -140,6 +142,13 @@ class RunReportGeneratorTest {
     val emitted = meta["metadata"]!!.jsonObject
     assertEquals("checkout-team", emitted["owner"]!!.jsonPrimitive.content)
     assertEquals("1017", emitted["testRailCaseId"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun skipSessionJson_carriesTheTrailsContextLikeARun() {
+    val meta = RunReportGenerator.skipSessionJson(skipRecord(context = "Refund must reach the card."))["meta"]!!.jsonObject
+    assertEquals("Refund must reach the card.", meta["context"]!!.jsonPrimitive.content)
+    assertNull(RunReportGenerator.skipSessionJson(skipRecord())["meta"]!!.jsonObject["context"])
   }
 
   @Test
@@ -409,6 +418,15 @@ class RunReportGeneratorTest {
   }
 
   @Test
+  fun sessionMetaJson_preservesTheCapturedSourceWithoutAFilePath() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    val url = "https://github.com/example/trails/blob/${"a".repeat(40)}/case/trail.yaml"
+    val meta = RunReportGenerator.sessionMetaJson(info(passed).copy(trailFilePath = null, trailSourceUrl = url), passed, noSelfHeal)
+    assertEquals(url, meta["trailSourceUrl"]!!.jsonPrimitive.content)
+    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)["trailSourceUrl"])
+  }
+
+  @Test
   fun sessionMetaJson_carriesTitleStatusDurationAndRerunCommand() {
     val meta = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(12_345)), SessionStatus.Ended.Succeeded(12_345), noSelfHeal)
     // The run's own id rides along, so another document can name this run stably by id.
@@ -420,6 +438,17 @@ class RunReportGeneratorTest {
     assertEquals("./trailblaze run trails/Login/login.trail.yaml", meta["cmd"]!!.jsonPrimitive.content)
     // A passing run has no error banner.
     assertNull(meta["error"])
+  }
+
+  @Test
+  fun sessionMetaJson_carriesTheTrailsAuthoredContext() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    val config = TrailConfig(id = "suite/case", title = "Push notification", context = "Setting must persist.\n\nSetup:\nSigned in.")
+    val meta = RunReportGenerator.sessionMetaJson(info(passed).copy(trailConfig = config), passed, noSelfHeal)
+    assertEquals("Setting must persist.\n\nSetup:\nSigned in.", meta["context"]!!.jsonPrimitive.content)
+    // The key is absent when the trail doesn't author it.
+    val bare = RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)
+    assertNull(bare["context"])
   }
 
   @Test
@@ -530,6 +559,24 @@ class RunReportGeneratorTest {
       meta["commitUrl"]!!.jsonPrimitive.content,
     )
     assertEquals("feature/report-context", meta["branch"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun reportProvenanceJson_preservesCustomActionsCommitHostWithoutCredentials() {
+    val meta = RunReportGenerator.reportProvenanceJson(
+      mapOf(
+        "GITHUB_SERVER_URL" to "https://ci-user:credential@git.example.com:8443/",
+        "GITHUB_REPOSITORY" to "team/repo",
+        "GITHUB_SHA" to "0123456789abcdef",
+      ),
+    )
+    assertEquals(
+      "https://git.example.com:8443/team/repo/commit/0123456789abcdef",
+      meta["commitUrl"]!!.jsonPrimitive.content,
+    )
+    assertNull(GitRepoUrls.webBaseUrl("https://git.example.com/team/repo"))
+    assertNull(RunReportGenerator.repositoryWebUrl(mapOf("GITHUB_SERVER_URL" to "javascript:alert(1)", "GITHUB_REPOSITORY" to "team/repo")))
+    assertNull(RunReportGenerator.repositoryWebUrl(mapOf("GITHUB_SERVER_URL" to "https://git.example.com", "GITHUB_REPOSITORY" to "team/../repo")))
   }
 
   @Test

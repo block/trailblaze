@@ -150,6 +150,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   sessionDirProvider = sessionDirProvider,
   workingDirectory = workingDirectory,
   memory = memory,
+  captureNetworkTraffic = runYamlRequestTemplate.config.captureNetworkTraffic,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
@@ -511,7 +512,7 @@ class HostOnDeviceRpcTrailblazeAgent(
         toolsExecuted.add(repoResolvedTool)
         if (repoResolvedTool is HostLocalExecutableTrailblazeTool || repoResolvedTool.requiresHostInstance()) {
           // Host-local tools (subprocess MCP, QuickJS scripted, cbot / dip-slot ADB tools,
-          // YAML-defined `requires_host: true`) run on the host JVM — so the host IS their
+          // `requiresHost = true` class-backed tools) run on the host JVM — so the host IS their
           // memory boundary: resolve here, dispatch resolved, log raw + resolved.
           val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory)
           executeHostLocalWithLogging(
@@ -554,7 +555,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           append("Unsupported tool type for RPC execution: ${repoResolvedTool::class.simpleName}")
           if (repoResolvedTool is OtherTrailblazeTool) {
             append(" (toolName='${repoResolvedTool.toolName}' — not registered in this session's ")
-            append("tool repo as a class-backed, YAML-defined, or dynamic scripted tool)")
+            append("tool repo as a class-backed or dynamic scripted tool)")
           }
         },
       )
@@ -585,6 +586,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
     tapRoute: TapRouteOverride?,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     // Accessibility-shaped selectors are recorded under the accessibility driver and must
@@ -608,6 +610,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           nodeSelector = nodeSelector,
           longPress = longPress,
           tapRoute = tapRoute,
+          timeoutMs = timeoutMs,
         ),
         traceId = traceId,
       )
@@ -918,8 +921,20 @@ class HostOnDeviceRpcTrailblazeAgent(
     // Mark BEFORE storing the values (mirroring `AgentMemory.storeSensitive`): a reader that
     // snapshots `variables` and filters against `sensitiveKeys` must never observe a returned
     // secret in the window before its marker lands.
-    sensitiveKeys.forEach { memory.markSensitive(it) }
-    memory.variables.putAll(deviceSnapshot)
-    deletions.forEach { memory.variables.remove(it) }
+    memory.mergeDeviceMemory(deviceSnapshot, deletions, sensitiveKeys)
   }
+}
+
+/**
+ * Merges what a device's memory held after an RPC into [this]: sensitivity markers, then values
+ * (device wins), then the keys the device explicitly deleted. See [HostOnDeviceRpcTrailblazeAgent].
+ */
+internal fun AgentMemory.mergeDeviceMemory(
+  deviceSnapshot: Map<String, String>,
+  deletions: List<String>,
+  sensitiveKeys: List<String>,
+) {
+  sensitiveKeys.forEach { markSensitive(it) }
+  variables.putAll(deviceSnapshot)
+  deletions.forEach { variables.remove(it) }
 }

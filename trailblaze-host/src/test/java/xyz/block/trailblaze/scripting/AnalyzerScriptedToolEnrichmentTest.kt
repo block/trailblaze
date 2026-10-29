@@ -8,6 +8,8 @@ import kotlinx.serialization.json.put
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.config.TrailheadMetadata
+import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import java.io.File
@@ -26,9 +28,11 @@ import kotlin.test.assertTrue
  * Covers:
  *  - Happy-path single-export `.ts` → Resolved with merged `_meta:` + analyzer-derived
  *    name/inputSchema/description.
- *  - **Multi-export `.ts` rejected** with a clear diagnostic citing every export name.
- *    Pins the Copilot/Codex review fix on PR #3338 — the original `associateBy` would
- *    have collapsed multi-export results to one arbitrary survivor.
+ *  - **Multi-export `.ts` behind a meta-only YAML rejected** with a clear diagnostic citing
+ *    every export name. Pins the Copilot/Codex review fix on PR #3338 — the original
+ *    `associateBy` would have collapsed multi-export results to one arbitrary survivor.
+ *  - **Bare multi-export `.ts`** (no YAML) resolves every export; it fails as a whole when
+ *    any export's spec was not captured or any export failed analysis.
  *  - **Missing script file** surfaces a "file does not exist" reason instead of the
  *    misleading "no typed declaration" message.
  *  - **`ScriptedToolDefinitionException` with `partialTools`** routes the healthy
@@ -81,6 +85,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     inputSchema: JsonObject = JsonObject(mapOf("type" to JsonPrimitive("object"))),
     spec: JsonObject? = null,
     uncapturedSpec: Boolean = false,
+    uncapturedSpecFields: List<String> = emptyList(),
   ): ScriptedToolDefinition = ScriptedToolDefinition(
     name = name,
     sourcePath = sourcePath,
@@ -90,6 +95,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     outputSchema = JsonObject(mapOf("type" to JsonPrimitive("string"))),
     spec = spec,
     uncapturedSpec = uncapturedSpec,
+    uncapturedSpecFields = uncapturedSpecFields,
   )
 
   /** Test seam: drives [AnalyzerScriptedToolEnrichment] with a fixed analyzer payload. */
@@ -174,6 +180,74 @@ class AnalyzerScriptedToolEnrichmentTest {
   }
 
   @Test
+  fun `meta-only descriptor whose inline spec has an unreadable gate hard-fails naming the field`() {
+    // `trailblaze.tool({ description: "Swipe.", supportedPlatforms: ANDROID_ONLY, ...SHARED }, ...)`:
+    // the analyzer reads the description but not the platform gate or the spread. Registering it
+    // would advertise the tool on every platform, so enrichment fails and names what to inline.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "swipe.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "swipe",
+          sourcePath = script.absolutePath,
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Swipe."))),
+          uncapturedSpec = true,
+          uncapturedSpecFields = listOf("supportedPlatforms", "...SHARED"),
+        ),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/swipe.ts", script = "./swipe.ts")),
+    )
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failed.reason.contains("'swipe'") &&
+        failed.reason.contains("`supportedPlatforms`") &&
+        failed.reason.contains("`...SHARED`") &&
+        failed.reason.contains("inline literal"),
+      "expected the tool, each unreadable entry, and the inline-a-literal fix, got: ${failed.reason}",
+    )
+  }
+
+  @Test
+  fun `partial descriptor supplying the gate resolves despite an unreadable spec gate`() {
+    // The hard error is for descriptor-less tools only: a descriptor that supplies
+    // supportedPlatforms itself still registers, gated by the YAML, with nothing to warn about.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "swipe.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "swipe",
+          sourcePath = script.absolutePath,
+          uncapturedSpec = true,
+          uncapturedSpecFields = listOf("supportedPlatforms"),
+        ),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/swipe.yaml",
+          script = "./swipe.ts",
+          name = "swipe",
+          supportedPlatforms = listOf("android"),
+        ),
+      ),
+    )
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val platforms = assertIs<JsonArray>(config.meta?.get("trailblaze/supportedPlatforms"))
+    assertEquals(JsonPrimitive("android"), platforms.single())
+  }
+
+  @Test
   fun `multi-export ts surfaces a Failed result naming every export`() {
     // Regression pin: the original `associateBy { sourcePath }` would have picked one
     // export at random and silently registered the wrong tool. After the fix the
@@ -202,6 +276,90 @@ class AnalyzerScriptedToolEnrichmentTest {
     assertTrue(
       failed.reason.contains("more than one"),
       "reason should explain why: ${failed.reason}",
+    )
+  }
+
+  @Test
+  fun `bare multi-export ts with no YAML resolves every export under its own name`() {
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "card_reader.ts")
+    val androidOnly = JsonObject(mapOf("supportedPlatforms" to JsonArray(listOf(JsonPrimitive("android")))))
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(name = "connectReader", sourcePath = script.absolutePath, description = "Connect.", spec = androidOnly),
+        stubDef(name = "insertCard", sourcePath = script.absolutePath, description = "Insert.", spec = androidOnly),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/card_reader.ts", script = "./card_reader.ts")),
+    )
+
+    val configs = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs
+    assertEquals(listOf("connectReader", "insertCard"), configs.map { it.name })
+    assertEquals(listOf("Connect.", "Insert."), configs.map { it.description })
+    configs.forEach { config ->
+      assertEquals(script.absolutePath, config.script)
+      val platforms = assertIs<JsonArray>(config.meta?.get("trailblaze/supportedPlatforms"))
+      assertEquals(JsonPrimitive("android"), platforms.single(), "${config.name} lost its spec gate")
+    }
+  }
+
+  @Test
+  fun `bare multi-export ts fails when any export's spec was not captured`() {
+    // One un-gated export is enough to fail the file: registering the others would hide it.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "card_reader.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(name = "connectReader", sourcePath = script.absolutePath),
+        stubDef(name = "insertCard", sourcePath = script.absolutePath, uncapturedSpec = true),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/card_reader.ts", script = "./card_reader.ts")),
+    )
+
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failed.reason.contains("'insertCard'") && failed.reason.contains("non-inline spec reference"),
+      "expected the uncaptured export to be named, got: ${failed.reason}",
+    )
+  }
+
+  @Test
+  fun `bare multi-export ts fails when one export fails analysis and another survives`() {
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "card_reader.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      throw ScriptedToolDefinitionException(
+        message = "1 of 2 tools failed",
+        errors = listOf(
+          ScriptedToolDefinitionError(
+            file = script.absolutePath,
+            toolName = "insertCard",
+            message = "spec `runtime` is not a string literal",
+          ),
+        ),
+        partialTools = listOf(stubDef(name = "connectReader", sourcePath = script.absolutePath)),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/card_reader.ts", script = "./card_reader.ts")),
+    )
+
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failed.reason.contains("spec `runtime` is not a string literal"),
+      "expected the analyzer's reason, got: ${failed.reason}",
     )
   }
 
@@ -678,7 +836,7 @@ class AnalyzerScriptedToolEnrichmentTest {
           spec = JsonObject(
             mapOf(
               "supportedPlatforms" to JsonArray(listOf(JsonPrimitive("web"))),
-              "requiresContext" to JsonPrimitive(true),
+              "requiresHost" to JsonPrimitive(true),
             ),
           ),
         ),
@@ -701,7 +859,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
     val platforms = assertIs<JsonArray>(meta.get("trailblaze/supportedPlatforms"))
     assertEquals(JsonPrimitive("web"), platforms.single())
-    assertEquals(JsonPrimitive(true), meta.get("trailblaze/requiresContext"))
+    assertEquals(JsonPrimitive(true), meta.get("trailblaze/requiresHost"))
   }
 
   @Test
@@ -777,7 +935,6 @@ class AnalyzerScriptedToolEnrichmentTest {
     val platforms = assertIs<JsonArray>(meta.get("trailblaze/supportedPlatforms"))
     assertEquals(JsonPrimitive("android"), platforms.single())
     // No analyzer-only keys leaked through.
-    assertNull(meta.get("trailblaze/requiresContext"))
     assertNull(meta.get("trailblaze/requiresHost"))
   }
 
@@ -858,6 +1015,51 @@ class AnalyzerScriptedToolEnrichmentTest {
     val meta = assertNotNull(config.meta)
     assertEquals(JsonPrimitive(false), meta.get("trailblaze/surfaceToLlm"))
     assertEquals(JsonPrimitive(false), meta.get("trailblaze/isRecordable"))
+  }
+
+  /** Enriches one meta-only descriptor for `tool.ts` whose spec is [spec]. */
+  private fun enrichWithSpec(
+    spec: JsonObject,
+    descriptorRuntime: ScriptedToolRuntime? = null,
+  ): ScriptedToolEnrichment.EnrichmentResult {
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "tool.ts")
+    val analyzer = FakeAnalyzer { _ -> listOf(stubDef(name = "tool", sourcePath = script.absolutePath, spec = spec)) }
+    return AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/tool.yaml",
+          descriptor = TrailmapScriptedToolFile(script = "./tool.ts", runtime = descriptorRuntime),
+        ),
+      ),
+    ).single()
+  }
+
+  @Test
+  fun `spec runtime selects the tool's runtime`() {
+    val result = enrichWithSpec(JsonObject(mapOf("runtime" to JsonPrimitive("subprocess"))))
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(result).configs.single()
+    assertEquals(ScriptedToolRuntime.SUBPROCESS, config.runtime)
+  }
+
+  @Test
+  fun `descriptor runtime wins over the spec's`() {
+    val result = enrichWithSpec(
+      JsonObject(mapOf("runtime" to JsonPrimitive("subprocess"))),
+      descriptorRuntime = ScriptedToolRuntime.IN_PROCESS,
+    )
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(result).configs.single()
+    assertEquals(ScriptedToolRuntime.IN_PROCESS, config.runtime)
+  }
+
+  @Test
+  fun `a misspelled spec runtime fails instead of running in-process`() {
+    val result = enrichWithSpec(JsonObject(mapOf("runtime" to JsonPrimitive("subproces"))))
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(result)
+    assertTrue("subproces" in failed.reason, "got: ${failed.reason}")
   }
 
   @Test
@@ -1030,6 +1232,74 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
   }
 
+  @Test
+  fun `a malformed _meta requiredClassifiers fails the descriptor on the enrichment path`() {
+    // Read downstream as "no restriction", a scalar would load a rig-only tool on every device.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "readRig.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "readRig", sourcePath = script.absolutePath, spec = null))
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/readRig.yaml",
+          script = "./readRig.ts",
+          name = "readRig",
+          meta = buildJsonObject { put("trailblaze/requiredClassifiers", JsonPrimitive("rig")) },
+        ),
+      ),
+    )
+
+    val failure = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failure.reason.contains("trailblaze/requiredClassifiers"),
+      "expected the offending key in: ${failure.reason}",
+    )
+  }
+
+  @Test
+  fun `a malformed entry _meta requiredClassifiers fails a multi-tool descriptor`() {
+    // Entry `_meta` merges over the descriptor's, so it must get the same shape check.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "multiRig.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(name = "anywhere", sourcePath = script.absolutePath),
+        stubDef(name = "readRig", sourcePath = script.absolutePath),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/multiRig.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./multiRig.ts",
+            tools = listOf(
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(name = "anywhere"),
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(
+                name = "readRig",
+                meta = buildJsonObject { put("trailblaze/requiredClassifiers", JsonPrimitive("rig")) },
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val failure = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failure.reason.contains("readRig") && failure.reason.contains("trailblaze/requiredClassifiers"),
+      "expected the entry and the offending key in: ${failure.reason}",
+    )
+  }
+
   // ============================================================================
   // Description precedence — YAML sidecar > spec `description` > TSDoc-derived.
   // `description` is the tool's primary descriptor field (NOT a `_meta` gate), so
@@ -1087,7 +1357,7 @@ class AnalyzerScriptedToolEnrichmentTest {
           spec = JsonObject(
             mapOf(
               "description" to JsonPrimitive("   "),
-              "requiresContext" to JsonPrimitive(true),
+              "requiresHost" to JsonPrimitive(true),
             ),
           ),
         ),
@@ -1137,13 +1407,12 @@ class AnalyzerScriptedToolEnrichmentTest {
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
     assertEquals("myapp/android/home_signed_in", config.trailhead?.to)
-    assertEquals(false, config.trailhead?.dynamic)
     // Not a dispatch gate — must never leak into the namespaced `_meta`.
     assertNull(config.meta?.get("trailblaze/trailhead"))
   }
 
   @Test
-  fun `trailhead dynamic true is populated when to is omitted`() {
+  fun `a trailhead with only the retired dynamic flag is still a trailhead, with no destination`() {
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "launchDeepLink.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1168,15 +1437,12 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead?.to)
-    assertEquals(true, config.trailhead?.dynamic)
+    assertEquals(TrailheadMetadata(to = null), config.trailhead)
   }
 
   @Test
-  fun `malformed trailhead with neither to nor dynamic is dropped, not surfaced as a trailhead`() {
-    // Lenient policy (mirrors the analyzer's general "skip the unresolvable bit" posture rather
-    // than the YAML loader's hard `require()`): a `trailhead: {}` with no destination and no
-    // `dynamic: true` isn't a real bootstrap, so it's dropped rather than failing the whole tool.
+  fun `an empty trailhead block is a trailhead with no destination`() {
+    // What the analyzer emits for every `trailblaze.trailhead(...)` that names no `to`.
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "emptyTrailhead.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1199,13 +1465,11 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead, "expected a trailhead block with neither to nor dynamic to be dropped")
+    assertEquals(TrailheadMetadata(to = null), config.trailhead)
   }
 
   @Test
-  fun `malformed trailhead with both to and dynamic keeps dynamic and drops to`() {
-    // Mutual-exclusion mirrors TrailheadMetadata's YAML contract, resolved leniently in favor of
-    // `dynamic` (the more permissive interpretation) rather than hard-failing.
+  fun `to is kept when the retired dynamic flag is also set`() {
     val trailmapDir = mkTrailmapDir()
     val script = mkScript(trailmapDir, "conflictingTrailhead.ts")
     val analyzer = FakeAnalyzer { _ ->
@@ -1236,8 +1500,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
 
     val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
-    assertNull(config.trailhead?.to, "expected 'to' dropped when both 'to' and 'dynamic: true' are set")
-    assertEquals(true, config.trailhead?.dynamic)
+    assertEquals(TrailheadMetadata(to = "myapp/android/home"), config.trailhead)
   }
 
   @Test

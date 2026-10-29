@@ -37,6 +37,7 @@ class TrailCommandPlanTrailExecutionTest {
     skip: String? = null,
     id: String? = null,
     target: String? = null,
+    context: String? = null,
   ): File {
     dir.mkdirs()
     val file = File(dir, name)
@@ -45,6 +46,7 @@ class TrailCommandPlanTrailExecutionTest {
       appendLine("  title: $title")
       if (id != null) appendLine("  id: $id")
       if (target != null) appendLine("  target: $target")
+      if (context != null) appendLine("  context: \"$context\"")
       if (tags != null) appendLine("  tags: [${tags.joinToString(", ")}]")
       if (skip != null) {
         appendLine("  skip:")
@@ -697,21 +699,17 @@ class TrailCommandPlanTrailExecutionTest {
     // Defensive branch: the walk filters `isFile`, so an unreadable file is only reachable when
     // permissions deny the read. Expansion must not crash; the file lands in the legacy bucket
     // and resolves like any recording (here: the dir's only file, picked with a warning).
+    // The read fails through the injected reader: a permission bit doesn't stop root.
     val dir = File(tempFolder.root, "unreadable").apply { mkdirs() }
     val locked = writeUnifiedTrail("locked-scenario.trail.yaml", dir)
-    org.junit.Assume.assumeTrue(
-      "cannot revoke read permission on this platform/user; skipping",
-      locked.setReadable(false) && !locked.canRead(),
-    )
-    try {
-      val capturedErr = ByteArrayOutputStream()
-      val expanded = withCapturedStderr(capturedErr) {
-        TrailCommand.expandTrailFiles(files = listOf(dir))
-      }
-      assertEquals(listOf(locked.canonicalPath), expanded.map { it.canonicalPath })
-    } finally {
-      locked.setReadable(true)
+    val capturedErr = ByteArrayOutputStream()
+    val expanded = withCapturedStderr(capturedErr) {
+      TrailCommand.expandTrailFiles(
+        files = listOf(dir),
+        readText = { throw java.nio.file.AccessDeniedException(it.path) },
+      )
     }
+    assertEquals(listOf(locked.canonicalPath), expanded.map { it.canonicalPath })
   }
 
   @Test
@@ -1025,6 +1023,7 @@ class TrailCommandPlanTrailExecutionTest {
       id = "checkout/refund",
       skip = "see #2194",
       target = "square",
+      context = "Refund must reach the card.",
     )
     // Under `trails/`, so the fallback shows the identity a session for it would carry: the
     // `trails/`-relative short name, not a machine-specific absolute path.
@@ -1055,6 +1054,7 @@ class TrailCommandPlanTrailExecutionTest {
     // beside the row holding the same trail's runs.
     assertEquals("checkout/refund", withConfig.trailId)
     assertEquals("square", withConfig.target)
+    assertEquals("Refund must reach the card.", withConfig.context)
 
     // No `id:` and no `title:`: both fall back to the short trail name, the same rule
     // `SessionInfo.stableTestKey` applies to the same absolute path the CLI stamps on a session
@@ -1082,6 +1082,7 @@ class TrailCommandPlanTrailExecutionTest {
       trailId = "checkout/refund",
       target = "square",
       trailSource = SOURCE_TYPE_GENERATED,
+      context = "Refund must reach the card.",
     )
     val classifiers = listOf(
       TrailblazeDeviceClassifier("android"),
@@ -1107,6 +1108,7 @@ class TrailCommandPlanTrailExecutionTest {
     assertEquals("android", recorded.platform)
     assertEquals("checkout/refund", recorded.trail_id)
     assertEquals("square", recorded.target)
+    assertEquals("Refund must reach the card.", recorded.context)
   }
 
   @Test
@@ -1194,6 +1196,53 @@ class TrailCommandPlanTrailExecutionTest {
   }
 
   /**
+   * With several configurations and none named, the bound device names pick the one declaring
+   * exactly those devices beyond its start device, so only that configuration's `skip:` applies.
+   */
+  @Test
+  fun `the bound names pick which configuration's skip applies`() {
+    val file = File(tempFolder.root, "two-casts-skip.trail.yaml")
+    file.writeText(
+      """
+      config:
+        target: myapp
+        devices:
+          phone-cast:
+            devices:
+              seller:
+                classifier: android-phone
+              customer:
+                classifier: android-phone
+          tablet-cast:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+              customer:
+                classifier: android-phone
+        skip:
+          tablet-cast: "tablet blocked on #789"
+      trail:
+        - step: Do the thing
+      """.trimIndent() + "\n",
+    )
+
+    fun planItem(boundDeviceNames: Set<String>) = TrailCommand.planTrailExecution(
+      files = listOf(file),
+      includeTags = emptyList(),
+      configClassifiers = listOf(TrailblazeDeviceClassifier("android-phone")),
+      bindsCompanionDevices = boundDeviceNames.isNotEmpty(),
+      boundDeviceNames = boundDeviceNames,
+    ).items.single()
+
+    assertIs<TrailExecutionItem.Run>(planItem(setOf("customer")))
+    val tablet = planItem(setOf("buyer", "customer"))
+    assertIs<TrailExecutionItem.Skip>(tablet)
+    assertEquals("tablet blocked on #789", tablet.reason)
+  }
+
+  /**
    * The planner reads this shell's `TRAILBLAZE_DEVICE_BINDINGS`, but a delegated run executes with the
    * daemon's environment, so a mixed trail must carry the shell's bindings to run what was planned.
    */
@@ -1268,6 +1317,49 @@ class TrailCommandPlanTrailExecutionTest {
     )
   }
 
+  /**
+   * A trail declaring several configurations is selected by the devices a run binds, so the planner's
+   * pick and the daemon's must read the same bindings: a daemon started with other bindings, or none,
+   * would run another cast than the one whose `skip:` was planned, or refuse the run.
+   */
+  @Test
+  fun `a delegated multi-configuration trail carries this shell's environment bindings`() {
+    val casts = File(tempFolder.root, "casts-forward.trail.yaml").apply {
+      writeText(
+        """
+        config:
+          devices:
+            phone-cast:
+              devices:
+                pos:
+                  classifier: android-phone
+                customer:
+                  classifier: android-phone
+            tablet-cast:
+              devices:
+                seller:
+                  classifier: android-tablet
+                buyer:
+                  classifier: android-phone
+                customer:
+                  classifier: android-phone
+        trail:
+          - step: Do the thing
+        """.trimIndent() + "\n",
+      )
+    }
+
+    assertEquals(
+      mapOf("buyer" to "emulator-5556", "customer" to "emulator-5558"),
+      TrailCommand.delegatedDeviceBindings(
+        casts.readText(),
+        emptyMap(),
+        rawEnvironmentBindings = "buyer=emulator-5556,customer=emulator-5558",
+      ),
+    )
+    assertTrue(TrailCommand.forwardsEnvironmentBindings(listOf(casts), emptyMap(), "customer=emulator-5558"))
+  }
+
   @Test
   fun `a delegated trail that is not mixed leaves environment bindings to the daemon`() {
     val singleDevice = """
@@ -1291,7 +1383,7 @@ class TrailCommandPlanTrailExecutionTest {
     """.trimIndent()
 
     // A request binding on a trail declaring no configuration is a hard error where the env var is
-    // ignored, and a configuration-only trail binds its configuration either way.
+    // ignored, and a trail with one configuration and nothing else binds it either way.
     for (yaml in listOf(singleDevice, configurationOnly)) {
       assertEquals(
         emptyMap(),

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.host.capture
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -274,6 +276,51 @@ class OnDeviceRpcMemoryProbeTest {
       "a background diagnostic must take the failure and fall back, not heal the device",
     )
     client.close()
+  }
+
+  @Test
+  fun `the closing reading does not wait out a runner that has stopped answering`() {
+    val fallback = FakeFallback()
+    val stalled = CountDownLatch(1)
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = fallback,
+      rpc = { _, _ ->
+        // The session's end is waiting on this reading; a runner this slow is answered by adb.
+        try {
+          Thread.sleep(60_000)
+        } catch (e: InterruptedException) {
+          stalled.countDown()
+          throw e
+        }
+        RpcResult.Success(response(inProcess = true))
+      },
+      finalReadBudgetMs = 200,
+    )
+
+    val startedNs = System.nanoTime()
+    val snapshot = assertNotNull(probe.readFinal("emulator-5554", "com.example.app", forceGc = true))
+    val tookMs = (System.nanoTime() - startedNs) / 1_000_000
+
+    assertEquals(MemoryProbe.SOURCE_ADB, snapshot.source)
+    assertTrue(tookMs < 10_000, "the closing reading took ${tookMs}ms")
+    // The abandoned request is not left holding a thread against the device.
+    assertTrue(stalled.await(10, TimeUnit.SECONDS), "the stalled request was never interrupted")
+  }
+
+  @Test
+  fun `a runner that answers the closing reading in time is still the one read`() {
+    val fallback = FakeFallback()
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = fallback,
+      rpc = { _, _ -> RpcResult.Success(response(inProcess = true)) },
+      finalReadBudgetMs = 5_000,
+    )
+
+    val snapshot = assertNotNull(probe.readFinal("emulator-5554", "com.example.app", forceGc = true))
+
+    assertEquals(MemoryProbe.SOURCE_ONDEVICE, snapshot.source)
+    assertEquals(65_536 - 20_480, snapshot.app?.javaHeapUsedKb, "the in-process Runtime figures are kept")
+    assertTrue(fallback.reads.isEmpty())
   }
 
   @Test

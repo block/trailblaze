@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.filterImportantForAccessibility
 import android.graphics.Bitmap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -198,19 +199,12 @@ class AccessibilityServiceScreenState(
     deviceWidth = displayWidth
     deviceHeight = displayHeight
 
-    // The fallback gets its own span because it is a different order of cost: the service answers
-    // from a field it maintains off the event stream, while the fallback shells out to adb.
-    currentActivity = TrailblazeTracer.traceDetail("getCurrentActivity", SCREEN_STATE_TRACE_CAT) {
-      TrailblazeAccessibilityService.getCurrentActivity()
-    } ?: TrailblazeTracer.traceDetail("getForegroundActivity.adb", SCREEN_STATE_TRACE_CAT) {
-      AdbCommandUtil.getForegroundActivity()
-    }
-
     // Mirror-only fast path: when the caller doesn't need the tree (live `/devices` viewer
     // frame loop), skip the accessibility-tree walk entirely. We still capture the screenshot
     // on the same thread (no parallelism win without a tree-build to overlap) — this drops
     // per-frame on-device cost from ~100-300 ms to ~30-60 ms.
     if (!includeTree) {
+      currentActivity = readCurrentActivity()
       viewHierarchy = ViewHierarchyTreeNode()
       _trailblazeNodeTree = null
       refsApplied = true // no tree → no refs to apply
@@ -266,6 +260,11 @@ class AccessibilityServiceScreenState(
       foregroundAppId = mergedTrees.foregroundAppId
 
       treeReadEndMs = System.currentTimeMillis()
+
+      // Read only now, after the stability gate inside the tree read has let go. That gate can
+      // hold for a window transition, and the activity is tracked from the very events that
+      // transition raises, so a read taken before it labels the new screen with the old activity.
+      currentActivity = readCurrentActivity()
 
       if (includeScreenshot) {
         val requested = CountDownLatch(1)
@@ -368,6 +367,15 @@ class AccessibilityServiceScreenState(
    * is an IPC round trip whose slow path is rate-limited, the encode is CPU on this thread and
    * scales with the screen.
    */
+  // The fallback gets its own span because it is a different order of cost: the service answers
+  // from a field it maintains off the event stream, while the fallback shells out to adb.
+  private fun readCurrentActivity(): String? =
+    TrailblazeTracer.traceDetail("getCurrentActivity", SCREEN_STATE_TRACE_CAT) {
+      TrailblazeAccessibilityService.getCurrentActivity()
+    } ?: TrailblazeTracer.traceDetail("getForegroundActivity.adb", SCREEN_STATE_TRACE_CAT) {
+      AdbCommandUtil.getForegroundActivity()
+    }
+
   private fun encodeScreenshot(bitmap: Bitmap): ByteArray =
     TrailblazeTracer.traceDetail("scaleAndEncodeScreenshot", SCREEN_STATE_TRACE_CAT) {
       bitmap.scaleAndEncode(screenshotScalingConfig)

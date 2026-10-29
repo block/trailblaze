@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.client
 
 import ai.koog.agents.core.tools.ToolDescriptor
+import java.util.concurrent.ConcurrentHashMap
 import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
@@ -23,6 +24,7 @@ import xyz.block.trailblaze.llm.LlmRequestUsageAndCost
 import xyz.block.trailblaze.llm.LlmTokenBreakdownEstimator
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -72,6 +74,20 @@ class TrailblazeLogger(
    */
   private val toolCatalogEmitter = TrailblazeToolCatalogEmitter()
 
+  /** Sessions whose failure screenshot is already logged; see [logFailureSnapshot]. */
+  private val failureSnapshotSessions: MutableSet<SessionId> = ConcurrentHashMap.newKeySet()
+
+  /**
+   * Logs [screenState] as [session]'s failure screenshot. A failed trail's teardown runs before
+   * the session ends and can change the screen, so the runner takes this first and the
+   * end-of-run capture skips it ([hasFailureSnapshot]).
+   */
+  fun logFailureSnapshot(session: TrailblazeSession, screenState: ScreenState): String? =
+    logSnapshot(session, screenState, displayName = FAILURE_SNAPSHOT_NAME)
+      ?.also { failureSnapshotSessions += session.sessionId }
+
+  fun hasFailureSnapshot(sessionId: SessionId): Boolean = sessionId in failureSnapshotSessions
+
   /**
    * Emits a log event for the given session.
    *
@@ -87,16 +103,22 @@ class TrailblazeLogger(
    *
    * @param session The session this screenshot belongs to
    * @param screenState The screen state containing screenshot bytes
+   * @param capturedAt When [screenState] was captured, for a caller that logs it later than that.
+   *   Names the file. Defaults to now.
    * @return The filename where the screenshot was stored, or null if no screenshot
    */
-  fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String? {
+  fun logScreenState(
+    session: TrailblazeSession,
+    screenState: ScreenState,
+    capturedAt: Instant? = null,
+  ): String? {
     val screenshotBytes = screenState.screenshotBytes ?: return null
     // A degraded device can return non-null empty/sub-header bytes; reject them so no 0-byte
     // image and no screenshot-less log is written.
     if (screenshotBytes.size < MIN_IMAGE_HEADER_BYTES) return null
 
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-    val timestamp = Clock.System.now()
+    val timestamp = capturedAt ?: Clock.System.now()
     val screenshotFileName = buildScreenshotFileName(
       sessionId = session.sessionId.value,
       epochMs = timestamp.toEpochMilliseconds(),
@@ -120,6 +142,9 @@ class TrailblazeLogger(
    * @param screenState The screen state containing clean screenshot and view hierarchy
    * @param displayName Optional human-readable name for this snapshot (e.g., "login_screen").
    *                    Shown in the snapshot viewer UI. Does not affect the actual filename.
+   * @param capturedAt When [screenState] was captured, for a caller that logs it later than that.
+   *   Becomes the snapshot's timestamp and names its file, so the report still places it before
+   *   the tool it shows the screen for. Defaults to now.
    * @return The filename where the snapshot was stored, or null if no screenshot available
    */
   fun logSnapshot(
@@ -127,8 +152,9 @@ class TrailblazeLogger(
     screenState: ScreenState,
     displayName: String? = null,
     traceId: TraceId? = null,
+    capturedAt: Instant? = null,
   ): String? {
-    val screenshotFileName = logScreenState(session, screenState) ?: return null
+    val screenshotFileName = logScreenState(session, screenState, capturedAt) ?: return null
 
     // If the screenState was captured in migration mode, the producer wraps it in
     // [MigrationScreenState] (the decorator delegates everything else to the primary
@@ -150,7 +176,7 @@ class TrailblazeLogger(
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         session = session.sessionId,
-        timestamp = Clock.System.now(),
+        timestamp = capturedAt ?: Clock.System.now(),
         traceId = traceId,
       )
     )
@@ -755,6 +781,8 @@ class TrailblazeLogger(
      * // Logs will be discarded
      * ```
      */
+    const val FAILURE_SNAPSHOT_NAME: String = "failure_screenshot"
+
     fun createNoOp(): TrailblazeLogger {
       return TrailblazeLogger(
         logEmitter = NoOpLogEmitter,

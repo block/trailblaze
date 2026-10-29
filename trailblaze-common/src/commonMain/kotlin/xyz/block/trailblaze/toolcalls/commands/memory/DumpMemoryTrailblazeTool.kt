@@ -10,12 +10,7 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("dumpMemory")
-@LLMDescription(
-  """
-Dump any of the remembered values from the agent's memory. Useful for debugging tests that
-remember data from one screen state and compare it to a later screen state.
-""",
-)
+@LLMDescription("Log remembered values to the console for debugging. Returns nothing.")
 data object DumpMemoryTrailblazeTool : MemoryTrailblazeTool {
   override fun execute(
     memory: AgentMemory,

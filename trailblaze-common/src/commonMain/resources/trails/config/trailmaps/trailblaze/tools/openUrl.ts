@@ -1,43 +1,44 @@
 import { trailblaze } from "@trailblaze/scripting";
 
-/**
- * Opens the browser to the provided URL.
- *
- * Hands Maestro the same `openLink` command the former Kotlin `OpenUrlTrailblazeTool`
- * emitted, via the framework `maestro` tool reachable from scripted tools through
- * `ctx.tools.mobile_maestro(...)` (maestro resolves through the unfiltered framework-tool
- * dispatch even though it isn't in any toolset). Maestro
- * implements `openLink` per platform, so a single call covers Android and iOS with no
- * per-platform branch.
- *
- * Web (Playwright) is intentionally out of scope: `openUrl` is not part of any web toolset
- * (`navigation` / `core_interaction` declare android + ios-host drivers only), so the web path
- * the old Kotlin tool had in `PlaywrightTrailblazeAgent` was never reachable via normal tool
- * advertising.
- *
- * Unlike the Kotlin tool, this does NOT interpolate `{{var}}` in the URL — not because it can't,
- * but because it doesn't need to. The in-process on-device context DOES expose a working memory
- * surface (`ctx.memory.interpolate` reconstitutes the snapshot the host serializes into the ctx
- * envelope — see `QuickJsOnDeviceMemorySmokeTest`), and both committed `openUrl` trails pass literal
- * URLs, so interpolating here would be a no-op. Add `ctx.memory.interpolate(input.url)` if a trail
- * ever needs a tokenized URL.
- */
 interface OpenUrlInput {
-  /** The URL to open that starts with https. */
+  /** The URL to open that starts with https */
   url: string;
 }
 
+/**
+ * Opens the browser to the provided URL.
+ *
+ * Android fires a `VIEW` intent in the `BROWSABLE` category with `am start -W` through
+ * `android_adbShell`, which runs both from the host and on the device; the category limits it to
+ * the activities a browser link may open, as a tapped link would, and `-W` returns once the
+ * handling app has drawn its first frame. iOS uses `ios_openUrl`, the iOS
+ * driver's own open-link action. Either way the OS routes the URL to whichever app handles it.
+ *
+ * Web (Playwright) is intentionally out of scope: `openUrl` is not part of any web toolset
+ * (`navigation` / `core_interaction` declare android + ios-host drivers only).
+ *
+ * This does NOT interpolate `{{var}}` in the URL. Current callers pass literal URLs;
+ * add `ctx.memory.interpolate(input.url)` if a trail ever needs a tokenized one.
+ */
 export const openUrl = trailblaze.tool<OpenUrlInput>(
-  { supportedPlatforms: ["android", "ios"] },
+  { description: "Opens the browser to the provided url.", supportedPlatforms: ["android", "ios"] },
   async (input, ctx) => {
     const url = String(input.url ?? "").trim();
     if (!url) {
       throw new Error("openUrl requires a non-empty `url` argument.");
     }
-    // `maestro` isn't in the SDK's curated `TrailblazeToolMap`, so this composes via the runtime
-    // `ctx.tools` Proxy rather than a statically-typed binding — the same framework-tool
-    // composition convention `clock_clearAlarms.ts` uses for `ctx.tools.android_adbShell(...)`.
-    await ctx.tools.mobile_maestro({ commands: [{ openLink: url }] });
+    if (ctx.device.platform === "ios") {
+      await ctx.tools.ios_openUrl({ url });
+      return `Opened ${url}`;
+    }
+    // `am start` exits 0 even when no activity resolves the intent and reports the failure on
+    // stdout instead, so read it.
+    const output = await ctx.tools.android_adbShell({
+      command: ["am", "start", "-W", "-a", "android.intent.action.VIEW", "-c", "android.intent.category.BROWSABLE", "-d", url],
+    });
+    if (/^Error:/m.test(output)) {
+      throw new Error(`openUrl could not open ${url}: ${output.trim()}`);
+    }
     return `Opened ${url}`;
   },
 );

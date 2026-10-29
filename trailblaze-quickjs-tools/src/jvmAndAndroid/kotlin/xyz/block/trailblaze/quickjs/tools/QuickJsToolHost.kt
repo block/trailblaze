@@ -3,13 +3,16 @@ package xyz.block.trailblaze.quickjs.tools
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.function
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -18,6 +21,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -42,6 +46,8 @@ class QuickJsToolHost internal constructor(
    * Owned by this host; closed in [shutdown].
    */
   private val engineDispatcher: ExecutorCoroutineDispatcher,
+  /** SHA-256 hex of the evaluated bundle source — see [bundleSha256]. */
+  private val sourceSha256: String = "",
 ) {
 
   /**
@@ -81,6 +87,22 @@ class QuickJsToolHost internal constructor(
    * tripwire, not a formal deadlock detector.
    */
   private val hostCallThread = java.util.concurrent.atomic.AtomicReference<Thread?>(null)
+
+  /**
+   * The hosts on the call path of the call this host is running, itself last; empty when idle.
+   * Written by [callTool] while it holds [evalMutex], and published as [callPath] by the host-call
+   * binding for the nested dispatch it runs.
+   */
+  @Volatile
+  private var pathOfCurrentCall: List<QuickJsToolHost> = emptyList()
+
+  /**
+   * The Job of the tool call [evaluateMember] is running, or null when idle. A host call the tool
+   * makes blocks the engine thread in `runBlocking`; parenting that on this Job lets cancelling
+   * the tool cancel the host call (a `ctx.events` wait, say) instead of leaving it to run out.
+   */
+  @Volatile
+  private var callJob: Job? = null
 
   /** See [hostCallThread]. Shared by [callTool] and [listTools]; [caller] is just for the message. */
   private fun checkNotReentrant(caller: String) {
@@ -136,10 +158,86 @@ class QuickJsToolHost internal constructor(
    *   Pass `null` to send `undefined` to the handler — useful for ad-hoc invocations outside
    *   a session.
    */
-  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject = run {
-    checkNotReentrant("callTool")
+  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject =
+    dispatch(name = name, member = HANDLER_MEMBER, args = args, ctx = ctx, extraArg = null)
+      ?: error("Tool '$name' registered no handler")
+
+  /**
+   * Invoke a secondary [member] of a registered tool — today only `teardown`, a trailhead's
+   * teardown — as `tool[member](args, ctx, extraArg)`. Returns null when the tool is registered but
+   * doesn't define [member], so callers can tell "absent" from "failed". Throws, like [callTool],
+   * when no tool named [name] is registered.
+   */
+  suspend fun callToolMember(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject,
+  ): JsonObject? = dispatch(name = name, member = member, args = args, ctx = ctx, extraArg = extraArg)
+
+  /** Whether [name]'s registry entry defines [member] as a function. */
+  suspend fun hasToolMember(name: String, member: String): Boolean = run {
+    checkNotReentrant("hasToolMember")
     evalMutex.withLock {
       withContext(engineDispatcher) {
+        quickJs.evaluate<Boolean>(
+          "(function(){ const t = (globalThis.__trailblazeTools || {})[${jsString(name)}]; " +
+            "return !!t && typeof t[${jsString(member)}] === 'function'; })()",
+          "has-member.js",
+          false,
+        )
+      }
+    }
+  }
+
+  /** SHA-256 of the bundle source this host evaluated; identifies the tool code version. */
+  val bundleSha256: String get() = sourceSha256
+
+  private suspend fun dispatch(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? = run {
+    checkNotReentrant("callTool")
+    // Read before the first suspension point: [callPath] is thread-scoped.
+    val pathAbove = callPath.get().orEmpty()
+    check(pathAbove.none { it === this }) { cycleMessage(name) }
+    evalMutex.withLock {
+      pathOfCurrentCall = pathAbove + this
+      try {
+        evaluateMember(name, member, args, ctx, extraArg)
+      } finally {
+        pathOfCurrentCall = emptyList()
+      }
+    }
+  }
+
+  private suspend fun evaluateMember(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? =
+      withContext(engineDispatcher) {
+        callJob = coroutineContext[Job]
+        try {
+          evaluateMemberOnEngine(name, member, args, ctx, extraArg)
+        } finally {
+          callJob = null
+        }
+      }
+
+  private suspend fun evaluateMemberOnEngine(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? {
         // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
         // splicing the raw JSON output into the generated source. JSON encodes the U+2028
         // (line separator) and U+2029 (paragraph separator) code points as themselves — valid
@@ -148,6 +246,11 @@ class QuickJsToolHost internal constructor(
         // bytes into characters QuickJS reads through the string-literal grammar (which treats
         // them as ordinary characters), and `JSON.parse` reconstructs the object on the JS side.
         val argsLiteral = jsString(JSON.encodeToString(JsonObject.serializer(), args))
+        val extraLiteral = if (extraArg != null) {
+          "JSON.parse(${jsString(JSON.encodeToString(JsonObject.serializer(), extraArg))})"
+        } else {
+          "undefined"
+        }
         val ctxLiteral = if (ctx != null) {
           // Same string-literal-then-parse trick. Wrapping in `JSON.parse(<literal>)` produces
           // an Object the handler sees as `ctx`.
@@ -185,6 +288,8 @@ class QuickJsToolHost internal constructor(
           }
           const __args = JSON.parse(${argsLiteral});
           const __ctx = ${ctxLiteral};
+          const __extra = ${extraLiteral};
+          const __member = tool[${jsString(member)}];
           // Inject framework-provided resolver methods on `ctx.target`. Methods can't
           // survive the JSON-serialization round-trip (host → JS engine), so we attach
           // them here on the JS side after deserialization. The methods read from the
@@ -232,7 +337,13 @@ class QuickJsToolHost internal constructor(
           // check would misclassify them as successes and silently swallow the failure.
           let __dispatchCaught = false;
           try {
-            __dispatchResult = await tool.handler(__args, __ctx);
+            if (typeof __member !== 'function') {
+              __dispatchResult = { ${MEMBER_ABSENT_KEY}: true };
+            } else if (__extra === undefined) {
+              __dispatchResult = await __member(__args, __ctx);
+            } else {
+              __dispatchResult = await __member(__args, __ctx, __extra);
+            }
           } catch (e) {
             __dispatchError = e;
             __dispatchCaught = true;
@@ -314,24 +425,56 @@ class QuickJsToolHost internal constructor(
             if (__structured !== undefined) {
               __envelope.structuredContent = __structured;
             }
+            // The reuse report of a trailhead handler that threw (tool-core.ts marks the error), so
+            // a failed reuse is still recorded as one.
+            try {
+              const __report = (__e !== null && __e !== undefined && typeof __e === 'object')
+                ? __e[Symbol.for('trailblaze.trailhead.report')]
+                : undefined;
+              if (__report !== undefined && __report !== null && typeof __report === 'object') {
+                __envelope._meta = { trailblaze: { trailhead: __report } };
+              }
+            } catch (__reportError) {
+              // A hostile accessor loses the report, never the envelope.
+            }
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__envelope);
             } catch (__payloadStringifyError) {
               // Non-JSON-serializable `data` (cycles, BigInt) must not cost the envelope —
-              // ship it payload-less rather than crash the dispatch.
-              globalThis.__trailblazeLastResult = JSON.stringify({
-                isError: true,
-                content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
-              });
+              // ship it payload-less rather than crash the dispatch. The trailhead's reuse report
+              // stays, so a failed reuse is still recorded.
+              const __bare = { isError: true, content: [{ type: 'text', text: __name + ': ' + __msg + __stack }] };
+              try {
+                globalThis.__trailblazeLastResult = JSON.stringify(
+                  __envelope._meta === undefined ? __bare : Object.assign({}, __bare, { _meta: __envelope._meta }),
+                );
+              } catch (__metaStringifyError) {
+                globalThis.__trailblazeLastResult = JSON.stringify(__bare);
+              }
             }
           } else {
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);
             } catch (e) {
-              globalThis.__trailblazeLastResult = JSON.stringify({
+              const __bare = {
                 isError: true,
                 content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
-              });
+              };
+              // Keep the envelope's `_meta` (the trailhead's reuse report, memory writes) when it
+              // serializes on its own.
+              let __meta;
+              try {
+                __meta = (__dispatchResult !== null && typeof __dispatchResult === 'object') ? __dispatchResult._meta : undefined;
+              } catch (__metaReadError) {
+                __meta = undefined;
+              }
+              try {
+                globalThis.__trailblazeLastResult = JSON.stringify(
+                  __meta === undefined ? __bare : Object.assign({}, __bare, { _meta: __meta }),
+                );
+              } catch (__metaStringifyError) {
+                globalThis.__trailblazeLastResult = JSON.stringify(__bare);
+              }
             }
           }
         """.trimIndent()
@@ -341,9 +484,8 @@ class QuickJsToolHost internal constructor(
           "read-result.js",
           false,
         )
-        JSON.parseToJsonElement(resultJson).jsonObject
-      }
-    }
+        val result = JSON.parseToJsonElement(resultJson).jsonObject
+        return if (result[MEMBER_ABSENT_KEY] != null) null else result
   }
 
   /**
@@ -364,7 +506,7 @@ class QuickJsToolHost internal constructor(
     if (!isShutdown.compareAndSet(false, true)) return
     evalMutex.withLock {
       withContext(engineDispatcher) {
-        runCatching { quickJs.close() }
+        runCatching { closeEngine(quickJs) }
       }
       runCatching { engineDispatcher.close() }
     }
@@ -379,6 +521,46 @@ class QuickJsToolHost internal constructor(
      * it was, instead of N identical `quickjs-tool-engine` threads.
      */
     private val engineThreadSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * The hosts blocked up the call path running on this thread, set by the host-call binding for
+     * the nested dispatch it runs. A nested [callTool] on a host already on the path would wait
+     * forever on that host's [evalMutex] (a tool cycle such as A → B → A, which the same-thread
+     * [checkNotReentrant] tripwire can't see), so it fails fast instead. Thread-scoped: a path that
+     * hops threads before the nested call is not followed, and waits as it always did. Never a
+     * false positive, because only hosts actually blocked up this exact path are on it.
+     */
+    private val callPath = ThreadLocal<List<QuickJsToolHost>>()
+
+    /** True when [host] is blocked up the call path running on this thread (see [callPath]). */
+    internal fun isOnCurrentCallPath(host: QuickJsToolHost): Boolean =
+      callPath.get()?.any { it === host } == true
+
+    private fun cycleMessage(name: String): String =
+      "QuickJsToolHost.callTool('$name') targets an engine that is already waiting further up this " +
+        "call path (a tool cycle such as A → B → A), so it would wait forever. Break the cycle: run " +
+        "the shared logic as a local function in one tool instead of dispatching back up the chain."
+
+    /**
+     * Serializes creating and closing engines across the whole process. quickjs-kt keeps JNI state
+     * shared by every engine with no locking: a live-engine counter, and cached class references
+     * that each create deletes and replaces and the last close frees. Two engines starting at once
+     * (bundles start concurrently) can free a reference the other is still using, and the process
+     * aborts on "invalid global reference".
+     *
+     * Evaluation stays outside the lock, so bundles still start in parallel. That is safe only while
+     * every binding takes and returns strings or null: the two references a create replaces (the
+     * `kotlin.Unit` and `UByteArray` classes) are read only when converting one of those types, so
+     * no running engine reads them. A binding that returns `Unit` or a byte array reopens the crash.
+     */
+    private val engineLifecycleLock = Any()
+
+    private fun createEngine(jobDispatcher: CoroutineDispatcher): QuickJs =
+      synchronized(engineLifecycleLock) { QuickJs.create(jobDispatcher) }
+
+    private fun closeEngine(quickJs: QuickJs) {
+      synchronized(engineLifecycleLock) { quickJs.close() }
+    }
 
     /**
      * Stand up a fresh QuickJS engine, install the optional host binding, evaluate the bundle.
@@ -426,12 +608,12 @@ class QuickJsToolHost internal constructor(
           // reach the outer catch so engineDispatcher gets closed; hoisting `create` above this
           // try (as an earlier version of this function did) leaks the dedicated thread on that
           // failure, since nothing downstream would ever call engineDispatcher.close().
-          val quickJs = QuickJs.create(engineDispatcher)
+          val quickJs = createEngine(engineDispatcher)
           // Constructed here (before any binding installs) rather than at the end of this
           // function so the HOST_CALL_BINDING closure below can reach `host.hostCallThread` --
           // the reentrancy tripwire that closure sets/clears needs the SAME instance `callTool`/
           // `listTools` check against.
-          val host = QuickJsToolHost(quickJs, engineDispatcher)
+          val host = QuickJsToolHost(quickJs, engineDispatcher, sha256Hex(bundleJs))
           try {
             if (hostBinding != null) {
               // Synchronous binding, NOT asyncFunction. The JVM crash once blamed on asyncFunction
@@ -441,16 +623,20 @@ class QuickJsToolHost internal constructor(
               // synchronous binding on its own merits -- our host calls are sequential (async
               // concurrency unused) and it avoids the async path's per-call growth on long-lived
               // engines. The reentrancy tripwire (`host.hostCallThread`/`checkNotReentrant`) guards
-              // against a host call re-entering this dispatch while one is already in flight; there
-              // is a known no-cancellation-propagation limitation on this synchronous path.
+              // against a host call re-entering this dispatch while one is already in flight, and a
+              // host call is cancelled with its tool call through [callJob].
               quickJs.function(HOST_CALL_BINDING) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_CALL_BINDING called without a tool name string")
                 val argsJson = args.getOrNull(1) as? String
                   ?: error("$HOST_CALL_BINDING called without an argsJson string")
                 host.hostCallThread.set(Thread.currentThread())
+                val outerPath = callPath.get()
+                callPath.set(host.pathOfCurrentCall)
                 try {
-                  runBlocking {
+                  // A tool this call dispatches is cancelled with this tool call, on any thread.
+                  val callJob = host.callJob
+                  runBlocking((callJob ?: EmptyCoroutineContext) + DispatchCancellation.element(callJob)) {
                     try {
                       hostBinding.callFromBundle(name, argsJson)
                     } catch (e: CancellationException) {
@@ -462,6 +648,42 @@ class QuickJsToolHost internal constructor(
                       hostCallErrorEnvelopeJson(name, e)
                     }
                   }
+                } catch (e: CancellationException) {
+                  // The tool call was cancelled: answer with an error rather than throwing through
+                  // the native boundary, and the tool's own coroutine still ends as cancelled. A
+                  // binding's own CancellationException keeps its rethrow (see above).
+                  if (host.callJob?.isCancelled != true) throw e
+                  hostCallErrorEnvelopeJson(name, e)
+                } finally {
+                  if (outerPath == null) callPath.remove() else callPath.set(outerPath)
+                  host.hostCallThread.set(null)
+                }
+              }
+              // `ctx.host.<name>(args)`: a host function, which is plumbing rather than a tool, so it
+              // takes its own binding instead of riding `trailblaze.call`. Same synchronous shape
+              // and the same rule: no exception crosses the native boundary.
+              quickJs.function(HOST_FUNCTION_BINDING) { args ->
+                val name = args.getOrNull(0) as? String
+                  ?: error("$HOST_FUNCTION_BINDING called without a host function name string")
+                val argsJson = args.getOrNull(1) as? String
+                  ?: error("$HOST_FUNCTION_BINDING called without an argsJson string")
+                host.hostCallThread.set(Thread.currentThread())
+                try {
+                  runBlocking(host.callJob ?: EmptyCoroutineContext) {
+                    try {
+                      hostBinding.callHostFunction(name, argsJson)
+                    } catch (e: CancellationException) {
+                      throw e
+                    } catch (e: Throwable) {
+                      hostFunctionErrorEnvelopeJson(
+                        "ctx.host.$name failed: ${e::class.simpleName ?: "Error"}: ${e.message ?: e.toString()}",
+                      )
+                    }
+                  }
+                } catch (e: CancellationException) {
+                  // Cancelled with its tool call; see the host-call binding above.
+                  if (host.callJob?.isCancelled != true) throw e
+                  hostFunctionErrorEnvelopeJson("ctx.host.$name was cancelled")
                 } finally {
                   host.hostCallThread.set(null)
                 }
@@ -540,7 +762,7 @@ class QuickJsToolHost internal constructor(
             // Runs on engineDispatcher (still inside the outer withContext) — freeing the
             // native engine from any other thread is the same cross-thread hazard `evaluate`
             // has, so this can't be hoisted out to the outer catch below.
-            runCatching { quickJs.close() }
+            runCatching { closeEngine(quickJs) }
             throw t
           }
         }
@@ -554,8 +776,25 @@ class QuickJsToolHost internal constructor(
       }
     }
 
+    /** The registry member every tool dispatches through by default. */
+    const val HANDLER_MEMBER: String = "handler"
+
+    /** The registry member holding a trailhead's teardown; see [callToolMember]. */
+    const val TEARDOWN_MEMBER: String = "teardown"
+
+    /** Marker the dispatcher writes when the requested member isn't defined. */
+    private const val MEMBER_ABSENT_KEY: String = "__trailblazeMemberAbsent"
+
+    private fun sha256Hex(source: String): String =
+      java.security.MessageDigest.getInstance("SHA-256")
+        .digest(source.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+
     /** Name of the host binding installed for `trailblaze.call(name, args)` round-trips. */
     const val HOST_CALL_BINDING: String = "__trailblazeCall"
+
+    /** Name of the binding installed for `ctx.host.<name>(args)` host function calls. */
+    const val HOST_FUNCTION_BINDING: String = "__trailblazeHost"
 
     /**
      * Default destination for bundle-side `console.*` output: stderr via `System.err.println`.
@@ -586,6 +825,14 @@ data class RegisteredToolSpec(
  */
 fun interface HostBinding {
   suspend fun callFromBundle(name: String, argsJson: String): String
+
+  /**
+   * Runs `ctx.host.<name>(args)` — a host function, not a tool — and returns the
+   * `{"ok":true,"value":…}` / `{"ok":false,"error":"…"}` envelope. Bindings that can't reach host
+   * functions (test doubles) keep this default, which fails the call with a clear message.
+   */
+  suspend fun callHostFunction(name: String, argsJson: String): String =
+    hostFunctionErrorEnvelopeJson("ctx.host.$name: host functions are not available in this runtime")
 }
 
 /**
@@ -678,3 +925,13 @@ private fun hostCallErrorEnvelopeJson(toolName: String, error: Throwable): Strin
   }
   return JSON.encodeToString(JsonObject.serializer(), envelope)
 }
+
+/** The failure half of the host function envelope [HostBinding.callHostFunction] returns. */
+internal fun hostFunctionErrorEnvelopeJson(message: String): String =
+  JSON.encodeToString(
+    JsonObject.serializer(),
+    buildJsonObject {
+      put("ok", false)
+      put("error", message)
+    },
+  )

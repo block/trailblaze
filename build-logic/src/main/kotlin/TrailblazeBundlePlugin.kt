@@ -138,7 +138,7 @@ class TrailblazeBundlePlugin : Plugin<Project> {
     // main-build `:trailblaze-host` module, not in build-logic, so we can't call it
     // inline from this plugin's `apply`. A `JavaExec` against `:trailblaze-host`'s
     // runtime classpath gets us the same code path the daemon and the CLI use without
-    // duplicating the wiring or pulling the host's transitive deps (Compose Desktop,
+    // duplicating the wiring or pulling the host's transitive deps (Compose UI,
     // Skiko, Playwright) into the lean Gradle plugin classpath.
     //
     // **`workingDir` not argv.** `WorkspaceCompileBootstrap.bootstrap()` discovers the
@@ -160,7 +160,7 @@ class TrailblazeBundlePlugin : Plugin<Project> {
     // TestKit functional tests in `build-logic/` green — their isolated fixture projects
     // don't include `:trailblaze-host`, so both branches no-op.
     //
-    // Follow-up tracked off #3210: `:trailblaze-host` is heavyweight (Compose Desktop,
+    // Follow-up tracked off #3210: `:trailblaze-host` is heavyweight (Compose UI,
     // Skiko, Playwright transitives). Extracting `WorkspaceCompileBootstrap` +
     // `WorkspaceCompileMain` into a leaner module would shrink the JavaExec classpath and
     // configuration phase. Out of scope for the onboarding fix; revisit when CI cycle

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.agent.trail.toJsonArgs
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -10,7 +11,6 @@ import xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 
@@ -43,8 +43,8 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  * has the right type, and that no required argument is missing. The framework already emits, per
  * trailmap, a `client.tools.<name>(args): Promise<O>` typed surface (see
  * [PerTrailmapClientDtsEmitter]) that the trailmap's `.ts` scripted tools compile against. That same
- * surface is the type oracle here: a recorded call `tapOnElementWithText: { text: "Buy" }` becomes
- * `client.tools.tapOnElementWithText({ "text": "Buy" })`, and a clean `tsc --noEmit` means the
+ * surface is the type oracle here: a recorded call `tapOnElementBySelector: { nodeSelector: … }`
+ * becomes `client.tools.tapOnElementBySelector({ nodeSelector: … })`, and a clean `tsc --noEmit` means the
  * recording is type-valid. Tools that don't exist, wrong-typed args, and missing required args all
  * surface as ordinary TypeScript diagnostics, which we remap back to `<trail>.yaml · step N`.
  *
@@ -88,7 +88,7 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  *
  * The emitted `trailblaze-client.d.ts` is the FULL, ungated tool surface — every class-backed tool a
  * trailmap resolves is typed there, and the emitter re-injects selector args and surfaces every
- * recordable tool (class- and YAML-defined), so a faithfully-recorded call type-checks cleanly.
+ * recordable class-backed tool, so a faithfully-recorded call type-checks cleanly.
  * Validation is bounded by how *faithfully* that surface models a recorded call; a residual
  * per-target fidelity gap is absorbed by the exemption above until the surface closes it.
  *
@@ -407,8 +407,12 @@ object TrailTscValidator {
      */
     failOnMissingSurface: Boolean = true,
     timeoutMs: Long = DEFAULT_TSC_TIMEOUT_MS,
+    /**
+     * The trails under [trailsRoot], already walked. `trailblaze check` shares one across its
+     * per-trail phases so each trail is read and decoded once; null walks [trailsRoot] here.
+     */
+    corpus: TrailCorpus? = null,
   ): Report {
-    val yaml = createTrailblazeYaml()
     // Map the workspace trailmaps by directory name. For a filesystem trailmap the dir name is the
     // trailmap id, which is what a trail's `target:` references — so this is the correct key here,
     // distinct from the `manifest.id` keying the compile-time emitters use (they operate on
@@ -432,45 +436,69 @@ object TrailTscValidator {
     // Per-trailmap arg-type descriptors (from the sidecar the emitter co-locates with the .d.ts),
     // loaded once per trailmap dir and reused across its trails. Used to coerce recorded scalar
     // args back to their declared types before transpiling — see [TrailValidationDescriptorSidecar].
-    val descriptorsByTrailmap = mutableMapOf<Path, Map<String, TrailblazeToolDescriptor>>()
+    val descriptorsByTrailmap = ConcurrentHashMap<Path, Map<String, TrailblazeToolDescriptor>>()
 
-    val trailFiles = trailsRoot.walkTopDown().filter { it.isFile && isTrailFile(it.name) }.toList()
-    for (trailFile in trailFiles) {
-      discovered++
+    // Shared discovery, not a raw walk: it skips `.claude/` (nested agent worktrees, each a full copy
+    // of the corpus), `build/`, `node_modules/` and `.git/`, so only this checkout's trails are judged.
+    val trailFiles = (corpus ?: TrailCorpus.load(trailsRoot)).recordingTrails
+
+    // What one trail contributes. Trails decode and stage on worker threads; [ParallelWork.map]
+    // hands each outcome back in file order, so the counts and the per-trailmap staging lists come
+    // out exactly as a serial pass builds them.
+    class TrailOutcome(
+      val error: String?,
+      val undeterminedDeviceCalls: Int,
+      val noRecording: Boolean,
+      val skippedTargets: List<String>,
+      val staged: List<Pair<Path, Staged>>,
+    )
+    ParallelWork.map(
+      items = trailFiles,
+      onResult = { _, outcome: TrailOutcome ->
+        discovered++
+        skippedUndeterminedDevice += outcome.undeterminedDeviceCalls
+        if (outcome.noRecording) skippedNoRecording++
+        // Split a no-loaded-surface target two ways:
+        //  - a target with a reachable manifest (in [knownManifestTargets]) whose surface just
+        //    wasn't loaded in this run → skipped-no-surface (fatal on an all-workspace pass, so an
+        //    uncovered target can't slip in silently).
+        //  - a target with NO manifest anywhere (placeholder / package-id targets, the no-target:
+        //    case) → skipped-no-manifest: it can never be validated, so it's a permanent, non-fatal
+        //    skip rather than something a hand-maintained exemption list has to carry.
+        for (key in outcome.skippedTargets) {
+          val bucket = if (key in knownManifestTargets) skippedNoSurface else skippedNoManifest
+          bucket[key] = (bucket[key] ?: 0) + 1
+        }
+        for ((trailmapDir, staged) in outcome.staged) {
+          stagedByTrailmap.getOrPut(trailmapDir) { mutableListOf() }.add(staged)
+        }
+        outcome.error?.let { errors.add(it) }
+      },
+    ) { trail ->
+      val trailFile = trail.file
       val rel = trailsRoot.parentFile?.toPath()?.relativize(trailFile.toPath())?.toString() ?: trailFile.name
+      var undetermined = 0
+      val skippedTargets = mutableListOf<String>()
+      val staged = mutableListOf<Pair<Path, Staged>>()
+      fun outcome(error: String? = null, noRecording: Boolean = false) =
+        TrailOutcome(error, undetermined, noRecording, skippedTargets, staged)
       try {
-        val text = trailFile.readText()
         // One version-aware parse per trail; the format is detected from CONTENT, never the
         // filename (a unified trail may be a bare `trail.yaml` or carry any name).
-        val doc = yaml.decodeTrailDocument(text)
+        val doc = trail.document.getOrThrow()
         val attribution = attributeRecordedCalls(doc)
-        skippedUndeterminedDevice += attribution.undeterminedDeviceCalls
-        if (attribution.calls.isEmpty()) {
-          skippedNoRecording++
-          continue
-        }
+        undetermined = attribution.undeterminedDeviceCalls
+        if (attribution.calls.isEmpty()) return@map outcome(noRecording = true)
         // One gen file per target this trail's devices run. Grouping preserves encounter order, so
         // each target's file keeps the trail's own call order.
         for ((target, attributed) in attribution.calls.groupBy { it.target }) {
           val trailmapDir = target?.let { trailmapDirByName[it] }
           if (trailmapDir == null) {
-            val key = target ?: NO_TARGET_KEY
-            // Split a no-loaded-surface target two ways:
-            //  - a target with a reachable manifest (in [knownManifestTargets]) whose surface just
-            //    wasn't loaded in this run → skipped-no-surface (fatal on an all-workspace pass, so an
-            //    uncovered target can't slip in silently).
-            //  - a target with NO manifest anywhere (placeholder / package-id targets, the no-target:
-            //    case) → skipped-no-manifest: it can never be validated, so it's a permanent, non-fatal
-            //    skip rather than something a hand-maintained exemption list has to carry.
-            if (key in knownManifestTargets) {
-              skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
-            } else {
-              skippedNoManifest[key] = (skippedNoManifest[key] ?: 0) + 1
-            }
+            skippedTargets += target ?: NO_TARGET_KEY
             continue
           }
-          val descriptors = descriptorsByTrailmap.getOrPut(trailmapDir) {
-            TrailValidationDescriptorSidecar.read(trailmapDir)
+          val descriptors = descriptorsByTrailmap.computeIfAbsent(trailmapDir) {
+            TrailValidationDescriptorSidecar.read(it)
           }
           val calls = attributed.map { it.toRecordedCall(descriptors) }
           val gen = generateGenFile(rel, calls)
@@ -482,11 +510,11 @@ object TrailTscValidator {
           val stem = rel.replace(Regex("[^A-Za-z0-9]"), "_")
           val unique = Integer.toHexString(rel.hashCode())
           val genPath = trailmapDir.resolve("tools").resolve("${stem}_$unique.trail.gen.ts")
-          stagedByTrailmap.getOrPut(trailmapDir) { mutableListOf() }
-            .add(Staged(genPath, gen.source, GenFileMeta(rel, gen.table, target), calls.size))
+          staged += trailmapDir to Staged(genPath, gen.source, GenFileMeta(rel, gen.table, target), calls.size)
         }
+        outcome()
       } catch (e: Exception) {
-        errors.add("$rel: ${e::class.simpleName}: ${e.message}")
+        outcome(error = "$rel: ${e::class.simpleName}: ${e.message}")
       }
     }
 
@@ -495,21 +523,38 @@ object TrailTscValidator {
     // count once.
     val validatedTrails = mutableSetOf<String>()
     var toolCalls = 0
-    for ((trailmapDir, staged) in stagedByTrailmap) {
+    // One `tsc` per trailmap, in parallel: each trailmap's gen files live in its own `tools/` dir and
+    // are checked against its own tsconfig, so the runs share nothing. Results fold in trailmap order.
+    class TscOutcome(
+      val findings: List<Finding> = emptyList(),
+      val validatedTrails: List<String> = emptyList(),
+      val toolCalls: Int = 0,
+      val error: String? = null,
+    )
+    ParallelWork.map(
+      items = stagedByTrailmap.entries.toList(),
+      onResult = { _, outcome: TscOutcome ->
+        findings += outcome.findings
+        validatedTrails += outcome.validatedTrails
+        toolCalls += outcome.toolCalls
+        outcome.error?.let { errors.add(it) }
+      },
+    ) { (trailmapDir, staged) ->
       val tsconfig = trailmapDir.resolve("tools").resolve("tsconfig.json")
       if (!Files.isRegularFile(tsconfig)) {
-        errors.add("${trailmapDir.fileName}: no tools/tsconfig.json (run the compile phase first)")
-        continue
+        return@map TscOutcome(error = "${trailmapDir.fileName}: no tools/tsconfig.json (run the compile phase first)")
       }
       try {
         staged.forEach { Files.writeString(it.genPath, it.source) }
         val output = runTsc(jsRuntime, tscJs, tsconfig, timeoutMs, trailmapDir.fileName.toString())
         val metas = staged.associate { it.genPath.fileName.toString() to it.meta }
-        findings += remap(output, metas)
-        staged.forEach { validatedTrails.add(it.meta.trailRelPath) }
-        toolCalls += staged.sumOf { it.callCount }
+        TscOutcome(
+          findings = remap(output, metas),
+          validatedTrails = staged.map { it.meta.trailRelPath },
+          toolCalls = staged.sumOf { it.callCount },
+        )
       } catch (e: Exception) {
-        errors.add("${trailmapDir.fileName}: tsc run failed: ${e::class.simpleName}: ${e.message}")
+        TscOutcome(error = "${trailmapDir.fileName}: tsc run failed: ${e::class.simpleName}: ${e.message}")
       } finally {
         staged.forEach { runCatching { Files.deleteIfExists(it.genPath) } }
       }
@@ -878,8 +923,8 @@ object TrailTscValidator {
    *
    * The child's output is drained on a reader thread so the [timeoutMs] bound actually applies even
    * when tsc hangs without closing its stream — reading inline before `waitFor` would block past the
-   * timeout. Diverges intentionally from [CheckCommand]'s `runTsc`, which `inheritIO()`s straight to
-   * the terminal (it needs no capture); here we must capture stdout to remap diagnostics.
+   * timeout. Unlike [CheckCommand]'s `runTsc`, which captures tsc's output only to print it, this
+   * one parses it to remap diagnostics onto trail lines, so it asks for plain (`--pretty false`) output.
    */
   private fun runTsc(jsRuntime: String, tscJs: Path, tsconfig: Path, timeoutMs: Long, label: String): String {
     val proc = ProcessBuilder(

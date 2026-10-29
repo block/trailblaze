@@ -228,7 +228,8 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [verbose, setVerbose] = React.useState(false);
   const [headless, setHeadless] = React.useState(true);
 
-  const [captureVideo, setCaptureVideo] = React.useState(false);
+  // On, like `trailblaze run`: a trail run has a definite start and end, so its video is bounded.
+  const [captureVideo, setCaptureVideo] = React.useState(true);
   const [captureLogcat, setCaptureLogcat] = React.useState(false);
   const [captureNetwork, setCaptureNetwork] = React.useState(false);
   const [captureIosLogs, setCaptureIosLogs] = React.useState(false);
@@ -625,7 +626,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
                       below. Say so rather than hand out a command that does something else. */}
                   {range && !whole && (
                     <div className="tb-sub" style={{ marginTop: 6, fontSize: 11.5, whiteSpace: 'normal' }}>
-                      Runs the WHOLE trail: running part of one is a Trail Runner action.
+                      Runs the WHOLE trail: running part of one is a Trailblaze App action.
                     </div>
                   )}
                 </div>

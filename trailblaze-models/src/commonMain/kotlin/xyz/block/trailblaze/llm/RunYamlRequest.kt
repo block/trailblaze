@@ -258,6 +258,20 @@ data class RunYamlRequest(
    * forwards them to on-device execution so its recording selection and session metadata agree.
    */
   val deviceClassifierOverride: List<String> = emptyList(),
+
+  /**
+   * Immutable GitHub permalink for the source trail YAML that initiated this request. Kept
+   * separate from [trailFilePath] because device-side RPC runs intentionally omit that path.
+   */
+  val trailSourceUrl: String? = null,
+
+  /**
+   * Run in the device's current language unless the trail declares a `locale:`. Set for a run
+   * that drives the device by hand (a CLI or MCP prompt or tool, the recording tab) even when it
+   * opens a session, so an on-device runner does not reset an undeclared run to the default
+   * language. See [xyz.block.trailblaze.model.DesktopAppRunYamlParams.keepDeviceLanguage].
+   */
+  val keepDeviceLanguage: Boolean = false,
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

@@ -427,6 +427,18 @@ describe('fetchRerunCommand', () => {
 });
 
 describe('runMeta', () => {
+  test('retains the saved source permalink through the live and share report metadata', () => {
+    const url = `https://github.com/example/trails/blob/${'a'.repeat(40)}/case/trail.yaml`;
+    const s = Payload.normalizeSummary({ id: 'source-run', trailSourceUrl: url });
+    expect(Payload.runMeta({ s }).trailSourceUrl).toBe(url);
+    expect(Payload.runMeta({ s: Payload.normalizeSummary({ id: 'legacy-run' }) }).trailSourceUrl).toBeUndefined();
+  });
+  test("carries the trail's authored context into the live and share report metadata", () => {
+    const meta = Payload.runMeta({ s: Payload.normalizeSummary({ id: 'run', context: 'Must persist.' }) });
+    expect(meta.context).toBe('Must persist.');
+    const bare = Payload.runMeta({ s: Payload.normalizeSummary({ id: 'legacy-run' }) });
+    expect(bare.context).toBeUndefined();
+  });
   const summary = {
     id: 'sess_1',
     title: 'Add item to cart',
@@ -561,6 +573,28 @@ describe('fetchSideChannels', () => {
       truncated: true,
       events: [{ t: 12, d: '{"url":"/a"}' }, { t: null, d: '{"timeMs":null,"data":null}' }],
     }]);
+  });
+
+  test('keeps the device-clock marker on events the session could not convert', async () => {
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        if (url.endsWith('/events')) {
+          return okJson({
+            streams: [{
+              streamId: 'app', label: 'app', count: 2,
+              events: [{ timeMs: 6000, data: { n: 1 }, clock: 'device' }, { timeMs: 1000, data: { n: 2 } }],
+            }],
+          });
+        }
+        return okJson([]);
+      },
+      originalYamlFromLogs: () => null,
+    }, []);
+
+    expect(side.events?.[0]?.events).toEqual([
+      { t: 6000, d: '{"n":1}', clock: 'device' },
+      { t: 1000, d: '{"n":2}' },
+    ]);
   });
 
   // Trail Runner's own timeline interleaves captured analytics as their own category, so a report

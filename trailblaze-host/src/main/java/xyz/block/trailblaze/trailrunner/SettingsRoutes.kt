@@ -13,9 +13,12 @@ import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.TrailblazeImageFormat
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.WorkspaceTrailsDeclaration
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -41,7 +44,6 @@ internal fun settingsDtoFromConfig(
   serverHttpsPort = config.serverHttpsPort,
   showTrailsTab = config.showTrailsTab,
   showDevicesTab = config.showDevicesTab,
-  showWaypointsTab = config.showWaypointsTab,
   preferHostAgent = config.preferHostAgent,
   trailsDirectory = config.trailsDirectory,
   logsDirectory = config.logsDirectory,
@@ -103,9 +105,25 @@ internal suspend fun buildSettingsPatchResponse(
   // `buildSaveTargetConfigResponse`: it keeps the workspace-switch trigger testable with plain
   // inputs, since the real device manager takes ~14 constructor dependencies.
   reloadAppTargets: (suspend () -> Unit)? = deps.deviceManager?.let { dm -> { dm.reloadAppTargets() } },
+  // The folder a trails-directory move relocates logs + state under. Defaults to the trails
+  // directory itself; `PUT /api/workspace` passes the repo root, whose declared trails directory
+  // can be a subfolder, so a workspace keeps one `<root>/logs` and `<root>/.trailblaze` either way.
+  workspaceRoot: File? = null,
+  // The config folder of the repo being activated (`PUT /api/workspace`), saved with the trails
+  // directory it declared. Null for a folder picked in Settings.
+  workspaceConfigDir: File? = null,
+  // Injected so the reload trigger can be tested against a launch workspace other than the JVM cwd.
+  launchDeclaration: () -> WorkspaceTrailsDeclaration? = TrailblazeDesktopUtil::launchWorkspaceDeclaration,
 ): SettingsDto? {
   val settingsRepo = deps.settingsRepo ?: return null
-  val trailsDirectoryBefore = settingsRepo.serverStateFlow.value.appConfig.trailsDirectory
+  // The folders actually in effect, not the stored string: the same stored path can change hands
+  // (an unflagged default becoming a pick, a new saved config folder) and switch workspaces.
+  fun workspaceInEffect(config: TrailblazeServerState.SavedTrailblazeAppConfig): Pair<String, String?> {
+    val launch = launchDeclaration()
+    return TrailblazeDesktopUtil.getEffectiveTrailsDirectory(config, workspaceTrailsDirProvider = { launch?.trailsDir }) to
+      TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(config, launch)?.path
+  }
+  val workspaceBefore = withContext(Dispatchers.IO) { workspaceInEffect(settingsRepo.serverStateFlow.value.appConfig) }
   settingsRepo.updateAppConfig { config ->
     var updated = config
     request.themeMode?.let { v ->
@@ -128,12 +146,16 @@ internal suspend fun buildSettingsPatchResponse(
       ?.let { updated = updated.copy(serverHttpsPort = it) }
     request.showTrailsTab?.let { updated = updated.copy(showTrailsTab = it) }
     request.showDevicesTab?.let { updated = updated.copy(showDevicesTab = it) }
-    request.showWaypointsTab?.let { updated = updated.copy(showWaypointsTab = it) }
     request.trailsDirectory?.let { v ->
       val trimmed = v.trim()
-      if (trimmed.isEmpty()) updated = updated.copy(trailsDirectory = null)
-      else if (File(trimmed).isDirectory) {
-        updated = updated.copy(trailsDirectory = trimmed)
+      if (trimmed.isEmpty()) {
+        updated = updated.copy(trailsDirectory = null, trailsDirectoryChosen = false, trailsDirectoryConfigDir = null)
+      } else if (File(trimmed).isDirectory) {
+        updated = updated.copy(
+          trailsDirectory = trimmed,
+          trailsDirectoryChosen = true,
+          trailsDirectoryConfigDir = workspaceConfigDir?.path,
+        )
         // Switching the workspace relocates run logs + daemon state UNDER the chosen folder, so a
         // workspace is self-contained — its trails, logs, and state live together rather than the
         // logs/state staying behind in whatever folder the daemon launched from. Skipped when the
@@ -141,11 +163,12 @@ internal suspend fun buildSettingsPatchResponse(
         // that one field). Mirrors the default workspace layout (<root>/logs, <root>/.trailblaze) with
         // the picked folder as the root; the dirs are created on first write. App-data is
         // "restart to fully apply" (its existing semantics); logs apply on the next run.
+        val stateRoot = workspaceRoot ?: File(trimmed)
         if (request.logsDirectory == null) {
-          updated = updated.copy(logsDirectory = File(trimmed, "logs").path)
+          updated = updated.copy(logsDirectory = File(stateRoot, "logs").path)
         }
         if (request.appDataDirectory == null) {
-          updated = updated.copy(appDataDirectory = File(trimmed, ".trailblaze").path)
+          updated = updated.copy(appDataDirectory = File(stateRoot, ".trailblaze").path)
         }
       }
     }
@@ -175,7 +198,7 @@ internal suspend fun buildSettingsPatchResponse(
     updated
   }
   val config = settingsRepo.serverStateFlow.value.appConfig
-  if (config.trailsDirectory != trailsDirectoryBefore) {
+  if (withContext(Dispatchers.IO) { workspaceInEffect(config) } != workspaceBefore) {
     // Discovery touches disk and may spawn the scripted-tool analyzer, so keep it off the request
     // thread. Only fires on an actual move (a patch that re-sends the same directory, or one that
     // never mentions it, costs nothing), which makes this a per-user-action cost.
@@ -243,6 +266,34 @@ internal fun buildWorkspaceTargetDriftResponse(deps: TrailRunnerDeps): Workspace
   )
 }
 
+/**
+ * The trails directory to store when the CLI activates the repo at [root]: the directory the
+ * repo's own `trails:` declaration names, else [root] itself (scanned recursively).
+ *
+ * Stored as the explicit choice rather than left unset so it applies however the daemon was
+ * launched — the declaration rung of
+ * [xyz.block.trailblaze.ui.TrailblazeDesktopUtil.getEffectiveTrailsDirectory] reads the daemon's
+ * launch cwd, which is a different repo once `trailblaze app` runs from another clone — and so
+ * Settings shows the folder recordings are actually saved under.
+ *
+ * Only a declaration made inside [root] counts: the workspace walk-up continues past [root], and
+ * an enclosing workspace's declaration would move the user out of the repo they activated.
+ * `TRAILBLAZE_CONFIG_DIR` is ignored for the same reason — the request names the repo.
+ */
+internal fun workspaceTrailsDirectoryFor(root: File): File = workspaceDeclarationFor(root)?.trailsDir ?: root
+
+/** [root]'s own `trails:` declaration — one made inside [root] — or null. */
+internal fun workspaceDeclarationFor(root: File): WorkspaceTrailsDeclaration? {
+  val declaration = TrailblazeWorkspaceConfigResolver.workspaceTrailsDeclaration(
+    fromPath = root.toPath(),
+    consumer = "Trailblaze App workspace switch",
+    envReader = { null },
+  ) ?: return null
+  val canonicalRoot = root.canonicalFile
+  val declaredInsideRoot = declaration.configFile.canonicalFile.toPath().startsWith(canonicalRoot.toPath())
+  return declaration.takeIf { declaredInsideRoot }
+}
+
 internal fun Route.settingsRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/workspace/pick-directory") {
     val request = runCatching { call.receive<DirectoryPickerRequest>() }.getOrElse { e ->
@@ -272,7 +323,14 @@ internal fun Route.settingsRoutes(deps: TrailRunnerDeps) {
       call.respond(HttpStatusCode.BadRequest, mapOf("error" to "workspace must be a readable directory"))
       return@put
     }
-    val dto = buildSettingsPatchResponse(deps, SettingsPatchRequest(trailsDirectory = requested))
+    val root = File(requested)
+    val declaration = withContext(Dispatchers.IO) { workspaceDeclarationFor(root) }
+    val dto = buildSettingsPatchResponse(
+      deps,
+      SettingsPatchRequest(trailsDirectory = (declaration?.trailsDir ?: root).path),
+      workspaceRoot = root,
+      workspaceConfigDir = declaration?.configDir,
+    )
     if (dto == null) {
       call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "settings not available"))
       return@put

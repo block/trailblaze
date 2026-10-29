@@ -21,4 +21,9 @@ data class SessionMetadata(
   val testMethodName: String? = null,
   val trailFilePath: String? = null,
   val customProperties: Map<String, String> = emptyMap(),
+  /**
+   * The running trail's `config.id`: the same value on every run of that trail. Null when the
+   * session is not running a trail, or the trail declares no id.
+   */
+  val trailId: String? = null,
 )

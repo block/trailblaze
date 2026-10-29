@@ -438,6 +438,7 @@ open class ScriptedToolDefinitionAnalyzer(
       outputSchema = outputSchema,
       spec = spec,
       uncapturedSpec = uncapturedSpec,
+      uncapturedSpecFields = uncapturedSpecFields,
     )
 
   private fun truncate(s: String, maxLen: Int): String =
@@ -466,11 +467,13 @@ open class ScriptedToolDefinitionAnalyzer(
      */
     val spec: JsonObject? = null,
     /**
-     * Emitted by the shim only in the dangerous case: the `(spec, handler)` overload was used with
-     * a non-inline spec reference, so [spec] is `null` and the whole spec was dropped. Defaults
-     * `false` for bare-handler / inline-literal calls (shim omits the key).
+     * Emitted by the shim only in the dangerous case: a spec gate may have been dropped, either
+     * because the whole spec is a non-inline reference or because an inline spec has an unreadable
+     * gate field or a spread. Defaults `false` otherwise (shim omits the key).
      */
     val uncapturedSpec: Boolean = false,
+    /** The unreadable gate fields and `...spread`s; empty when the whole spec is a reference. */
+    val uncapturedSpecFields: List<String> = emptyList(),
   )
 
   @Serializable
@@ -967,7 +970,7 @@ data class ScriptedToolDefinition(
    *
    * Captured by the analyzer's inline-literal extraction — keys are the
    * `TrailblazeTypedToolSpec` field names (`description`, `supportedPlatforms`,
-   * `requiresContext`, `requiresHost`, `supportedDrivers`, `trailhead`) and values are the
+   * `requiresHost`, `supportedDrivers`, `trailhead`) and values are the
    * JSON-compatible literals the author wrote at the call site (strings, string arrays,
    * booleans, and — for `trailhead` — a nested `{to, dynamic}` object).
    *
@@ -986,14 +989,23 @@ data class ScriptedToolDefinition(
    */
   val spec: JsonObject? = null,
   /**
-   * True when the author used the `(spec, handler)` overload but passed a non-inline reference
-   * the analyzer can't read (`const SPEC = {...}`, `Specs.foo`, a factory call), so the ENTIRE
-   * spec ([spec] is therefore `null`) was dropped — silently un-gating the tool's
-   * `supportedPlatforms` / `surfaceToLlm` / `requiresHost`. Callers MUST surface this: a warning in
-   * general, and a hard error where the spec is the only metadata source (a descriptor-less `.ts`).
-   * The fix is always to inline the spec object literal at the `trailblaze.tool(...)` call site.
+   * True when a spec gate (`supportedPlatforms` / `surfaceToLlm` / `requiresHost` / …) may have
+   * been silently dropped because the analyzer couldn't read it:
+   *  - the `(spec, handler)` overload got a non-inline reference (`const SPEC = {...}`,
+   *    `Specs.foo`, a factory call), so the ENTIRE spec was dropped and [spec] is `null`; or
+   *  - an inline spec literal has a gate field that isn't a literal (`supportedPlatforms:
+   *    ANDROID_ONLY`, shorthand `{ supportedPlatforms }`) or a spread (`{ ...SPEC }`), named in
+   *    [uncapturedSpecFields]; the readable fields are still in [spec].
+   * Callers MUST surface this: a warning in general, and a hard error where the spec is the only
+   * metadata source (a descriptor-less `.ts`). The fix is always to inline the literal at the
+   * `trailblaze.tool(...)` call site.
    */
   val uncapturedSpec: Boolean = false,
+  /**
+   * The gate field names and `...spread` expressions the analyzer couldn't read from an inline
+   * spec literal. Empty when [uncapturedSpec] is false or the whole spec is a reference.
+   */
+  val uncapturedSpecFields: List<String> = emptyList(),
 ) {
   init {
     // Forcing function: the analyzer caller treats schemas as JSON objects (passes

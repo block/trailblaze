@@ -95,9 +95,9 @@ long LLM rounds. The daemon itself is fine; re-run the trail.
 Every scripted tool is a single `.ts` file under
 `trails/config/trailmaps/wikipedia/tools/` — no sibling YAML, no separate
 descriptor to maintain. The trailmap loader auto-discovers every `.ts`
-that exports a `trailblaze.tool(...)` declaration; the names listed under
-`target.tools:` in `trailmap.yaml` decide which of those are advertised to
-the agent. Here's `wikipedia_web_openArticle` broken into the parts that
+that exports a `trailblaze.tool(...)` declaration and puts it on the target;
+`excluded_tools:` in `trailmap.yaml` opts one out (this example excludes its
+two type-surface demos that way). Here's `wikipedia_web_openArticle` broken into the parts that
 matter. (`@trailblaze/scripting` is the SDK the daemon synthesizes into the
 workspace at `trails/.trailblaze/sdk/` — no `npm install` needed.)
 
@@ -112,12 +112,10 @@ export interface OpenArticleArgs {
 }
 
 /**
- * Open a Wikipedia article by title. Use this whenever the task is to
- * navigate to a specific article — e.g. "open the Albert Einstein
- * article". Asserts the destination's #firstHeading is visible.
+ * Open a Wikipedia article by title and verify its heading is visible.
  */
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },  // ← spec object: gates + hints
+  { supportedPlatforms: ["web"] },  // ← spec object: gates + hints
   async (input, ctx) => {                                  // ← typed handler
     const title = nonEmptyString(input.title, "Wikipedia");
 
@@ -136,7 +134,7 @@ What the framework derives from this one file:
 | Export name `wikipedia_web_openArticle` | The dispatchable tool name + an entry on `ctx.tools` for sibling tools. |
 | TSDoc above `export const` | The LLM-facing description. |
 | The `<OpenArticleArgs>` type parameter | The tool's input JSON Schema (with per-field TSDoc carried through). |
-| The spec object `{ supportedPlatforms, requiresContext }` | Runtime registration gates and metadata hints. |
+| The spec object `{ supportedPlatforms }` | Runtime registration gates and metadata hints. |
 | The handler body | The runtime behavior. |
 
 Key conventions to copy:
@@ -164,7 +162,8 @@ Key conventions to copy:
 
 ## Recipe: add your own scripted tool
 
-One file, then restart the daemon. Concrete steps:
+One file, then restart the daemon — there's nothing to register in `trailmap.yaml`.
+Concrete steps:
 
 ```bash
 TOOL=wikipedia_web_myNewTool
@@ -172,7 +171,7 @@ TRAILMAP=examples/wikipedia/trails/config/trailmaps/wikipedia
 
 # 1. Body — what the tool does. The TSDoc on the exported `const` is what
 #    the LLM reads as the tool's description; the spec object's
-#    `supportedPlatforms` / `requiresContext` flags carry runtime hints.
+#    `supportedPlatforms` gates where it registers.
 cat > $TRAILMAP/tools/${TOOL}.ts <<'TS'
 import { trailblaze } from "@trailblaze/scripting";
 
@@ -182,11 +181,11 @@ export interface MyNewToolArgs {
 }
 
 /**
- * <One paragraph in plain English, including the task patterns the LLM
- * should match against. NO "USE THIS TOOL" — describe what it DOES.>
+ * <One or two plain-English sentences on what it DOES, plus any side effect
+ * or failure mode the LLM needs. No "Use this whenever..." phrasing lists.>
  */
 export const wikipedia_web_myNewTool = trailblaze.tool<MyNewToolArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     // ... do work via ctx.tools.X(args) ...
     return "Did the thing.";
@@ -194,19 +193,16 @@ export const wikipedia_web_myNewTool = trailblaze.tool<MyNewToolArgs>(
 );
 TS
 
-# 2. Register in trailmap.yaml — add `wikipedia_web_myNewTool` under target.tools.
-$EDITOR $TRAILMAP/trailmap.yaml
-
-# 3. Restart the daemon so the new tool is discovered + bindings regenerate.
+# 2. Restart the daemon so the new tool is discovered + bindings regenerate.
 trailblaze app --stop && trailblaze app --headless & disown
 
-# 4. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
+# 3. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
 #    autocomplete should now include your new tool.
 trailblaze toolbox --device web --target wikipedia --search myNewTool
 ```
 
-For reference, here's what `trailmap.yaml`'s `target.tools:` list looks like — bare
-export names, one per line:
+This example's `trailmap.yaml` doesn't list its tools: every one in `tools/` is on the
+target. The opt-out is `excluded_tools:`:
 
 ```yaml
 # trails/config/trailmaps/wikipedia/trailmap.yaml (excerpt)
@@ -214,15 +210,13 @@ id: wikipedia
 target:
   display_name: Wikipedia (en)
   system_prompt_file: wikipedia-system-prompt.md
-  tools:
-    - wikipedia_web_openMainPage
-    - wikipedia_web_searchAndOpenFirstResult
-    - wikipedia_web_myNewTool        # ← your new tool, by export name
-    # ... others ...
   platforms:
     web:
       drivers: [playwright-native, playwright-electron]
       tool_sets: [web_core, web_verification, memory]
+      excluded_tools:
+        - wikipedia_typed_demo
+        - wikipedia_conditional_action_demo
 ```
 
 That's the whole loop. If autocomplete doesn't pick up the new tool, run
@@ -232,19 +226,19 @@ fires on restart.
 
 ### Tool-description discipline (load-bearing)
 
-The TSDoc on each exported `const` is read by the LLM at session start
-as the **only** way it learns what your tool does. Two non-obvious rules:
+The TSDoc above each exported `const`, and on each input field, is sent to
+the LLM on every request and is the **only** way it learns what your tool
+does. Keep it tight:
 
-- **Don't say "USE THIS TOOL FOR X".** The LLM picks tools by matching its
-  understanding of the task against the description. Telling it to "use"
-  the tool reduces the description to a single keyword and loses the
-  surrounding context. Describe what the tool *does* and include the task
-  patterns it matches — "Search Wikipedia for X / look up Y on Wikipedia
-  / find articles about Z" — not "USE THIS WHEN SEARCHING".
-- **Match real user phrasing.** If a trail says "search Wikipedia for
-  Python" but the tool description only mentions "query the search
-  endpoint", the LLM may not connect them. Include the synonyms (search,
-  look up, find articles about, etc.) that real prompts will use.
+- **Lead with what the tool does**, in a sentence or two — "Search
+  Wikipedia from the header search box, submit, and verify the resulting
+  article's heading."
+- **Keep what the LLM needs to call it correctly:** side effects (restarts
+  the app, deletes data), when it fails, and what sets it apart from a
+  similar tool.
+- **Cut the rest:** "Use this whenever..." lists of phrasings, and
+  implementation notes. Put maintainer notes in `//` comments, which are
+  not sent to the LLM.
 
 You can sanity-check picking by running a trail in `--verbose` mode and
 watching which tool the agent chose for each step.
@@ -273,10 +267,10 @@ trail:
   - step: Search Wikipedia for "Albert Einstein" and verify the resulting article page shows the heading "Albert Einstein".
 ```
 
-The agent sees the trailmap's `target.tools:` (which includes the scripted
+The agent sees the trailmap's scripted tools (including
 `wikipedia_web_searchAndOpenFirstResult` and `wikipedia_web_verifyArticleStructure`)
 and the system prompt at `wikipedia-system-prompt.md` nudges it toward those
-tools when a step matches their task patterns. Run it:
+tools when a step matches what they do. Run it:
 
 ```bash
 trailblaze run trails/wikipedia/test-search-einstein --device web/playwright-native
@@ -465,9 +459,8 @@ previous crashes are safe to delete.
 
 1. Confirm the file is named exactly `<toolName>.ts` under `tools/` and
    exports a `trailblaze.tool(...)` declaration whose export name matches.
-2. Confirm the bare tool name is listed under `target.tools:` in
-   `trailmap.yaml`. Names omitted from that list are loaded by the bundler but
-   not advertised to the agent for this target.
+2. Confirm no `excluded_tools:` entry in `trailmap.yaml` names it, and that
+   its `supportedPlatforms` includes the session's platform.
 3. Restart the daemon after editing anything under
    `trails/config/trailmaps/<trailmap>/`. Trailmaps are discovered at boot.
 

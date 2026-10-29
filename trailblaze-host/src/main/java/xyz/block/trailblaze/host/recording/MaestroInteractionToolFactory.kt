@@ -4,6 +4,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.hasSemanticIdentifier
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.recording.InputTarget
 import xyz.block.trailblaze.recording.InteractionToolFactory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -35,6 +36,8 @@ import xyz.block.trailblaze.toolcalls.toolName
 class MaestroInteractionToolFactory(
   private val deviceWidth: Int,
   private val deviceHeight: Int,
+  /** The recording device's platform; on iOS, Back is refused rather than recorded. */
+  private val platform: TrailblazeDevicePlatform? = null,
 ) : InteractionToolFactory {
 
   override fun createTapTool(
@@ -109,7 +112,9 @@ class MaestroInteractionToolFactory(
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>? {
     val keyCode = when (key) {
-      "Back" -> PressKeyTrailblazeTool.PressKeyCode.BACK
+      // iOS has no system back, and `pressKey: BACK` fails there, so recording it would write a
+      // step that can never replay.
+      "Back" -> if (platform == TrailblazeDevicePlatform.IOS) return null else PressKeyTrailblazeTool.PressKeyCode.BACK
       "Enter" -> PressKeyTrailblazeTool.PressKeyCode.ENTER
       "Home" -> PressKeyTrailblazeTool.PressKeyCode.HOME
       else -> return null // Unsupported key for Maestro recording
@@ -118,7 +123,7 @@ class MaestroInteractionToolFactory(
   }
 
   /**
-   * Mirrors `./trailblaze waypoint suggest-selector --at` so the recording UI can offer the
+   * Mirrors `./trailblaze selector suggest --at` so the recording UI can offer the
    * author the same alternatives. The default best-first entry matches what [createTapTool]
    * already emits; subsequent entries let the author swap to a more semantic strategy
    * (e.g. trade `index: 1` for a parent-anchored selector or a className+text combination)

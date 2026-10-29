@@ -197,7 +197,7 @@ class InteractionRecorder(
      * Routes through [TrailblazeYaml.Default] (expect/actual) rather than the JVM-only
      * `createTrailblazeYaml()`. Same change [RecordingYamlCodec] made — keeps the recorder's
      * remaining JVM dependencies focused on `toLogPayload` (which still needs JVM reflection
-     * for YAML-defined tools), not on YAML registry construction.
+     * for class-backed tools), not on YAML registry construction.
      */
     private val trailblazeYaml: TrailblazeYaml get() = TrailblazeYaml.Default
 

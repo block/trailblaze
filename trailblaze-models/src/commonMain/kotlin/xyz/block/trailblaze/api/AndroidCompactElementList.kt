@@ -347,6 +347,9 @@ object AndroidCompactElementList {
     val ownLabel = resolveLabel(props)
     val absorbedFrom = if (ownLabel == null) labelSourceChild(node, props) else null
     val label = ownLabel ?: absorbedFrom?.let { AndroidNodeProps.of(it)?.let(::resolveLabel) }
+    // The same text as printed, line breaks escaped. Every decision below reads [label].
+    val shown = (if (ownLabel != null) props else absorbedFrom?.let(AndroidNodeProps::of))
+      ?.let { resolveLabel(it, SnapshotText::render) }
     val isContainer = isContainer(props, shortClass)
     val isMeaningful = includeAllElements || isMeaningful(props, label)
     val indent = "  ".repeat(depth)
@@ -354,8 +357,8 @@ object AndroidCompactElementList {
     if (isContainer && hasVisibleDescendants(node)) {
       // Container: emit as "ClassName:" header with optional item count
       val containerLabel = when {
-        label != null && shortClass.isNotEmpty() -> "$shortClass \"$label\""
-        label != null -> "\"$label\""
+        label != null && shortClass.isNotEmpty() -> "$shortClass \"$shown\""
+        label != null -> "\"$shown\""
         else -> shortClass
       }
       if (ownLabel != null) textNodeIds.add(node.nodeId)
@@ -364,7 +367,7 @@ object AndroidCompactElementList {
         val count = if (ci.columnCount <= 1) ci.rowCount else ci.rowCount * ci.columnCount
         if (count > 0) " [$count items]" else ""
       } ?: ""
-      lines.add("$indent$containerLabel$itemCount:")
+      lines.add("$indent$containerLabel$itemCount${buildStateAnnotation(props, label)}:")
       for (child in node.children) {
         buildRecursive(
           child, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
@@ -374,8 +377,8 @@ object AndroidCompactElementList {
     } else if (isMeaningful) {
       // Meaningful element: emit with stable [ref:slug] and state annotations
       val descriptor = when {
-        label != null && shortClass.isNotEmpty() -> "$shortClass \"$label\""
-        label != null -> "\"$label\""
+        label != null && shortClass.isNotEmpty() -> "$shortClass \"$shown\""
+        label != null -> "\"$shown\""
         shortClass.isNotEmpty() -> shortClass
         else -> ""
       }
@@ -424,7 +427,7 @@ object AndroidCompactElementList {
           if (underHiddenAncestor && isOffscreen(child, screenHeight, screenWidth, underHiddenAncestor)) {
             offscreenCounter()
           } else {
-            lines.add("$indent  \"$childLabel\"")
+            lines.add("$indent  \"${resolveLabel(childProps, SnapshotText::render)}\"")
             textNodeIds.add(child.nodeId)
           }
         } else {
@@ -455,31 +458,28 @@ object AndroidCompactElementList {
    * label+value fix. Same treatment for `labeledByText + text` when the field's semantic
    * label comes from a sibling node (API 28+).
    *
-   * Falls back through: text > hintText > contentDescription > labeledByText > stateDescription >
-   * paneTitle, with duplicates deduped.
+   * Falls back through: text > contentDescription > hintText > labeledByText > paneTitle.
+   * State descriptions are annotations, not ordinary text labels.
    *
-   * Normalizes whitespace to single line.
+   * Each text is written by [print]: [SnapshotText.flatten] (the default) for the label every
+   * decision and ref reads, [SnapshotText.render] for the text a line prints.
    */
-  private fun resolveLabel(props: AndroidNodeProps): String? {
-    val text = props.text?.takeIf { it.isNotBlank() }?.normalize()
-    val hint = props.hintText?.takeIf { it.isNotBlank() }?.normalize()
-    val labeledBy = props.labeledByText?.takeIf { it.isNotBlank() }?.normalize()
-    val cd = props.contentDescription?.takeIf { it.isNotBlank() }?.normalize()
-    val state = props.stateDescription?.takeIf { it.isNotBlank() }?.normalize()
-    val pane = props.paneTitle?.takeIf { it.isNotBlank() }?.normalize()
+  private fun resolveLabel(props: AndroidNodeProps, print: (String) -> String = SnapshotText::flatten): String? {
+    val text = props.text?.takeIf { it.isNotBlank() }
+    val hint = props.hintText?.takeIf { it.isNotBlank() }
+    val labeledBy = props.labeledByText?.takeIf { it.isNotBlank() }
+    val cd = props.contentDescription?.takeIf { it.isNotBlank() }
+    val pane = props.paneTitle?.takeIf { it.isNotBlank() }
 
     // Compose: an input field with both a visible label (hint or labeledBy) and a value.
     // The *label* describes the category, the *value* is the data — LLMs need both.
     val semanticLabel = hint ?: labeledBy
-    if (semanticLabel != null && text != null && semanticLabel != text) {
-      return "$semanticLabel: $text"
+    if (semanticLabel != null && text != null && SnapshotText.flatten(semanticLabel) != SnapshotText.flatten(text)) {
+      return "${print(semanticLabel)}: ${print(text)}"
     }
 
-    return text ?: cd ?: hint ?: labeledBy ?: state ?: pane
+    return (text ?: cd ?: hint ?: labeledBy ?: pane)?.let(print)
   }
-
-  private fun String.normalize(): String =
-    replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
 
   /**
    * For clickable/actionable containers without direct text (e.g., a clickable LinearLayout),
@@ -489,7 +489,8 @@ object AndroidCompactElementList {
   private fun resolveChildLabel(
     node: TrailblazeNode,
     props: AndroidNodeProps,
-  ): String? = labelSourceChild(node, props)?.let { child -> AndroidNodeProps.of(child)?.let(::resolveLabel) }
+    print: (String) -> String = SnapshotText::flatten,
+  ): String? = labelSourceChild(node, props)?.let { child -> AndroidNodeProps.of(child)?.let { resolveLabel(it, print) } }
 
   /** The child whose label [resolveChildLabel] absorbs, or null when the parent absorbs none. */
   private fun labelSourceChild(
@@ -542,12 +543,13 @@ object AndroidCompactElementList {
         parts.add("[value: $pct%]")
       }
     }
-    // Show stateDescription only when it adds info beyond the label
+    val annotations = if (parts.isEmpty()) "" else " ${parts.joinToString(" ")}"
+    return annotations + buildStateAnnotation(props, label)
+  }
+
+  private fun buildStateAnnotation(props: AndroidNodeProps, label: String?): String {
     val sd = props.stateDescription?.takeIf { it.isNotBlank() }
-    if (sd != null && sd != label && sd != props.text) {
-      parts.add("[state: \"$sd\"]")
-    }
-    return if (parts.isEmpty()) "" else " ${parts.joinToString(" ")}"
+    return if (sd != null && sd != label && sd != props.text) " [state: \"$sd\"]" else ""
   }
 
   /**
@@ -571,6 +573,7 @@ object AndroidCompactElementList {
   private fun isMeaningful(props: AndroidNodeProps, label: String?): Boolean {
     // Interactive elements are always meaningful
     if (props.isClickable || props.isEditable || props.isCheckable) return true
+    if (props.stateDescription?.isNotBlank() == true) return true
     // Headings with text are meaningful (empty headings are just section dividers)
     if (props.isHeading && label != null) return true
     // Scrollable with a label is meaningful; bare scroll containers are transparent
@@ -656,7 +659,7 @@ object AndroidCompactElementList {
     }
     val rawClass = props.className?.substringAfterLast('.') ?: ""
     val shortClass = if (rawClass in GENERIC_CLASSES) "" else rawClass
-    val label = resolveLabel(props) ?: resolveChildLabel(node, props)
+    val label = resolveLabel(props, SnapshotText::render) ?: resolveChildLabel(node, props, SnapshotText::render)
     val descriptor = when {
       label != null && shortClass.isNotEmpty() -> "$shortClass \"$label\""
       label != null -> "\"$label\""

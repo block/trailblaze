@@ -234,6 +234,29 @@ class WorkspaceClientDtsGeneratorTest {
   }
 
   @Test
+  fun `koog list parameter accepts a readonly array`() {
+    // A tool argument is serialized to JSON, so the tool can never mutate the caller's array.
+    // A mutable `unknown[]` rejects every `readonly` array a caller holds (TS4104).
+    val trailmapDir = newTrailmapDir()
+    val generator = WorkspaceClientDtsGenerator()
+
+    val toolDescriptors = listOf(
+      ToolDescriptor(
+        name = "runSteps",
+        description = "",
+        requiredParameters = listOf(
+          ToolParameterDescriptor("steps", "Ordered steps", ToolParameterType.List(ToolParameterType.String)),
+        ),
+      ),
+    )
+
+    val outputPath = generator.generateForTrailmap(trailmapDir, toolDescriptors, emptyList())
+    val rendered = Files.readString(outputPath)
+
+    assertTrue("rendered: $rendered") { rendered.contains("steps: readonly unknown[];") }
+  }
+
+  @Test
   fun `hyphenated names are emitted as quoted properties`() {
     val trailmapDir = newTrailmapDir()
     val generator = WorkspaceClientDtsGenerator()

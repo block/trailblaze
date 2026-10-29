@@ -11,15 +11,11 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("takeSnapshot")
-@LLMDescription(
-  """
-Take a snapshot of the current page and save it under the provided screen name.
-  """,
-)
+@LLMDescription("Save a screenshot of the current screen to the session log under a screen name.")
 data class TakeSnapshotTool(
-  @param:LLMDescription("Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation').")
+  @param:LLMDescription("Screen name, e.g. 'login_screen'.")
   val screenName: String,
-  @param:LLMDescription("Optional description of what this snapshot captures or why it was taken.")
+  @param:LLMDescription("What the snapshot captures or why it was taken.")
   val description: String? = null,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
   companion object {

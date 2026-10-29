@@ -25,6 +25,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -199,6 +200,52 @@ class TapOnPointTrailblazeToolTest {
   }
 
   @Test
+  fun `doubleTap dispatches the point with a two-tap repeat`(): Unit = runBlocking {
+    val agent = CapturingAgent()
+    val context = contextWithTree(agent, tree = null)
+
+    val result = TapOnPointTrailblazeTool(x = 100, y = 65, doubleTap = true).execute(context)
+
+    assertEquals("Double-tapped at (100, 65)", assertIs<TrailblazeToolResult.Success>(result).message)
+    val command = assertNotNull(agent.lastTapCommand)
+    assertEquals("100,65", command.point)
+    assertEquals(2, command.repeat?.repeat)
+  }
+
+  @Test
+  fun `a plain tap carries no repeat`(): Unit = runBlocking {
+    val agent = CapturingAgent()
+    TapOnPointTrailblazeTool(x = 100, y = 65).execute(contextWithTree(agent, tree = null))
+
+    assertNull(assertNotNull(agent.lastTapCommand).repeat)
+  }
+
+  @Test
+  fun `doubleTap and longPress together are rejected`() {
+    assertFailsWith<IllegalArgumentException> {
+      TapOnPointTrailblazeTool(x = 1, y = 2, longPress = true, doubleTap = true)
+    }
+  }
+
+  @Test
+  fun `upgrade carries doubleTap through to the recorded step`(): Unit = runBlocking {
+    val button = node(
+      DriverNodeDetail.AndroidAccessibility(text = "Menu", isClickable = true),
+      TrailblazeNode.Bounds(0, 0, 100, 50),
+    )
+    val root = node(
+      DriverNodeDetail.AndroidAccessibility(),
+      TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(button),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+    TapOnPointTrailblazeTool(x = 50, y = 25, doubleTap = true).execute(context)
+
+    val stamped = assertIs<TapOnTrailblazeTool>(context.recordedToolOverride)
+    assertEquals(true, stamped.doubleTap)
+  }
+
+  @Test
   fun `upgrade works for Compose nodes via DriverNodeMatch Compose`(): Unit = runBlocking {
     val target = node(
       DriverNodeDetail.Compose(testTag = "submit_btn", text = "Submit", hasClickAction = true),
@@ -321,12 +368,15 @@ class TapOnPointTrailblazeToolTest {
   ) {
     var lastTapPoint: Pair<Int, Int>? = null
       private set
+    var lastTapCommand: TapOnPointV2Command? = null
+      private set
 
     override suspend fun executeMaestroCommands(
       commands: List<Command>,
       traceId: TraceId?,
     ): TrailblazeToolResult {
       commands.filterIsInstance<TapOnPointV2Command>().lastOrNull()?.let { cmd ->
+        lastTapCommand = cmd
         val parts = cmd.point.split(",").mapNotNull { it.trim().toIntOrNull() }
         if (parts.size == 2) lastTapPoint = parts[0] to parts[1]
       }

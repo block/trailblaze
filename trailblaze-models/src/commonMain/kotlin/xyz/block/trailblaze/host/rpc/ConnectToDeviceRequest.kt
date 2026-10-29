@@ -34,4 +34,14 @@ data class ConnectToDeviceRequest(
 data class ConnectToDeviceResponse(
   val deviceWidth: Int,
   val deviceHeight: Int,
-)
+) {
+  /**
+   * The session this connection's own taps and runs log into, when that session never shows in the
+   * session list: an Android connection logs into one that has no start record. Null when they log
+   * into a listed session instead, or nowhere.
+   *
+   * A body property so the published constructor and `copy` keep their JVM signatures; like any
+   * body property it is serialized but left out of `copy`/`equals`/`hashCode`.
+   */
+  var logSessionId: String? = null
+}

@@ -49,9 +49,7 @@ targets:
 id: myapp
 target:
   display_name: My App
-  tools:                                      # bare export names from tools/*.ts
-    - myapp_login
-    - myapp_navigate
+  # No tools list: every tools/*.ts that exports a trailblaze.tool(...) is on this target.
   platforms:
     android:
       app_ids:
@@ -69,31 +67,28 @@ toolsets:                                     # trailmap-level file refs
 
 ### Field reference
 
-> **Heads up on how tools register.** Only scripted TypeScript tools are listed in the
-> manifest — by **bare export name** under `target.tools:` (or `platforms.<p>.tools:`).
-> There is no top-level `tools:` field: class-backed and pure-YAML composed tools
-> (`*.tool.yaml`, plus `*.shortcut.yaml` / `*.trailhead.yaml`) **auto-discover** from the
-> trailmap's `tools/` / `shortcuts/` / `trailheads/` directories, and waypoints
+> **Heads up on how tools register.** Every scripted TypeScript tool in the trailmap's
+> `tools/` folder is on its target without being listed; `excluded_tools:` opts one out.
+> There is no top-level `tools:` field: Kotlin-backed tool descriptors
+> (`*.tool.yaml`, plus `*.trailhead.yaml`) **auto-discover** from the
+> trailmap's `tools/` / `trailheads/` directories, and waypoints
 > auto-discover from `waypoints/`. See
 > [Tool flavors](#tool-flavors-which-kind-do-i-write) below for the rubric.
 
 | Field | Status | Purpose |
 | --- | --- | --- |
 | `id` | required | Unique trailmap id. Used for shadowing / overrides. |
-| `target` | optional | Embeds an `AppTargetYamlConfig` (id is inherited from the trailmap id when omitted). A trailmap without `target:` is treated as a library trailmap — it contributes via `defaults:` / `toolsets:` / `tools:` / `waypoints:` but isn't surfaced as a runnable target. `target.tools:` lists scripted tools by their bare export name (one `.ts` per tool under `<trailmap>/tools/`). |
+| `target` | optional | Embeds an `AppTargetYamlConfig` (id is inherited from the trailmap id when omitted). A trailmap without `target:` is treated as a library trailmap — it contributes via `defaults:` / `toolsets:` / `tools:` / `waypoints:` but isn't surfaced as a runnable target. Every scripted tool under `<trailmap>/tools/` is on the target; `target.tools:` may still list them by bare export name, but no longer has to. |
 | `target.icon` | optional | Workspace-relative path to an icon (Android launcher icon / web favicon) shown beside this target in the TrailRunner UI. When omitted, the UI falls back to a filename convention under a shared `assets/icons/` folder relative to the workspace's `trails/config/` directory: `assets/icons/android_<app_id>.png` for an Android target, `assets/icons/favicon_<host>.png` for a web target. Drop matching files into that folder and every target lights up with no per-target authoring; set `target.icon` to override. |
 | `target.system_prompt_file` | optional | Trailmap-relative path to a markdown / text file containing the target's system-prompt template. The trailmap loader (and the build-time generator) reads the file and inlines its content into the generated target YAML's `system_prompt:` field. Lets authors keep multi-paragraph prompts in a standalone editable file rather than an unwieldy YAML string. Inline `system_prompt:` is not supported on `target` — a trailmap manifest declaring it fails the load with a migration message. The file-only shape leaves room for future per-device or per-classifier prompt selection (e.g. `app-tablet.prompt.md`) without an authoring schema change. |
 | `dependencies` | optional | Trailmap ids this trailmap depends on. Transitive — depending on a trailmap pulls in its dependencies too. Resolves via closest-to-root-wins inheritance from each dep's `defaults:` (see below). |
 | `defaults` | optional | Per-platform defaults this trailmap contributes to consumers via dependency resolution. Same shape as `target.platforms`. Consumers with `dependencies: [<this trailmap>]` inherit any field they leave null. |
 | `toolsets` | optional | List of trailmap-relative paths to `ToolSetYamlConfig` files. |
 | `platforms` | optional (library trailmaps only) | Top-level per-platform config declaring the library's own runtime-registry needs — the toolsets its internal scripted tools dispatch against. Same shape as `target.platforms`. Setting it on a target trailmap is a load-time error (a target's platform config belongs under `target.platforms:`). |
-| `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
+| `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. This is how a TypeScript tool is shared across trailmaps: list it in this trailmap's `target.tools:` or `target.platforms.<p>.tools:`, export it, and every trailmap with this one in its `dependencies:` gets it on the platforms the tool supports. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
 | `waypoints` | deprecated / ignored | Waypoints auto-discover from any `*.waypoint.yaml` under `<trailmap>/waypoints/` (any depth). The field survives in the schema only so legacy manifests still parse — leave it absent. |
 | `trail_validation` | optional | `trail_validation.exempt: "<reason>"` opts this target's `.trail.yaml` recordings out of the default-fatal trail-recording type-validation phase of `trailblaze check` — findings are reported but never fail the build. Blank reason = not exempt. |
 | `trails` | reserved | First-class artifact loading deferred. |
-
-> The `routes:` field was removed in 2026-04-28 — routes were dropped as a separate
-> concept in favor of "shortcuts that invoke other shortcuts."
 
 > The legacy reserved-slot fields `use:` / `extend:` / `replace:` were removed in favour
 > of the unified `dependencies:` field. Workspace trailmaps that still declare them get a
@@ -144,42 +139,33 @@ loaded from the repo's own `trails/config/`, not bundled into the framework JAR)
 ## Tool flavors: which kind do I write?
 
 A trailmap can contribute two flavors of custom tool. They share the `<trailmap>/tools/`
-directory but bind through entirely different mechanisms — easy to copy-paste-confuse,
-so this table is the rubric:
+directory but bind through different mechanisms:
 
-> **Default to scripted TypeScript.** Reach for pure-YAML only when the tool is a
-> literal parameter substitution into an existing tool call — anything with a
-> conditional, retry, or two-step sequence is a scripted tool.
+> **Default to scripted TypeScript.** It covers everything from a one-call wrapper to
+> multi-step orchestration with branching and retries. Reach for Kotlin only when the tool
+> needs host-side state the scripting SDK doesn't expose.
 
-| | **Scripted (TypeScript)** | **Pure-YAML composed** |
+| | **Scripted (TypeScript)** | **Kotlin-backed** |
 | --- | --- | --- |
-| Pick when | You need branching, retries, async, multi-step orchestration | You need a thin wrapper that substitutes parameters into existing tool calls |
-| Filename | `<id>.ts` — one file per tool | `<id>.tool.yaml` (note the double suffix) |
-| Body | TypeScript in the `.ts`. The `trailblaze.tool<I, O>(spec, handler)` export carries everything (name from the export, schema from `<I>`, description from TSDoc). | `tools:` block — declarative composition of existing tools |
-| Manifest entry | Listed by **bare export name** under `target.tools:` in `trailmap.yaml` | **Auto-discovered** — do NOT list in `trailmap.yaml` |
-| Surfaced to a target via | Direct `target.tools:` reference | A toolset (`<workspace>/trails/config/toolsets/<id>.yaml` or `<trailmap>/toolsets/<id>.yaml`) that names the tool, declared from `platforms.<p>.tool_sets:` |
-| Param schema source | The `<I>` type parameter on the `trailblaze.tool<I, O>` call. Per-field TSDoc becomes per-field JSON Schema `description`. | `parameters:` (list of `{name, type, required?, description?}`) |
-| Host vs on-device | `requiresHost: true` on the typed spec — registration-time gate | Workspace tools default to `requires_host: true` (config can't ship on-device); bundled framework `*.tool.yaml` runs on either side because the file is on both classpaths |
+| Filename | `<id>.ts` — one file per tool | A `@TrailblazeToolClass` class in your Kotlin sources, plus `<id>.tool.yaml` (note the double suffix) with `class:` naming it |
+| Manifest entry | None needed — every `.ts` in `tools/` is on the target. Opt one out with `excluded_tools:` | **Auto-discovered** — do NOT list in `trailmap.yaml` |
+| Surfaced to a target via | Being in the trailmap's `tools/` folder, or a dependency's `exports:` | A toolset that names the tool, declared from `platforms.<p>.tool_sets:` |
+| Param schema source | The `<I>` type parameter on the `trailblaze.tool<I, O>` call. Per-field TSDoc becomes per-field JSON Schema `description`. | The class's constructor properties and their `@LLMDescription`s |
+| Host vs on-device | `requiresHost: true` on the typed spec — registration-time gate | Set by the class's `@TrailblazeToolClass(requiresHost = ...)` |
+
+A `*.tool.yaml` or `*.trailhead.yaml` with a `tools:` list of other tool calls (the retired
+YAML-composed flavor) fails to load with a pointer to TypeScript tools. Port it to a `.ts`
+tool: each listed call becomes an `await ctx.tools.<name>({ ... })` line.
 
 > **Older trailmaps still using `<id>.yaml` + `<id>.ts` pairs?** That shape continues to
 > work unmodified — see the [Scripted Tools — Legacy Reference](scripted_tools.md). New
 > tools should use the `.ts`-only canonical shape above; convert in place when
 > convenient.
 
-The two most common mistakes when authoring a trailmap from scratch:
-
-1. **Listing a `.tool.yaml` under `target.tools:` in `trailmap.yaml`.** The framework treats
-   `target.tools:` entries as scripted tool descriptors and tries to decode each one as a
-   `TrailmapScriptedToolFile` (which needs `script:` and `name:`). The loader now intercepts
-   `.tool.yaml` paths and emits an actionable diagnostic that names the offending path
-   and points at the auto-discovery convention. If you see
-   `Trailmap '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...`,
-   delete that entry from the manifest — leave the file in place.
-
-2. **Using `parameters:` (list) in a scripted descriptor or `inputSchema:` (map) in a
-   pure-YAML composed tool.** Each flavor uses a different shape; the other shape is
-   silently ignored by the YAML decoder. Symptom: the tool registers but params behave
-   as if the schema were empty. Check the columns above when params aren't flowing.
+The most common mistake when authoring a trailmap from scratch is **listing a `.tool.yaml`
+under `target.tools:`** in `trailmap.yaml`. `target.tools:` entries are scripted tool
+export names; a `.tool.yaml` auto-discovers, so delete that entry from the manifest and leave
+the file in place.
 
 ## Per-file scripted tools
 
@@ -192,37 +178,44 @@ See [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md) for the ful
 authoring reference, the IDE-typings pipeline, the testing helpers, and the worked
 iOS Contacts + Wikipedia examples.
 
-Each entry under `target.tools:` is the **bare export name** of a scripted tool:
+Every `.ts` under `tools/` that exports a `trailblaze.tool(...)` declaration is on the
+trailmap's target — no manifest entry needed. Each tool's own `supportedPlatforms` and
+`supportedDrivers` decide where it runs, exactly as they do for a listed tool, so there
+is nothing to list per platform or per driver. Files in `tools/` that don't export a tool
+(shared helpers, type-only modules) are ignored.
+
+To keep a tool off a platform, name it in that platform's `excluded_tools:`:
 
 ```yaml
 target:
-  tools:
-    - myapp_login                   # matches `export const myapp_login = trailblaze.tool(...)` in tools/myapp_login.ts
-    - myapp_navigate
+  platforms:
+    android:
+      excluded_tools:
+        - myapp_debugOnly           # matches `export const myapp_debugOnly = trailblaze.tool(...)`
 ```
 
-The trailmap loader walks `tools/` for every `.ts` that exports a `trailblaze.tool(...)`
-declaration; the names listed under `target.tools:` decide which of those are advertised
-to the agent for this target. Files in `tools/` that don't export a tool (shared
-helpers, type-only modules) are ignored at registration.
+Repeat it under each platform it should stay off. `excluded_tools:` is the only opt-out, so
+a target that needs one must declare that platform under `platforms:`.
 
-For trailmaps that haven't migrated yet, the legacy YAML-descriptor shape continues to
-work — each entry under `target.tools:` is then a bare name (resolved against the
-descriptor's `name:` field). See
+`target.tools:` (a list of bare export names) and `platforms.<p>.tools:` still work, but
+listing a tool there is redundant, and the lists only add: `tools: []` no longer keeps a
+trailmap's own tools off its target. Sharing a tool with *other* trailmaps stays explicit:
+list it under `exports:`.
+
+The legacy YAML-descriptor shape continues to work the same way — every descriptor's
+`name:` is on the target too. See
 [Scripted Tools — Legacy Reference](scripted_tools.md) for the full descriptor schema
 and the field-level conventions in
 [`TrailmapScriptedToolFile.kt`](https://github.com/block/trailblaze/blob/main/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailmapScriptedToolFile.kt).
 
 ### Per-platform scripted tools
 
-Trailmaps that ship distinct iOS and Android tools (or web and mobile) declare each
-platform-specific tool under `platforms.<p>.tools:`. Cross-platform tools — anything
-whose `supportedPlatforms` spans more than one platform — stay at the top level under
-`target.tools:`. The build-time generator and runtime loader both hoist either site
-into the delivered target's top-level `tools:` block; declaring a tool under its
-platform is purely an authoring-time aid, so the platform↔tool association is
-explicit in the YAML rather than inferred from each `.ts`'s `supportedPlatforms`
-gate alone.
+A tool's `supportedPlatforms` / `supportedDrivers` already limit it to its platforms
+and drivers, so no listing is needed. Trailmaps that want the platform↔tool association visible in the YAML can
+still declare each platform-specific tool under `platforms.<p>.tools:`, and
+cross-platform tools — anything whose `supportedPlatforms` spans more than one platform
+— under `target.tools:`. The build-time generator and runtime loader both hoist either
+site into the delivered target's top-level `tools:` block, alongside the unlisted ones.
 
 ```yaml
 # trails/config/trailmaps/myapp/trailmap.yaml
@@ -251,99 +244,50 @@ platform belongs under `target.tools:`. The trailmap loader rejects the mismatch
 a load-time error so the authoring shape is self-consistent.
 
 When a trailmap targets only one platform there's nothing to split — every tool
-necessarily applies to that one platform, so they all sit at the top level under
-`target.tools:` and the `platforms.<p>.tools:` block is unused. The
-[`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts)
-trailmap in the OSS tree is the canonical single-platform shape and lists its tools
-at `target.tools:` for that reason. The split shape above is what you reach for once a
-trailmap grows past one platform.
+necessarily applies to that one platform, and the `platforms.<p>.tools:` block is unused.
 
-## Tool YAML file suffixes — `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`
+## Tool YAML file suffixes — `.tool.yaml`, `.trailhead.yaml`
 
 Each operational class lives under its own trailmap subdirectory and uses a matching filename
 suffix. The loader enforces that the file's content matches what the suffix promises — a
-`.tool.yaml` file with a stray `shortcut:` block is a load-time error.
+`.tool.yaml` file with a stray `trailhead:` block is a load-time error.
 
 | Suffix              | Trailmap subdir   | Class      | Available when                       | Required block       |
 | ------------------- | ------------- | ---------- | ------------------------------------ | -------------------- |
 | `*.tool.yaml`       | `tools/`      | tool       | a toolset names it under `tools:`    | (none)               |
-| `*.shortcut.yaml`   | `shortcuts/`  | shortcut   | current waypoint matches `from`      | `shortcut:`          |
 | `*.trailhead.yaml`  | `trailheads/` | trailhead  | always (bootstrap from any state)    | `trailhead:`         |
 
 Subdirectories below each top-level dir are organizational only — the loader walks them
-recursively at any depth. A trailmap with multi-platform shortcuts can group them as
-`shortcuts/{android,ios,web}/...` (or any other grouping that fits) without changing how
+recursively at any depth. A trailmap with multi-platform trailheads can group them as
+`trailheads/{android,ios,web}/...` (or any other grouping that fits) without changing how
 discovery works.
 
-The three classes share one data class (`ToolYamlConfig`) with two optional metadata
-blocks (`shortcut`, `trailhead`); they're mutually exclusive — a tool can't be both a
-shortcut and a trailhead.
+Both classes share one data class (`ToolYamlConfig`); a trailhead is a tool with the
+optional `trailhead` metadata block populated.
 
-> **Workspace `*.tool.yaml` auto-discovery.** A workspace-authored pure-YAML composed
-> tool is discoverable by the resolver at session start (no manifest entry needed), but
-> the framework only surfaces it to a target when **some toolset names it under `tools:`**.
+> **Workspace `*.tool.yaml` auto-discovery.** A workspace-authored `*.tool.yaml` is
+> discoverable by the resolver at session start (no manifest entry needed), but the
+> framework only surfaces it to a target when **some toolset names it under `tools:`**.
 > The common shape is one workspace toolset at `<workspace>/trails/config/toolsets/<id>.yaml`
 > (or `<trailmap>/toolsets/<id>.yaml`) that lists the tool, and one target referencing that
-> toolset under `platforms.<p>.tool_sets:`. Workspace tools default to host-side
-> execution (`requires_host = true` implicit) — the framework's bundled `*.tool.yaml`
-> resources ride on both host and device classpaths and execute on whichever side runs
-> them, but workspace files only live on the host, so the dispatcher routes them locally.
-> Authors who explicitly set `requires_host: false` keep that explicit value.
-
-### Shortcut tools
-
-A **shortcut** is a tool with a populated `shortcut: { from, to }` block — an authored
-navigation edge between two waypoints with a runtime pre/post-condition contract. Same
-file format, same registry, same agent-facing tool descriptor as any other tool; the
-framework adds a contextual descriptor filter (only surfaces shortcut tools whose `from`
-matches the current waypoint) and a pre/post-condition wrapper at execution time.
-
-```yaml
-# trailmaps/clock/shortcuts/clock_create_alarm.shortcut.yaml
-id: clock_create_alarm
-description: Create an alarm at a given time.
-parameters:
-  - name: hour
-    type: integer
-    required: true
-  - name: minute
-    type: integer
-    required: true
-shortcut:
-  from: clock/android/alarm_tab
-  to:   clock/android/alarm_saved
-tools:
-  - tapElement: { selector: { textRegex: 'Add alarm' } }
-  - inputText:  { text: '{{params.hour}}:{{params.minute}}' }
-  - tapElement: { selector: { text: 'OK' } }
-```
-
-The metadata block adds:
-
-- `from` / `to` — slash-namespaced waypoint ids the framework matches against current
-  state. Both are required; the framework refuses to invoke if `from` doesn't match at
-  call time and reports failure if the post-state doesn't match `to`.
-- `variant` — optional disambiguator when multiple shortcuts share the same `(from, to)`
-  pair. Most shortcuts never need it.
+> toolset under `platforms.<p>.tool_sets:`.
 
 ### Trailhead tools
 
-A **trailhead** is a tool with a populated `trailhead: { to }` block — a bootstrap
-primitive that takes the agent from any state to a known waypoint. Always available
-(no `from` precondition). The framework asserts the agent landed at `to` after the
-body runs, just like a shortcut's post-condition. Trailheads are the right shape for
-"launch the app and reach a logged-in screen", "force-quit and re-sign-in", and similar
-reset/genesis moves that need to work regardless of where the agent currently is.
+A **trailhead** is a bootstrap tool that takes the agent from any state to a known starting
+point. Always available, with no precondition. In TypeScript, define it with
+`trailblaze.trailhead(spec, handler)` in place of `trailblaze.tool`. In YAML, give a
+`*.trailhead.yaml` tool a `trailhead:` block; `trailhead: {}` is enough.
+
+A trailhead needn't name where it lands. The optional `to` names the waypoint it usually lands
+on, and only draws its edge on the waypoint graph: nothing checks it. A trailhead that must fail
+on the wrong screen asserts that in its own body. Trailheads are the right shape for "launch the app and reach a logged-in screen",
+"force-quit and re-sign-in", and similar reset/genesis moves that need to work regardless
+of where the agent currently is.
 
 ```yaml
 # trailmaps/myapp/trailheads/myapp_launchAppSignedIn.trailhead.yaml
 id: myapp_launchAppSignedIn
-description: Launch MyApp and sign in to the home screen.
-parameters:
-  - name: email
-    default: '{{memory.email}}'
-  - name: password
-    default: '{{memory.password}}'
 trailhead:
   to: myapp/android/home_signed_in
 class: com.example.myapp.LaunchAppSignedInTool
@@ -354,13 +298,151 @@ section in the v2 trail YAML) composes one or more trailheads alongside other to
 e.g. setting a feature flag before invoking a launch trailhead. The trailhead is the
 atom; the trail's setup is the orchestration.
 
+### Trailhead teardown
+
+A TypeScript trailhead can define `teardown`. Trailblaze calls it once after the trail,
+whatever happened: passed, failed, cancelled, or the trailhead itself threw. It cleans up what
+the run left behind and says whether the next trail can reuse this setup.
+
+```ts
+export const myapp_launchAppSignedIn = trailblaze.trailhead<{ email: string }>(
+  {
+    async teardown(args, ctx, trailRun) {
+      // The history is a tree: a composite tool's own calls sit under its `calls`.
+      const visit = async (calls: ToolCall[]) => {
+        for (const c of calls) {
+          if (c.name === "myapp_addItem") await deleteItem(ctx, String(c.args.id));
+          await visit(c.calls);
+        }
+      };
+      await visit(await ctx.history.toolCalls("trail"));
+      if (trailRun.outcome !== "passed") return { reusable: false, reason: "trail did not pass" };
+      return { reusable: true, reason: "home screen", state: { cartItems: await cartCount(ctx) } };
+    },
+  },
+  async (args, ctx) => {
+    if (ctx.previousRun && (await onHomeScreen(ctx))) {
+      return ctx.previousRun.reuse("already signed in on home", async () => {
+        if (ctx.previousRun?.state?.cartItems) await clearCart(ctx);
+      });
+    }
+    // ...full launch and sign-in
+  },
+);
+```
+
+- **`trailRun`** has `outcome` and `events.list()` / `events.query(stream, { match, window, limit })`, which return only the
+  matching records of this session's event streams. Matching runs in Kotlin: equality, nested
+  subset objects, and `RegExp` (flags `i` and `m`; `g` is ignored and any other flag is an error).
+  `events` works only inside `teardown`. In a multi-device trail a query reads the device the trail
+  ended on and skips the other devices' `trailhead` records.
+- **`ctx.history`** lists every tool call of the run, with its args and outcome, split into
+  `trailhead`, `trail` and `teardown` sections. `ctx.history.toolCalls({ section })` with the
+  `trail` section's id returns what the trail did and nothing from setup. See
+  [Reading what ran via `ctx.history`](scripted-tools-typed-authoring.md#reading-what-ran-via-ctxhistory).
+- **The return value** is `{ reusable, reason, state? }`. `reason` is required and shows in the
+  report. `state` is your own small JSON (16 KB cap, no secrets). It is printed and logged with the
+  session's trailhead events, as is the next run's `previousRun`, so it goes wherever the
+  session goes, such as a failed session uploaded by `loop --on-failure`.
+- **`ctx.previousRun`** is `{ sessionId, reason, state?, trailheadEndWaypoint?, reuse(reason, catchUp?) }`: what the
+  last run's `teardown` reported, handed to the next run of the same trailhead on the same device,
+  and only when `teardown` said `reusable: true`. It is a claim to check, not a guarantee. It
+  is `null` otherwise: not reusable, a different tool, code, args, device or driver, reuse off for
+  the lane (`TRAILBLAZE_TRAILHEAD_REUSE`, see [Configuration](configuration.md)) or for the run that
+  set it up, and in every
+  tool that isn't the trailhead. The session log says why it was `null`. A hand-off lasts one
+  trail: the next run of that trailhead consumes it, match or not, and a trail with no
+  `teardown` trailhead drops every pending hand-off in the runner, because the runner can't tell
+  which device that trail changed. Reuse is off on Compose and Revyl, whose device ids don't tell
+  one app or cloud device from the next.
+- **A reusable hand-off skips the runner's clean start.** Runners normally force-stop the app
+  before each trail. With reuse on, a trail whose trailhead has a reusable hand-off waiting on the
+  device leaves the app running and the trailhead decides; every other trail keeps its clean start. So a full setup must establish its own starting state
+  (relaunch the app, for example) rather than count on the runner having stopped it. A trail that
+  changes the device's language (its `locale`, or the `en-US` default after a localized trail)
+  still gets a fresh process, and the change drops the device's pending hand-offs.
+- **Where the setup landed is part of the hand-off.** On a host run with reuse on, the runner
+  matches the screen against the target's own waypoints (its trailmap's, ids under `<trailmap id>/`) as the
+  trailhead returns, giving it up to 5 seconds to settle onto one. It logs every match
+  (`trailheadEnd` in `events/trailhead.ndjson`). The landing has to match exactly one waypoint,
+  which is handed on as `previousRun.trailheadEndWaypoint`. A run whose trailhead matched none, or
+  more than one, hands nothing on: make overlapping waypoints exclude each other with `forbidden`.
+  A browser run, which selects no app target, and a target with no waypoints are not checked, and
+  their setup is handed on as on a device. A reused setup must land on that waypoint again when
+  the trailhead returns (its own `required` and `forbidden` selectors, waiting up to 5 seconds as
+  `assertWaypoint` does), or the trailhead fails. To reuse only from one screen, check
+  `previousRun.trailheadEndWaypoint` before calling `reuse`. On-device runs record no landing, so
+  `trailheadEndWaypoint` is absent and nothing is checked.
+- **`reuse(reason, catchUp?)`** skips the full setup. It logs the attempt, runs `catchUp` (what the
+  last run left to finish) and resolves with its result. If `catchUp` or the rest of the handler
+  throws, the trailhead fails and the report says it failed while reusing that session's setup.
+  Without a call the log says "full setup".
+- **Two hooks, two kinds of work.** `teardown` runs even when no trail follows, so it does the
+  cleanup that can't wait: records on a server, leases, uploads. Work that a full setup also undoes
+  (back to the home screen, clear a cart) can wait for the next trailhead: record it in `state` and
+  do it there when `ctx.previousRun` arrives. Defer nothing else, because when it is `null` the
+  next trailhead does a full setup and never sees what was left.
+- **`reusable` is forced to `false`** when the trail did not pass, when `teardown` throws or
+  runs past its 45-second budget, when the session holds a resource the host releases at session
+  end, or when `state` is over 16 KB (it is dropped). The budget
+  is best effort while `teardown` waits on a nested tool call, which runs to its own timeout.
+- **In a multi-device trail** a trailhead's `teardown` runs only if the trail ended on the device
+  that trailhead set up. Otherwise it is skipped and reported as failed, since its cleanup would
+  land on the wrong device; switch back before the trail ends to keep it.
+- **It never changes the verdict.** A failing `teardown` shows as a failed "Teardown"
+  section in the report, after the trail; the trail keeps its own result. Its tool calls are never
+  written into a recording.
+
+`teardown` is supported for in-process (QuickJS) TypeScript tools run by `trailblaze run`
+and the JUnit runners. It is not called for subprocess tools or for trails run step by step over
+MCP.
+
+### Reading session events mid-run
+
+Any TypeScript tool can check what the session's event streams (`events/<stream>.ndjson`) hold
+so far, at any point in a run, and wait for a record to land. This lets a tool check app state from
+the app's own signals rather than guess it from the screen:
+
+```typescript
+await ctx.events.mark("launched");
+// ... sign in ...
+const login = await ctx.events.query("analytics", {
+  match: { event: "sign_in", properties: { result: "success" } },
+  since: "launched", // "session" (default), "trailhead", "trail", or a mark name
+  waitMs: 15_000,    // poll until a match lands, up to this long
+});
+if (!login.captured) throw new Error("no analytics capture in this session");
+```
+
+- **`query(stream, options)`** returns `{ captured, events, cursor }`. `captured: false` means the
+  stream has no file in this session, so nothing captured it; tell that apart from "captured, and
+  nothing matched". Pass `cursor` back as `after` to read only what arrives next. `newest: true`
+  returns the last matches to arrive first, read from the end of the stream. A result stops at
+  about 4 MB of record text and says `truncated: true`; an oldest-first read continues from its
+  `cursor` passed as `after`.
+- **`count(stream, options)`** returns how many records match, with no payloads.
+- Both say `complete: false`, with an `incompleteReason`, when a capture writing the session's
+  streams recorded losing data, or when the read skipped a record over 4 MB. An absence check ("no 5xx since the mark") should fail then, since
+  the record it looks for may have been dropped.
+- **`mark(name)`** names this point in every stream. A stream that appears after the mark starts
+  after it.
+- **`match`** uses the same rules as `trailRun.events.query`: strings, numbers and booleans
+  match exactly, a `RegExp` tests, a nested object is a subset match.
+- **It is cheap enough for a device with no host.** Matching runs in Kotlin over the stream's bytes.
+  A query reads only the bytes after its starting point, lines missing a matched value are skipped
+  before they are decoded, and a wait checks the file size between reads.
+
+Which streams exist depends on what the trailmap captures. Records are returned to the tool
+as captured, so don't log or return payloads that may hold secrets.
+
+A trailmap's [surveys](surveys.md#running-a-survey-mid-trail) run over the same streams, as typed
+functions: `await ctx.surveys.checkoutDone({ waitMs: 15_000 })` returns `{ passed, message, findings }`.
+
 ### Authoring forms
 
-The body of any of the three classes uses one of `class:` (Kotlin-backed) or `tools:`
-(declarative YAML composition). The `tools:` form is the happy path — machine-readable,
-no conditionals, no loops, covers the majority case. A future `script:` mode for TS/JS
-bodies will land when shortcuts/trailheads need real code (branching, retries) the YAML
-form can't express.
+Write a trailhead as a TypeScript tool (declare `trailhead: { to: ... }` in its
+`trailblaze.tool(...)` spec) or as a `*.trailhead.yaml` with `class:` pointing at Kotlin. A
+shortcut is a `*.shortcut.yaml` with `class:`. See [Tool flavors](#tool-flavors-which-kind-do-i-write).
 
 ## Discovery and precedence
 
@@ -508,7 +590,7 @@ becomes:
 
 ```text
 trailmaps/myapp/
-├── trailmap.yaml                       # id, target.display_name, target.tools refs, platforms
+├── trailmap.yaml                       # id, target.display_name, platforms
 └── tools/
     └── myapp_login.ts                  # typed `trailblaze.tool<I, O>(spec, handler)` export
 ```

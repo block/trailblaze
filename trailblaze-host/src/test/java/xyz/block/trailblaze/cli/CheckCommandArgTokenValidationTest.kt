@@ -197,6 +197,46 @@ class CheckCommandArgTokenValidationTest {
   }
 
   @Test
+  fun `phase ignores trails inside a nested agent worktree under dot-claude`() {
+    val workspace = java.nio.file.Files.createTempDirectory("trailblaze-check-args-worktree").toFile()
+    try {
+      // Another branch's checkout: its trails are not this workspace's, whatever state they're in.
+      val nested = java.io.File(workspace, "trails/.claude/worktrees/agent-1/trails").apply { mkdirs() }
+      java.io.File(nested, "bad.trail.yaml").writeText(
+        """
+        config:
+          id: test/bad
+        trail:
+        - step: Reply to {{args.sender}}
+        """.trimIndent(),
+      )
+      assertEquals(CheckCommand.EXIT_OK, command.runArgTokenValidationPhase(workspace))
+    } finally {
+      workspace.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `phase follows a trails directory that is a symlink`() {
+    val workspace = java.nio.file.Files.createTempDirectory("trailblaze-check-args-symlink").toFile()
+    try {
+      val shared = java.io.File(workspace, "shared-trails").apply { mkdirs() }
+      java.io.File(shared, "bad.trail.yaml").writeText(
+        """
+        config:
+          id: test/bad
+        trail:
+        - step: Reply to {{args.sender}}
+        """.trimIndent(),
+      )
+      java.nio.file.Files.createSymbolicLink(java.io.File(workspace, "trails").toPath(), shared.toPath())
+      assertEquals(CheckCommand.EXIT_TYPE_ERROR, command.runArgTokenValidationPhase(workspace))
+    } finally {
+      workspace.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `phase is clean for a workspace with no trails directory`() {
     val workspace = java.nio.file.Files.createTempDirectory("trailblaze-check-args-empty").toFile()
     try {

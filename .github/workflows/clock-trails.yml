@@ -6,8 +6,7 @@ name: Clock Trails
 # https://block.github.io/trailblaze/reports/.
 #
 # Runs on push to main ONLY — deliberately NOT on pull_request. The same clock trail is
-# already exercised on every PR by the `android-tests-host-rpc` job in pr-checks.yml
-# (its script ends with `trailblaze trail trails/clock/set-alarm-730am/android.trail.yaml`),
+# already replayed on every PR by the `trail-runner / android-clock` job in pr-checks.yml,
 # so PR-level validation is covered there. This workflow exists purely to produce the
 # gallery artifact from a main run, so there's no reason to pay for a second Android
 # emulator boot on every PR.
@@ -78,17 +77,15 @@ jobs:
 
   # Boots an Android emulator and replays the recorded clock trail via the host-RPC path
   # (the agent loop runs in-process on the host and dispatches device tools over RPC to
-  # the bundled on-device APK). Mirrors the emulator setup of pr-checks.yml's
-  # `android-tests-host-rpc` job — the one that's reliably green — then exports the docs
-  # gallery assets from the resulting session.
+  # the bundled on-device APK), then exports the docs gallery assets from the resulting
+  # session.
   clock-trails:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: build-uber-jar
     env:
       # Recordings-only — the trail has pre-recorded tool sequences, so LLM inference is
-      # never invoked. A non-empty sentinel satisfies the provider/client wiring (same
-      # pattern as android-tests-host-rpc in pr-checks.yml).
+      # never invoked. A non-empty sentinel satisfies the provider/client wiring.
       OPENAI_API_KEY: no-key-set
       # Record each session's screen so the report plays the recording (off by default).
       TRAILBLAZE_CAPTURE_VIDEO: "true"

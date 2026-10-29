@@ -27,6 +27,7 @@ import maestro.orchestra.ScrollUntilVisibleCommand
 import maestro.orchestra.SetAirplaneModeCommand
 import maestro.orchestra.SetLocationCommand
 import maestro.orchestra.SetOrientationCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
@@ -792,6 +793,19 @@ class MaestroCommandToYamlSerializerTest {
   @Test
   fun clearKeychainCommand() {
     ClearKeychainCommand().also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun setPermissionsCommand() {
+    SetPermissionsCommand(
+      appId = "com.example.app",
+      permissions = mapOf("notifications" to "allow", "microphone" to "deny"),
+    ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
         commandToSerialize = command,
         expected = command,

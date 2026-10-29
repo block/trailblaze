@@ -6,11 +6,10 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /** Launch Google Calendar fresh and land on the default day view. */
-export const calendar_android_launch = trailblaze.tool(
+export const calendar_android_launch = trailblaze.trailhead(
   {
     supportedPlatforms: ["android"],
-    requiresContext: true,
-    trailhead: { to: "calendar/android/day_view" },
+    to: "calendar/android/day_view",
   },
   async (_input, ctx) => {
     return await ctx.tools.calendar_android_launchApp({});

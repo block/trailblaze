@@ -110,7 +110,6 @@ class SessionScopedHostBindingTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "test-set",
         toolClasses = classes.toSet(),
-        yamlToolNames = emptySet(),
       ),
     )
   }
@@ -330,6 +329,37 @@ class SessionScopedHostBindingTest {
       SessionScopedHostBinding.clearContext()
     }
   }
+
+  @Test
+  fun `a call that never reached its tool is marked dispatchFailed and a tool that ran and failed is not`() =
+    runBlocking {
+      // `runIf` reads the mark: a failing condition tool means false, a condition that cannot run
+      // fails the step.
+      val repo = newRepoWith(PingTool::class, DriverSpecificTool::class)
+      val binding = SessionScopedHostBinding(repo, sessionId)
+      SessionScopedHostBinding.installContext(buildContext())
+      try {
+        fun envelope(name: String, args: String) = Json.parseToJsonElement(
+          runBlocking { binding.callFromBundle(name, args) },
+        ) as JsonObject
+
+        val notReached = mapOf(
+          "unknown name" to envelope("not_registered_anywhere", "{}"),
+          "unknown argument key" to envelope("test_ping", """{"text":"hi","txet":"typo"}"""),
+          "missing required argument" to envelope("test_ping", "{}"),
+        )
+        for ((case, env) in notReached) {
+          assertEquals(true, (env["isError"] as JsonPrimitive).content.toBoolean(), "$case: $env")
+          assertEquals(true, (env["dispatchFailed"] as? JsonPrimitive)?.content?.toBoolean(), "$case: $env")
+        }
+
+        val ranAndFailed = envelope("test_driver_specific", """{"payload":"x"}""")
+        assertEquals(true, (ranAndFailed["isError"] as JsonPrimitive).content.toBoolean(), "$ranAndFailed")
+        assertEquals(null, ranAndFailed["dispatchFailed"], "a tool that ran must not be marked: $ranAndFailed")
+      } finally {
+        SessionScopedHostBinding.clearContext()
+      }
+    }
 
   // ---- Test 5b: global-registry (unfiltered) tier is reachable — cross-transport parity ----
 

@@ -114,12 +114,11 @@ export interface OpenContactArgs {
 }
 
 /**
- * Open a specific contact by name from the iOS Contacts list. Use this
- * whenever the task is to open a contact, view a contact, navigate to
- * someone's contact card, or look up a particular person ...
+ * Open a contact by name (restarting Contacts first) and verify its detail
+ * screen shows the name. Fails if the contact doesn't exist.
  */
 export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },  // ← spec object: gates + hints
+  { supportedPlatforms: ["ios"] },  // ← spec object: gates + hints
   async (input, ctx) => {                                  // ← typed handler
     const name = nonEmptyString(input?.name, "John Appleseed");
     const expectedHeading = nonEmptyString(input?.expectedHeading, name);
@@ -145,7 +144,7 @@ What the framework derives from this one file:
 | Export name `contacts_ios_openContact` | The dispatchable tool name + an entry on `ctx.tools` for sibling tools. |
 | TSDoc above `export const` | The LLM-facing description. |
 | The `<OpenContactArgs>` type parameter | The tool's input JSON Schema (with per-field TSDoc carried through). |
-| The spec object `{ supportedPlatforms, requiresContext }` | Runtime registration gates and metadata hints. |
+| The spec object `{ supportedPlatforms }` | Runtime registration gates and metadata hints. |
 | The handler body | The runtime behavior. |
 
 Key conventions to copy:
@@ -175,7 +174,8 @@ Key conventions to copy:
 
 ## Recipe: add your own scripted tool
 
-One file, then restart the daemon. Concrete steps:
+One file, then restart the daemon — there's nothing to register in `trailmap.yaml`.
+Concrete steps:
 
 ```bash
 TOOL=contacts_ios_myNewTool
@@ -192,11 +192,11 @@ export interface MyNewToolArgs {
 }
 
 /**
- * <One paragraph in plain English, including the task patterns the LLM
- * should match against. NO "USE THIS TOOL" — describe what it DOES.>
+ * <One or two plain-English sentences on what it DOES, plus any side effect
+ * or failure mode the LLM needs. No "Use this whenever..." phrasing lists.>
  */
 export const contacts_ios_myNewTool = trailblaze.tool<MyNewToolArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     // ... do work via ctx.tools.X(args) ...
     return "Did the thing.";
@@ -204,19 +204,16 @@ export const contacts_ios_myNewTool = trailblaze.tool<MyNewToolArgs>(
 );
 TS
 
-# 2. Register in trailmap.yaml — add `contacts_ios_myNewTool` under target.tools.
-$EDITOR $TRAILMAP/trailmap.yaml
-
-# 3. Restart the daemon so the new tool is discovered + bindings regenerate.
+# 2. Restart the daemon so the new tool is discovered + bindings regenerate.
 trailblaze app --stop && trailblaze app --headless & disown
 
-# 4. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
+# 3. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
 #    autocomplete should now include your new tool.
 trailblaze toolbox --device ios --target contacts --search myNewTool
 ```
 
-For reference, here's what `trailmap.yaml`'s `target.tools:` list looks like — bare
-export names, one per line:
+This example's `trailmap.yaml` doesn't list its tools: every one in `tools/` is on the
+target. To keep a tool off, name it under `platforms.ios.excluded_tools:`.
 
 ```yaml
 # trails/config/trailmaps/contacts/trailmap.yaml (excerpt)
@@ -224,11 +221,6 @@ id: contacts
 target:
   display_name: Contacts
   system_prompt_file: contacts-ios-system-prompt.md
-  tools:
-    - contacts_ios_openApp
-    - contacts_ios_searchContacts
-    - contacts_ios_myNewTool        # ← your new tool, by export name
-    # ... others ...
   platforms:
     ios:
       app_ids: [com.apple.MobileAddressBook]
@@ -243,19 +235,18 @@ fires on restart.
 
 ### Tool-description discipline (load-bearing)
 
-The TSDoc above each exported `const` is read by the LLM at session start
-as the **only** way it learns what your tool does. Two non-obvious rules:
+The TSDoc above each exported `const`, and on each input field, is sent to
+the LLM on every request and is the **only** way it learns what your tool
+does. Keep it tight:
 
-- **Don't say "USE THIS TOOL FOR X".** The LLM picks tools by matching its
-  understanding of the task against the description. Telling it to "use"
-  the tool reduces the description to a single keyword and loses the
-  surrounding context. Describe what the tool *does* and include the task
-  patterns it matches — "Open a contact / view a contact card / navigate
-  to someone's contact" — not "USE THIS WHEN OPENING A CONTACT".
-- **Match real user phrasing.** If a trail says "open Albert Einstein's
-  contact" but the tool description only mentions "navigate to a contact's
-  detail screen", the LLM may not connect them. Include the synonyms
-  (open, view, navigate to, look up) that real prompts will use.
+- **Lead with what the tool does**, in a sentence or two — "Delete an iOS
+  contact by name, confirming the delete prompt."
+- **Keep what the LLM needs to call it correctly:** side effects (restarts
+  the app, deletes data), when it fails, and what sets it apart from a
+  similar tool.
+- **Cut the rest:** "Use this whenever..." lists of phrasings, and
+  implementation notes. Put maintainer notes in `//` comments, which are
+  not sent to the LLM.
 
 You can sanity-check picking by running a trail in `--verbose` mode and
 watching which tool the agent chose for each step.
@@ -285,8 +276,8 @@ verbatim:
 ```
 
 The two scripted tools the trail composes (`contacts_ios_openApp` and
-`contacts_ios_searchContacts`) are exactly the ones registered in
-`trailmap.yaml`'s `target.tools:`. The agent dispatches them by name when the
+`contacts_ios_searchContacts`) are on the target because their files are in the
+trailmap's `tools/` folder. The agent dispatches them by name when the
 step text references them.
 
 Run it:
@@ -479,9 +470,8 @@ stale entries from previous crashes are safe to delete.
 
 1. Confirm the file is named exactly `<toolName>.ts` under `tools/` and
    exports a `trailblaze.tool(...)` declaration whose export name matches.
-2. Confirm the bare tool name is listed under `target.tools:` in
-   `trailmap.yaml`. Names omitted from that list are loaded by the bundler but
-   not advertised to the agent for this target.
+2. Confirm no `excluded_tools:` entry in `trailmap.yaml` names it, and that
+   its `supportedPlatforms` includes the session's platform.
 3. Restart the daemon after editing anything under
    `trails/config/trailmaps/<trailmap>/`. Trailmaps are discovered at boot.
 

@@ -47,6 +47,9 @@ For the on-device version of Trailblaze, we exclude Maestro dependencies that ar
 
 #### 3. Compose Web for Reporting
 
+> **Superseded.** Reports are no longer built with Compose Web. See
+> [A TypeScript Web UI Instead of Compose](2026-10-06-typescript-web-ui-over-compose.md).
+
 Kotlin enables us to use Compose Web (Wasm) for rendering test reports in the browser. This allows us to share models and UI components between the agent and the reporting interface without any modifications or translation layers. This is critical for delivering rich, interactive reports in CI/CD environments.
 
 This would not be possible with Java, which lacks equivalent web compilation targets.

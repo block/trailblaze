@@ -40,8 +40,7 @@ fun main(args: Array<String>) {
         rpcPort = ComposeRpcServer.COMPOSE_DEFAULT_PORT,
       )
     Console.log("Compose sample app '$sampleApp' is running with RPC on port ${ComposeRpcServer.COMPOSE_DEFAULT_PORT}")
-    Console.log("Launch Trailblaze desktop with: ./gradlew :trailblaze-desktop:run")
-    Console.log("Then select the Compose (RPC) target in Trailblaze.")
+    Console.log("Drive it with: trailblaze run trails/compose-desktop/test-add-todo/trail.yaml")
     try {
       while (true) {
         Thread.sleep(60_000)

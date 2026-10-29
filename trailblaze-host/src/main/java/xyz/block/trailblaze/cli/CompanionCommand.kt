@@ -22,7 +22,9 @@ import xyz.block.trailblaze.trailrunner.CompanionDisconnectRequest
 import xyz.block.trailblaze.trailrunner.CompanionEventRequest
 import xyz.block.trailblaze.trailrunner.CompanionRespondRequest
 import xyz.block.trailblaze.trailrunner.ExternalAgentType
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import xyz.block.trailblaze.util.runJsonOutput
 import java.io.File
 import java.net.URI
@@ -35,7 +37,7 @@ import java.util.concurrent.Callable
 @Command(
   name = "companion",
   mixinStandardHelpOptions = true,
-  description = ["Attach a coding agent to Trail Runner while it authors a trail."],
+  description = ["Attach a coding agent to Trailblaze App while it authors a trail."],
   subcommands = [
     CompanionStartCommand::class,
     CompanionEventCommand::class,
@@ -81,13 +83,13 @@ internal class CompanionStartCommand : CompanionAction(), Callable<Int> {
   @Option(names = ["--folder"], description = ["Trail folder relative to the workspace root."])
   var folder: String? = null
 
-  @Option(names = ["--title"], description = ["Human-readable title shown in Trail Runner."])
+  @Option(names = ["--title"], description = ["Human-readable title shown in Trailblaze App."])
   var title: String? = null
 
   @Option(names = ["--agent"], defaultValue = "claude", description = ["Agent type: claude or codex."])
   var agent: String = "claude"
 
-  @Option(names = ["--label"], description = ["Agent label shown in Trail Runner."])
+  @Option(names = ["--label"], description = ["Agent label shown in Trailblaze App."])
   var label: String? = null
 
   @Option(names = ["--trails-dir"], defaultValue = ".", description = ["Workspace root (default: current directory)."])
@@ -165,6 +167,7 @@ internal fun daemonSupportsCompanion(port: Int): Boolean = DaemonClient(port = p
 }
 
 internal fun openCompanionWindow(ui: String, port: Int): Boolean {
+  if (isWindows()) return TrailblazeDesktopUtil.openInDefaultBrowser(ui)
   val launcher = findTrailblazeLauncher() ?: return false
   return runCatching {
     ProcessBuilder(launcher.absolutePath, "trailrunner")
@@ -204,7 +207,7 @@ internal class CompanionEventCommand : CompanionAction(), Callable<Int> {
   }
 }
 
-@Command(name = "send", mixinStandardHelpOptions = true, description = ["Send or retract Trail Runner UI guidance."])
+@Command(name = "send", mixinStandardHelpOptions = true, description = ["Send or retract Trailblaze App UI guidance."])
 internal class CompanionSendCommand : CompanionAction(), Callable<Int> {
   @Parameters(index = "0", description = ["Companion run id."])
   lateinit var runId: String
@@ -283,7 +286,7 @@ internal class CompanionDisconnectCommand : CompanionAction(), Callable<Int> {
   }
 }
 
-@Command(name = "respond", mixinStandardHelpOptions = true, description = ["Settle a request delegated by Trail Runner."])
+@Command(name = "respond", mixinStandardHelpOptions = true, description = ["Settle a request delegated by Trailblaze App."])
 internal class CompanionRespondCommand : CompanionAction(), Callable<Int> {
   @Parameters(index = "0", description = ["Companion run id."])
   lateinit var runId: String

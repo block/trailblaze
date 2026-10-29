@@ -20,7 +20,11 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.ScreenStateLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -95,6 +99,52 @@ class ReadBarcodeFromScreenTrailblazeToolTest {
     assertThat(message).contains("[REDACTED]")
     // Redaction is a reporting concern only — the trail still gets to assert on the value.
     assertThat(context.memory.variables["pairingToken"]).isEqualTo(BarcodeTestImages.QR_CODE_CONTENT)
+  }
+
+  @Test
+  fun `the screenshot that was decoded is logged as a snapshot named for the variable`() = runBlocking<Unit> {
+    // Without it the report shows only the step's earlier screenshots, which can predate the code
+    // being drawn — the read passes and nobody can see what it read.
+    val emitted = mutableListOf<TrailblazeLog>()
+    val stored = mutableListOf<TrailblazeScreenStateLog>()
+    val bytes = BarcodeTestImages.driverEncodedScreenshotBytes()
+    val context = contextWith(
+      bytes,
+      logger = TrailblazeLogger(
+        logEmitter = LogEmitter(emitted::add),
+        screenStateLogger = ScreenStateLogger { stored.add(it); it.fileName },
+      ),
+    )
+    context.memory.markSensitive("paymentQrUrl")
+
+    ReadBarcodeFromScreenTrailblazeTool(variable = "paymentQrUrl").execute(context)
+
+    val snapshot = emitted.filterIsInstance<TrailblazeLog.TrailblazeSnapshotLog>().single()
+    assertThat(snapshot.displayName).isEqualTo("Screen scanned for paymentQrUrl")
+    val screenshot = stored.single { it.fileName == snapshot.screenshotFile }
+    assertTrue(screenshot.screenState.screenshotBytes.contentEquals(bytes), "the logged image is the one decoded")
+    assertThat(snapshot.displayName.orEmpty()).doesNotContain(BarcodeTestImages.QR_CODE_CONTENT)
+  }
+
+  @Test
+  fun `a read that finds no barcode still logs what it scanned, without claiming success`() = runBlocking<Unit> {
+    // A code still loading is the failure this evidence is for: the report has to show the screen
+    // the read gave up on, under a name that does not say the read worked.
+    val emitted = mutableListOf<TrailblazeLog>()
+    val bytes = BarcodeTestImages.encodeBlankPng(width = 600, height = 900)
+    val context = contextWith(
+      bytes,
+      logger = TrailblazeLogger(
+        logEmitter = LogEmitter(emitted::add),
+        screenStateLogger = ScreenStateLogger { it.fileName },
+      ),
+    )
+
+    val result = ReadBarcodeFromScreenTrailblazeTool(variable = "paymentQrUrl").execute(context)
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    val snapshot = emitted.filterIsInstance<TrailblazeLog.TrailblazeSnapshotLog>().single()
+    assertThat(snapshot.displayName).isEqualTo("Screen scanned for paymentQrUrl")
   }
 
   @Test
@@ -186,10 +236,37 @@ class ReadBarcodeFromScreenTrailblazeToolTest {
       assertThat(context.memory.variables["v"]).isEqualTo(BarcodeTestImages.QR_CODE_CONTENT)
     }
 
+  @Test
+  fun `an iOS screen with no view hierarchy still logs the screenshot it scanned`() =
+    runBlocking<Unit> {
+      // The snapshot log carries a view hierarchy, and reading AxeScreenState's throws when
+      // `axe describe-ui` failed. The scanned image is the evidence, so it is logged without one.
+      val emitted = mutableListOf<TrailblazeLog>()
+      val stored = mutableListOf<TrailblazeScreenStateLog>()
+      val bytes = BarcodeTestImages.driverEncodedScreenshotBytes()
+      val context = contextWith(
+        bytes,
+        platform = TrailblazeDevicePlatform.IOS,
+        viewHierarchyUnavailable = true,
+        logger = TrailblazeLogger(
+          logEmitter = LogEmitter(emitted::add),
+          screenStateLogger = ScreenStateLogger { stored.add(it); it.fileName },
+        ),
+      )
+
+      ReadBarcodeFromScreenTrailblazeTool(variable = "paymentQrUrl").execute(context)
+
+      val snapshot = emitted.filterIsInstance<TrailblazeLog.TrailblazeSnapshotLog>().single()
+      assertThat(snapshot.displayName).isEqualTo("Screen scanned for paymentQrUrl")
+      val screenshot = stored.single { it.fileName == snapshot.screenshotFile }
+      assertTrue(screenshot.screenState.screenshotBytes.contentEquals(bytes), "the logged image is the one decoded")
+    }
+
   private fun contextWith(
     screenshotBytes: ByteArray?,
     platform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     viewHierarchyUnavailable: Boolean = false,
+    logger: TrailblazeLogger = TrailblazeLogger.createNoOp(),
   ): TrailblazeToolExecutionContext {
     val bytes = screenshotBytes
     val screen = object : ScreenState {
@@ -220,7 +297,7 @@ class ReadBarcodeFromScreenTrailblazeToolTest {
       sessionProvider = TrailblazeSessionProvider {
         TrailblazeSession(sessionId = SessionId("barcode-test"), startTime = Clock.System.now())
       },
-      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      trailblazeLogger = logger,
       memory = AgentMemory(),
     )
   }

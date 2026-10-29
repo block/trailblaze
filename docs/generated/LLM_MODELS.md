@@ -54,6 +54,7 @@ Trailblaze ships with the following built-in models. When you reference a model 
 | `gpt-5.6-luna` | 1M | 128K | $0.20 | $1.20 | $0.02 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-5.6-sol` | 1M | 128K | $5.00 | $30.00 | $0.50 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-5.6-terra` | 1M | 128K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gpt-6-luna` | 1M | 128K | $0.10 | $0.50 | $0.01 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## OpenRouter
 

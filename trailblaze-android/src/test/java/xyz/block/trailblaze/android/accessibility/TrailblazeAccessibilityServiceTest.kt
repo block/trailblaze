@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService.Companion.CaptureWindowInfo
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService.Companion.WindowVerdict
 
 /**
  * Unit tests for the IME class-name heuristic that backs
@@ -326,5 +327,73 @@ class TrailblazeAccessibilityServiceTest {
     assertFalse(settled, "an early-exited wait must not report settled")
     val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
     assertTrue(elapsedMs < 5_000, "early exit must not run to timeout (took ${elapsedMs}ms)")
+  }
+}
+
+/**
+ * [TrailblazeAccessibilityService.Companion.gestureCompletionTimeoutMs]: how long a dispatched
+ * gesture may take to report completion before it is failed as not dispatched.
+ */
+class GestureCompletionTimeoutTest {
+
+  @Test
+  fun `a tap waits out a several-second late completion`() {
+    // A farm emulator reported a tap ~7s after dispatch, though the tap had landed. The old flat
+    // 2s wait failed it.
+    assertTrue(TrailblazeAccessibilityService.gestureCompletionTimeoutMs(100L) > 7_000L)
+  }
+
+  @Test
+  fun `a gesture longer than the slack still gets the full slack after it ends`() {
+    // A flat timeout fails every long-press or swipe longer than itself.
+    val tapTimeout = TrailblazeAccessibilityService.gestureCompletionTimeoutMs(0L)
+    assertEquals(
+      30_000L + tapTimeout,
+      TrailblazeAccessibilityService.gestureCompletionTimeoutMs(30_000L),
+    )
+  }
+}
+
+/**
+ * Which activity the screen header names when a new activity announces itself before the window
+ * list includes its window — what [TrailblazeAccessibilityService.Companion.pendingActivityVerdict]
+ * decides for a window-state change, and again for a held one at capture time.
+ */
+class PendingActivityVerdictTest {
+
+  private val statusBar = 1 to AccessibilityWindowInfo.TYPE_SYSTEM
+  private val settings = 7 to AccessibilityWindowInfo.TYPE_APPLICATION
+
+  @Test
+  fun `a change from a listed application window names the activity`() {
+    assertEquals(
+      WindowVerdict.APPLICATION,
+      TrailblazeAccessibilityService.pendingActivityVerdict(7, listOf(statusBar, settings)),
+    )
+  }
+
+  /** Dropping it here left the previous activity's name on the new screen. */
+  @Test
+  fun `a change from a window not listed yet is kept for later rather than dropped`() {
+    assertEquals(
+      WindowVerdict.NOT_LISTED_YET,
+      TrailblazeAccessibilityService.pendingActivityVerdict(9, listOf(statusBar, settings)),
+    )
+  }
+
+  @Test
+  fun `a change from a system window never names the activity`() {
+    assertEquals(
+      WindowVerdict.OTHER,
+      TrailblazeAccessibilityService.pendingActivityVerdict(1, listOf(statusBar, settings)),
+    )
+  }
+
+  @Test
+  fun `an unreadable window list cannot confirm a held change`() {
+    assertEquals(
+      WindowVerdict.OTHER,
+      TrailblazeAccessibilityService.pendingActivityVerdict(9, null),
+    )
   }
 }

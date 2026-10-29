@@ -12,7 +12,6 @@ import kotlin.test.assertTrue
 import picocli.CommandLine
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.host.TrailTscValidator
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * Tests for [CheckCommand] — the unified compile-+-typecheck-+-test CLI entry point that
@@ -38,11 +37,6 @@ class CheckCommandTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
-    // `check` delegates its compile half to `CompileCommand`, which registers the workspace's
-    // `*.tool.yaml` files on the process-global YAML-tool registry (the resolver snapshots it at
-    // construction, so there's no scoped alternative). Clear it so a later test in the same JVM
-    // doesn't resolve names against this test's temp workspace.
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
   }
 
   @Test
@@ -55,8 +49,8 @@ class CheckCommandTest {
     // `web_requestDetails` for the same reason `CompileCommandTest`'s sibling case uses it:
     // class-backed, not recordable, and its only classpath home (`web/toolsets/web_core.yaml`) is
     // not `always_enabled`, so `beta_extra` is its only route into beta's surface. A recordable
-    // tool, an `always_enabled` toolset member, or any YAML-defined tool would land there
-    // regardless of `tool_sets:` and make the assertion vacuous.
+    // tool or an `always_enabled` toolset member would land there regardless of `tool_sets:` and
+    // make the assertion vacuous.
     val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "beta", withTarget = false)
     val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/beta")
     File(trailmapDir, "tools").mkdirs()
@@ -229,6 +223,53 @@ class CheckCommandTest {
       File(toolsDir, "tsconfig.json").exists(),
       "tools/tsconfig.json should be emitted by the materialize phase, available to the test phase",
     )
+  }
+
+  @Test
+  fun `check --tests-only skips the trail validations a full check fails on`() {
+    // A trail with an undeclared `{{args.x}}` fails the arg-token phase, a pure text scan that
+    // needs no bun. A full check reports it; --tests-only must not reach it. With no `*.test.ts`
+    // in the fixture, --tests-only then fails for having nothing to run, which keeps this
+    // deterministic on an agent without bun.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
+    File(workspaceRoot, "trails").apply { mkdirs() }.resolve("bad.trail.yaml").writeText(
+      """
+      config:
+        id: test/bad
+      trail:
+      - step: Reply to {{args.sender}}
+      """.trimIndent(),
+    )
+
+    val (fullExit, fullStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck")
+      }
+    }
+    assertTrue(fullExit != 0, "A full check should fail on the arg-token finding. stderr:\n$fullStderr")
+    assertTrue(fullStderr.contains("arg-token validation FAILED"), "stderr was:\n$fullStderr")
+
+    val (testsOnlyExit, testsOnlyStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--tests-only")
+      }
+    }
+    assertEquals(TrailmapUnitTestRunner.EXIT_USAGE, testsOnlyExit, "stderr was:\n$testsOnlyStderr")
+    assertTrue(testsOnlyStderr.contains("--tests-only found no"), "stderr was:\n$testsOnlyStderr")
+    assertTrue(!testsOnlyStderr.contains("arg-token"), "--tests-only ran a trail phase. stderr:\n$testsOnlyStderr")
+  }
+
+  @Test
+  fun `the test runner passes an empty workspace by default and fails it when tests are required`() {
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha")
+    val trailmap = File(workspaceRoot, "trails/config/trailmaps/alpha").toPath()
+
+    assertEquals(TrailmapUnitTestRunner.EXIT_OK, TrailmapUnitTestRunner.run(listOf(trailmap)))
+    assertEquals(
+      TrailmapUnitTestRunner.EXIT_USAGE,
+      TrailmapUnitTestRunner.run(listOf(trailmap), requireTests = true),
+    )
+    assertEquals(TrailmapUnitTestRunner.EXIT_USAGE, TrailmapUnitTestRunner.run(emptyList(), requireTests = true))
   }
 
   @Test
@@ -406,7 +447,7 @@ class CheckCommandTest {
     File(trailmapDir, "trailmap.yaml").writeText("id: alpha\n")
     // Give alpha a real TypeScript tool source (but no tsconfig) so the typecheck phase treats it
     // as typecheckable and hits the missing-tsconfig branch. Without a `.ts`, the phase now skips
-    // Kotlin/YAML-only trailmaps (see `no TypeScript tools` skip test below).
+    // Kotlin-only trailmaps (see `no TypeScript tools` skip test below).
     File(trailmapDir, "tools").apply { mkdirs() }
     File(trailmapDir, "tools/foo.ts").writeText("export const x = 1\n")
 
@@ -431,11 +472,10 @@ class CheckCommandTest {
   }
 
   @Test
-  fun `typecheck phase skips a Kotlin-or-YAML-only trailmap with no TypeScript sources`() {
-    // A trailmap may carry only class-backed `.tool.yaml` (Kotlin) and/or YAML tools — no
-    // TypeScript. Such a trailmap has nothing for `tsc` to check; the phase must skip it and
-    // succeed rather than fail with a missing-tsconfig error or `tsc`'s TS18003 ("No inputs
-    // were found"). This is what allows a trailmap to carry any mix — or zero — TypeScript tools.
+  fun `typecheck phase skips a Kotlin-only trailmap with no TypeScript sources`() {
+    // A trailmap may carry only class-backed `.tool.yaml` (Kotlin) tools — no TypeScript. Such
+    // a trailmap has nothing for `tsc` to check; the phase must skip it and succeed rather than
+    // fail with a missing-tsconfig error or `tsc`'s TS18003 ("No inputs were found"). This is what allows a trailmap to carry any mix — or zero — TypeScript tools.
     val workspaceRoot = File(workDir, "ws-noTs").apply { mkdirs() }
     val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/kotlinTools").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText("id: kotlinTools\n")
@@ -458,13 +498,13 @@ class CheckCommandTest {
   }
 
   @Test
-  fun `hasTypeScriptToolSources distinguishes TypeScript sources from Kotlin-or-YAML-only tools`() {
+  fun `hasTypeScriptToolSources distinguishes TypeScript sources from Kotlin-only tools`() {
     val base = File(workDir, "ws-detect").apply { mkdirs() }
 
-    val yamlOnly = File(base, "yamlOnly/tools").apply { mkdirs() }
-    File(yamlOnly, "a.tool.yaml").writeText("id: a\nclass: com.example.A\n")
+    val kotlinOnly = File(base, "kotlinOnly/tools").apply { mkdirs() }
+    File(kotlinOnly, "a.tool.yaml").writeText("id: a\nclass: com.example.A\n")
     assertTrue(
-      !CheckCommand().hasTypeScriptToolSources(yamlOnly.parentFile.toPath()),
+      !CheckCommand().hasTypeScriptToolSources(kotlinOnly.parentFile.toPath()),
       "A tools/ dir with only .tool.yaml should not be typecheckable.",
     )
 

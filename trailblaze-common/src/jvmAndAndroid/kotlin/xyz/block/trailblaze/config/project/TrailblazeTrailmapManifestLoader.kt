@@ -61,12 +61,11 @@ object TrailblazeTrailmapManifestLoader {
   private const val FRAMEWORK_TRAILMAP_ID = "trailblaze"
 
   /**
-   * Manifest top-level fields removed in 2026-04-28 as part of the shortcuts-as-tools
-   * unification. Detected by string scan in [warnOnRemovedNavFields] for the same
-   * "kaml drops unknown keys silently" reason as [REMOVED_COMPOSE_FIELDS].
+   * Removed manifest top-level navigation fields. Detected by string scan in
+   * [warnOnRemovedNavFields] for the same "kaml drops unknown keys silently" reason as
+   * [REMOVED_COMPOSE_FIELDS].
    *
-   * `routes:` was the reserved slot for multi-hop navigation paths; it was dropped
-   * because a multi-hop path is just a shortcut whose body invokes other shortcut tools.
+   * `routes:` was a reserved slot for multi-hop navigation paths that was never wired up.
    */
   private val REMOVED_NAV_FIELDS = listOf("routes")
 
@@ -79,8 +78,6 @@ object TrailblazeTrailmapManifestLoader {
    * so tests that swap [Thread.currentThread]'s context classloader (via
    * `ClasspathFixture.withClasspathRoot`) naturally miss the cache and rediscover from the
    * new classpath. [WeakHashMap] keys ensure dead classloaders can be GC'd.
-   *
-   * Mirrors the cache pattern in `TrailblazeSerializationInitializer.buildYamlDefinedTools`.
    */
   private val classpathTrailmapCache = WeakHashMap<ClassLoader, List<LoadedTrailblazeTrailmapManifest>>()
   private val classpathTrailmapCacheLock = Any()
@@ -437,7 +434,7 @@ object TrailblazeTrailmapManifestLoader {
    *
    * Kept as a separate function from the legacy-compose warning because the migration
    * advice differs: legacy compose fields migrate to `dependencies:`, whereas `routes:`
-   * is genuinely gone and the navigation logic should be expressed as shortcut tools.
+   * is genuinely gone and any setup navigation belongs in a trailhead tool.
    * Routing two distinct migration messages through one function would force a
    * conditional-message switch and obscure both intents.
    */
@@ -459,12 +456,8 @@ object TrailblazeTrailmapManifestLoader {
     if (!isFirstWarning) return
     Console.log(
       "Warning: Trailmap '${manifest.id}' ($identifier) declares removed navigation " +
-        "field(s) ${populated.joinToString(", ")} — these fields were removed as part of " +
-        "the shortcuts-as-tools unification. Multi-hop paths are now expressed as " +
-        "shortcuts whose body invokes other shortcut tools — see " +
-        "docs/trailmaps.md (Shortcut tools section) for the authoring shape. " +
-        "The fields are silently ignored at parse time; remove them or migrate the " +
-        "navigation logic into shortcut tools under <trailmap>/tools/shortcuts/.",
+        "field(s) ${populated.joinToString(", ")}. The fields are silently ignored at parse " +
+        "time; remove them. Put any setup navigation in a trailhead tool instead.",
     )
   }
 

@@ -17,8 +17,8 @@ import kotlin.test.assertEquals
  *  - `--target <unknown>` → `ToolDiscoveryTargetResult(error = "Target '…' not found …")`
  *  - `--search <no-matches>` → `ToolDiscoverySearchResult(query = …, matches = null)`
  *    (the daemon's distinguished "no rows" shape, no `error` field)
- *  - role filter (`trailheads`/`shortcuts`) with empty `trailheadTools` /
- *    `shortcutTools` → same regression class as search-no-matches
+ *  - role filter (`trailheads`) with empty `trailheadTools`
+ *    → same regression class as search-no-matches
  *  - top-level `error` (e.g. unknown `--device`) → routed the same way regardless
  *    of which mode-specific formatter would otherwise have rendered it
  *  - malformed daemon JSON (protocol violation) → also `NOT_FOUND`; treating
@@ -233,7 +233,7 @@ class ToolboxCommandExitCodeTest {
   }
 
   // ---------------------------------------------------------------------------------------
-  // Role filter: empty trailheads/shortcuts list is the same regression class as a search
+  // Role filter: empty trailheads list is the same regression class as a search
   // with zero matches — the user asked the catalogue for X tools and got none.
   // ---------------------------------------------------------------------------------------
 
@@ -278,21 +278,6 @@ class ToolboxCommandExitCodeTest {
       suppressIndexContextLine = false,
     )
     assertEquals(ToolboxRenderOutcome.OK, outcome)
-  }
-
-  @Test
-  fun `role filter shortcuts with empty list returns NOT_FOUND`() {
-    val envelope = """{"currentTarget":"default","currentPlatform":"android","shortcutTools":[]}"""
-    val outcome = command.formatToolsResult(
-      content = envelope,
-      nameFilter = null,
-      targetFilter = null,
-      searchQuery = null,
-      showDetail = false,
-      roleFilter = "shortcuts",
-      suppressIndexContextLine = false,
-    )
-    assertEquals(ToolboxRenderOutcome.NOT_FOUND, outcome)
   }
 
   // ---------------------------------------------------------------------------------------

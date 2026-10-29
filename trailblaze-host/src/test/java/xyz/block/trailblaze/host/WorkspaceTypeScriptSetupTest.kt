@@ -123,6 +123,42 @@ class WorkspaceTypeScriptSetupTest {
   }
 
   @Test
+  fun `extractSdk ships the surveys subpath pair`() {
+    // `@trailblaze/scripting/surveys` is what a trailmap's `surveys/` imports, so a repo that
+    // owns a trailmap can typecheck its surveys and run their tests. Same "both halves" rule
+    // as the matcher pair, plus one of its own: the runtime is bundled for node, so its
+    // `node:` builtin imports must stay imports rather than be stubbed out.
+    val workspace = newWorkspaceRoot()
+
+    val sdkDir = WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
+
+    val dts = File(sdkDir.toFile(), "dist/surveys.d.ts")
+    assertTrue(dts.isFile, "expected the surveys declaration bundle at $dts")
+    val dtsContent = dts.readText()
+    assertTrue(
+      dtsContent.contains("declare class SurveySession"),
+      "expected the session type in the surveys .d.ts; got first 200 chars: ${dtsContent.take(200)}",
+    )
+
+    val runtime = File(sdkDir.toFile(), "dist/surveys.js")
+    assertTrue(runtime.isFile, "expected the surveys runtime ESM bundle at $runtime")
+    val runtimeContent = runtime.readText()
+    listOf("trailblaze", "waypointFindings", "sessionFromSnapshot").forEach { symbol ->
+      val exported = Regex("""export\s*\{[^}]*\b$symbol\b""").containsMatchIn(runtimeContent) ||
+        Regex("""export\s+(?:const|let|var|function)\s+$symbol\b""").containsMatchIn(runtimeContent)
+      assertTrue(
+        exported,
+        "expected the surveys runtime to ESM-export `$symbol`; got last 500 chars: " +
+          runtimeContent.takeLast(500),
+      )
+    }
+    assertTrue(
+      Regex("""from\s*["']node:fs["']""").containsMatchIn(runtimeContent),
+      "expected the surveys runtime to keep its `node:fs` import (node-platform bundle)",
+    )
+  }
+
+  @Test
   fun `extractSdk is idempotent — re-run with same input doesn't churn mtimes`() {
     val workspace = newWorkspaceRoot()
 

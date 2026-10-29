@@ -32,10 +32,11 @@ replay → compose your own agent surface.** You can stop at any rung.
 
 ## System Requirements
 
-| | macOS | Linux |
-|---|---|---|
-| **Desktop App (GUI)** | Supported | Not supported |
-| **Headless / CLI** | Supported | Supported |
+| | macOS | Linux | Windows (x64) |
+|---|---|---|---|
+| **Trailblaze App** | Native window | Default browser | Default browser |
+| **Headless / CLI** | Supported | Supported | Supported |
+| **Devices** | Android, iOS, web | Android, web | Android, web |
 
 - **JDK 17+** on all platforms
 - **Android SDK** with `adb` on your PATH for Android devices and emulators
@@ -54,6 +55,13 @@ Or install from the GitHub release:
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
+On Windows, install from PowerShell. This puts `trailblaze.cmd` and the JAR in
+`%USERPROFILE%\.trailblaze\bin` and adds that folder to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex
+```
+
 Or clone and run from source (`./trailblaze` is the repo-root wrapper that rebuilds and
 dispatches to the source-built CLI):
 
@@ -61,8 +69,7 @@ dispatches to the source-built CLI):
 git clone https://github.com/block/trailblaze.git
 cd trailblaze
 ./trailblaze --help     # CLI usage
-./trailblaze app        # Start the legacy desktop app
-./trailblaze app --v2   # Start the daemon and open Trail Runner in a native macOS window
+./trailblaze app        # Start the daemon and open Trailblaze App
 ```
 
 **Bundled with the Homebrew install:**
@@ -145,7 +152,7 @@ trailblaze snapshot
 
 # Act on a referenced element. Every action takes --step.
 trailblaze tool tap ref=ab42 -s "Tap sign in"
-trailblaze tool inputText text="test@example.com" -s "Enter email"
+trailblaze tool type text="test@example.com" -s "Enter email"
 ```
 
 ### Why `--step` is mandatory
@@ -220,7 +227,8 @@ trailblaze run flows/login/trail.yaml -d android --self-heal
 ```
 
 By default `trailblaze run` replays the recorded tool sequence with **no LLM in the
-loop** — fast, deterministic, cheap. This is the path CI takes.
+loop** — fast, deterministic, cheap. This is the path CI takes; on GitHub, the
+[trail runner workflow](github-actions.md) runs it for you.
 
 ### When does the LLM actually run?
 
@@ -266,7 +274,7 @@ transcript (when an LLM was involved), and video replay when capture is enabled.
 
 The same Trace Viewer surface is available three ways:
 
-- **Trail Runner desktop app** — `trailblaze app --v2` opens one workspace for trails,
+- **Trailblaze App** — `trailblaze app` opens one workspace for trails,
   live and completed runs, recording, and integrations, with rich trace inspection
   and inline editing and re-running.
 - **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install

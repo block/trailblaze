@@ -14,28 +14,28 @@ import { createMockClient, createMockContext } from "@trailblaze/scripting/testi
 import { playwrightSample_web_openFixtureAndVerifyText } from "./playwrightSample_web_openFixtureAndVerifyText";
 
 describe("playwrightSample_web_openFixtureAndVerifyText", () => {
-  test("dispatches web_navigate then web_verifyTextVisible with the args verbatim", async () => {
+  test("dispatches web_navigate then web_verifyElementVisible on the heading", async () => {
     const client = createMockClient();
     const ctx = createMockContext({ platform: "web" });
 
     const result = await playwrightSample_web_openFixtureAndVerifyText(
-      { relativePath: "fixtures/text-snippet.html", text: "Hello" },
+      { relativePath: "fixtures/text-snippet.html", heading: "Hello" },
       ctx,
       client,
     );
 
-    // Order matters — the tool's contract is "navigate, then verify text on the loaded
-    // page." A future refactor that reorders the calls (or drops one) breaks this test
+    // Order matters — the tool's contract is "navigate, then verify the heading on the
+    // loaded page." A future refactor that reorders the calls (or drops one) breaks this test
     // even though tsc would still be green.
     expect(client.calls.map((c) => c.tool)).toEqual([
       "web_navigate",
-      "web_verifyTextVisible",
+      "web_verifyElementVisible",
     ]);
     expect(client.calls[0]?.args).toMatchObject({
       action: "GOTO",
       url: "fixtures/text-snippet.html",
     });
-    expect(client.calls[1]?.args).toMatchObject({ text: "Hello" });
+    expect(client.calls[1]?.args).toMatchObject({ ref: 'heading "Hello"' });
     expect(result).toContain("Hello");
   });
 
@@ -50,7 +50,7 @@ describe("playwrightSample_web_openFixtureAndVerifyText", () => {
     );
 
     // The tool's `nonEmptyString` helper falls back to its module-level defaults when
-    // args.relativePath / args.text are absent. The exact default values are a tool-side
+    // args.relativePath / args.heading are absent. The exact default values are a tool-side
     // implementation detail — assert via substring rather than equality so a doc-only
     // tweak to the default string doesn't break the test.
     expect(client.calls).toHaveLength(2);

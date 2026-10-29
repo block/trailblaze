@@ -27,7 +27,7 @@ import java.util.concurrent.Callable
 @Command(
   name = "tool",
   mixinStandardHelpOptions = true,
-  description = ["Run a Trailblaze tool by name (e.g., tap, inputText)"],
+  description = ["Run a Trailblaze tool by name (e.g., tap, type)"],
 )
 class ToolCommand : Callable<Int>, QuietUnlessVerbose {
 
@@ -269,15 +269,14 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   /**
-   * Lazily-built snapshot of every tool name discoverable from the local classpath —
-   * class-backed (`@TrailblazeToolClass`, declared via `.tool.yaml`) plus YAML-defined
-   * (`tools:` mode). Built once per JVM via [ToolNameResolver.fromBuiltInAndCustomTools]
+   * Lazily-built snapshot of every class-backed tool name discoverable from the local
+   * classpath (`@TrailblazeToolClass`, declared via `.tool.yaml`). Built once per JVM via [ToolNameResolver.fromBuiltInAndCustomTools]
    * so repeated `trailblaze tool …` invocations within the same process (e.g. agent or
    * test runner contexts) pay the classpath scan only once.
    *
    * **Workspace-tool guard.** This snapshot covers the classpath only — workspace-
    * discovered tools (overlaid into the daemon's registry by `AppTargetDiscovery.discover()`
-   * via `registerWorkspaceToolSets` / `registerWorkspaceYamlTools`) are NOT visible
+   * via `registerWorkspaceToolSets`) are NOT visible
    * in the CLI process. A workspace-defined tool that isn't also on the classpath
    * would, without containment, slip past the local check and get rejected with the
    * same `Unknown tool: …` envelope the daemon would have emitted for a real typo —
@@ -292,7 +291,7 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
    * still get the <1s typo response.
    *
    * **Failure mode.** [ToolNameResolver]'s `init` block throws on a class-backed /
-   * YAML-defined name collision. Without containment that exception would be cached
+   * scripted name collision. Without containment that exception would be cached
    * by `by lazy` and re-thrown on every subsequent `tool` invocation in the same
    * JVM — preempting cleaner pre-flight errors (no tool name, malformed args). The
    * `runCatching` wraps that init so a resolver-construction failure degrades to
@@ -407,10 +406,10 @@ private fun hasToolFileUnder(dir: Path, maxDepth: Int): Boolean {
       // Toolset YAMLs are plain `<id>.yaml` inside a `toolsets/` directory — no
       // filename-level discriminator, so the detection has to look one segment up.
       // A workspace with only toolsets still defines new dispatch surfaces (each toolset
-      // lists tool names) and must disable the fast-path. Shortcut/trailhead YAMLs are
-      // intentionally excluded: they're navigation operations on existing tools rather
+      // lists tool names) and must disable the fast-path. Trailhead YAMLs are
+      // intentionally excluded: they're setup operations on existing tools rather
       // than new tool-name registrations, and including them would false-detect any
-      // workspace that ships waypoint navigation primitives.
+      // workspace that ships trailheads.
       p.parent?.fileName?.toString() == "toolsets"
     }
   }

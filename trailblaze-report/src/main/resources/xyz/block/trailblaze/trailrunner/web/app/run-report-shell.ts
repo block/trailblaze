@@ -33,6 +33,7 @@
 // Out-of-directory like run-report-core.ts's own import: the events module lives beside the bun
 // driver (report/), and every surface must reach the SAME decode/detection implementation.
 import { ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, buildEventStream, collectStreamAttachmentRefs, isSafeSessionRelativePath, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS } from '../../../report/run-report-events';
+import { parseDeviceClockSync } from '../../../report/device-clock-sync';
 import { MAX_TRACE_BYTES, slimTracerSpans } from '../../../report/run-report-trace-spans';
 import { extractVisibleStrings, visibleStringsShotFiles } from '../../../report/run-report-visible-strings';
 import { extractLlmLogs, extractTrace, normalizedToHostClock, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles, captureFrameFiles } from './run-report-extract';
@@ -48,7 +49,7 @@ const ANALYSIS_PARAM = 'analysis';
 // The two attachment-policy values ride here for exactly that reason: the pipeline defines neither
 // itself (run-report-events.ts is the single home), so an object without them materializes no
 // attachment at all, silently.
-export const REPORT_DERIVE = { extractTrace, extractLlmLogs, normalizedToHostClock, originalYamlFromLogs, traceScreenshotFiles, captureFrameFiles, buildEventStream, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles };
+export const REPORT_DERIVE = { extractTrace, extractLlmLogs, normalizedToHostClock, originalYamlFromLogs, traceScreenshotFiles, captureFrameFiles, buildEventStream, parseDeviceClockSync, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles };
 
 // The permalink for one or more archive URLs — a repeated `zip` param, one per archive, so a link
 // can carry the same trail's runs across several devices and render them as one report. Each value
@@ -294,6 +295,27 @@ type AnalysisCodeFinding = {
   relationship: 'direct_source_fact' | 'temporal_correlation' | 'hypothesis';
   what_would_confirm: string;
 };
+type AnalysisDiagnostic = {
+  status: 'classified' | 'unavailable';
+  label: string;
+  primary_diagnosis?: string;
+  intermittency?: 'OBSERVED' | 'NOT_ESTABLISHED';
+  confidence?: number;
+};
+type AnalysisActionLink = {
+  label: string;
+  href: string;
+};
+type AnalysisSubject = {
+  key: string;
+  label: string;
+  context: string;
+  platform?: string;
+  device?: string;
+  diagnostic?: AnalysisDiagnostic;
+  report_href?: string;
+  status?: { tone: string; label: string };
+};
 type AnalysisProblem = {
   id: string;
   title: string;
@@ -301,17 +323,20 @@ type AnalysisProblem = {
   confidence: string;
   attention_summary: string;
   context_summary: string;
-  affected_subjects: Array<{ key: string; label: string; context: string }>;
+  affected_subjects: AnalysisSubject[];
   observations: string[];
   interpretation: string;
   uncertainty: string;
-  next_action_or_evidence_needed: { kind: string; text: string };
+  next_action_or_evidence_needed: { kind: string; text: string; links?: AnalysisActionLink[] };
   evidence: AnalysisEvidence[];
   code_findings?: AnalysisCodeFinding[];
+  diagnostic_summary?: string;
   history_summary: string;
   related_history: AnalysisHistory[];
 };
 type AnalysisManifest = {
+  fix_category_launcher_url?: string;
+  build_url?: string;
   summary: {
     headline: string;
     run_label: string;
@@ -327,6 +352,55 @@ const safeHttpsHref = (value: unknown): string => {
   try { const url = new URL(String(value || '')); return url.protocol === 'https:' ? url.href : ''; } catch (e) { return ''; }
 };
 
+// Diagnostic annotations are optional enrichment. A malformed annotation must not make the
+// otherwise usable triage document disappear, so required annotation fields reject the annotation
+// while malformed optional fields are simply omitted.
+function analysisDiagnostic(value: unknown): AnalysisDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const item = value as Partial<AnalysisDiagnostic>;
+  if ((item.status !== 'classified' && item.status !== 'unavailable') || !nonEmpty(item.label)) return undefined;
+  const diagnostic: AnalysisDiagnostic = { status: item.status, label: item.label };
+  if (nonEmpty(item.primary_diagnosis)) diagnostic.primary_diagnosis = item.primary_diagnosis;
+  if (item.intermittency === 'OBSERVED' || item.intermittency === 'NOT_ESTABLISHED') diagnostic.intermittency = item.intermittency;
+  if (typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1) {
+    diagnostic.confidence = item.confidence;
+  }
+  return diagnostic;
+}
+
+function analysisSubject(value: unknown): AnalysisSubject | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<AnalysisSubject>;
+  if (!nonEmpty(item.key) || !nonEmpty(item.label) || !nonEmpty(item.context)) return null;
+  const platform = nonEmpty(item.platform) ? item.platform : undefined;
+  const device = nonEmpty(item.device) ? item.device : undefined;
+  const diagnostic = analysisDiagnostic(item.diagnostic);
+  const reportHref = safeHttpsHref(item.report_href);
+  const status = item.status && nonEmpty(item.status.label)
+    && ['critical', 'warning', 'notice', 'neutral', 'info'].includes(item.status.tone) ? item.status : undefined;
+  return {
+    key: item.key,
+    label: item.label,
+    context: item.context,
+    ...(platform ? { platform } : {}),
+    ...(device ? { device } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
+    ...(reportHref ? { report_href: reportHref } : {}),
+    ...(status ? { status } : {}),
+  };
+}
+
+function analysisActionLinks(value: unknown): AnalysisActionLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const links = value.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const item = raw as Partial<AnalysisActionLink>;
+    const href = safeHttpsHref(item.href);
+    return nonEmpty(item.label) && href ? [{ label: item.label, href }] : [];
+  });
+  return links.length ? links : undefined;
+}
+
 function analysisProblem(value: unknown): AnalysisProblem | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<AnalysisProblem>;
@@ -337,7 +411,8 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
     || !item.next_action_or_evidence_needed || !nonEmpty(item.next_action_or_evidence_needed.kind) || !nonEmpty(item.next_action_or_evidence_needed.text)
     || !Array.isArray(item.affected_subjects) || !Array.isArray(item.observations)
     || !Array.isArray(item.evidence) || !Array.isArray(item.related_history)) return null;
-  if (!item.affected_subjects.every((subject) => subject && nonEmpty(subject.key) && nonEmpty(subject.label) && nonEmpty(subject.context))
+  const subjects = item.affected_subjects.map(analysisSubject);
+  if (subjects.some((subject) => subject === null)
     || !item.observations.every(nonEmpty)
     || !item.evidence.every((evidence) => evidence && nonEmpty(evidence.id) && nonEmpty(evidence.kind)
       && nonEmpty(evidence.label) && nonEmpty(evidence.supports) && nonEmpty(evidence.source_run)
@@ -359,8 +434,17 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
         && ['direct_source_fact', 'temporal_correlation', 'hypothesis'].includes(finding.relationship))))) return null;
   const keyEvidence = item.evidence.filter((evidence) => evidence.key);
   if (keyEvidence.length < 1 || keyEvidence.length > 3) return null;
+  const action = item.next_action_or_evidence_needed;
+  const actionLinks = analysisActionLinks(action.links);
   return {
     ...item,
+    next_action_or_evidence_needed: {
+      kind: action.kind,
+      text: action.text,
+      ...(actionLinks ? { links: actionLinks } : {}),
+    },
+    affected_subjects: subjects as AnalysisSubject[],
+    diagnostic_summary: nonEmpty(item.diagnostic_summary) ? item.diagnostic_summary : undefined,
     history_summary: nonEmpty(item.history_summary)
       ? item.history_summary
       : 'Prior-run context is unavailable for this problem.',
@@ -369,7 +453,7 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
 
 function analysisManifest(payload: unknown): AnalysisManifest {
   if (!payload || typeof payload !== 'object') throw new Error('The analysis document is malformed.');
-  const root = payload as { schema_version?: unknown; summary?: Partial<AnalysisManifest['summary']>; problem_sets?: unknown };
+  const root = payload as { schema_version?: unknown; summary?: Partial<AnalysisManifest['summary']>; problem_sets?: unknown; fix_category_launcher_url?: unknown; build_url?: unknown };
   const summary = root.summary;
   if (root.schema_version !== 2 || !summary || !nonEmpty(summary.headline) || !nonEmpty(summary.run_label)
     || typeof summary.affected_subject_count !== 'number' || typeof summary.problem_set_count !== 'number'
@@ -378,7 +462,65 @@ function analysisManifest(payload: unknown): AnalysisManifest {
   if (problems.some((problem) => problem === null)) throw new Error('The analysis document is malformed.');
   const all = problems as AnalysisProblem[];
   if (summary.problem_set_count !== all.length) throw new Error('The analysis document is malformed.');
-  return { summary: summary as AnalysisManifest['summary'], problem_sets: all };
+  return { summary: summary as AnalysisManifest['summary'], problem_sets: all,
+    fix_category_launcher_url: safeHttpsHref(root.fix_category_launcher_url) || undefined,
+    build_url: safeHttpsHref(root.build_url) || undefined };
+}
+
+export function repairMachineFor(problem: Pick<AnalysisProblem, 'affected_subjects'>): 'linux' | 'mac-ios' {
+  const hasIosMember = problem.affected_subjects.some((subject) =>
+    [subject.platform, subject.device, subject.context].filter(nonEmpty)
+      .some((value) => /(?:^|[-_\s])ios(?:$|[-_\s])|\biphone\b|\bipad\b/i.test(value)));
+  return hasIosMember ? 'mac-ios' : 'linux';
+}
+
+function fixCategoryButton(manifest: AnalysisManifest, problem: AnalysisProblem): string {
+  if (!manifest.fix_category_launcher_url) return '';
+  const machine = repairMachineFor(problem);
+  const label = machine === 'mac-ios' ? 'Fix on Mac (iOS)' : 'Fix on Linux';
+  return `<button type="button" data-tb-fix-category="${escapeHtml(problem.id)}">${label}</button><span data-tb-fix-status role="status" aria-live="polite"></span>`;
+}
+
+type CategoryLaunchMessage = { source: unknown; origin: string; data: { type?: string; nonce?: string } };
+type CategoryLaunchBrowser = {
+  crypto: Pick<Crypto, 'randomUUID'>;
+  location: Pick<Location, 'origin'>;
+  open(url: string, target: string): { postMessage(message: unknown, targetOrigin: string): void } | null;
+  addEventListener(type: 'message', listener: (event: CategoryLaunchMessage) => void): void;
+  removeEventListener(type: 'message', listener: (event: CategoryLaunchMessage) => void): void;
+};
+
+export async function gzipAnalysisSnapshot(analysisJson: string): Promise<string> {
+  const stream = new Blob([analysisJson]).stream().pipeThrough(new CompressionStream('gzip'));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export function launchCategoryFix(launcherUrl: string, analysis: string, category: string, pageUrl: string, browser: CategoryLaunchBrowser, buildUrl?: string, analysisGzip?: string): void {
+  if (new URL(analysis).protocol !== 'https:' || new URL(analysis).origin !== browser.location.origin
+    || new URL(pageUrl).origin !== browser.location.origin) {
+    throw new Error('Category repair requires an HTTPS analysis published by this report host.');
+  }
+  const launcher = new URL(launcherUrl);
+  if (launcher.protocol !== 'https:') throw new Error('The category launcher must use HTTPS.');
+  const nonce = browser.crypto.randomUUID();
+  launcher.searchParams.set('source_origin', browser.location.origin);
+  launcher.searchParams.set('nonce', nonce);
+  let popup: ReturnType<CategoryLaunchBrowser['open']> = null;
+  const receive = (event: CategoryLaunchMessage) => {
+    if (!popup || event.source !== popup || event.origin !== launcher.origin
+      || event.data?.type !== 'trailblaze-fix-category-ready' || event.data?.nonce !== nonce) return;
+    popup.postMessage({ type: 'trailblaze-fix-category-launch', nonce, context: { analysis, category, pageUrl, ...(buildUrl ? { buildUrl } : {}), ...(analysisGzip !== undefined ? { analysisGzip } : {}) } }, launcher.origin);
+    browser.removeEventListener('message', receive);
+  };
+  browser.addEventListener('message', receive);
+  popup = browser.open(launcher.href, '_blank');
+  if (!popup) {
+    browser.removeEventListener('message', receive);
+    throw new Error('The browser blocked the launch window. Allow pop-ups for this report and click again.');
+  }
 }
 
 export function analysisProblemHref(href: string, problemId: string): string {
@@ -417,16 +559,59 @@ function codeFindingHtml(item: AnalysisCodeFinding): string {
     + `${source}</li>`;
 }
 
+function subjectDiagnosticHtml(item: AnalysisDiagnostic): string {
+  const confidence = item.confidence === undefined
+    ? ''
+    : `<span class="tb-analysis-diagnostic-confidence">Classifier confidence: ${escapeHtml(item.confidence)}</span>`;
+  return `<span class="tb-analysis-subject-diagnostic"><span class="tb-analysis-diagnostic-label">Diagnostic classification: ${escapeHtml(item.label)}</span>${confidence}</span>`;
+}
+
+function diagnosticSummaryHtml(summary: unknown): string {
+  return nonEmpty(summary)
+    ? `<p class="tb-analysis-diagnostic-summary"><b>Diagnostic classification:</b> <span>${escapeHtml(summary)}</span></p>`
+    : '';
+}
+
+function contextWithoutAffectedCount(problem: AnalysisProblem): string {
+  return problem.context_summary.replace(/^\d+ affected run(?:\(s\)|s?)(?:\s*·\s*)?/i, '');
+}
+
+function actionLinksHtml(problem: AnalysisProblem): string {
+  const links = problem.next_action_or_evidence_needed.links || [];
+  if (!links.length) return '';
+  return `<div class="tb-analysis-action-links" aria-label="Self-heal pull requests">${links.map((link) => `<a href="${escapeHtml(safeHttpsHref(link.href))}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`).join('')}</div>`;
+}
+
+function runReportTabHref(href: string, tab: 'recording' | 'replay'): string {
+  const url = new URL(href);
+  url.searchParams.set('tab', tab);
+  return url.href;
+}
+
+function trailRunButtonsHtml(problem: AnalysisProblem): string {
+  const runs = problem.affected_subjects.map((subject) => `<li><div class="tb-analysis-run-name"><h3>${escapeHtml(subject.label)}</h3>`
+    + `<div class="tb-analysis-run-meta"><span class="tb-analysis-meta">${escapeHtml(subject.context)}</span>`
+    + (subject.status ? `<span class="tb-analysis-status tb-analysis-${subject.status.tone}">${escapeHtml(subject.status.label)}</span>` : '')
+    + `</div>${subject.diagnostic ? subjectDiagnosticHtml(subject.diagnostic) : ''}</div><div class="tb-analysis-run-buttons">`
+    + (subject.report_href
+      ? `<a class="tb-analysis-run-button" href="${escapeHtml(runReportTabHref(subject.report_href, 'recording'))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(`View trail: ${subject.label}`)}">View trail ↗</a>`
+        + `<a class="tb-analysis-run-button tb-analysis-run-button-primary" href="${escapeHtml(runReportTabHref(subject.report_href, 'replay'))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(`Watch replay: ${subject.label}`)}">Watch replay ↗</a>`
+      : '<span class="tb-analysis-meta">Report unavailable</span>')
+    + '</div></li>').join('');
+  return `<section class="tb-analysis-failed-trails"><h2>Failed trails</h2><ul class="tb-analysis-run-cards">${runs}</ul></section>`;
+}
+
 function overviewHtml(manifest: AnalysisManifest, href: string): string {
   const cards = manifest.problem_sets.map((problem) => {
     const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
     const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
+    const context = contextWithoutAffectedCount(problem);
     return `<article class="tb-analysis-card tb-analysis-${tone}">`
-      + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)</span></header>`
+      + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)${context ? ` <span class="tb-analysis-meta">· ${escapeHtml(context)}</span>` : ''}</span></header>`
+      + diagnosticSummaryHtml(problem.diagnostic_summary)
       + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
       + `<p class="tb-analysis-card-summary">${escapeHtml(problem.attention_summary)}</p>`
-      + `<p class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</p>`
-      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></div>`
+      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem)}</div>`
       + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence <span aria-hidden="true">↗</span></a></article>`;
   }).join('');
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
@@ -444,7 +629,6 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
   const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
   const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
   const titlePeriod = /[.!?…]$/.test(problem.title.trimEnd()) ? '' : '<span class="tb-analysis-period" aria-hidden="true">.</span>';
-  const subjects = problem.affected_subjects.map((subject) => `<li><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></li>`).join('');
   const observations = problem.observations.map((observation) => `<li>${escapeHtml(observation)}</li>`).join('');
   const keyEvidence = problem.evidence.filter((item) => item.key);
   const otherEvidence = problem.evidence.filter((item) => !item.key);
@@ -463,14 +647,14 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
     + `<nav class="tb-analysis-toolbar" aria-label="Analysis navigation"><a href="${escapeHtml(analysisProblemHref(href, 'all'))}">← Run overview</a>`
     + `<button type="button" data-tb-copy-link>Copy problem link</button><span data-tb-copy-status class="tb-shell-sr" role="status" aria-live="polite"></span></nav>`
     + `<article class="tb-analysis-focus tb-analysis-${tone}"><header class="tb-analysis-hero"><div class="tb-analysis-hero-meta"><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span>`
-    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span><span class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</span></div>`
+    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span><span class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</span></div>${diagnosticSummaryHtml(problem.diagnostic_summary)}`
     + `<p class="tb-analysis-eyebrow">Analysis / ${escapeHtml(manifest.summary.run_label)}</p>`
     + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}${titlePeriod}</h1>`
     + `<p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p></header>`
-    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></section>`
-    + `<section class="tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section></div>`
-    + `<div class="tb-analysis-detail-grid"><section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
-    + `<section><h2>Observed facts</h2><ul>${observations}</ul></section>`
+    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem)}</section>`
+    + `${trailRunButtonsHtml(problem)}</div>`
+    + `<section class="tb-analysis-lower tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section>`
+    + `<div class="tb-analysis-detail-grid"><section><h2>Observed facts</h2><ul>${observations}</ul></section>`
     + `<section class="tb-analysis-interpretation"><h2>Interpretation <span class="tb-analysis-meta">· ${escapeHtml(problem.confidence)} confidence</span></h2><p>${escapeHtml(problem.interpretation)}</p></section>`
     + `<section class="tb-analysis-uncertainty"><h2>Uncertainty</h2><p>${escapeHtml(problem.uncertainty)}</p></section></div>`
     + ((problem.code_findings || []).length ? `<section class="tb-analysis-lower"><h2>Code findings</h2><ul class="tb-analysis-evidence-list">${problem.code_findings!.map(codeFindingHtml).join('')}</ul></section>` : '')
@@ -482,6 +666,10 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
 // are restricted to HTTPS, so fetched content cannot inject markup or active URL schemes.
 export function renderAnalysisView(payload: unknown, selectedProblem: string, href = 'https://viewer.invalid/?analysis=manifest'): string {
   const manifest = analysisManifest(payload);
+  const analysis = analysisParamsFrom(href);
+  if (!analysis || new URL(analysis.url).origin !== new URL(href).origin) {
+    manifest.fix_category_launcher_url = undefined;
+  }
   if (selectedProblem === 'all') return overviewHtml(manifest, href);
   const problem = manifest.problem_sets.find((item) => item.id === selectedProblem);
   if (!problem) throw new Error('That problem set is not present in this analysis.');
@@ -613,7 +801,9 @@ export function RUN_REPORT_SHELL(): void {
   // column, and an inline `display: block` outranks it, collapsing the viewer's own layout.
   const showReport = () => { shell.classList.remove('tb-shell-panel-visible'); panel.style.display = 'none'; app.style.display = ''; };
   const spinner = (msg: string) => showPanel(`<div class="tb-shell-spinner"></div><div class="tb-shell-sub">${escapeHtml(msg)}</div>`);
-  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err" role="alert">${escapeHtml(msg)}</div><div class="tb-shell-sub">${idleHtml}</div>`); };
+  // Embedded, the reader cannot load anything else, so a failure says what went wrong and stops.
+  const embedded = document.documentElement.hasAttribute('data-tb-embed');
+  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err" role="alert">${escapeHtml(msg)}</div>${embedded ? '' : `<div class="tb-shell-sub">${idleHtml}</div>`}`); };
 
   // `shareable` says whether the CURRENT report came from a URL; the link itself is read at click
   // time, never captured here. The viewer rewrites location.search as the user moves between runs,
@@ -947,10 +1137,37 @@ export function RUN_REPORT_SHELL(): void {
     void fetch(analysis.url)
       .then((response) => {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        return response.json();
+        return response.text();
       })
-      .then((payload) => {
+      .then(async (analysisJson) => {
+        const payload = JSON.parse(analysisJson);
+        const manifest = analysisManifest(payload);
         showPanel(renderAnalysisView(payload, analysis.problem, currentHref));
+        const fixButtons = panel.querySelectorAll<HTMLButtonElement>('[data-tb-fix-category]');
+        fixButtons.forEach((button) => { button.disabled = true; });
+        let analysisGzip: string | undefined;
+        let snapshotError: unknown;
+        if (fixButtons.length) {
+          try { analysisGzip = await gzipAnalysisSnapshot(analysisJson); }
+          catch (error) { snapshotError = error; }
+        }
+        fixButtons.forEach((button) => {
+          if (snapshotError) {
+            if (button.nextElementSibling) button.nextElementSibling.textContent = `Repair launch unavailable: ${errorDetail(snapshotError)}`;
+            return;
+          }
+          button.disabled = false;
+          button.onclick = () => {
+            const status = button.nextElementSibling;
+            try {
+              launchCategoryFix(manifest.fix_category_launcher_url!, analysis.url,
+                button.dataset.tbFixCategory!, analysisProblemHref(currentHref, button.dataset.tbFixCategory!), window, manifest.build_url, analysisGzip);
+              if (status) status.textContent = 'Opening the authenticated launcher…';
+            } catch (error) {
+              if (status) status.textContent = errorDetail(error);
+            }
+          };
+        });
         const heading = panel.querySelector<HTMLElement>('#tb-analysis-title');
         if (heading) heading.focus({ preventScroll: true });
         const copy = panel.querySelector<HTMLButtonElement>('[data-tb-copy-link]');

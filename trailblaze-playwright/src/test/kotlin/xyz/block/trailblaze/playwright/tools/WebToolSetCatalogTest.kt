@@ -29,6 +29,7 @@ class WebToolSetCatalogTest {
       PlaywrightNativeTypeTool::class,
       PlaywrightNativePressKeyTool::class,
       PlaywrightNativeHoverTool::class,
+      PlaywrightNativeDragTool::class,
       PlaywrightNativeSelectOptionTool::class,
       PlaywrightNativeWaitTool::class,
       PlaywrightNativeScrollTool::class,
@@ -45,7 +46,6 @@ class WebToolSetCatalogTest {
       requestedIds = listOf("web_verification"),
     )
     assertThat(resolved.toolClasses).containsAll(
-      PlaywrightNativeVerifyTextVisibleTool::class,
       PlaywrightNativeVerifyElementVisibleTool::class,
       PlaywrightNativeVerifyValueTool::class,
       PlaywrightNativeVerifyListVisibleTool::class,
@@ -93,7 +93,7 @@ class WebToolSetCatalogTest {
       requestedIds = WebToolSetIds.ALL,
     )
     val names =
-      (resolved.toolClasses.map { it.simpleName } + resolved.yamlToolNames.map { it.toolName })
+      (resolved.toolClasses.map { it.simpleName } + resolved.scriptedToolNames.map { it.toolName })
         .filterNotNull()
         .toSet()
     assertThat(names).contains("ObjectiveStatusTrailblazeTool")

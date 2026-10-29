@@ -41,8 +41,11 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.SessionMetadata
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -64,7 +67,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.failureMessage
 import xyz.block.trailblaze.toolcalls.carriesPayload
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -81,6 +87,10 @@ internal enum class ScreenStateKind { UIAUTOMATOR, ACCESSIBILITY }
  * cannot match an `AndroidAccessibility` node. If the rule built a UiAutomator screen state under
  * the accessibility driver, every selector generated from it would `NoMatch` at dispatch time —
  * the failure mode reported in the OSS bug.
+ *
+ * Outside migration mode there is no UiAutomator fallback: a run whose agent is not the
+ * accessibility agent, or whose accessibility service is not running, fails here by name instead
+ * of quietly capturing a tree the agent cannot resolve against.
  *
  * Migration mode is the exception: when `trailblaze.captureSecondaryTree=true` we're replaying
  * pre-migration Maestro selectors and need them to resolve against the UiAutomator shape, so the
@@ -103,13 +113,27 @@ internal fun chooseScreenStateKind(
   isAccessibilityDriver: Boolean,
   isMigrationMode: Boolean,
   isAccessibilityServiceRunning: Boolean,
-): ScreenStateKind = if (
-  isAccessibilityDriver && !isMigrationMode && isAccessibilityServiceRunning
-) {
-  ScreenStateKind.ACCESSIBILITY
-} else {
-  ScreenStateKind.UIAUTOMATOR
+): ScreenStateKind = when {
+  isMigrationMode -> ScreenStateKind.UIAUTOMATOR
+  !isAccessibilityDriver -> throw TrailblazeException(
+    "AndroidTrailblazeRule has no screen state for a non-accessibility agent outside migration " +
+      "mode: the on-device Maestro runtime is retired. Use the " +
+      "${TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY.name} agent.",
+  )
+  !isAccessibilityServiceRunning -> throw TrailblazeException(ACCESSIBILITY_SERVICE_NOT_RUNNING)
+  else -> ScreenStateKind.ACCESSIBILITY
 }
+
+/**
+ * Why a capture with the accessibility service down fails, and how to recover. Shared by the rule
+ * and the RPC captor so both paths name the same cause and fix. Distinct from the RPC readiness
+ * poll's "not yet bound": this is a service that should be running and isn't, usually because
+ * UiDevice or shell work tore it down mid-run.
+ */
+internal const val ACCESSIBILITY_SERVICE_NOT_RUNNING: String =
+  "TrailblazeAccessibilityService is not running, so the screen cannot be captured. UiDevice or " +
+    "shell work reconnects UiAutomation and tears the service down; re-bind it with " +
+    "OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady() after that work."
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -409,7 +433,23 @@ open class AndroidTrailblazeRule(
    */
   protected open val uiAutomatorScreenStateMaxAttempts: Int = 1
 
-  protected val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
+  protected val screenStateProvider: () -> ScreenState = screenStateProviderOverride?.let { override ->
+    {
+      // An override does its own capture, but the default provider's refusals still apply: a
+      // non-accessibility agent outside migration mode (the on-device Maestro runtime is retired),
+      // and a lost service. The on-device runner passes the accessibility agent's own capture here,
+      // and without the check a lost service fails with the service's generic "enable it in
+      // Settings" error, which names neither the cause nor the re-bind fix, and is not the
+      // [TrailblazeException] the failure screenshot falls back on. The kind is unused: the
+      // override decides the shape.
+      chooseScreenStateKind(
+        isAccessibilityDriver = trailblazeAgent.usesAccessibilityDriver,
+        isMigrationMode = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
+        isAccessibilityServiceRunning = TrailblazeAccessibilityService.isServiceRunning(),
+      )
+      override()
+    }
+  } ?: {
     // Source of truth is the *agent* the rule will dispatch through, not the driver type
     // label. A caller can pass [agentOverride] with a non-accessibility agent while
     // [driverTypeOverride] stays at the now-default ANDROID_ONDEVICE_ACCESSIBILITY; reading the
@@ -463,7 +503,22 @@ open class AndroidTrailblazeRule(
   }
 
   init {
-    trailblazeLoggingRule.failureScreenStateProvider = screenStateProvider
+    // Failure and final screenshots are read for their pixels, never resolved against. So when the
+    // accessibility service is down — the case [screenStateProvider] now refuses to paper over —
+    // they fall back to a UiAutomator capture, and a run that failed because the service died
+    // still records what the screen showed.
+    trailblazeLoggingRule.failureScreenStateProvider = {
+      try {
+        screenStateProvider()
+      } catch (e: TrailblazeException) {
+        if (TrailblazeAccessibilityService.isServiceRunning()) throw e
+        AndroidOnDeviceUiAutomatorScreenState(
+          includeScreenshot = true,
+          maxAttempts = uiAutomatorScreenStateMaxAttempts.coerceAtLeast(1),
+          deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+        )
+      }
+    }
   }
 
   // Lazy so rule instances (one per test method) that never compare an element skip the
@@ -485,7 +540,7 @@ open class AndroidTrailblazeRule(
    * After the parent rule chain completes its setup (UiDevice, status-bar hiding, etc.),
    * enable the on-device [TrailblazeAccessibilityService]. Called unconditionally — not only
    * when the resolved driver is [TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY] — because
-   * UiAutomator2 (the instrumentation driver's view-hierarchy source) reads the same OS
+   * UiAutomator2 (migration mode's view-hierarchy source) reads the same OS
    * accessibility node tree that Jetpack Compose only populates when
    * `AccessibilityManager.isEnabled()` returns true in the app process. UiAutomation defaults
    * to `flags = 0` (suppresses all accessibility services), which forces `isEnabled()` to false
@@ -493,7 +548,7 @@ open class AndroidTrailblazeRule(
    * children. Calling [OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady]
    * reconnects UiAutomation with `FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES`, binds the
    * service, and flips `isEnabled()` so Compose builds its semantic tree — required for the
-   * instrumentation driver on any Compose-heavy app, not only for the accessibility driver.
+   * migration-mode capture on any Compose-heavy app, not only for the accessibility driver.
    *
    * For accessibility-driver runs the binding is also required so the
    * [AccessibilityTrailblazeAgent] constructed in [trailblazeAgent] can issue taps/swipes
@@ -518,7 +573,7 @@ open class AndroidTrailblazeRule(
     applyPerTrailDriverOverrides(description)
     onBeforeTest(description)
     // Bind unconditionally — needed for both the accessibility driver (taps/swipes) and the
-    // instrumentation driver (Compose semantic-tree exposure under UiAutomator2). See kdoc above.
+    // migration-mode UiAutomator capture (Compose semantic-tree exposure). See kdoc above.
     OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
     // Turbo, when the run asked for it: attach the in-process idle detector so this run's settle
     // gates race a true-idle signal. AFTER the accessibility bind, matching the ordering the farm
@@ -571,7 +626,9 @@ open class AndroidTrailblazeRule(
         OnDeviceTurbo.requireTurboHeld(description.displayName)
       }
     }
-    super.afterTestExecution(description, verdict.sessionResult)
+    trailblazeLoggingRule.afterTestExecution(description, verdict.sessionResult) {
+      OnDeviceAccessibilityServiceSetup.disableAccessibilityService()
+    }
     verdict.failure?.let { throw it }
   }
 
@@ -618,9 +675,25 @@ open class AndroidTrailblazeRule(
   protected open fun sessionTestClassName(trailConfig: TrailConfig?): String =
     trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule"
 
-  /** Test method name recorded on the session-start log. */
+  /**
+   * Test method name recorded on the session-start log. A trail [runFromAssets] runs keeps the
+   * test's own name: CI maps a failed row back to the test to retry by it.
+   */
   protected open fun sessionTestMethodName(trailConfig: TrailConfig?): String =
     trailblazeLoggingRule.description?.methodName ?: "run"
+
+  /**
+   * Subclass seam: [runFromAssets] opened [session] for its next trail. Start here whatever
+   * [beforeTestExecution] starts for the test's own session. No-op by default.
+   */
+  protected open fun onGroupedTrailSessionStarted(session: TrailblazeSession) = Unit
+
+  /**
+   * Subclass seam: [runFromAssets] is about to end [session], one per trail. Finish here whatever
+   * [afterTestExecution] finishes for the test's own session, which by then has none. No-op by
+   * default.
+   */
+  protected open fun onGroupedTrailSessionEnding(session: TrailblazeSession) = Unit
 
   protected val trailblazeYaml = createTrailblazeYaml(
     customTrailblazeToolClasses = customToolClasses?.allForSerializationTools() ?: setOf(),
@@ -676,11 +749,14 @@ open class AndroidTrailblazeRule(
 
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
-      runTrailblazeTool = ::runTrailblazeTool,
+      runTrailblazeTool = { tools -> runTrailblazeTool(tools) },
       trailblazeLogger = trailblazeLoggingRule.logger,
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
+      trailheadReuse = TrailheadRuns.reuseEnabled(
+        InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
+      ),
       // Replay each step's recorded tools inside one shared execution context + snapshot frame, so
       // cross-tool device state (e.g. the in-process clipboard cache on the per-context device
       // executor) survives across the recording — matching the legacy single-`- tools:`-block batch.
@@ -707,6 +783,13 @@ open class AndroidTrailblazeRule(
      * be joined here rather than deferred into a next action that may never come.
      */
     sendSessionEndLog: Boolean,
+    trailSourceUrl: String? = null,
+    /**
+     * The host's trace for this dispatch ([xyz.block.trailblaze.llm.RunYamlRequest.traceId]). A
+     * direct tool call logs its outer call on the host under this trace; logging the device's
+     * executor calls under it too is what lets a saved recording pair the two.
+     */
+    traceId: TraceId? = null,
   ): TrailblazeToolResult.Success? {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this on-device runner. v1 inputs ignore
@@ -747,8 +830,12 @@ open class AndroidTrailblazeRule(
     )?.let { refusal -> throw TrailblazeException(refusal) }
 
     // A locale is a device setting, not an app launch argument. Apply it before the session starts
-    // so the session snapshot and every subsequently launched target process observe it.
-    trailConfig?.locale?.let { AndroidDeviceLocale.apply(it) }
+    // so the session snapshot and every subsequently launched target process observe it. Only a
+    // declared locale (the trail's own or its catalog device's) is applied here. The default for a
+    // trail that declares none belongs to whoever started the run: [run] or [runFromAsset] before
+    // it starts, or the host for a host-driven run, whose config here need not carry the locale the
+    // host already applied and must not be overwritten with the default.
+    AndroidDeviceLocale.forTrail(trailConfig?.locale)?.let { AndroidDeviceLocale.applyForTrail(it) }
 
     // Per-trail overrides (e.g. a `config.driver` flip) must land before the session-start
     // log below reads the device info, and before any lazy agent field is first touched.
@@ -771,6 +858,7 @@ open class AndroidTrailblazeRule(
             hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
             trailblazeDeviceId = trailblazeDeviceId,
             targetAppInfo = targetAppInfoForSession,
+            trailSourceUrl = trailSourceUrl,
           ),
           session = currentSession.sessionId,
           timestamp = Clock.System.now(),
@@ -784,14 +872,7 @@ open class AndroidTrailblazeRule(
       trailblazeAgent.clearMemory()
     }
 
-    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
-      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
-      throw TrailblazeException(
-        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file." +
-          (emptyTrailGuardHint(trailConfig)?.let { " $it" } ?: ""),
-      )
-    }
+    requireActionableSteps(trailItems, trailConfig, trailFilePath)
 
     // PR A5: launch the target-declared MCP bundles at session start, so advertised tools
     // are registered into [trailblazeToolRepo] before the LLM selects a tool. Tear down in
@@ -848,7 +929,13 @@ open class AndroidTrailblazeRule(
         // `finally`. Deciding and launching separately would let two overlapping dispatches of one
         // session both launch into the repo they now share, and the second would die on the tool
         // names the first registered — see [ScriptedToolBundleReuse.claimOrLaunch].
-        val reused = ScriptedToolBundleReuse.claimOrLaunch(sessionId, trailblazeToolRepo) {
+        // Keyed on the classifiers too: the launch registers only the tools the device's classifiers
+        // satisfied (`trailblaze/requiredClassifiers`), so a changed override must relaunch.
+        val reused = ScriptedToolBundleReuse.claimOrLaunch(
+          sessionId = sessionId,
+          repo = trailblazeToolRepo,
+          classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+        ) {
           launchToolsetScriptedToolBundles(toolRepo = trailblazeToolRepo, sessionId = sessionId)
         }
         if (reused) {
@@ -863,41 +950,47 @@ open class AndroidTrailblazeRule(
 
       ActionTrace.mark(ActionTrace.Boundary.BUNDLES_LAUNCHED)
 
-      trailItems.forEach { item ->
-        val itemResult = when (item) {
-          is TrailYamlItem.PromptsTrailItem ->
-            // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
-            // delegates only the unrecorded steps to the Koog [trailblazeRunner].
-            trailblazeRunnerUtil.runPrompt(
-              prompts = item.promptSteps,
-              useRecordedSteps = useRecordedSteps,
-              selfHeal = resolveSelfHealEnabled(),
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            // The trailhead is step 0: run its single lowered step through the same path as any
-            // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
-            trailblazeRunnerUtil.runPrompt(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = resolveSelfHealEnabled(),
-            )
-          is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
-          is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
-        }
-        if (itemResult is TrailblazeToolResult.Error) {
-          // A tool that reported an error left its engine in a known state, so the session's
-          // bundles stay reusable.
-          endedInException = false
-          throw TrailblazeException(itemResult.errorMessage)
-        }
-        // Only adopt a Success as the trail's last-tool payload if it actually carries data —
-        // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
-        // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
-        // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
-        // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
-        // Success() values produced by non-tool items must not overwrite a payload-bearing one.
-        if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
-          lastToolSuccess = itemResult
+      // One trail: the trailhead's teardown runs after it, whatever the outcome.
+      trailblazeRunnerUtil.runTrail {
+        trailItems.forEach { item ->
+          val itemResult = when (item) {
+            is TrailYamlItem.PromptsTrailItem ->
+              // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
+              // delegates only the unrecorded steps to the Koog [trailblazeRunner]. Suspending, so
+              // every tool a step dispatches is cancelled with the trail.
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = item.promptSteps,
+                useRecordedSteps = useRecordedSteps,
+                selfHeal = resolveSelfHealEnabled(),
+              )
+            is TrailYamlItem.TrailheadTrailItem ->
+              // The trailhead is step 0: run its single lowered step through the same path as any
+              // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = resolveSelfHealEnabled(),
+              )
+            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem {
+              runTrailblazeTool(item.tools.map { it.trailblazeTool }, traceId)
+            }
+            is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
+          }
+          if (itemResult is TrailblazeToolResult.Error) {
+            // A tool that reported an error left its engine in a known state, so the session's
+            // bundles stay reusable.
+            endedInException = false
+            throw TrailblazeException(itemResult.errorMessage)
+          }
+          // Only adopt a Success as the trail's last-tool payload if it actually carries data —
+          // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
+          // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
+          // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
+          // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
+          // Success() values produced by non-tool items must not overwrite a payload-bearing one.
+          if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
+            lastToolSuccess = itemResult
+          }
         }
       }
       endedInException = false
@@ -975,6 +1068,89 @@ open class AndroidTrailblazeRule(
     trailFilePath: String?,
     useRecordedSteps: Boolean,
   ) {
+    refuseIfRequiresHost(testYaml, trailFilePath)
+    // A direct run has no host and no [runFromAsset] ahead of it, so the default is applied here.
+    // A trail that can't be read is left to the run's own decode to report. A changed language
+    // restarts the app, as [runFromAsset] does, or a running process keeps strings it cached.
+    val localeChanged = applyTrailLocale(
+      runCatching {
+        trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers)
+      }.getOrNull(),
+      trailFilePath,
+    )
+    // The restart stays owed until an app was actually stopped.
+    if (localeChanged) {
+      defaultForceStopAppId?.let {
+        AdbCommandUtil.forceStopApp(it)
+        TrailDeviceLocale.cleanupDone(localeCleanupKey())
+      }
+    }
+    runWithSource(
+      testYaml = testYaml,
+      trailFilePath = trailFilePath,
+      useRecordedSteps = useRecordedSteps,
+      trailSourceUrl = null,
+    )
+  }
+
+  /**
+   * Applies the language of [trailItems] — its `locale:`, or the default when it declares none —
+   * unless the trail is unreadable (null) or skipped. A trail pinned to a retired driver is
+   * refused first, as [runSuspend] would refuse it, so a trail that cannot run leaves the device's
+   * language and reusable setup alone, and so is a trail with no steps. A change drops this
+   * device's trailhead hand-offs, whose setup lived in the app process the change restarts.
+   *
+   * Returns whether the app needs a fresh process: the language changed, or an earlier change's
+   * restart never happened (that run failed first). The caller restarts the app, then calls
+   * [TrailDeviceLocale.cleanupDone].
+   */
+  private fun applyTrailLocale(trailItems: List<TrailYamlItem>?, trailFilePath: String?): Boolean {
+    val runnable = trailItems?.takeIf { trailblazeYaml.firstSkipReason(it) == null } ?: return false
+    val trailConfig = trailblazeYaml.extractTrailConfig(runnable)
+    retiredTrailDriverPinRefusal(
+      pinnedDriver = trailConfig?.driver,
+      forcedDriver = InstrumentationArgUtil.driverType(),
+    )?.let { refusal -> throw TrailblazeException(refusal) }
+    requireActionableSteps(runnable, trailConfig, trailFilePath)
+    val changed = TrailDeviceLocale.changeNeedingCleanup(localeCleanupKey()) {
+      AndroidDeviceLocale.applyForTrail(trailConfig?.locale)
+    }
+    if (changed) TrailheadHandoffStore.dropDevice(trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId)
+    return changed
+  }
+
+  private fun localeCleanupKey(): String = trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId.toString()
+
+  private fun requireActionableSteps(trailItems: List<TrailYamlItem>, trailConfig: TrailConfig?, trailFilePath: String?) {
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      throw TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (emptyTrailGuardHint(trailConfig)?.let { " $it" } ?: ""),
+      )
+    }
+  }
+
+  /**
+   * Refuse a trail whose device entry declares `requiresHost`: [run] and [runFromAsset] execute on
+   * the device with no host behind them. Host-driven runs reach the device through [runSuspend],
+   * so they never pass through here.
+   */
+  private fun refuseIfRequiresHost(yaml: String, trailName: String?) {
+    trailblazeYaml.requiresHostRefusal(
+      yaml,
+      trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+      trailName,
+    )?.let { throw TrailblazeException(it) }
+  }
+
+  private fun runWithSource(
+    testYaml: String,
+    trailFilePath: String?,
+    useRecordedSteps: Boolean,
+    trailSourceUrl: String?,
+  ) {
     // [TrailblazeRule.run] returns Unit — discard `runSuspend`'s `Success` payload (only the
     // RPC handler path threads that back through the response envelope).
     runBlocking {
@@ -986,13 +1162,18 @@ open class AndroidTrailblazeRule(
         // The JUnit run IS the session: its teardown emits SessionEnded, so this dispatch owns
         // both ends and never defers the driver-log join.
         sendSessionEndLog = true,
+        trailSourceUrl = trailSourceUrl,
       )
     }
   }
 
-  private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult =
+  private fun runTrailblazeTool(
+    trailblazeTools: List<TrailblazeTool>,
+    traceId: TraceId? = null,
+  ): TrailblazeToolResult =
     trailblazeAgent.runTrailblazeTools(
       tools = trailblazeTools,
+      traceId = traceId,
       // null + provider = capture lazily on first `context.screenState` read (see the lazy
       // getter on TrailblazeToolExecutionContext). Most recorded tools (inputText, pressKey,
       // swipe, launchApp) never read it — the accessibility driver resolves against the live
@@ -1031,6 +1212,8 @@ open class AndroidTrailblazeRule(
     // The instrumentation process inherits none of the host's environment, so decision settings
     // arrive as instrumentation arguments named like the env vars (`-e TRAILBLAZE_DECISION_MOVES first`).
     decisionSettings = { name -> InstrumentationArgUtil.getInstrumentationArg(name) ?: System.getenv(name) },
+    // Read when the runner is first used, after the driver override is set (see trailblazeToolRepo).
+    alwaysShownTools = target?.getAlwaysShownToolNamesForDriver(trailblazeLoggingRule.driverTypeOverride).orEmpty(),
   )
 
   @Deprecated("Prefer the suspend version.")
@@ -1050,8 +1233,14 @@ open class AndroidTrailblazeRule(
     }
   }
 
+  /** Whether a trail's `config.context` is in [trailblazeRunner]'s prompt, for [runFromAssets] to drop. */
+  private var systemPromptAppended = false
+
   private fun handleConfig(config: TrailConfig): TrailblazeToolResult {
-    config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+    config.context?.let {
+      trailblazeRunner.appendToSystemPrompt(it)
+      systemPromptAppended = true
+    }
     return TrailblazeToolResult.Success()
   }
 
@@ -1130,6 +1319,17 @@ open class AndroidTrailblazeRule(
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
     targetAppId: String? = null,
+    trailSourceUrl: String? = null,
+  ) = runFromAsset(yamlAssetPath, forceStopApp, useRecordedSteps, targetAppId, trailSourceUrl, afterCleanStart = {})
+
+  /** [runFromAsset], calling [afterCleanStart] once the app has had its clean start, or kept its hand-off. */
+  private fun runFromAsset(
+    yamlAssetPath: String,
+    forceStopApp: Boolean,
+    useRecordedSteps: Boolean,
+    targetAppId: String?,
+    trailSourceUrl: String?,
+    afterCleanStart: () -> Unit,
   ) {
     val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
@@ -1138,33 +1338,169 @@ open class AndroidTrailblazeRule(
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
     val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
+    refuseIfRequiresHost(yamlContent, computedAssetPath)
     val appIdToForceStop = targetAppId ?: defaultForceStopAppId
-    val localeForFreshProcess = if (forceStopApp) {
-      null
-    } else {
-      val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
-      val trailItems = trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
-      trailblazeYaml.extractTrailConfig(trailItems)
-        ?.locale
-        ?.takeIf { trailblazeYaml.firstSkipReason(trailItems) == null }
+    val reuseEnabled = TrailheadRuns.reuseEnabled(
+      InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
+    )
+    // Decoded for the trail's language, which [runSuspend] leaves to this caller when the trail
+    // declares none, and for the clean-start decision: a reusable hand-off can skip the ordinary
+    // force-stop, but never a locale change. A trail that can't be read keeps its clean start; the
+    // run's own decode reports the error.
+    val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val trailItems = when {
+      !forceStopApp -> trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
+      else -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers) }.getOrNull()
     }
-    if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess) && appIdToForceStop != null) {
+    // The language is applied before the clean-start decision because only a change needs a fresh
+    // process; the same language leaves a running app, and a reusable hand-off, alone.
+    val deviceId = trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId
+    val localeChanged = applyTrailLocale(trailItems, computedAssetPath)
+    val keepForReuse = reuseEnabled && trailItems != null &&
+      TrailheadHandoffStore.holdsReusableFor(deviceId, trailItems)
+    if (shouldForceStopTargetApp(forceStopApp, localeChanged, keepForReuse) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
+      // The restart stays owed until an app was actually stopped.
+      if (localeChanged) TrailDeviceLocale.cleanupDone(localeCleanupKey())
     }
-    run(
+    afterCleanStart()
+    runWithSource(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
       // The resolved (classifier-specific) file, not the caller's raw argument — the raw argument
       // can be a recording directory, and this value reaches the session-start log, the skip
       // message, and the trail-name fallback for trails with no title.
       trailFilePath = computedAssetPath,
+      trailSourceUrl = trailSourceUrl,
     )
   }
 
+  /**
+   * Runs [yamlAssetPaths] in order in one test, each trail in a session of its own, as though each
+   * were its own test: its own start and end logs, final or failure screenshot, trace, and result
+   * row. The app process carries over from one trail to the next, so with
+   * `trailblaze.trailheadReuse` a trailhead can hand its setup on rather than repeat it.
+   *
+   * Every trail runs even after one fails, and the test then fails with each failure. An interrupt
+   * (the test's timeout) ends the trail it lands in and stops there.
+   *
+   * The trails must share a driver: the agent is built for the first trail. Each trail runs in its
+   * own `locale:`, or the default when it declares none. Each trail's `config.context` and turbo
+   * verdict are its own, and a failed trail hands no setup on. [trailSourceUrls] maps a path to the link its report
+   * shows for the trail's source, as [runFromAsset]'s `trailSourceUrl` does.
+   */
+  fun runFromAssets(
+    yamlAssetPaths: List<String>,
+    forceStopApp: Boolean = true,
+    useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
+    targetAppId: String? = null,
+    trailSourceUrls: Map<String, String> = emptyMap(),
+  ) {
+    require(yamlAssetPaths.isNotEmpty()) { "runFromAssets needs at least one trail" }
+    val failures = mutableListOf<Throwable>()
+    val accessibilityDriver =
+      trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    for ((index, path) in yamlAssetPaths.withIndex()) {
+      val trailName = groupedTrailNameFor(path)
+      val next = if (index > 0) startGroupedTrailSession(trailName) else null
+      val failure =
+        runCatching {
+            if (next != null) {
+              // What [beforeTestExecution] does for the first trail, minus what carries over.
+              if (systemPromptAppended) {
+                trailblazeRunner.resetSystemPrompt()
+                systemPromptAppended = false
+              }
+              if (accessibilityDriver) OnDeviceTurbo.start(scope = trailName, targetAppId = turboTargetAppId)
+            }
+            // The hook starts after the clean-start decision: a capture started on the previous
+            // trail's process would read this trail's force-stop as a crash.
+            runFromAsset(path, forceStopApp, useRecordedSteps, targetAppId, trailSourceUrls[path]) {
+              next?.let(::onGroupedTrailSessionStarted)
+            }
+            // Before the session ends, so its report row carries the verdict, as
+            // [afterTestExecution] does for a trail run alone.
+            if (accessibilityDriver) OnDeviceTurbo.requireTurboHeld(trailName)
+          }
+          .exceptionOrNull()
+      // A trail that failed before its teardown ran (an unreadable trail, say) may have stopped the
+      // app a stored hand-off describes.
+      if (failure != null) TrailheadHandoffStore.dropAll()
+      endGroupedTrailSession(failure)
+      if (failure != null) failures += failure
+      // The test's timeout: a later trail would run past its deadline, on a device the next test
+      // may already hold.
+      if (failure is InterruptedException || Thread.currentThread().isInterrupted) break
+    }
+    when (failures.size) {
+      0 -> Unit
+      1 -> throw failures.single()
+      else ->
+        throw TrailblazeException(
+          "${failures.size} of ${yamlAssetPaths.size} trails failed: " +
+            failures.joinToString("; ") { it.message ?: it::class.simpleName.orEmpty() }
+        ).apply { failures.forEach(::addSuppressed) }
+    }
+  }
+
+  /** Opens the next trail's session, named for the trail so its logs are findable by it. */
+  private fun startGroupedTrailSession(trailName: String): TrailblazeSession {
+    val description = trailblazeLoggingRule.description
+    val className = description?.className ?: "AndroidTrailblazeRule"
+    val next =
+      trailblazeLoggingRule.sessionManager.startSession(
+        sessionName = "${className}_$trailName",
+        metadata = SessionMetadata(testClassName = className, testMethodName = description?.methodName),
+      )
+    trailblazeLoggingRule.setSession(next)
+    return next
+  }
+
+  /**
+   * Ends the running trail's session as [afterTestExecution] would have, then clears it, so the
+   * test's own end neither ends it again nor overwrites its status with the whole group's.
+   */
+  private fun endGroupedTrailSession(failure: Throwable?) {
+    val current = trailblazeLoggingRule.session ?: return
+    runCatching {
+        if (failure != null) {
+          trailblazeLoggingRule.captureFailureScreenshot(current)
+        } else {
+          trailblazeLoggingRule.captureFinalScreenshot(current)
+        }
+      }
+      .onFailure { Console.log("Grouped trail screenshot failed: ${it.message}") }
+      .onFailure(::keepInterrupt)
+    runCatching { onGroupedTrailSessionEnding(current) }
+      .onFailure { Console.log("Grouped trail session cleanup failed: ${it.message}") }
+      .onFailure(::keepInterrupt)
+    try {
+      trailblazeLoggingRule.endSession(current, isSuccess = failure == null, exception = failure)
+    } finally {
+      trailblazeLoggingRule.setSession(null)
+    }
+  }
+
+  /** Re-raises an interrupt a best-effort step swallowed, so [runFromAssets] still stops. */
+  private fun keepInterrupt(failure: Throwable) {
+    if (failure is InterruptedException) Thread.currentThread().interrupt()
+  }
+
   companion object {
-    /** A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. */
-    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
-      requested || locale != null
+    /**
+     * The name a trail's own generated test would have: the file name of a `<name>.trail.yaml`, or
+     * the directory of a `<name>/` recording directory.
+     */
+    internal fun groupedTrailNameFor(yamlAssetPath: String): String =
+      yamlAssetPath.trimEnd('/').substringAfterLast('/').removeSuffix(".trail.yaml")
+
+    /**
+     * A trail that changed the device's language needs a fresh process even when ordinary
+     * clean-start is disabled. A reusable trailhead hand-off skips the ordinary clean start: the
+     * trailhead decides what to keep.
+     */
+    internal fun shouldForceStopTargetApp(requested: Boolean, localeChanged: Boolean, keepForReuse: Boolean = false): Boolean =
+      (requested && !keepForReuse) || localeChanged
 
     /**
      * Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)

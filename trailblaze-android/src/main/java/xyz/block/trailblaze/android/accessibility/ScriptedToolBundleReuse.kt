@@ -3,6 +3,7 @@ package xyz.block.trailblaze.android.accessibility
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -16,10 +17,12 @@ import xyz.block.trailblaze.util.Console
  * QuickJS bundles at the top and shuts them down in its `finally`. For a recorded replay that is a
  * per-action tax on tools the action never calls.
  *
- * The reuse is keyed on **(session, tool repo instance)**, not on the session alone, because a
- * launch registers its tools INTO a repo — a dispatch that built a different repo would find the
- * tools missing and fail "Unknown tool" at dispatch. When a claim misses, the caller launches
- * normally, which is exactly today's behaviour.
+ * The reuse is keyed on **(session, tool repo instance, device classifiers)**, not on the session
+ * alone, because a launch registers its tools INTO a repo — a dispatch that built a different repo
+ * would find the tools missing and fail "Unknown tool" at dispatch — and registers only the tools
+ * whose `trailblaze/requiredClassifiers` the device satisfied at launch, so a dispatch whose
+ * classifiers changed (an override added or removed) would inherit the old gate's answer. When a
+ * claim misses, the caller launches normally, which is exactly today's behaviour.
  *
  * On unless the session may load host-pushed bundles; see [ReplayCaptureOptions.REUSE_TOOL_BUNDLES_SYSPROP].
  */
@@ -28,6 +31,7 @@ object ScriptedToolBundleReuse {
   private class Retained(
     val sessionId: SessionId,
     val repo: TrailblazeToolRepo,
+    val classifiers: List<TrailblazeDeviceClassifier>,
     val runtime: LaunchedQuickJsToolRuntime?,
   )
 
@@ -35,14 +39,18 @@ object ScriptedToolBundleReuse {
   private var retained: Retained? = null
 
   /**
-   * True when [sessionId] already has a launch registered into [repo], so the caller can skip both
-   * the launch and its teardown. A miss leaves the cache untouched — the caller launches and then
+   * True when [sessionId] already has a launch registered into [repo] for a device with
+   * [classifiers], so the caller can skip both the launch and its teardown. A miss leaves the cache untouched — the caller launches and then
    * calls [retain].
    */
   @Synchronized
-  fun claim(sessionId: SessionId, repo: TrailblazeToolRepo): Boolean {
+  fun claim(
+    sessionId: SessionId,
+    repo: TrailblazeToolRepo,
+    classifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean {
     val current = retained ?: return false
-    return current.sessionId == sessionId && current.repo === repo
+    return current.sessionId == sessionId && current.repo === repo && current.classifiers == classifiers
   }
 
   /**
@@ -62,15 +70,29 @@ object ScriptedToolBundleReuse {
    * A launch returned by [launch] is retained here, so the caller must not shut it down itself. An
    * overlapping dispatch waits for an in-flight launch and then reuses it rather than starting a
    * second one — the wait is shorter than the launch it replaces.
+   *
+   * A miss against a launch that registered into this same [repo] (the classifiers changed) shuts
+   * that launch down BEFORE [launch] runs: its tools are still in the repo, and the new launch would
+   * otherwise die registering their names.
    */
   suspend fun claimOrLaunch(
     sessionId: SessionId,
     repo: TrailblazeToolRepo,
+    classifiers: List<TrailblazeDeviceClassifier>,
     launch: suspend () -> LaunchedQuickJsToolRuntime?,
   ): Boolean = launchLock.withLock {
-    if (claim(sessionId, repo)) return@withLock true
-    retain(sessionId, repo, launch())
+    if (claim(sessionId, repo, classifiers)) return@withLock true
+    releaseIfRegisteredInto(repo)
+    retain(sessionId, repo, classifiers, launch())
     false
+  }
+
+  @Synchronized
+  private fun releaseIfRegisteredInto(repo: TrailblazeToolRepo) {
+    val current = retained ?: return
+    if (current.repo !== repo) return
+    shutdown(current)
+    retained = null
   }
 
   /**
@@ -84,12 +106,17 @@ object ScriptedToolBundleReuse {
    * runtime on the floor there would leak one QuickJS context per action.
    */
   @Synchronized
-  fun retain(sessionId: SessionId, repo: TrailblazeToolRepo, runtime: LaunchedQuickJsToolRuntime?) {
+  fun retain(
+    sessionId: SessionId,
+    repo: TrailblazeToolRepo,
+    classifiers: List<TrailblazeDeviceClassifier>,
+    runtime: LaunchedQuickJsToolRuntime?,
+  ) {
     val previous = retained
     if (replacesPreviousLaunch(previous?.runtime, runtime)) {
       previous?.let { shutdown(it) }
     }
-    retained = Retained(sessionId, repo, runtime)
+    retained = Retained(sessionId, repo, classifiers, runtime)
   }
 
   /**

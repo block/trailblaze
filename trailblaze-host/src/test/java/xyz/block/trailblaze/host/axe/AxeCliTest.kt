@@ -334,9 +334,24 @@ class AxeCliTest {
       ),
       AxeCli.pasteFromPasteboardArgs("SIM-ARGS").drop(1),
     )
+  }
+
+  @Test
+  fun `screenshot goes through simctl, not axe, so it opens no render-server client`() {
+    // See AxeCli.screenshot for why `axe screenshot` is avoided.
     assertEquals(
-      SimctlCommand.argv("pbcopy", "SIM-ARGS"),
-      AxeCli.writePasteboardArgs("SIM-ARGS"),
+      SimctlCommand.argv("io", "SIM-ARGS", "screenshot", "--type=png", "/tmp/shot.png"),
+      AxeCli.screenshotArgs("SIM-ARGS", "/tmp/shot.png"),
+    )
+  }
+
+  @Test
+  fun `select all is Cmd+A, the key-combo UIKit answers by selecting the whole field`() {
+    // HID usage 4 is the A key; with Left Command held, a text field selects everything, secure
+    // fields included, so one Backspace after it empties the field whatever its length.
+    assertEquals(
+      listOf("key-combo", "--modifiers", "227", "--key", "4", "--udid", "SIM-ARGS"),
+      AxeCli.selectAllArgs("SIM-ARGS").drop(1),
     )
   }
 
@@ -415,5 +430,49 @@ class AxeCliTest {
     assertFalse(result.success)
     assertFalse(invoked)
     assertTrue(result.stderr.contains("pasteboard lock exceeded the 1s inputText timeout"))
+  }
+
+  @Test
+  fun `an unanswered version probe is asked again, a definitive answer is not`() {
+    // A one-off probe timeout cached for the daemon's life would report a working axe as missing.
+    val answers = ArrayDeque(listOf(AxeCli.Availability.UNKNOWN, AxeCli.Availability.AVAILABLE))
+    var probes = 0
+    val cache = AxeCli.AvailabilityCache { probes++; answers.removeFirst() }
+
+    assertEquals(AxeCli.Availability.UNKNOWN, cache.get())
+    assertEquals(AxeCli.Availability.AVAILABLE, cache.get())
+    assertEquals(AxeCli.Availability.AVAILABLE, cache.get())
+    assertEquals(2, probes)
+  }
+
+  @Test
+  fun `a missing axe is cached for the run`() {
+    var probes = 0
+    val cache = AxeCli.AvailabilityCache { probes++; AxeCli.Availability.MISSING }
+
+    repeat(3) { assertEquals(AxeCli.Availability.MISSING, cache.get()) }
+    assertEquals(1, probes)
+  }
+
+  // --- multiTapXy ---
+
+  @Test
+  fun `a double-tap is one batch session with a tap step per tap, settling only after the last`() {
+    val args = AxeCli.multiTapArgs("UDID", x = 100, y = 65, count = 2, postDelaySeconds = 0.3)
+
+    assertEquals(
+      listOf(
+        "batch",
+        "--step", "tap -x 100 -y 65 --post-delay 0.0",
+        "--step", "tap -x 100 -y 65 --post-delay 0.3",
+        "--udid", "UDID",
+      ),
+      args.drop(1), // the axe binary path varies by machine
+    )
+  }
+
+  @Test
+  fun `a single tap is not a multi-tap`() {
+    assertFailsWith<IllegalArgumentException> { AxeCli.multiTapArgs("UDID", 1, 2, count = 1) }
   }
 }

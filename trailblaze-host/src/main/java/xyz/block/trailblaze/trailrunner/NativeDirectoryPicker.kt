@@ -24,7 +24,7 @@ internal fun pickDirectoryWithNativeDialog(initialDirectory: File?): File? {
   if (GraphicsEnvironment.isHeadless()) {
     error(
       "A desktop folder picker is not available in this environment. " +
-        "Run `trailblaze app --v2` from the repository you want to use."
+        "Run `trailblaze app` from the repository you want to use."
     )
   }
   val result = CompletableFuture<File?>()
@@ -45,14 +45,14 @@ private fun cachedMacShellSupportsDirectoryPicking(): Boolean {
   val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() } ?: return false
   val dir = File(home, ".trailblaze/bin")
   val source = File(dir, "TrailblazeTrailRunner.swift")
-  val binary = File(dir, "Trail Runner")
+  val binary = File(dir, "Trailblaze App")
   return binary.canExecute() && source.isFile && source.lastModified() <= binary.lastModified() &&
     runCatching { source.readText().contains("--pick-directory") }.getOrDefault(false)
 }
 
 private fun pickDirectoryWithCachedMacShell(initialDirectory: File?): File? {
   if (!cachedMacShellSupportsDirectoryPicking()) return null
-  val binary = File(System.getProperty("user.home"), ".trailblaze/bin/Trail Runner")
+  val binary = File(System.getProperty("user.home"), ".trailblaze/bin/Trailblaze App")
   val process = ProcessBuilder(
     listOf(binary.absolutePath, "--pick-directory", initialDirectory?.absolutePath.orEmpty()),
   ).redirectError(ProcessBuilder.Redirect.DISCARD).start()
@@ -68,7 +68,7 @@ private fun pickMacDirectory(initialDirectory: File?): File? {
   val property = "apple.awt.fileDialogForDirectories"
   val previous = System.getProperty(property)
   System.setProperty(property, "true")
-  val dialog = FileDialog(null as Frame?, "Choose Trail Runner workspace", FileDialog.LOAD)
+  val dialog = FileDialog(null as Frame?, "Choose a Trailblaze workspace", FileDialog.LOAD)
   return try {
     dialog.directory = initialDirectory?.absolutePath
     dialog.isAlwaysOnTop = true
@@ -84,7 +84,7 @@ private fun pickMacDirectory(initialDirectory: File?): File? {
 
 private fun pickSwingDirectory(initialDirectory: File?): File? {
   val chooser = JFileChooser(initialDirectory).apply {
-    dialogTitle = "Choose Trail Runner workspace"
+    dialogTitle = "Choose a Trailblaze workspace"
     fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
     isAcceptAllFileFilterUsed = false
   }

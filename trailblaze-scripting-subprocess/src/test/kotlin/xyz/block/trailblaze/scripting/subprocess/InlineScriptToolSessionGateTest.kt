@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolRuntime
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import java.io.File
 import java.nio.file.Files
@@ -59,6 +60,24 @@ class InlineScriptToolSessionGateTest {
     description = "Write a note.",
     runtime = ScriptedToolRuntime.SUBPROCESS,
   )
+
+  @Test fun `a classifier-gated tool is spawnable only on a device carrying that classifier`() {
+    val rigOnly = unrestricted.copy(
+      name = "shopapp_readRigSensor",
+      meta = buildJsonObject {
+        put("trailblaze/requiredClassifiers", buildJsonArray { add("rig") })
+      },
+    )
+    fun spawnableOn(vararg classifiers: String) = SubprocessToolRegistrar.applicableInlineTools(
+      tools = listOf(rigOnly, unrestricted),
+      driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      preferHostAgent = true,
+      classifiers = classifiers.map(::TrailblazeDeviceClassifier),
+    ).map { it.name }
+
+    assertThat(spawnableOn("android", "phone", "rig")).containsExactly("shopapp_readRigSensor", "shopapp_writeNote")
+    assertThat(spawnableOn("android", "phone")).containsExactly("shopapp_writeNote")
+  }
 
   @Test fun `web-only tool is not spawnable in an android session`() {
     val spawnable = SubprocessToolRegistrar.applicableInlineTools(

@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
@@ -81,6 +82,10 @@ internal class ScriptedToolDefinitionCache(
    */
   val dependencyKey: String,
 ) {
+
+  init {
+    TrailblazeDesktopUtil.markCacheDirectory(cacheRoot)
+  }
 
   /**
    * Look up a cache entry for [trailmapToolsDir] keyed on the content hash derived from
@@ -516,6 +521,7 @@ internal class ScriptedToolDefinitionCache(
     val outputSchema: JsonObject,
     val spec: JsonObject? = null,
     val uncapturedSpec: Boolean = false,
+    val uncapturedSpecFields: List<String> = emptyList(),
   ) {
     fun toDefinition(): ScriptedToolDefinition = ScriptedToolDefinition(
       name = name,
@@ -526,6 +532,7 @@ internal class ScriptedToolDefinitionCache(
       outputSchema = outputSchema,
       spec = spec,
       uncapturedSpec = uncapturedSpec,
+      uncapturedSpecFields = uncapturedSpecFields,
     )
 
     companion object {
@@ -538,6 +545,7 @@ internal class ScriptedToolDefinitionCache(
         outputSchema = def.outputSchemaObject,
         spec = def.spec,
         uncapturedSpec = def.uncapturedSpec,
+        uncapturedSpecFields = def.uncapturedSpecFields,
       )
     }
   }

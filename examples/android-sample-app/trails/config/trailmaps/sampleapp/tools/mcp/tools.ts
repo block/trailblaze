@@ -44,8 +44,7 @@ server.registerTool(
   "generateTestUser",
   {
     description:
-      "Generates a random test user with {name, email}. Use whenever a trail needs a fresh identity " +
-      "(signup, form entry, login flows). Each call returns a different user.",
+      "Generates a random test user as {name, email}. Each call returns a different user.",
     inputSchema: {},
   },
   async () => {
@@ -66,8 +65,7 @@ server.registerTool(
   "currentEpochMillis",
   {
     description:
-      "Returns the current Unix epoch time in milliseconds, as a string. Useful for date-picker " +
-      "tests or stamping test artifacts with a timestamp.",
+      "Returns the current Unix epoch time in milliseconds, as a string.",
     inputSchema: {},
   },
   async () => ({

@@ -30,9 +30,17 @@ class SessionEventsParityFixturesTest {
   @Serializable
   private data class FileNameCase(val file: String, val name: String?)
 
-  /** `payload == null` means the line is skipped; `t == null` means no ordering timestamp. */
+  /**
+   * `payload == null` means the line is skipped; `t == null` means no ordering timestamp; `clock ==
+   * null` means the host clock.
+   */
   @Serializable
-  private data class LineCase(val line: String, val t: Long? = null, val payload: JsonElement? = null)
+  private data class LineCase(
+    val line: String,
+    val t: Long? = null,
+    val payload: JsonElement? = null,
+    val clock: String? = null,
+  )
 
   /** `refs` is the exact expected sweep result in document order; `label == null` means absent. */
   @Serializable
@@ -75,6 +83,8 @@ class SessionEventsParityFixturesTest {
     assertEquals(expected.map { it.payload }, stream.events.map { it.data }, "decoded payloads (skipped lines excluded)")
     // The JVM reader represents "no ordering timestamp" as 0.
     assertEquals(expected.map { it.t ?: 0L }, stream.events.map { it.timeMs }, "ordering timestamps")
+    // No session_device_clock.json in this session, so a device-stamped line keeps its raw stamp and says so.
+    assertEquals(expected.map { it.clock }, stream.events.map { it.clock?.wireName }, "clock markers")
   }
 
   @Test

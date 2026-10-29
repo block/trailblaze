@@ -3,6 +3,7 @@ import {
   SELECTORS,
   articleUrlForLanguage,
   nonEmptyString,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 // Wikipedia accepts a wide range of language codes — including two-letter
@@ -19,22 +20,17 @@ import {
 const LANG_CODE_PATTERN = /^[a-z]{2,3}(-[a-z0-9]+)*$/i;
 
 export interface SwitchArticleLanguageArgs {
-  /** English article title. */
+  /** Article title as used on the target-language site, e.g. "Albert Einstein". */
   title?: string;
   /** Wikipedia language code (`es`, `fr`, `zh-min-nan`, …). */
   languageCode?: string;
-  /** Visible heading text in the localized article. */
+  /** Heading text of the localized article. Defaults to `title`. */
   expectedHeading?: string;
 }
 
 /**
- * Open the same Wikipedia article in a different language. Use this
- * whenever the task is to switch language, view in another language, or
- * read the Spanish/French/German/Japanese/etc. version of a Wikipedia
- * article. Routes directly to the matching language subdomain
- * (`es.wikipedia.org`, `fr.wikipedia.org`, …) rather than driving through
- * the in-page language picker (which varies a lot across skins). Verifies
- * the destination article's first heading is visible.
+ * Open a Wikipedia article in another language by going straight to that
+ * language's site, and verify its heading.
  */
 // The header language picker varies a lot between skins and articles (some
 // have a dropdown, some inline a list, some hide it behind a chevron); jumping
@@ -46,7 +42,7 @@ export interface SwitchArticleLanguageArgs {
 // article header — without it, the text check could match content elsewhere on
 // a non-article page (e.g. a sister-projects portal landing).
 export const wikipedia_web_switchArticleLanguage = trailblaze.tool<SwitchArticleLanguageArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, "Albert Einstein");
     const languageCode = nonEmptyString(input.languageCode, "es").toLowerCase();
@@ -65,7 +61,7 @@ export const wikipedia_web_switchArticleLanguage = trailblaze.tool<SwitchArticle
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.firstHeading,
     });
-    await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+    await ctx.tools.web_verifyElementVisible({ ref: articleHeadingRef(expectedHeading) });
 
     return `Switched "${title}" to ${languageCode}.wikipedia.org and verified heading "${expectedHeading}".`;
   },

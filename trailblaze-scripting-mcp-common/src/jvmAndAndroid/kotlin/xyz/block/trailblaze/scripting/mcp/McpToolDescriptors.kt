@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.scripting.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 
@@ -15,10 +17,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
  * Extracts per-property `type` + `description` + `enum` and partitions by the schema's
  * `required` list. A property with a JSON-Schema `enum` array threads its allowed values into
  * [TrailblazeToolParameterDescriptor.validValues] so the LLM-facing function-call schema can
- * constrain the argument rather than seeing a bare `type: string`. Nested shapes, `oneOf`, and
- * defaults still aren't reflected — a property with `type: "object"` registers as `"object"`
- * and the LLM sees a flat schema hint. The MCP handler receives the full raw JSON regardless,
- * so correctness isn't affected — only LLM-facing UX is.
+ * constrain the argument rather than seeing a bare `type: string`. The full schema also rides on
+ * [TrailblazeToolDescriptor.inputSchema], which is what lets an `array` / `object` property reach the
+ * LLM with its `items` / nested `properties` instead of a flat `"array"` hint (see
+ * `TrailblazeKoogTool.toKoogToolDescriptor`). `oneOf` and defaults still aren't reflected.
  */
 fun ToolSchema.toTrailblazeToolDescriptor(
   name: String,
@@ -40,7 +42,13 @@ fun ToolSchema.toTrailblazeToolDescriptor(
     description = description,
     requiredParameters = all.filter { it.name in requiredNames },
     optionalParameters = all.filter { it.name !in requiredNames },
-  )
+  ).apply {
+    // Body property (not a constructor arg) to keep the descriptor's public JVM ABI stable. `copy`
+    // drops it, so a caller that copies the descriptor must carry it across.
+    if (properties.isNotEmpty()) {
+      inputSchema = Json.encodeToJsonElement(ToolSchema.serializer(), this@toTrailblazeToolDescriptor).jsonObject
+    }
+  }
 }
 
 private fun JsonObject.propertyType(): String =

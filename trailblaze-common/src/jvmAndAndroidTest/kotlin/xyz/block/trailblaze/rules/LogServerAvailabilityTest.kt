@@ -42,6 +42,36 @@ class LogServerAvailabilityTest {
   }
 
   @Test
+  fun `a warm ping that reached the server spares the first log its probe`() {
+    var probes = 0
+    val availability = LogServerAvailability(probe = { probes++; true }, nowMs = { 0L })
+
+    availability.warm()
+    assertTrue(availability.isAvailable())
+
+    assertEquals(1, probes, "the first log reused the warm ping's answer")
+  }
+
+  @Test
+  fun `a warm ping that missed does not hold the first log to a backoff`() {
+    // The channel can come up between the warm ping and the first log. A recorded miss would send
+    // that log to disk for a whole retry window; the warm miss must leave it to ask for itself.
+    var probes = 0
+    var serverUp = false
+    val availability = LogServerAvailability(
+      probe = { probes++; serverUp },
+      initialRetryAfterMs = 60_000,
+      nowMs = { 0L },
+    )
+
+    availability.warm()
+    serverUp = true
+
+    assertTrue(availability.isAvailable())
+    assertEquals(2, probes)
+  }
+
+  @Test
   fun `repeated misses back off, doubling up to the cap`() {
     var now = 0L
     val probeTimes = mutableListOf<Long>()

@@ -1,13 +1,9 @@
 ---
 name: trailblaze-author
-description: |
-  Use when turning a captured human demonstration (a Trail Runner
-  demonstration bundle: demo.yaml + actions.ndjson + per-action
-  screenshots and view hierarchies) into a durable, independently
-  runnable Trailblaze trail. Trigger when a prompt hands you a
-  demonstration bundle directory and asks you to author, generate,
-  or produce the trail for it - or to add another platform's
-  recordings to an existing trail from a new demonstration.
+description: >
+  Turn Trailblaze App demo bundles (`demo.yaml`, `actions.ndjson`, screenshots,
+  hierarchies) into runnable trails or add another platform's recording to an
+  existing trail; verify by running.
 ---
 
 # Author a trail from a demonstration bundle
@@ -47,9 +43,9 @@ framework source. When you do need to explore the codebase or read many files
 at once, hand that read-only legwork to a cheaper-model subagent and keep the
 authoring and verification on yourself.
 
-After every change you make to a trail file, emit a `trail_output` so Trail
-Runner can show the current file. Tool calls that need a human decision pause
-in Trail Runner until the human approves them, so a slow tool call is waiting on
+After every change you make to a trail file, emit a `trail_output` so the
+Trailblaze App can show the current file. Tool calls that need a human decision pause
+in Trailblaze App until the human approves them, so a slow tool call is waiting on
 a person, not hung; keep working the plan and it will resume once approved.
 
 ## Phase 1 - Understand

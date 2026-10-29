@@ -4,7 +4,7 @@
 
 # `takeSnapshot`
 
-Take a snapshot of the current page and save it under the provided screen name.
+Save a screenshot of the current screen to the session log under a screen name.
 
 ## Source
 
@@ -22,12 +22,12 @@ Take a snapshot of the current page and save it under the provided screen name.
 ### Required parameters
 
 - `screenName` — `String`
-  Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation').
+  Screen name, e.g. 'login_screen'.
 
 ### Optional parameters
 
 - `description` — `String`
-  Optional description of what this snapshot captures or why it was taken.
+  What the snapshot captures or why it was taken.
 
 ## Output
 

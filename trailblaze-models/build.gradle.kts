@@ -111,6 +111,16 @@ trailblazeSdkDtsBundle {
   // into a consumer repo one level shallower.
   sdkDtsMatcherBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/matcher.d.ts"))
   sdkMatcherRuntimeOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/matcher.js"))
+  // Bundles for `@trailblaze/scripting/surveys` (session surveys, waypoints, snapshots). A
+  // trailmap's `surveys/` — and the `*.test.ts` beside them — import from this subpath, so
+  // they typecheck and run in the repo that owns the trailmap, not only in this one.
+  sdkDtsSurveysBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/surveys.d.ts"))
+  sdkSurveysRuntimeOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/surveys.js"))
+  // The sandbox build of the surveys subpath, for a survey bundled to run mid-trail by an
+  // install with no SDK source.
+  sdkSurveysInProcessRuntimeOutputFile.set(
+    layout.projectDirectory.file("../sdks/typescript/dist/surveys-in-process.js"),
+  )
 }
 
 configurations.all {
@@ -192,6 +202,7 @@ kotlin {
 
   sourceSets {
     commonMain.dependencies {
+      api(project(":trailblaze-trail-format"))
       implementation(libs.coroutines)
       implementation(libs.kaml)
       implementation(libs.koog.agents.tools)
@@ -385,6 +396,10 @@ val copyTypescriptSdkResources by tasks.registering(Copy::class) {
   // resolves the `dist/matcher` stem to `matcher.d.ts` under tsc and `matcher.js` under bun.
   from(layout.projectDirectory.file("../sdks/typescript/dist/matcher.d.ts"))
   from(layout.projectDirectory.file("../sdks/typescript/dist/matcher.js"))
+  // Declaration + runtime pair for `@trailblaze/scripting/surveys`, same resolution.
+  from(layout.projectDirectory.file("../sdks/typescript/dist/surveys.d.ts"))
+  from(layout.projectDirectory.file("../sdks/typescript/dist/surveys.js"))
+  from(layout.projectDirectory.file("../sdks/typescript/dist/surveys-in-process.js"))
   into(layout.buildDirectory.dir("generated-resources/sdk/trails/config/sdk/typescript/dist"))
 }
 

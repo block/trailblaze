@@ -162,7 +162,11 @@ class ViewHierarchyOnlyDriver(
     TODO("Not yet implemented")
   }
 
-  override fun isUnicodeInputSupported(): Boolean {
+  override fun isDarkModeEnabled(): Boolean {
+    TODO("Not yet implemented")
+  }
+
+  override fun setDarkMode(enabled: Boolean) {
     TODO("Not yet implemented")
   }
 

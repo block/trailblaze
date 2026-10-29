@@ -61,7 +61,7 @@ export const wikipedia_conditional_action_demo = trailblaze.tool<
   ConditionalActionDemoInput,
   ConditionalActionDemoOutput
 >(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (_input, ctx) => {
     // The fundraising banner's close button — Codex skin's ARIA shape. Same
     // probe `wikipedia_web_dismissBannerIfPresent.ts` uses, intentionally so

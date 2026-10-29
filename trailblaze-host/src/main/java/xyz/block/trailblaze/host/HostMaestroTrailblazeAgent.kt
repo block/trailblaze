@@ -5,6 +5,7 @@ import kotlinx.datetime.Clock
 import maestro.device.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.MigrationScreenState
@@ -43,12 +44,14 @@ class HostMaestroTrailblazeAgent(
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
   sessionDirProvider: ((SessionId) -> File)? = null,
+  memory: AgentMemory = AgentMemory(),
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   nodeSelectorMode = nodeSelectorMode,
   trailblazeToolRepo = trailblazeToolRepo,
+  memory = memory,
   resolvedTarget = resolvedTarget,
   appId = appId,
   sessionDirProvider = sessionDirProvider,
@@ -73,6 +76,13 @@ class HostMaestroTrailblazeAgent(
       traceId = traceId,
     )
 
+  // Keep the original batch together so the host logger can mask a launch credential reused
+  // by a later command. The runner still executes and logs commands one at a time.
+  override suspend fun runMaestroCommands(
+    maestroCommands: List<Command>,
+    traceId: TraceId?,
+  ): TrailblazeToolResult = executeMaestroCommands(maestroCommands, traceId)
+
   /**
    * Resolves the [nodeSelector] against the current iOS TrailblazeNode tree and taps
    * at the matched node's center point. Falls back to Maestro Orchestra if:
@@ -85,6 +95,9 @@ class HostMaestroTrailblazeAgent(
     longPress: Boolean,
     // Ignored — this agent has only the coordinate-gesture path, so there is no route to pin.
     tapRoute: TapRouteOverride?,
+    // Not needed here: this reads the tree once, and a miss returns null so the caller's Maestro
+    // fallback (which carries the wait — see [TapOnByElementSelector.toMaestroCommands]) runs.
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null
@@ -113,7 +126,7 @@ class HostMaestroTrailblazeAgent(
         TrailblazeToolResult.Success()
       }
       // For multiple matches, mark the first resolved node — consistent with how
-      // verifyTextEquality / resolveToCenter pick a representative from a match list — rather
+      // resolveToCenter picks a representative from a match list — rather
       // than defaulting the marker to screen center.
       is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
         logAssertScreenState(nodeSelector = nodeSelector, matchedNode = result.nodes.firstOrNull(), isVisible = true)

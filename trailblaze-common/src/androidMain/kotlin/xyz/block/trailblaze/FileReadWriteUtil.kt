@@ -49,11 +49,16 @@ object FileReadWriteUtil {
     }
   }
 
+  /**
+   * [mimeType] defaults to the JSON logs this was written for. A file of another type needs its
+   * own: MediaStore may rename a file whose extension disagrees with its MIME type.
+   */
   fun writeToDownloadsFile(
     context: Context,
     fileName: String,
     contentBytes: ByteArray,
     directory: String?,
+    mimeType: String = "text/json",
   ): Uri? {
     val resolver = context.contentResolver
     deleteFromDownloadsIfExists(context, fileName)
@@ -62,7 +67,7 @@ object FileReadWriteUtil {
       // Scoped storage: use MediaStore
       val values = ContentValues().apply {
         put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-        put(MediaStore.Downloads.MIME_TYPE, "text/json")
+        put(MediaStore.Downloads.MIME_TYPE, mimeType)
         put(MediaStore.Downloads.IS_PENDING, 1)
         directory?.let {
           put(MediaStore.Downloads.RELATIVE_PATH, "Download/$directory")

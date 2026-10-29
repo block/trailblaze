@@ -11,14 +11,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("compose_verify_text_visible", isVerification = true)
-@LLMDescription(
-  """
-Verify that specific text is visible on screen.
-This is a test assertion — it will fail if the text is not found.
-""",
-)
+@LLMDescription("Assert an element with this exact text is on screen.")
 data class ComposeVerifyTextVisibleTool(
-  @param:LLMDescription("The text content to verify is visible.")
+  @param:LLMDescription("Expected text, exact whole-text match.")
   val text: String,
 ) : ComposeExecutableTool {
 

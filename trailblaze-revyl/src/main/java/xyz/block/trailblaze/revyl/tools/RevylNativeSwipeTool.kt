@@ -15,14 +15,11 @@ import xyz.block.trailblaze.util.Console
  */
 @Serializable
 @TrailblazeToolClass("revyl_swipe")
-@LLMDescription(
-  "Swipe on the device screen in a direction (up, down, left, right). " +
-    "Optionally start from a specific element.",
-)
+@LLMDescription("Swipe in a direction, optionally starting from an element.")
 data class RevylNativeSwipeTool(
-  @param:LLMDescription("Swipe direction: 'up', 'down', 'left', or 'right'.")
+  @param:LLMDescription("'up', 'down', 'left', or 'right'.")
   val direction: String,
-  @param:LLMDescription("Optional element to start the swipe from.")
+  @param:LLMDescription("Element to start from, in natural language.")
   val target: String = "",
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {

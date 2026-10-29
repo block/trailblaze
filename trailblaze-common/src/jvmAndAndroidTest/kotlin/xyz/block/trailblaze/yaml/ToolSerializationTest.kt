@@ -13,6 +13,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.toolcalls.commands.AssertMatchCountTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
@@ -23,8 +24,8 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
@@ -50,8 +51,11 @@ class ToolSerializationTest {
   private val androidClassifier = listOf(TrailblazeDeviceClassifier("android"))
 
   /** Decode a unified doc and return the single recorded step's tool wrappers. */
-  private fun decodeRecordedTools(yaml: String): List<TrailblazeToolYamlWrapper> =
-    trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier)
+  private fun decodeRecordedTools(
+    yaml: String,
+    decoder: TrailblazeYaml = trailblazeYaml,
+  ): List<TrailblazeToolYamlWrapper> =
+    decoder.decodeTrail(yaml, deviceClassifiers = androidClassifier)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools
 
@@ -268,10 +272,7 @@ trail:
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
     assertThat(wrapper.name).isEqualTo("eraseText")
-    // eraseText is now a YAML-defined (`tools:` mode) tool — decodes to
-    // YamlDefinedTrailblazeTool with an empty caller-params map.
-    assertThat(wrapper.trailblazeTool)
-      .isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
+    assertThat(wrapper.trailblazeTool).isEqualTo(EraseTextTrailblazeTool(charactersToErase = null))
   }
 
   @Test
@@ -290,28 +291,7 @@ trail:
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
     assertThat(wrapper.name).isEqualTo("eraseText")
-    val tool = wrapper.trailblazeTool as xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
-    assertThat(tool.params.containsKey("charactersToErase")).isEqualTo(true)
-  }
-
-  @Test
-  fun deserializePressBackTool() {
-    // `pressBack` is now a YAML-defined tool (see trails/config/tools/pressBack.yaml).
-    // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - pressBack: {}
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    assertThat(tools.size).isEqualTo(1)
-    val wrapper = tools[0]
-    assertThat(wrapper.name).isEqualTo("pressBack")
-    assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
+    assertThat(wrapper.trailblazeTool).isEqualTo(EraseTextTrailblazeTool(charactersToErase = 10))
   }
 
   @Test
@@ -657,6 +637,33 @@ trail:
     )
   }
 
+  /**
+   * Trails set `timeoutMs` on a selector tap to wait out a late-rendering target. The field used to
+   * be missing from the tool, so decoding dropped it without an error and the tap waited only the
+   * driver default.
+   */
+  @Test
+  fun tapOnElementBySelectorKeepsTimeoutMs() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: the tab row renders late
+            timeoutMs: 30000
+            nodeSelector:
+              androidAccessibility:
+                textRegex: More cart options
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    val tap = reDecoded.single().trailblazeTool as TapOnByElementSelector
+    assertThat(tap.timeoutMs).isEqualTo(30_000L)
+  }
+
   @Test
   fun waitForChangeRoundTrip() {
     val yaml = """
@@ -874,29 +881,24 @@ trail:
   }
 
   @Test
-  fun deserializeTapOnElementWithTextTool() {
+  fun deserializeTapOnElementBySelectorWithNodeSelector() {
     val yaml = """
 config: {}
 trail:
   - step: recorded
     recording:
       android:
-        - tapOnElementWithText:
-            text: Sign Out
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: '(?is).*\QSign Out\E.*'
     """.trimIndent()
 
     val tools = decodeRecordedTools(yaml)
     assertThat(tools.size).isEqualTo(1)
-    TrailblazeToolYamlWrapper(
-      name = "tapOnElementWithText",
-      trailblazeTool = TapOnElementWithTextTrailblazeTool(
-        text = "Sign Out",
-        index = 0,
-        id = null,
-        enabled = null,
-        selected = null,
-      ),
-    )
+    val tool = tools[0].trailblazeTool as TapOnByElementSelector
+    val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.textRegex).isEqualTo("(?is).*\\QSign Out\\E.*")
   }
 
   @Test
@@ -940,7 +942,7 @@ trail:
     val tools = decodeRecordedTools(yaml)
     assertThat(tools.size).isEqualTo(1)
     TrailblazeToolYamlWrapper(
-      name = "tapOnElementWithText",
+      name = "longPressOnElementWithText",
       trailblazeTool = LongPressOnElementWithTextTrailblazeTool(
         text = "Sign Out",
         index = null,

@@ -5,7 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 
@@ -72,18 +71,12 @@ class StaleUberJarPrunerTest {
 
   @Test
   fun `throws naming the artifact when a stale delete does not take`() {
-    val dir = dirWith("current.jar", "stale.jar")
-    // A read-only parent makes delete() return false on POSIX. Skip (not fail) where the
-    // environment ignores that (e.g. running as root): the property under test is the
-    // throw-on-survivor contract, not the platform's permission model.
-    assumeTrue(dir.setWritable(false))
-    try {
-      assumeTrue(!File(dir, "stale.jar").delete())
+    val dir = dirWith("current.jar")
+    // File.delete() returns false for a non-empty directory, for any user, root included; a
+    // read-only parent would not stop root.
+    File(dir, "stale.jar").apply { mkdir() }.resolve("inside").writeText("x")
 
-      val e = assertFailsWith<IOException> { StaleUberJarPruner.prune(dir, "current.jar") }
-      assertTrue(e.message!!.contains("stale.jar"))
-    } finally {
-      dir.setWritable(true)
-    }
+    val e = assertFailsWith<IOException> { StaleUberJarPruner.prune(dir, "current.jar") }
+    assertTrue(e.message!!.contains("stale.jar"))
   }
 }

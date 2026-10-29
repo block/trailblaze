@@ -70,17 +70,8 @@ myapp_launchApp               ← the trailhead; recorded under `all:` in every 
 
 Trails stay platform-free, and each platform's steps live in their own tool, so you can change one
 platform without touching the other. Put each tool in its own file under the trailmap's `tools/`
-directory, and list all three names in `trailmap.yaml`; a scripted tool the
-target doesn't list is not available to it:
-
-```yaml
-# trailmap.yaml
-target:
-  tools:
-    - myapp_launchApp
-    - myapp_android_launchApp
-    - myapp_ios_launchApp
-```
+directory. Nothing to list in `trailmap.yaml`: every scripted tool in `tools/` is on the target,
+and each tool's `supportedPlatforms` / `supportedDrivers` scope it to its platform and drivers.
 
 For a small app, a single tool with an `if` on `ctx.device.platform` works too. Split it once the
 branches grow.
@@ -90,12 +81,9 @@ branches grow.
 import { trailblaze } from "@trailblaze/scripting";
 
 /** Opens MyApp signed in on the home screen, from any state, on Android or iOS. */
-export const myapp_launchApp = trailblaze.tool(
+export const myapp_launchApp = trailblaze.trailhead(
   {
     supportedPlatforms: ["android", "ios"],
-    requiresContext: true,
-    // The landing waypoint differs per platform, so the cross-platform entry is `dynamic`.
-    trailhead: { dynamic: true },
   },
   async (_input, ctx) => {
     if (ctx.device.platform === "ios") return ctx.tools.myapp_ios_launchApp({});
@@ -110,7 +98,7 @@ import { trailblaze } from "@trailblaze/scripting";
 
 /** Android half of myapp_launchApp: fresh data, notifications allowed, app on screen. */
 export const myapp_android_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true, surfaceToLlm: false },
+  { supportedPlatforms: ["android"], surfaceToLlm: false },
   async (_input, ctx) => {
     const appId = "com.example.myapp";
     await ctx.tools.mobile_clearAppData({ appId });
@@ -131,12 +119,12 @@ import { trailblaze } from "@trailblaze/scripting";
 
 /** iOS half of myapp_launchApp: fresh data, location allowed, app on screen. */
 export const myapp_ios_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["ios"], requiresContext: true, surfaceToLlm: false },
+  { supportedPlatforms: ["ios"], surfaceToLlm: false },
   async (_input, ctx) => {
     const appId = "com.example.myapp";
     await ctx.tools.ios_terminate({ appId }); // clearing data does not stop a running iOS app
     await ctx.tools.mobile_clearAppData({ appId });
-    await ctx.tools.ios_grantPrivacy({ appId, services: ["location"] });
+    await ctx.tools.ios_setPermissions({ appId, grant: ["location"] });
     await ctx.tools.openApp({ appId });
     return `Opened ${appId} from cleared data.`;
   },
@@ -152,32 +140,40 @@ from the agent: trailheads call them, the agent doesn't.
 |---|---|---|
 | Wipe the app's data | `mobile_clearAppData` | `mobile_clearAppData` |
 | Stop the app (keeps data) | `android_forceStop` | `ios_terminate` |
-| Grant runtime permissions | `android_grantPermissions` | `ios_grantPrivacy` |
+| Set runtime permissions | `android_grantPermissions` (clearing app data revokes them) | `ios_setPermissions` (`reset`, `revoke`, `grant` by simctl service name; `reset: ["all"]` drops grants an earlier trail left) |
+| Allow or deny notifications | `android_grantPermissions` (`POST_NOTIFICATIONS`) | `ios_setPermissions` (`notifications`: the driver answers the alert when it appears) |
+| Sign out (clear the keychain) | — | `ios_resetKeychain` |
 | Grant special-access permissions | `android_grantAppOpsPermission` | — |
 | Anything else | `android_adbShell` | — |
 | **Open the app and wait until it is on screen** | `openApp` | `openApp` |
+| Open with launch arguments (cold start) | — | `ios_openApp` |
 
 Rules of thumb:
 
 - **End with `openApp`.** It returns once the app is up: first frame drawn and in front on
   Android, then a few seconds at most for it to go idle (Android) or settle (iOS). An app that is
   still busy after that is reported, not failed; the next step's wait for its element takes over.
-- **On a physical iPhone** `openApp` launches through the driver, since simctl only reaches
-  simulators.
 - **On iOS, `ios_terminate` before `mobile_clearAppData`.** Android's clear kills the app; iOS's
   only deletes files, so a running app keeps its in-memory state and `openApp` brings it back.
 - **Grant iOS permissions before `openApp`.** simctl kills a running app when a grant changes.
 - **Want a cold start without losing sign-in?** Stop the app, then `openApp`. Clearing data signs
   the user out.
+- **iOS launch arguments** (a locale, a seeded session, a debug flag) go on `ios_openApp`, which is
+  `openApp` for iOS plus `arguments`: `ios_openApp({ appId, arguments: { AppleLanguages: "(es-US)" } })`.
+  Values are strings, numbers or booleans, passed as Maestro's `launchApp.arguments` passed them,
+  and string values are masked in logs, so a recording needs a memory reference (`{{token}}`)
+  rather than a literal. In trail YAML, `true`/`false` is always a boolean, quoted or not. They
+  only reach a cold start, so `ios_terminate` first; `ios_openApp` fails if the app is still
+  running.
 - **Only grant what the test needs.** A trailhead that grants everything hides which permissions
   the app depends on.
 
 ## Declaring a tool as a trailhead
 
-- **TypeScript**: `trailhead: { to: "<waypoint>" }` in the tool spec, or `{ dynamic: true }` when
-  the landing screen varies (by platform or input). No sidecar file needed.
+- **TypeScript**: `trailblaze.trailhead(spec, handler)` instead of `trailblaze.tool`. No sidecar
+  file and no waypoint needed. The optional `to: "<waypoint>"` only draws the trailhead on the
+  waypoint graph; nothing checks it, so assert the landing screen in the handler if it matters.
 - **Kotlin**: `@TrailblazeToolClass(trailheadTo = "<waypoint>")`.
-- **YAML (`tools:` mode)**: a `*.trailhead.yaml` in the trailmap's `trailheads/` directory.
 
-`toolbox trailheads` lists all three. To author the waypoints a trailhead lands on, see
+`toolbox trailheads` lists both. To author the waypoints a trailhead lands on, see
 [`compose-agent-surface.md`](compose-agent-surface.md).

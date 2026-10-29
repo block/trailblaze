@@ -24,6 +24,106 @@ class SensitiveValuesRedactionTest {
   private val redacted = JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER)
 
   @Test
+  fun preservesValidAuthoredReferenceNamesContainingADeclaredShortValue() {
+    val payload = OtherTrailblazeTool(
+      toolName = "fixture_tool",
+      raw = buildJsonObject {
+        put("argsRef", "{{args.oauth2Token}} value=2")
+        put("memoryRef", "\${oauth2Token} value=2")
+      },
+    )
+    val executed = OtherTrailblazeTool("fixture_tool", buildJsonObject {
+      put("argsRef", "actual-token value=2")
+      put("memoryRef", "actual-token value=2")
+    })
+    val scrubbed = payload.withSensitiveValuesRedacted(listOf("2", "2"), executed).raw
+    assertEquals(JsonPrimitive("{{args.oauth2Token}} value=<redacted>"), scrubbed["argsRef"])
+    assertEquals(JsonPrimitive("\${oauth2Token} value=<redacted>"), scrubbed["memoryRef"])
+  }
+
+  @Test
+  fun masksReferenceShapedLiteralWhenItWasNotResolved() {
+    val payload = OtherTrailblazeTool("fixture_tool", buildJsonObject { put("text", "{{abc123}}") })
+    assertEquals(
+      JsonPrimitive("{{<redacted>}}"),
+      payload.withSensitiveValuesRedacted(listOf("abc123"), payload).raw["text"],
+    )
+  }
+
+  @Test
+  fun masksDeclaredSecretInAnUnknownTokenThatWasBlanked() {
+    val payload = OtherTrailblazeTool("fixture_tool", buildJsonObject {
+      put("text", "prefix-\${TOKEN-secret}-suffix")
+    })
+    val executed = OtherTrailblazeTool("fixture_tool", buildJsonObject {
+      put("text", "prefix--suffix")
+    })
+
+    assertEquals(
+      JsonPrimitive("prefix-\${TOKEN-<redacted>}-suffix"),
+      payload.withSensitiveValuesRedacted(listOf("secret"), executed).raw["text"],
+    )
+  }
+
+  @Test
+  fun masksAnUnchangedTokenAfterAnotherReferenceResolves() {
+    val payload = OtherTrailblazeTool("fixture_tool", buildJsonObject {
+      put("text", "{{prefix}}\${TOKEN-secret}")
+    })
+    val executed = OtherTrailblazeTool("fixture_tool", buildJsonObject {
+      put("text", "abc\${TOKEN-secret}")
+    })
+    assertEquals(
+      JsonPrimitive("{{prefix}}\${TOKEN-<redacted>}"),
+      payload.withSensitiveValuesRedacted(listOf("secret"), executed).raw["text"],
+    )
+  }
+
+  @Test
+  fun masksASecretThatOverlapsOnlyPartOfAResolvedReference() {
+    val payload = OtherTrailblazeTool("fixture_tool", buildJsonObject { put("text", "pre{{token}}") })
+    val executed = OtherTrailblazeTool("fixture_tool", buildJsonObject { put("text", "prebound") })
+    assertEquals(
+      JsonPrimitive("<redacted>en}}"),
+      payload.withSensitiveValuesRedacted(listOf("pre{{tok"), executed).raw["text"],
+    )
+  }
+
+  @Test
+  fun preservesResolvedLegacyMemoryReferenceWithHyphenatedKey() {
+    val payload = OtherTrailblazeTool("fixture_tool", buildJsonObject { put("text", "{{session-token}}") })
+    val executed = OtherTrailblazeTool("fixture_tool", buildJsonObject { put("text", "resolved-value") })
+
+    assertEquals(
+      JsonPrimitive("{{session-token}}"),
+      payload.withSensitiveValuesRedacted(listOf("session"), executed).raw["text"],
+    )
+  }
+
+  @Test
+  fun masksDeclaredValuesInsideShellReferenceDefaults() {
+    val payload = OtherTrailblazeTool(
+      toolName = "fixture_tool",
+      raw = buildJsonObject { put("text", "\${TOKEN:-fixture-session-secret}") },
+    )
+
+    assertEquals(
+      JsonPrimitive("\${TOKEN:-<redacted>}"),
+      payload.withSensitiveValuesRedacted(listOf("fixture-session-secret")).raw["text"],
+    )
+  }
+
+  @Test
+  fun masksSecretsThatAreOrContainAWholeReference() {
+    for (secret in listOf("{{credential}}", "prefix-{{credential}}-suffix")) {
+      val payload = OtherTrailblazeTool(
+        toolName = "fixture_tool", raw = buildJsonObject { put("text", secret) },
+      )
+      assertEquals(redacted, payload.withSensitiveValuesRedacted(listOf(secret)).raw["text"])
+    }
+  }
+
+  @Test
   fun masksOneElementOfAnArrayAndKeepsItsNeighbours() {
     val payload = OtherTrailblazeTool(
       toolName = "fixture_tool",

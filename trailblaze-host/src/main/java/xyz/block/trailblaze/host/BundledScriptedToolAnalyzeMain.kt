@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.host
 
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -7,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.util.Console
@@ -28,10 +31,11 @@ import kotlin.system.exitProcess
  * binary/CLI uses: a contributor's `.ts` is self-describing; framework tools now resolve the same
  * way.
  *
- * **What "YAML-less" means here.** A `.ts` under `<trailmap>/tools/` with no sibling `<name>.yaml`
- * descriptor. Tools that still ship a descriptor YAML keep flowing through the build-logic kaml path
+ * **What "YAML-less" means here.** A `.ts` under `<trailmap>/tools/` that no YAML descriptor names
+ * in `script:`. Tools that still ship a descriptor YAML keep flowing through the build-logic kaml path
  * untouched — this main only fills the gap for descriptor-less `.ts` files, so the migration is
- * opt-in per file (delete a sidecar to adopt the analyzer path).
+ * opt-in per file (delete a sidecar to adopt the analyzer path). A meta-only descriptor (`script:`
+ * plus optional `_meta:`, no `name:`) is described here too, since only the `.ts` can name it.
  *
  * **Reuses production enrichment verbatim.** Each descriptor-less `.ts` becomes a meta-only
  * [TrailmapScriptedToolFile] (`script: ./<name>.ts`, no other fields) — the same synthetic shape the
@@ -64,6 +68,8 @@ object BundledScriptedToolAnalyzeMain {
   }
 
   /** Top-level `id: <value>` line in a trailmap manifest (column 0, optional quotes/comment). */
+  private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
   private val TRAILMAP_ID_LINE = Regex("""^id:\s*["']?([A-Za-z0-9_.\-]+)["']?\s*(#.*)?$""")
 
   /**
@@ -79,7 +85,7 @@ object BundledScriptedToolAnalyzeMain {
    * time but skipped at runtime (or vice versa). There is no compile-time check that they agree.
    */
   private val TYPED_TOOL_BINDING_PATTERN =
-    Regex("""(?m)^\s*export\s+const\s+\w+\s*=\s*trailblaze\.tool\s*[<(]""")
+    Regex("""(?m)^\s*export\s+const\s+\w+\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
 
   @JvmStatic
   fun main(args: Array<String>) {
@@ -141,11 +147,9 @@ object BundledScriptedToolAnalyzeMain {
           // Recursive so descriptor-less `.ts` tools organized into `tools/<subdir>/` (by
           // platform/category) are analyzed — otherwise a `target.tools:` entry for a subfoldered
           // bare `.ts` resolves to nothing downstream. Mirrors the recursive trailmap walk above.
-          val descriptorlessTs = toolsDir.walkTopDown()
-            .filter { it.isFile && it.isDescriptorlessTypedToolFile() }
-            .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
-            .toList()
-          if (descriptorlessTs.isEmpty()) return@forEach
+          val descriptorlessTs = descriptorlessToolSources(toolsDir)
+          val partial = enrichableDescriptors(toolsDir)
+          if (descriptorlessTs.isEmpty() && partial.isEmpty()) return@forEach
 
           val trailmapId = readTrailmapId(manifest)
             ?: error("Trailmap manifest ${manifest.absolutePath} has no top-level `id:`")
@@ -154,6 +158,12 @@ object BundledScriptedToolAnalyzeMain {
             ScriptedToolEnrichment.DeferredDescriptor(
               relativePath = "tools/${ts.relativeTo(toolsDir).invariantSeparatorsPath}",
               descriptor = TrailmapScriptedToolFile(script = "./${ts.name}"),
+            )
+          } + partial.map { (yamlFile, descriptor) ->
+            // What the YAML declares rides along; the `.ts` fills the rest, as at runtime.
+            ScriptedToolEnrichment.DeferredDescriptor(
+              relativePath = "tools/${yamlFile.relativeTo(toolsDir).invariantSeparatorsPath}",
+              descriptor = descriptor,
             )
           }
           val results = enrichment.enrich(trailmapId, trailmapDir, toolsDir, deferred)
@@ -212,25 +222,64 @@ object BundledScriptedToolAnalyzeMain {
   }
 
   /**
-   * A `.ts` under [toolsDir] that has no sibling `<name>.yaml` descriptor. `.d.ts` / `.test.ts`
-   * are never tool sources. The sibling check is the opt-in boundary: a tool keeps its build-logic
-   * kaml path until its descriptor YAML is deleted.
+   * A `.ts` tool source. `.d.ts` / `.test.ts` are never tool sources. Whether a YAML descriptor
+   * owns it is decided by [yamlCoveredScripts] alone, as in the runtime loader — a same-named YAML
+   * that doesn't decode, or names another script, leaves this `.ts` descriptor-less.
    */
   private fun File.isDescriptorlessTypedToolFile(): Boolean {
     val n = name
     if (!n.endsWith(".ts") || n.endsWith(".d.ts") || n.endsWith(".test.ts")) return false
-    // Sibling descriptor lives in the SAME directory as the `.ts` (works whether the tool is at
-    // `tools/` root or under a `tools/<subdir>/` organizational folder).
-    val sibling = File(parentFile, n.removeSuffix(".ts") + ".yaml")
-    if (sibling.exists()) return false
-    // A descriptor-less `.ts` is a meta-only tool source only when it declares EXACTLY ONE typed
-    // export: zero = a shared helper module; two-or-more = a multi-export file the meta-only path
-    // can't disambiguate (it needs a YAML `tools:` descriptor), so it's not a descriptor-less source.
-    // Keeps recursive discovery from feeding multi-export subdir reference examples (e.g. the
-    // android-sample-app `host-tools/`/`quickjs-tools/` files) into enrichment, which would throw.
-    // SISTER-IMPL-TAG: typed-tool-binding-pattern.
-    return TYPED_TOOL_BINDING_PATTERN.findAll(readText()).count() == 1
+    // Zero typed exports = a shared helper module. One or more = a tool source registering every
+    // export. SISTER-IMPL-TAG: typed-tool-binding-pattern.
+    return TYPED_TOOL_BINDING_PATTERN.containsMatchIn(readText())
   }
+
+  /** The `.ts` files under [toolsDir] that no YAML descriptor covers and that export a typed tool. */
+  internal fun descriptorlessToolSources(toolsDir: File): List<File> {
+    val covered = yamlCoveredScripts(toolsDir)
+    return toolsDir.walkTopDown()
+      .filter { it.isFile && it.absoluteFile !in covered && it.isDescriptorlessTypedToolFile() }
+      .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
+      .toList()
+  }
+
+  /**
+   * YAML descriptors under [toolsDir] the runtime loader completes from their `.ts`
+   * ([TrailmapScriptedToolFile.requiresEnrichment]): meta-only (`script:` and optionally `_meta:`),
+   * or a `name:` with no description or schema. The build-logic kaml path can't describe them, so
+   * they are described here, keeping what the YAML declares.
+   */
+  internal fun enrichableDescriptors(toolsDir: File): List<Pair<File, TrailmapScriptedToolFile>> =
+    scriptedToolYamls(toolsDir)
+      .mapNotNull { yamlFile -> decodeDescriptor(yamlFile)?.let { yamlFile to it } }
+      .filter { (_, descriptor) -> descriptor.requiresEnrichment() }
+      .sortedBy { (yamlFile, _) -> yamlFile.relativeTo(toolsDir).invariantSeparatorsPath }
+      .toList()
+
+  private fun scriptedToolYamls(toolsDir: File): Sequence<File> =
+    toolsDir.walkTopDown().filter { f ->
+      f.isFile && f.name.endsWith(".yaml") &&
+        TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES.none { f.name.endsWith(it) }
+    }
+
+  private fun decodeDescriptor(yamlFile: File): TrailmapScriptedToolFile? = runCatching {
+    yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), yamlFile.readText())
+  }.getOrNull()
+
+  /**
+   * Every script a YAML descriptor under [toolsDir] names in `script:`, resolved against that
+   * YAML's directory — the loader's rule. A descriptor that selects some of a file's exports
+   * owns the file, so its other exports must not register here as descriptor-less tools. A YAML
+   * that doesn't decode covers nothing, as in the loader.
+   */
+  private fun yamlCoveredScripts(toolsDir: File): Set<File> =
+    scriptedToolYamls(toolsDir)
+      .mapNotNull { yamlFile ->
+        val script = decodeDescriptor(yamlFile)?.script ?: return@mapNotNull null
+        File(script).takeIf { it.isAbsolute }
+          ?: File(yamlFile.parentFile, script).toPath().normalize().toFile().absoluteFile
+      }
+      .toSet()
 
   private fun readTrailmapId(manifest: File): String? =
     manifest.readLines().firstNotNullOfOrNull { line ->

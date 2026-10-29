@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.rules
 
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import maestro.DeviceInfo
@@ -14,6 +15,8 @@ import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -24,7 +27,9 @@ import java.io.File
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
+import xyz.block.trailblaze.host.HostMigrationCapture
 import xyz.block.trailblaze.host.HostYamlRunResult
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.MaestroTrailblazeAgent
@@ -55,10 +60,10 @@ import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.model.toSessionToolRepo
+import xyz.block.trailblaze.host.persistedTrailYaml
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
 import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
-import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -83,7 +88,6 @@ abstract class BaseHostTrailblazeTest(
   protected val systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  customYamlToolNames: Set<ToolName> = setOf(),
   excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   maxRetries: Int = 0,
   private val appTarget: TrailblazeHostAppTarget? = null,
@@ -176,6 +180,15 @@ abstract class BaseHostTrailblazeTest(
    * Makes sure the targeted app is closed
    */
   abstract fun ensureTargetAppIsStopped()
+
+  /**
+   * [ensureTargetAppIsStopped], reporting whether a target app was there to stop. False means the
+   * run has no target app, so a language change's app restart stays owed to a later run.
+   */
+  open fun stopTargetAppForCleanup(): Boolean {
+    ensureTargetAppIsStopped()
+    return true
+  }
 
   /**
    * The connected device, fetched independently to avoid circular dependency with hostRunner.
@@ -275,6 +288,7 @@ abstract class BaseHostTrailblazeTest(
   val loggingRule: TrailblazeLoggingRule = hostLoggingRule
 
   init {
+    xyz.block.trailblaze.host.HostWaypointWiring.ensureInstalled()
     loggingRule.failureScreenStateProvider = { screenStateProvider() }
   }
 
@@ -387,9 +401,9 @@ abstract class BaseHostTrailblazeTest(
   }
 
   /**
-   * The active target's `excluded_tools:` surface (class / YAML / scripted) for this driver, when an
+   * The active target's `excluded_tools:` surface (class / scripted) for this driver, when an
    * [appTarget] was supplied. Threaded into the repo below so a host JUnit/CLI run honors the SAME
-   * scripted + YAML opt-outs the daemon and on-device paths do — not just the class-backed ones the
+   * scripted opt-outs the daemon and on-device paths do — not just the class-backed ones the
    * explicit [excludedToolClasses] param historically carried. Empty when no target was given.
    */
   private val targetExcludedSurface: TrailblazeToolSurface =
@@ -402,8 +416,6 @@ abstract class BaseHostTrailblazeTest(
         name = "Custom Tool Set",
         toolClasses = trailblazeToolSet.toolClasses + customToolClasses -
           (excludedToolClasses + targetExcludedSurface.toolClasses),
-        yamlToolNames = trailblazeToolSet.yamlToolNames + customYamlToolNames -
-          targetExcludedSurface.yamlToolNames,
         // Forward the explicit toolset's scripted tools too (they were silently dropped before)
         // and honor the target's scripted opt-outs, so this override branch stays symmetric with
         // the dynamic-catalog branch below.
@@ -420,11 +432,9 @@ abstract class BaseHostTrailblazeTest(
       driverType = trailblazeDriverType,
       additional = ResolvedAgentToolbox(
         toolClasses = customToolClasses,
-        yamlToolNames = customYamlToolNames,
       ),
       additionalExclusions = ResolvedToolExclusions(
         toolClasses = excludedToolClasses,
-        yamlToolNames = emptySet(),
         scriptedToolNames = emptySet(),
       ),
     )
@@ -457,11 +467,43 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       maxLlmCalls = null,
       systemPromptTemplate = TrailblazeSystemPrompt.compose(platformPrompt = systemPromptTemplate),
+      alwaysShownTools = appTarget?.getAlwaysShownToolNamesForDriver(trailblazeDriverType).orEmpty(),
     )
   }
 
   private val trailblazeYaml = TrailblazeYaml.Default
   private var currentToolTraceId: TraceId? = null
+
+  /**
+   * Per-tool migration snapshots for the in-host replay path (iOS / web). Same hooks the RPC
+   * path installs; capture goes through the synchronous [screenStateProvider] so there's no
+   * thread hop for the shared tool batch below to lose.
+   */
+  private val migrationHooks by lazy { migrationCaptureHooks() }
+
+  /**
+   * Assembles the hook args. Internal rather than inlined above so the gating decision — which is
+   * the part that can be wrong — is reachable without standing up a device.
+   *
+   * [hasProducer] is asked only per recorded tool, and only when [enabled], so a run with the
+   * switch off never forces [connectedDevice] just to answer a question it doesn't need answered.
+   */
+  internal fun migrationCaptureHooks(
+    enabled: Boolean = HostMigrationCapture.enabled(),
+    hasProducer: () -> Boolean = { HostMigrationCapture.hasHostProducer(connectedDevice) },
+  ): HostMigrationCapture.RecordedToolHooks? = HostMigrationCapture.recordedToolHooks(
+    enabled = enabled,
+    hasProducer = hasProducer,
+    captureScreenState = { screenStateProvider() },
+    sessionProvider = { loggingRule.session },
+    logSnapshot = { session, screenState, displayName ->
+      loggingRule.logger.logSnapshot(
+        session = session,
+        screenState = screenState,
+        displayName = displayName,
+      )
+    },
+  )
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
@@ -482,9 +524,12 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { loggingRule.setSession(it) },
+      onBeforeRecordedTool = migrationHooks?.onBefore,
+      onAfterRecordedTool = migrationHooks?.onAfter,
       // Replay each step's recorded tools inside one shared execution context + snapshot frame —
       // see AndroidTrailblazeRule's identical wiring for why (cross-tool device state survival).
       sharedToolBatch = { block -> trailblazeAgent.runInSharedToolBatch(block) },
+      trailheadReuse = TrailheadRuns.reuseEnabledFor(config.trailheadReuse),
     )
   }
 
@@ -502,75 +547,78 @@ abstract class BaseHostTrailblazeTest(
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
     useRecordedSteps: Boolean,
-  ): TrailblazeToolResult.Success? {
-    resolveTrailContextFromEnv()?.let { trailblazeRunner.appendToSystemPrompt(it) }
-    resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
-      val setupFile = File(setupTrailId)
-      if (setupFile.exists()) {
-        val setupClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
-        val setupItems = createTrailblazeYaml()
-          .decodeTrail(setupFile.readText(), deviceClassifiers = setupClassifiers)
-        for (setupItem in setupItems) {
-          val result =
-            when (setupItem) {
-              is TrailYamlItem.PromptsTrailItem ->
-                trailblazeRunnerUtil.runPromptSuspend(
-                  prompts = setupItem.promptSteps,
-                  useRecordedSteps = true,
-                  selfHeal = false,
-                )
-              is TrailYamlItem.TrailheadTrailItem ->
-                trailblazeRunnerUtil.runPromptSuspend(
-                  prompts = listOf(setupItem.trailhead.toPromptStep()),
-                  useRecordedSteps = true,
-                  selfHeal = false,
-                )
-              is TrailYamlItem.ToolTrailItem ->
-                trailblazeRunnerUtil.runTrailblazeTool(
-                  setupItem.tools.map { it.trailblazeTool }
-                )
-              is TrailYamlItem.ConfigTrailItem -> {
-                setupItem.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-                null // ConfigTrailItem has no tool result
+  ): TrailblazeToolResult.Success? =
+    // One trail, setup trail included: the trailhead's teardown runs after it, whatever the
+    // outcome.
+    trailblazeRunnerUtil.runTrail {
+      resolveTrailContextFromEnv()?.let { trailblazeRunner.appendToSystemPrompt(it) }
+      resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
+        val setupFile = File(setupTrailId)
+        if (setupFile.exists()) {
+          val setupClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+          val setupItems = createTrailblazeYaml()
+            .decodeTrail(setupFile.readText(), deviceClassifiers = setupClassifiers)
+          for (setupItem in setupItems) {
+            val result =
+              when (setupItem) {
+                is TrailYamlItem.PromptsTrailItem ->
+                  trailblazeRunnerUtil.runPromptSuspend(
+                    prompts = setupItem.promptSteps,
+                    useRecordedSteps = true,
+                    selfHeal = false,
+                  )
+                is TrailYamlItem.TrailheadTrailItem ->
+                  trailblazeRunnerUtil.runPromptSuspend(
+                    prompts = listOf(setupItem.trailhead.toPromptStep()),
+                    useRecordedSteps = true,
+                    selfHeal = false,
+                  )
+                is TrailYamlItem.ToolTrailItem ->
+                  trailblazeRunnerUtil.runToolItem(
+                    setupItem.tools.map { it.trailblazeTool }
+                  )
+                is TrailYamlItem.ConfigTrailItem -> {
+                  setupItem.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+                  null // ConfigTrailItem has no tool result
+                }
               }
+            if (result is TrailblazeToolResult.Error) {
+              throw TrailblazeException("Setup trail failed: ${result.errorMessage}")
             }
-          if (result is TrailblazeToolResult.Error) {
-            throw TrailblazeException("Setup trail failed: ${result.errorMessage}")
           }
         }
       }
+      var lastSuccess: TrailblazeToolResult.Success? = null
+      for (item in trailItems) {
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem ->
+            // Replays recorded steps deterministically and delegates only unrecorded steps to the
+            // agent.
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = useRecordedSteps,
+              selfHeal = resolveSelfHealFromEnvOrConfig(),
+            )
+          is TrailYamlItem.TrailheadTrailItem ->
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = resolveSelfHealFromEnvOrConfig(),
+            )
+          is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
+        // Only tool steps carry a payload worth surfacing. Prompt / trailhead steps return a bare
+        // Success(), so tracking them would let a trailing prompt overwrite a real tool payload.
+        if (item is TrailYamlItem.ToolTrailItem && itemResult is TrailblazeToolResult.Success) {
+          lastSuccess = itemResult
+        }
+      }
+      lastSuccess
     }
-    var lastSuccess: TrailblazeToolResult.Success? = null
-    for (item in trailItems) {
-      val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem ->
-          // Replays recorded steps deterministically and delegates only unrecorded steps to the
-          // agent.
-          trailblazeRunnerUtil.runPromptSuspend(
-            prompts = item.promptSteps,
-            useRecordedSteps = useRecordedSteps,
-            selfHeal = resolveSelfHealFromEnvOrConfig(),
-          )
-        is TrailYamlItem.TrailheadTrailItem ->
-          trailblazeRunnerUtil.runPromptSuspend(
-            prompts = listOf(item.trailhead.toPromptStep()),
-            useRecordedSteps = true,
-            selfHeal = resolveSelfHealFromEnvOrConfig(),
-          )
-        is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-      }
-      if (itemResult is TrailblazeToolResult.Error) {
-        throw TrailblazeException(itemResult.errorMessage)
-      }
-      // Only tool steps carry a payload worth surfacing. Prompt / trailhead steps return a bare
-      // Success(), so tracking them would let a trailing prompt overwrite a real tool payload.
-      if (item is TrailYamlItem.ToolTrailItem && itemResult is TrailblazeToolResult.Success) {
-        lastSuccess = itemResult
-      }
-    }
-    return lastSuccess
-  }
 
   private fun resolveTrailContextFromEnv(): String? =
     System.getenv(TRAILBLAZE_TRAIL_CONTEXT_ENV)
@@ -607,6 +655,8 @@ abstract class BaseHostTrailblazeTest(
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean,
     sendSessionStartLog: Boolean,
+    /** See [xyz.block.trailblaze.model.DesktopAppRunYamlParams.keepDeviceLanguage]. */
+    keepDeviceLanguage: Boolean = false,
     /**
      * CLI `--memory` / `--secret` seeds, composed with the trail's `config.memory:` block via
      * [xyz.block.trailblaze.AgentMemory.seedFrom] before any tool runs (later tiers win on a
@@ -620,15 +670,20 @@ abstract class BaseHostTrailblazeTest(
      * tiers (string args may carry memory tokens, so memory must land first).
      */
     initialArgs: Map<String, String> = emptyMap(),
+    trailSourceUrl: String? = null,
   ): HostYamlRunResult {
-    // Preserve the caller's cleanup contract even when decoding later resolves the trail to skip.
-    if (forceStopApp) {
-      ensureTargetAppIsStopped()
-    }
-
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this device. v1 inputs ignore the list.
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+
+    // Only a trail whose trailhead will take the reusable hand-off skips the clean start. A trail
+    // that can't be read here keeps it; the decode below reports the error.
+    val keepForReuse = TrailheadRuns.reuseEnabledFor(config.trailheadReuse) &&
+      runCatching { trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers) }
+        .getOrNull()?.let { TrailheadHandoffStore.holdsReusableFor(trailblazeDeviceId, it) } == true
+    // Preserve the caller's cleanup contract even when decoding later resolves the trail to skip.
+    val targetAppStopped = forceStopApp && !keepForReuse && stopTargetAppForCleanup()
+
     // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
     // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch on host Maestro / iOS-host)
     // additionally decodes to one ToolTrailItem. Host-runner single-tool dispatch now sends the bare
@@ -648,14 +703,23 @@ abstract class BaseHostTrailblazeTest(
     }
 
     // A locale is a device setting, not an app launch argument. Apply it before the session so the
-    // target's next process starts with the configured language.
-    val deviceLocale = trailConfig?.locale
-    deviceLocale?.let { DeviceLocaleConfigurator.apply(trailblazeDeviceId, it) }
+    // target's next process starts with the configured language. A trail that declares none runs in
+    // the default, so it does not inherit the last trail's language. A prompt or single tool sent
+    // into a running session keeps the session's language. A trail with no steps, which the run
+    // rejects below, leaves the device alone.
+    val localeChanged = TrailDeviceLocale.forRun(
+      declared = trailConfig?.locale,
+      continuesSession = keepDeviceLanguage || !sendSessionStartLog || trailblazeYaml.isBareToolEnvelope(yaml),
+    )?.takeIf { trailblazeYaml.hasActionableSteps(trailItems) }?.let { runInterruptible { DeviceLocaleConfigurator.applyForTrail(trailblazeDeviceId, it) } } ?: false
 
-    // A requested locale requires a fresh app process even when the caller opted out of the usual
+    // A changed language requires a fresh app process even when the caller opted out of the usual
     // clean start; otherwise an already-running app can keep rendering in its previous language.
-    if (!forceStopApp && deviceLocale != null) {
-      ensureTargetAppIsStopped()
+    // The restart also ends any setup a trailhead handed on in the old process.
+    if (localeChanged) {
+      TrailheadHandoffStore.dropDevice(trailblazeDeviceId)
+      val stopped = if (!forceStopApp || keepForReuse) stopTargetAppForCleanup() else targetAppStopped
+      // No target app was stopped, so the restart stays owed to the next run that has one.
+      if (stopped) DeviceLocaleConfigurator.cleanupDone(trailblazeDeviceId)
     }
 
     // Anchor trail-relative host paths (e.g. a WAV committed beside the trail) to THIS trail's
@@ -679,6 +743,7 @@ abstract class BaseHostTrailblazeTest(
     if (sendSessionStartLog) {
       val session = loggingRule.session
       if (session != null) {
+        (connectedDevice as? IosNativeConnectedDevice)?.onSessionStart(session.sessionId)
         // A session that runs under a real JUnit harness carries a Description we can read the
         // class/method from. CLI / daemon runs don't (the runner builds an anonymous
         // `object : BaseHostTrailblazeTest`, whose simpleName is empty), so derive a readable
@@ -702,9 +767,10 @@ abstract class BaseHostTrailblazeTest(
                 ?: derivedTestIdentity?.methodName
                 ?: "run",
               trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
-              rawYaml = yaml,
+              rawYaml = trailblazeYaml.persistedTrailYaml(yaml, trailItems),
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
               targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
@@ -737,6 +803,7 @@ abstract class BaseHostTrailblazeTest(
         launchedScripting = HostScriptedToolLauncher.launch(
           targetTestApp = appTarget,
           config = config,
+          trailFilePath = trailFilePath,
           sessionId = session.sessionId,
           deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
           logsRepo = hostLoggingRule.logsRepo,

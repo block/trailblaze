@@ -17,10 +17,7 @@ import xyz.block.trailblaze.util.Console
  */
 @Serializable
 @TrailblazeToolClass("revyl_doubleTap")
-@LLMDescription(
-  "Double-tap a UI element on the device screen. Describe the element in natural language. " +
-    "Use for zoom-in gestures on maps, image viewers, or any double-tap UI pattern.",
-)
+@LLMDescription("Double-tap an element, e.g. to zoom a map or image.")
 data class RevylNativeDoubleTapTool(
   @param:LLMDescription("Element to double-tap, described in natural language.")
   val target: String,

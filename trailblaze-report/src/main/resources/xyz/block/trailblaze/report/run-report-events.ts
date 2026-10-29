@@ -11,6 +11,8 @@
 // FormattedRow data (never HTML), and streams without a formatter keep the generic last-N,
 // truncated-preview shape the viewer has always rendered.
 
+import { clockTrackForStream, type DeviceClockSync, type DeviceClockTrack, trackToHostMs } from "./device-clock-sync";
+
 // This pipeline itself embeds event payloads IN FULL — no last-N event cap and no preview
 // truncation. Report size is kept in check by the driver (it gzips a session's events into
 // `eventsGz` past an inline threshold and enforces a loud total budget — see run-report-cli.ts),
@@ -50,8 +52,9 @@ export function parseStreamFileName(file: string): string | null {
 /**
  * Decode one NDJSON line. Mirrors the JVM SessionEventsReader envelope rule: a top-level `timeMs`
  * marks the `{ timeMs, data }` envelope (payload is `data`); otherwise the whole object is a bare
- * rich payload ordered by its own `timestampMs` when present. Locked against the JVM reader by
- * session-events-parity-fixtures.json.
+ * rich payload ordered by its own `timestampMs` when present. A top-level `clock: "device"` says
+ * the device's clock stamped `t` and is carried as `clock`; absent means the host's. Locked against
+ * the JVM reader by session-events-parity-fixtures.json.
  */
 export function decodeEventLine(line: string): FormatterEntry | null {
   try {
@@ -59,10 +62,26 @@ export function decodeEventLine(line: string): FormatterEntry | null {
     if (o == null || typeof o !== "object") return null;
     const envelope = typeof o.timeMs === "number";
     const t = envelope ? o.timeMs : typeof o.timestampMs === "number" ? o.timestampMs : null;
-    return { t, data: envelope ? (o.data ?? o) : o };
+    const entry: FormatterEntry = { t, data: envelope ? (o.data ?? o) : o };
+    if (o.clock === "device") entry.clock = "device";
+    return entry;
   } catch {
     return null;
   }
+}
+
+/**
+ * `entry` with a device-clock `t` moved onto the host timeline by its device's measured clock
+ * readings (`clockTrackForStream`), keeping the raw stamp as `deviceT`. Left on the device clock —
+ * still marked `clock: "device"` — when there is nothing to convert with (an on-device run, one from
+ * before the measurement, or a device whose clock reads all failed).
+ */
+export function toHostClock(entry: FormatterEntry, clockTrack: DeviceClockTrack | null): FormatterEntry {
+  if (entry.clock !== "device" || entry.t == null) return entry;
+  const hostMs = trackToHostMs(clockTrack, entry.t);
+  if (hostMs == null) return { ...entry, deviceT: entry.t };
+  const { clock: _device, ...rest } = entry;
+  return { ...rest, t: hostMs, deviceT: entry.t };
 }
 
 /** Validate a required formatter module (tolerating a `default` export wrapper). */
@@ -360,18 +379,24 @@ function formatComparisonValues(
  * The whole pipeline for one `events/` file: raw lines in, embeddable EventStream out (null when
  * the file isn't a well-formed events stream). Every line is kept — with a matching formatter as
  * netlog-style rows (the formatter sees `ctx` and may size-budget raw payloads of passed
- * sessions), without one as generic events embedded in full.
+ * sessions), without one as generic events embedded in full. `clockSync` (the session's
+ * `session_device_clock.json`) puts device-clock lines on the host timeline the rest of the report uses.
  */
 export function buildEventStream(
   fileName: string,
   lines: string[],
   formatters: EventStreamFormatter[] = [],
   ctx?: FormatterContext,
+  clockSync?: DeviceClockSync | null,
 ): EventStream | null {
   const name = parseStreamFileName(fileName);
   if (!name) return null;
   const nonBlank = lines.filter((l) => l.trim());
-  const entries = nonBlank.map(decodeEventLine).filter((e): e is FormatterEntry => e != null);
+  const clockTrack = clockTrackForStream(clockSync, name);
+  const entries = nonBlank
+    .map(decodeEventLine)
+    .filter((e): e is FormatterEntry => e != null)
+    .map((e) => toHostClock(e, clockTrack));
   if (!entries.length) return null;
 
   const formatter = formatterForStream(formatters, name);
@@ -409,7 +434,7 @@ export function buildEventStream(
       continue;
     }
     if (d.length > MAX_VALUE_CHARS) d = `${d.slice(0, MAX_VALUE_CHARS)}…`;
-    events.push({ t: entry.t, d });
+    events.push(entry.clock === "device" ? { t: entry.t, d, clock: "device" } : { t: entry.t, d });
   }
   if (!events.length) return null;
   return {

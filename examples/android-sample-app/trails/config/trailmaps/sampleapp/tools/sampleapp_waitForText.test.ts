@@ -3,7 +3,7 @@
 // `@trailblaze/scripting/testing`, asserting the dual-driver split:
 //   - accessibility driver  -> findSelectorMatches({ selectors: [^text$], timeoutMs }); an empty
 //                              match list throws
-//   - any other Android driver -> maestro({ extendedWaitUntil: { visible: { text }, timeout } })
+//   - any other Android driver -> assertVisibleBySelector({ nodeSelector: ^text$, timeoutMs })
 //
 // Run via:  ./trailblaze check sampleapp
 
@@ -14,8 +14,8 @@ import type { MatchDescriptor } from "@trailblaze/scripting";
 import { sampleapp_waitForText } from "./sampleapp_waitForText";
 
 const ACCESSIBILITY_DRIVER = "android-ondevice-accessibility";
-// The live non-accessibility Android driver: it carries no selector-native wait, and lowers a
-// `mobile_maestro` command list onto its own backends, so the Maestro branch is what runs there.
+// The live non-accessibility Android driver: it carries no selector-native wait, so the
+// `assertVisibleBySelector` branch is what runs there.
 const IN_PROCESS_DRIVER = "android-test";
 const MATCH: MatchDescriptor = { indexPath: [0, 1] };
 
@@ -44,8 +44,8 @@ describe("sampleapp_waitForText — accessibility driver", () => {
       selectors: [{ androidAccessibility: { textRegex: "^Content Loaded$" } }],
       timeoutMs: 5_000,
     });
-    // Never falls through to the Maestro branch on the accessibility driver.
-    expect(callsTo(c, "mobile_maestro")).toHaveLength(0);
+    // Never falls through to the assertVisibleBySelector branch on the accessibility driver.
+    expect(callsTo(c, "assertVisibleBySelector")).toHaveLength(0);
     expect(result).toBe('"Content Loaded" became visible within 5s.');
   });
 
@@ -81,7 +81,7 @@ describe("sampleapp_waitForText — accessibility driver", () => {
 });
 
 describe("sampleapp_waitForText — non-accessibility driver", () => {
-  test("waits via Maestro extendedWaitUntil rather than findSelectorMatches", async () => {
+  test("waits via assertVisibleBySelector rather than findSelectorMatches", async () => {
     const c = createQueuedFindMatchesClient();
 
     const result = await sampleapp_waitForText(
@@ -91,13 +91,12 @@ describe("sampleapp_waitForText — non-accessibility driver", () => {
     );
 
     expect(callsTo(c, "findSelectorMatches")).toHaveLength(0);
-    const maestroCalls = callsTo(c, "mobile_maestro");
-    expect(maestroCalls).toHaveLength(1);
-    // Same anchored/regex-escaped value as the accessibility branch (Maestro's text is regex-backed).
-    expect(maestroCalls[0].args).toEqual({
-      commands: [
-        { extendedWaitUntil: { visible: { text: "^Content Loaded$" }, timeout: 4_000 } },
-      ],
+    const assertCalls = callsTo(c, "assertVisibleBySelector");
+    expect(assertCalls).toHaveLength(1);
+    // Same anchored/regex-escaped selector as the accessibility branch.
+    expect(assertCalls[0].args).toEqual({
+      nodeSelector: { androidAccessibility: { textRegex: "^Content Loaded$" } },
+      timeoutMs: 4_000,
     });
     expect(result).toBe('"Content Loaded" became visible within 4s.');
   });

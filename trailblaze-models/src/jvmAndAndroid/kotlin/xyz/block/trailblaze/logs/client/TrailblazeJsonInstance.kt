@@ -14,10 +14,7 @@ import kotlinx.serialization.json.Json
  */
 @Suppress("ktlint:standard:property-naming")
 val TrailblazeJsonInstance: Json by lazy {
-  TrailblazeJson.createTrailblazeJsonInstance(
-    TrailblazeSerializationInitializer.buildAllTools(),
-    TrailblazeSerializationInitializer.buildYamlDefinedToolSerializers(),
-  )
+  TrailblazeJson.createTrailblazeJsonInstance(TrailblazeSerializationInitializer.buildAllTools())
 }
 
 /**

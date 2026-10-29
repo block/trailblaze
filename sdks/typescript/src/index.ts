@@ -13,6 +13,7 @@ import type { RunOptions } from "./run.js";
 import type {
   TrailblazeToolHandler,
   TrailblazeToolSpec,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
 } from "./tool.js";
@@ -22,6 +23,11 @@ export {
   fromMeta,
   type TrailblazeContext,
   type TrailblazeDevice,
+  TRAILBLAZE_HOST_ARCH,
+  TRAILBLAZE_HOST_OS,
+  type TrailblazeHostArch,
+  type TrailblazeHostOs,
+  type TrailblazeHostPlatform,
   type TrailblazeLogger,
   type TrailblazeLogLevel,
   type TrailblazeMemory,
@@ -33,12 +39,43 @@ export type {
   TrailblazeSessionResources,
 } from "./session-resources.js";
 export type {
+  SessionEvents,
+  SessionEventsCountResult,
+  SessionEventsMark,
+  SessionEventsQueryOptions,
+  SessionEventsQueryResult,
+  SessionEventsScan,
+  SessionEventsSince,
+} from "./session-events.js";
+export type { HistorySection, MemoryChange, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
+export type {
+  SurveyRunFinding,
+  SurveyRunOptions,
+  SurveyRunResult,
+  TrailblazeSurveyMap,
+  TrailblazeSurveys,
+} from "./session-surveys.js";
+export type {
+  EventMatch,
+  EventMatchValue,
+  TeardownResult,
+  SessionEvent,
+  TrailEvents,
+  TrailEventsQueryOptions,
+  PreviousRun,
+  TrailOutcome,
+  TrailRun,
+} from "./trailhead.js";
+export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
+  TrailblazeHostFunctionMap,
+  TrailblazeHostMethods,
   TrailblazeToolEntry,
   TrailblazeToolMap,
 } from "./client.js";
-export type { EmptyInput, ToolContext, TypedToolDefinition } from "./tool.js";
+export type { EmptyInput, ToolContext, TrailblazeHost, TypedToolDefinition } from "./tool.js";
 export { ToolError } from "./tool-error.js";
 export {
   captureViewHierarchy,
@@ -68,7 +105,7 @@ export {
 } from "./generated/selectors.js";
 
 // Side-effect import — pulls in the vendored built-in-tool bindings so authors get
-// autocomplete / type-checking on framework tools (`tapOnElementWithText`, `inputText`,
+// autocomplete / type-checking on framework tools (`tapOnElementBySelector`, `inputText`,
 // etc.) the moment they import anything from `@trailblaze/scripting`. The imported file is
 // pure declaration merging on `TrailblazeToolMap`; no runtime values are added.
 import "./built-in-tools.js";
@@ -86,6 +123,7 @@ export type {
   RunOptions,
   TrailblazeToolHandler,
   TrailblazeToolSpec,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
 };
@@ -101,4 +139,4 @@ export type {
  * re-exported here. The SDK's public surface is `tool`, `run`, `fromMeta`, and the type
  * exports above; tests that need internals import from the module's relative path directly.
  */
-export { trailblaze, run, tool } from "./sub-process.js";
+export { trailblaze, run, tool, trailhead } from "./sub-process.js";

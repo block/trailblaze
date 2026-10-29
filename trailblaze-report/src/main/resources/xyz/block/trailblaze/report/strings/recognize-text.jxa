@@ -1,0 +1,30 @@
+// Run by VisionScreenTextReader through `osascript -l JavaScript`.
+// argv: an image path, then a JSON array of [x, y, width, height] regions in Vision's normalized,
+// bottom-left-origin coordinates. Prints a JSON array holding each region's recognized lines,
+// top to bottom then left to right.
+ObjC.import('Foundation');
+ObjC.import('Vision');
+
+function run(argv) {
+  const handler = $.VNImageRequestHandler.alloc.initWithURLOptions($.NSURL.fileURLWithPath(argv[0]), $({}));
+  const requests = JSON.parse(argv[1]).map(([x, y, width, height]) => {
+    const request = $.VNRecognizeTextRequest.alloc.init;
+    request.recognitionLevel = $.VNRequestTextRecognitionLevelAccurate;
+    // Off, because a label is often a name or a handle that correction would "fix" into a word.
+    request.usesLanguageCorrection = false;
+    request.regionOfInterest = { origin: { x, y }, size: { width, height } };
+    return request;
+  });
+  const error = Ref();
+  if (!handler.performRequestsError($(requests), error)) throw new Error(ObjC.unwrap(error[0].localizedDescription));
+  return JSON.stringify(requests.map((request) => {
+    const lines = [];
+    const results = request.results;
+    for (let i = 0; i < results.count; i++) {
+      const observation = results.objectAtIndex(i);
+      const box = observation.boundingBox;
+      lines.push({ text: observation.topCandidates(1).objectAtIndex(0).string.js, top: box.origin.y + box.size.height, left: box.origin.x });
+    }
+    return lines.sort((a, b) => b.top - a.top || a.left - b.left).map((line) => line.text);
+  }));
+}

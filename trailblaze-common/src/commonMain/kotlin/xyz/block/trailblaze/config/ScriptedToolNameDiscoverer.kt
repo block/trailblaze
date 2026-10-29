@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.config
 
+import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.config.project.GeneratedScriptedToolDefsFile
+import xyz.block.trailblaze.config.project.ScriptedToolDefProjection
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
+import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
@@ -10,13 +14,13 @@ import xyz.block.trailblaze.util.Console
 /**
  * Discovers the NAMES of scripted (`.ts` / `.js`) tools declared by per-trailmap descriptor
  * YAMLs, so a toolset can reference a scripted tool by bare name the same way it references a
- * Kotlin class-backed or YAML-defined tool.
+ * Kotlin class-backed tool.
  *
  * ## Background
  *
  * Scripted tools live under `trails/config/trailmaps/<id>/tools/` next to their descriptor YAML
  * (a [TrailmapScriptedToolFile] — a plain `.yaml`, NOT one of the `*.tool.yaml` /
- * `*.shortcut.yaml` / `*.trailhead.yaml` operational suffixes that [ToolYamlLoader] owns).
+ * `*.trailhead.yaml` operational suffixes that [ToolYamlLoader] owns).
  * Historically these descriptors were "deliberately excluded" from the global name registry and
  * reached the runtime only through a target's `target.tools:` list — see the note in
  * `ToolYamlLoader.discoverTrailmapBundledToolContents`. As a result, a scripted name listed in a
@@ -36,9 +40,15 @@ import xyz.block.trailblaze.util.Console
  * ([TrailmapScriptedToolFile.requiresEnrichment]) are skipped here — their name isn't knowable
  * without running the analyzer, which doesn't run at framework startup.
  *
+ * A tool with no descriptor YAML is still discoverable when the build generated a
+ * `<tool>.tooldefs.json` for it (see [GeneratedScriptedToolDefsFile]): the analyzer already ran, so
+ * its name, description and schema are known without running it again here. A descriptor YAML that
+ * backs the same `.ts` replaces the generated file; one that claims the same name for a different
+ * `.ts` is a collision.
+ *
  * This is a deliberate contract: **a scripted tool that wants to be delivered by a toolset must be
  * statically nameable**, because the toolset references it by name before any analyzer runs. Such a
- * tool can still be delivered per-target via `target.tools:` (that path runs the analyzer). First-party
+ * tool is still delivered to its own trailmap's target (that path runs the analyzer). First-party
  * framework scripted tools (the ones that replace Kotlin tools in the bundled `trailblaze` trailmap)
  * always author an explicit `name:`, so they satisfy this contract.
  */
@@ -53,7 +63,16 @@ object ScriptedToolNameDiscoverer {
   data class DiscoveredDescriptor(
     val relPath: String,
     val descriptor: TrailmapScriptedToolFile,
-  )
+    /**
+     * The tool's resolved config when it came from a generated `.tooldefs.json` rather than a
+     * descriptor YAML. [descriptor] is then a stand-in carrying just its `script:` and `name:`.
+     */
+    val generatedConfig: InlineScriptToolConfig? = null,
+  ) {
+    /** The runtime configs this descriptor declares. */
+    fun toolConfigs(): List<InlineScriptToolConfig> =
+      generatedConfig?.let(::listOf) ?: descriptor.toInlineScriptToolConfigs()
+  }
 
   /**
    * Discovers every statically-nameable scripted tool name under
@@ -63,9 +82,11 @@ object ScriptedToolNameDiscoverer {
    */
   fun discoverAllNames(
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
-  ): Set<ToolName> = discoverDescriptors(resourceSource)
-    .flatMap { (relPath, descriptor) -> namesFrom(relPath, descriptor) }
-    .toSet()
+  ): Set<ToolName> {
+    val descriptors = discoverDescriptors(resourceSource)
+    return descriptors.flatMap { (relPath, descriptor) -> namesFrom(relPath, descriptor) }.toSet() +
+      discoverGenerated(resourceSource, descriptors).map { ToolName(it.descriptor.name!!) }
+  }
 
   /**
    * Returns a name-keyed index of every statically-nameable scripted tool descriptor,
@@ -81,7 +102,8 @@ object ScriptedToolNameDiscoverer {
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Map<ToolName, DiscoveredDescriptor> {
     val result = mutableMapOf<ToolName, DiscoveredDescriptor>()
-    discoverDescriptors(resourceSource).forEach { (relPath, descriptor) ->
+    val descriptors = discoverDescriptors(resourceSource)
+    descriptors.forEach { (relPath, descriptor) ->
       val discovered = DiscoveredDescriptor(relPath, descriptor)
       for (name in namesFrom(relPath, descriptor)) {
         // Tool names are a flat global namespace (see [ToolNameResolver]). Two descriptors
@@ -98,14 +120,95 @@ object ScriptedToolNameDiscoverer {
         result[name] = discovered
       }
     }
+    // Generated files whose `.ts` a descriptor YAML already backs are dropped by discoverGenerated,
+    // so any name still taken here belongs to a different script: a collision like any other.
+    discoverGenerated(resourceSource, descriptors).forEach { discovered ->
+      val name = ToolName(discovered.descriptor.name!!)
+      val existing = result[name]
+      require(existing == null || existing.relPath == discovered.relPath) {
+        "Scripted tool name collision: '${name.toolName}' is declared by both " +
+          "'${existing!!.relPath}' and '${discovered.relPath}'. Tool names share a flat global namespace; " +
+          "rename one so each scripted tool name resolves to exactly one backing."
+      }
+      result[name] = discovered
+    }
     return result
+  }
+
+  /**
+   * Every tool in a generated `<tool>.tooldefs.json` under a trailmap's `tools/`, each already
+   * resolved to its config. The stand-in descriptor's `script:` is the sibling `./<tool>.ts`, so
+   * [bundleResourcePath] finds the `.bundle.js` the same build wrote beside it. A file that fails to
+   * decode, or a tool that fails to resolve, is logged and skipped like a malformed descriptor.
+   *
+   * A file is dropped when any of [descriptors] backs the same `.ts`, whatever that YAML names the
+   * tool (or leaves to the analyzer): the YAML is the author's declaration, and a workspace YAML
+   * layered over a framework tool must replace it, not sit beside it.
+   */
+  private fun discoverGenerated(
+    resourceSource: ConfigResourceSource,
+    descriptors: Map<String, TrailmapScriptedToolFile>,
+  ): List<DiscoveredDescriptor> {
+    val yamlBackedScripts = descriptors.mapTo(mutableSetOf()) { (relPath, d) -> backingScriptOf(relPath, d.script) }
+    val matches = try {
+      resourceSource.discoverAndLoadRecursive(
+        directoryPath = TrailblazeConfigPaths.TRAILMAPS_DIR,
+        suffix = GeneratedScriptedToolDefsFile.SUFFIX,
+      )
+    } catch (e: Exception) {
+      Console.log(
+        "ScriptedToolNameDiscoverer: WARNING: failed to scan ${TrailblazeConfigPaths.TRAILMAPS_DIR} " +
+          "for generated tool definitions (${e::class.simpleName}: ${e.message}).",
+      )
+      return emptyList()
+    }
+    return matches.flatMap { (relPath, content) ->
+      val segments = relPath.split('/')
+      if (segments.size < 3 || segments[1] != "tools") return@flatMap emptyList()
+      val script = "./" + segments.last().removeSuffix(GeneratedScriptedToolDefsFile.SUFFIX) + ".ts"
+      if (backingScriptOf(relPath, script) in yamlBackedScripts) return@flatMap emptyList()
+      val defs = try {
+        generatedDefsJson.decodeFromString(GeneratedScriptedToolDefsFile.serializer(), content).tools
+      } catch (e: Exception) {
+        Console.log("ScriptedToolNameDiscoverer: skipping unreadable '$relPath': ${e.message}")
+        return@flatMap emptyList()
+      }
+      defs.mapNotNull { def ->
+        try {
+          DiscoveredDescriptor(
+            relPath = relPath,
+            descriptor = TrailmapScriptedToolFile(script = script, name = def.name),
+            generatedConfig = ScriptedToolDefProjection.descriptorlessConfig(def, script),
+          )
+        } catch (e: IllegalArgumentException) {
+          Console.log("ScriptedToolNameDiscoverer: skipping '${def.name}' in '$relPath': ${e.message}")
+          null
+        }
+      }
+    }
+  }
+
+  private val generatedDefsJson = Json { ignoreUnknownKeys = true }
+
+  /** Trailmap-relative path of the script a file at [relPath] names with [script] (`./x.ts`, `../a/x.ts`). */
+  private fun backingScriptOf(relPath: String, script: String): String {
+    val parts = relPath.split('/').dropLast(1).toMutableList()
+    script.replace('\\', '/').split('/').forEach { segment ->
+      when (segment) {
+        "", "." -> Unit
+        ".." -> parts.removeLastOrNull()
+        else -> parts += segment
+      }
+    }
+    return parts.joinToString("/")
   }
 
   /**
    * Walks the trailmap tree and decodes every scripted-tool descriptor under a `tools/`
    * directory. Returns relPath -> decoded descriptor. Files carrying the operational
-   * `*.tool.yaml` / `*.shortcut.yaml` / `*.trailhead.yaml` suffixes (owned by [ToolYamlLoader])
-   * are excluded by suffix; any remaining plain `.yaml` that fails to decode as a
+   * `*.tool.yaml` / `*.trailhead.yaml` suffixes (owned by [ToolYamlLoader]) are excluded
+   * by suffix, as are leftover `*.shortcut.yaml` files (shortcuts were removed; keep this
+   * skip so a stale file is never decoded as a descriptor); any remaining plain `.yaml` that fails to decode as a
    * [TrailmapScriptedToolFile] (e.g. it has no `script:` field) is skipped.
    */
   private fun discoverDescriptors(
@@ -130,8 +233,8 @@ object ScriptedToolNameDiscoverer {
       // strips the leading `trails/config/trailmaps/` prefix, so relPath starts at `<id>/...`.
       val segments = relPath.split('/')
       if (segments.size < 3 || segments[1] != "tools") return@forEach
-      // The three operational suffixes are owned by ToolYamlLoader (class-backed / YAML-defined
-      // tools + shortcut/trailhead edges). Scripted descriptors use a plain `.yaml`.
+      // The operational suffixes are owned by ToolYamlLoader (class-backed
+      // tools + trailheads). Scripted descriptors use a plain `.yaml`.
       if (isOperationalToolSuffix(relPath)) return@forEach
       val descriptor = try {
         TrailblazeConfigYaml.instance.decodeFromString(
@@ -151,8 +254,9 @@ object ScriptedToolNameDiscoverer {
 
   private fun isOperationalToolSuffix(relPath: String): Boolean =
     relPath.endsWith(".tool.yaml") ||
-      relPath.endsWith(".shortcut.yaml") ||
-      relPath.endsWith(".trailhead.yaml")
+      relPath.endsWith(".trailhead.yaml") ||
+      // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+      relPath.endsWith(".shortcut.yaml")
 
   /**
    * Resolves the classpath/asset path of the committed `.bundle.js` for a discovered scripted-tool
@@ -223,7 +327,7 @@ object ScriptedToolNameDiscoverer {
       "ScriptedToolNameDiscoverer: skipping '$relPath' — descriptor declares no static name " +
         "(it is analyzer-derived). A scripted tool referenced by a toolset must declare an " +
         "explicit `name:` (single-tool) or `tools[].name` (multi-tool); analyzer-named tools " +
-        "can only be delivered per-target via `target.tools:`.",
+        "are only delivered to their own trailmap's target.",
     )
     return emptyList()
   }

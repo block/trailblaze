@@ -13,16 +13,23 @@ import xyz.block.trailblaze.util.SimctlCommand
 
 object IosHostUtils {
 
-  fun killAppOnSimulator(deviceId: String, appId: String) {
-    if (!isMacOs()) return
-    TrailblazeProcessBuilderUtils.createProcessBuilder(
+  /**
+   * Terminates [appId] on the simulator. Returns whether the app is now not running: terminated,
+   * or already not running (`simctl` exits with ESRCH, "found nothing to terminate").
+   */
+  fun killAppOnSimulator(deviceId: String, appId: String): Boolean {
+    if (!isMacOs()) return false
+    val result = TrailblazeProcessBuilderUtils.createProcessBuilder(
       SimctlCommand.argv(
         "terminate",
         deviceId,
         appId,
       ),
     ).runProcess {}
+    return result.exitCode == 0 || result.exitCode == SIMCTL_NOTHING_TO_TERMINATE
   }
+
+  private const val SIMCTL_NOTHING_TO_TERMINATE = 3
 
   /**
    * Bundle identifiers of the apps installed on the simulator. Delegates to the canonical
@@ -80,7 +87,7 @@ object IosHostUtils {
     return result
   }
 
-  fun clearAppDataContainer(deviceId: String, appId: String) {
+  suspend fun clearAppDataContainer(deviceId: String, appId: String) {
     IosHostSimctlUtils.clearAppDataContainer(deviceId = deviceId, appId = appId)
   }
 

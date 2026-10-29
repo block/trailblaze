@@ -126,6 +126,10 @@ tasks.named<Test>("test") {
   // end-to-end behavior can be exercised without shipping a separate fixture esbuild + SDK in
   // this repo.
   systemProperty("trailblaze.sdkDir", file("../sdks/typescript").absolutePath)
+  // The plugin copies the packaged-survey layout constants; a test pins them to this source.
+  val surveyBundles = file("../trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/surveys/SurveyBundles.kt")
+  systemProperty("trailblaze.surveyBundlesSource", surveyBundles.absolutePath)
+  inputs.file(surveyBundles).withPropertyName("surveyBundlesSource").withPathSensitivity(PathSensitivity.NONE)
 
   // `systemProperty` above registers only the path STRING as a task input, so an edit to the SDK
   // content these tests actually read left the task UP-TO-DATE and the tests unrun — a green leg

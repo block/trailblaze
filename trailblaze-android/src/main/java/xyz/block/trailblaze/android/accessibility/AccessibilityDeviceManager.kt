@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst
 import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
@@ -52,6 +53,20 @@ class AccessibilityDeviceManager(
   // wasn't constructed with a target (target-agnostic rules / unit-test fixtures);
   // selectors authored without templates work either way.
   private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  // Drops the capture gate's stable-tree proof whenever this driver dispatches input — see
+  // [dispatchAndAwaitSettleBlocking]. Injectable so a unit test can see when it runs.
+  private val forgetStableTree: () -> Unit = { TrailblazeAccessibilityService.forgetStableTree() },
+  // Gesture dispatchers for point taps, and the screen size percent taps resolve against.
+  // Injectable so a unit test can see which gesture a tap becomes without a running service.
+  private val dispatchTap: (x: Int, y: Int) -> Boolean = { x, y ->
+    TrailblazeAccessibilityService.tap(x, y)
+  },
+  private val dispatchMultiTap: (x: Int, y: Int, count: Int) -> Boolean = { x, y, count ->
+    TrailblazeAccessibilityService.multiTap(x, y, count)
+  },
+  private val screenDimensions: () -> Pair<Int, Int> = {
+    TrailblazeAccessibilityService.getScreenDimensions()
+  },
 ) : DriverDispatch {
 
   companion object {
@@ -263,8 +278,17 @@ class AccessibilityDeviceManager(
         emptyMap()
       },
     ) {
-      TrailblazeAccessibilityService.forgetStableTree()
-      dispatchAction(action)
+      // The stable-tree proof is dropped where input is dispatched (the dispatch wrappers below),
+      // not here. Dropping it before [dispatchAction] made the action's own selector resolution
+      // re-prove a screen the tool call had just proven, ~100 ms per tap for nothing: nothing has
+      // been dispatched yet at that point. The `finally` still covers any branch that reaches the
+      // device without going through a wrapper, so the capture after an action always runs the
+      // full gate.
+      try {
+        dispatchAction(action)
+      } finally {
+        forgetStableTree()
+      }
     }
   }
 
@@ -275,14 +299,16 @@ class AccessibilityDeviceManager(
   private fun dispatchAction(action: AccessibilityAction): ExecutionResult =
     when (action) {
       is AccessibilityAction.Tap -> {
-        tap(action.x, action.y)
+        tap(action.x, action.y, action.repeat)
         ExecutionResult(resolvedX = action.x, resolvedY = action.y)
       }
       is AccessibilityAction.TapRelative -> {
-        val (width, height) = getScreenDimensions()
-        val resolvedX = width * action.percentX / 100
-        val resolvedY = height * action.percentY / 100
-        tap(resolvedX, resolvedY)
+        val (width, height) = screenDimensions()
+        // 100% is the screen's far edge, one pixel past the last valid coordinate: clamp, as the
+        // iOS AXe driver does.
+        val resolvedX = (width * action.percentX / 100.0).toInt().coerceIn(0, width - 1)
+        val resolvedY = (height * action.percentY / 100.0).toInt().coerceIn(0, height - 1)
+        tap(resolvedX, resolvedY, action.repeat)
         ExecutionResult(resolvedX = resolvedX, resolvedY = resolvedY)
       }
       is AccessibilityAction.LongPress -> {
@@ -309,6 +335,10 @@ class AccessibilityDeviceManager(
       is AccessibilityAction.InputText -> executeInputText(action)
       is AccessibilityAction.EraseText -> {
         eraseText(action.characters)
+        ExecutionResult()
+      }
+      is AccessibilityAction.ClearText -> {
+        clearFocusedText()
         ExecutionResult()
       }
       is AccessibilityAction.PressBack -> {
@@ -398,10 +428,19 @@ class AccessibilityDeviceManager(
    * blocking [awaitSettle] primitive inline. The settle runs whether [action] returns normally
    * or throws (see [DriverDispatch] kdoc for the exception contract).
    */
-  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R = try {
-    action()
-  } finally {
-    TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
+  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R {
+    // Same keyboard restore as [dispatchAndAwaitSettleBlocking]: callers through this seam
+    // (scripted tools) dispatch too, and must not inherit a hidden keyboard.
+    TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    forgetStableTree()
+    return try {
+      action()
+    } finally {
+      // Again after the action: a scripted tool that reads the tree after its input can set a
+      // fresh proof before the screen reacts, which the settle below must not reuse.
+      forgetStableTree()
+      TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
+    }
   }
 
   /**
@@ -414,13 +453,26 @@ class AccessibilityDeviceManager(
    * platform `UiDevice.waitForIdle()` (500ms hardcoded quiet window — the largest per-action cost
    * in recorded replay) and for the `TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE=1` kill-switch.
    */
-  private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R {
-    // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore SHOW_MODE_AUTO
-    // before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
+  private inline fun <R> dispatchAndAwaitSettleBlocking(
+    looksUpItsTargetFirst: Boolean = false,
+    action: () -> R,
+  ): R {
+    // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore the previous show
+    // mode before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
     TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    // Every gesture, key, text entry and focus change goes through here, so this is where the
+    // capture gate's stable-tree proof stops holding: the next capture runs the full gate.
+    //
+    // A routed tap ([looksUpItsTargetFirst]) reads the live tree to find its node and then sends
+    // one input. Its lookup happens before that input, so it may still use the proof; dropping it
+    // first made every ACTION_CLICK tap re-prove the screen the tool call had just proven, ~100 ms.
+    // Every other caller drops it up front, because its action may read the screen after an input
+    // (typing reads its text back).
+    if (!looksUpItsTargetFirst) forgetStableTree()
     return try {
       action()
     } finally {
+      forgetStableTree()
       TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
     }
   }
@@ -433,8 +485,12 @@ class AccessibilityDeviceManager(
    * [AccessibilityDeviceManager.execute]'s direct [AccessibilityAction.Tap] /
    * [AccessibilityAction.TapRelative] dispatch — can't mistake a no-op gesture for a completed one.
    */
-  fun tap(x: Int, y: Int) = dispatchAndAwaitSettleBlocking {
-    failIfGestureNotDispatched(TrailblazeAccessibilityService.tap(x, y), "tap at ($x, $y)")
+  fun tap(x: Int, y: Int, repeat: Int = 1) = dispatchAndAwaitSettleBlocking {
+    if (repeat > 1) {
+      failIfGestureNotDispatched(dispatchMultiTap(x, y, repeat), "$repeat taps at ($x, $y)")
+    } else {
+      failIfGestureNotDispatched(dispatchTap(x, y), "tap at ($x, $y)")
+    }
   }
 
   /** Long-presses at the given coordinates and waits for the UI to settle. Fails loudly on a
@@ -501,9 +557,10 @@ class AccessibilityDeviceManager(
    *
    * The two shapes differ in what they do with [inputText]'s result. A selector-bearing action
    * throws when the text never landed: it named the field, so "focused it and typed nothing"
-   * cannot be reported as success. The no-selector path keeps discarding the result — that is
-   * long-standing replay behavior across every trail on this driver, and flipping it here would
-   * turn a silent no-op into a failure for trails this change is supposed to leave alone.
+   * cannot be reported as success. So does `clearFirst`: it just emptied the field, so typing
+   * nothing would pass a step that only erased. The plain no-selector path keeps discarding the
+   * result — that is long-standing replay behavior across every trail on this driver, and flipping
+   * it would turn a silent no-op into a failure for trails this change is supposed to leave alone.
    *
    * The focus race this discarded result used to hide is gone:
    * `TrailblazeAccessibilityService.inputText` now waits for a field to take focus, so an
@@ -512,11 +569,19 @@ class AccessibilityDeviceManager(
    */
   private fun executeInputText(action: AccessibilityAction.InputText): ExecutionResult {
     val nodeSelector = action.nodeSelector ?: run {
-      inputText(action.text)
+      if (action.clearFirst) clearFocusedText()
+      if (!inputText(action.text) && action.clearFirst) {
+        error(
+          "Cleared the focused field but the text never landed in it: the field rejected both " +
+            "ACTION_SET_TEXT and keystroke synthesis — see the preceding inputText log line.",
+        )
+      }
       if (action.hideKeyboardAfter) hideKeyboardAfterTyping(::hideKeyboard)
       return ExecutionResult()
     }
     val focused = focusOnElement(nodeSelector, action.timeoutMs)
+    // After the focus, so the field emptied is the one the text lands in.
+    if (action.clearFirst) clearFocusedText()
     if (!inputText(action.text)) {
       error(
         "Focused ${nodeSelector.description()} but the text never landed in it. The field took " +
@@ -562,7 +627,7 @@ class AccessibilityDeviceManager(
           return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
         }
         is FocusPlan.DispatchActionFocus -> {
-          val dispatched = dispatchAndAwaitSettleBlocking {
+          val dispatched = dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
             TrailblazeAccessibilityService.focusByActionFocusOnBounds(
               plan.bounds.toAndroidRect(),
               plan.className,
@@ -594,6 +659,21 @@ class AccessibilityDeviceManager(
       "Cannot type into ${nodeSelector.description()}: $lastObstacle (gave up after " +
         "${timeoutMs}ms). Name the editable field, or something whose tap focuses one.",
     )
+  }
+
+  /**
+   * Empties the focused editable field and waits for the UI to settle, throwing when the field
+   * still holds text: `clearFirst` asked for it to hold only the new text, and typing onto what's
+   * left would pass a step whose field reads wrong.
+   */
+  private fun clearFocusedText() {
+    val cleared = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.clearFocusedText() }
+    if (!cleared) {
+      error(
+        "Could not clear the focused text field: there was none, it still holds text, or its " +
+          "value can't be read to confirm it is empty — see the preceding clearFocusedText log line.",
+      )
+    }
   }
 
   /** Erases characters from the focused editable node and waits for the UI to settle. */
@@ -687,20 +767,20 @@ class AccessibilityDeviceManager(
   /**
    * Matches the retired UiAutomator driver's setAirplaneMode(). The radios and the enable/disable
    * polarity both come from
-   * [NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands], so every Android
+   * [NetworkConnectionTrailblazeTool.maestroSetAirplaneModeRadioCommands], so every Android
    * driver switches the same set. That is the radios-off stand-in, not real airplane mode — see
    * that driver's override for why this surface keeps the stand-in even though the
-   * `networkConnection` tool no longer does.
+   * `mobile_networkConnection` tool no longer does.
    *
    * Whether a radio actually switched is not checked, matching this driver's long-standing
    * behavior. `svc` exits 0 either way and what it PRINTS does not answer the question — on API 36
    * `svc bluetooth` prints "disable: Success" on the happy path — so the only real check is reading
-   * [NetworkConnectionTrailblazeTool.AndroidRadio.stateSetting] back, as the `networkConnection`
+   * [NetworkConnectionTrailblazeTool.AndroidRadio.stateSetting] back, as the `mobile_networkConnection`
    * tool does. Adding that poll here would make every toggle on the driver the fleet replays on wait out
    * a radio that did not move, which is a fleet-wide behavior change and not this one.
    */
   private fun executeSetAirplaneMode(enabled: Boolean) {
-    NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
+    NetworkConnectionTrailblazeTool.maestroSetAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
       AdbCommandUtil.execShellCommand(command)
     }
   }
@@ -756,24 +836,32 @@ class AccessibilityDeviceManager(
   // --- Keyboard ---
 
   /**
-   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard]. The dispatch
-   * step (sending GLOBAL_ACTION_BACK through the accessibility service) is fatal on
-   * failure — that means the accessibility service rejected the action, which is real
-   * framework misuse.
+   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard], which uses
+   * `SHOW_MODE_HIDDEN` and only falls back to GLOBAL_ACTION_BACK when the IMF rejects that.
+   * The dispatch step is fatal on failure — that means the accessibility service rejected
+   * the BACK fallback, which is real framework misuse.
    *
-   * The post-check (waiting for the IME window to actually leave) is best-effort: a
-   * Compose `BackHandler` registered on a modal can consume BACK before the IME framework
-   * sees it, and the IME stays up. The framework asked for a hide and did everything it
+   * The post-check (waiting for the IME window to actually leave) is best-effort: on the
+   * BACK fallback a Compose `BackHandler` registered on a modal can consume BACK before the
+   * IME framework sees it, and the IME stays up. The framework asked for a hide and did everything it
    * can. Log a warning and return — the caller decides what to do next. The downstream
    * safety net for this is [executeTapOnElement]'s pre-tap IME-occlusion check, which
    * catches the silent-mis-tap case at the actual point of impact (the tap), not at the
    * housekeeping that came before it.
    */
   fun hideKeyboard() {
-    TrailblazeTracer.traceDetail("hideKeyboard", DRIVER_TRACE_CAT) {
-      val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
-      if (!dispatched) {
-        error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+    dismissKeyboard()
+  }
+
+  /** [hideKeyboard], returning whether a dismissal was sent (false: no keyboard was drawn). */
+  private fun dismissKeyboard(): Boolean = TrailblazeTracer.traceDetail("hideKeyboard", DRIVER_TRACE_CAT) {
+      when (dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }) {
+        // No keyboard on screen: skip the post-check, whose dumpsys gate would report a
+        // hardware-keyboard image's IME as still shown.
+        HideKeyboardOutcome.NOTHING_TO_DISMISS -> return@traceDetail false
+        HideKeyboardOutcome.REJECTED ->
+          error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+        HideKeyboardOutcome.DISMISSAL_SENT -> Unit
       }
       // Post-check polls the cheap in-process windows enumeration for fast-fail, then
       // gates the final answer on the authoritative `dumpsys input_method` signal —
@@ -788,8 +876,8 @@ class AccessibilityDeviceManager(
             "occlusion check will fail there with a clear error.",
         )
       }
+      true
     }
-  }
 
   /** Returns true if an editable field is currently focused. */
   fun isKeyboardVisible(): Boolean = TrailblazeAccessibilityService.isKeyboardVisible()
@@ -822,22 +910,9 @@ class AccessibilityDeviceManager(
     }
 
   /**
-   * Resolves a [TrailblazeNodeSelector] against the live accessibility tree using a
-   * filtered-first / unfiltered-fallback strategy.
-   *
-   * Default: resolve against the [filterImportantForAccessibility]-applied tree, which
-   * matches the tree shape the LLM and recording-playback see by default
-   * ([AccessibilityServiceScreenState] applies the same filter when [includeAllElements]
-   * is false). Without this, intermediate non-important nodes (e.g. Compose layout
-   * wrappers) break selectors that use [TrailblazeNodeSelector.containsChild] — the
-   * filtered tree promotes children of dropped nodes up, so the selector's
-   * direct-child relationship survives, but the unfiltered tree shows the target as
-   * a grandchild via the wrapper.
-   *
-   * Fallback: if the filtered resolution yields [TrailblazeNodeSelectorResolver.ResolveResult.NoMatch],
-   * try the unfiltered tree. This preserves the `--all` / [SnapshotDetail.ALL_ELEMENTS]
-   * escape hatch — selectors generated from those captures can target nodes that are
-   * themselves `isImportantForAccessibility=false`, so they'd never match the filtered tree.
+   * Resolves a [TrailblazeNodeSelector] against the live accessibility tree, filtered-first with
+   * an unfiltered fallback — see [resolveImportantForAccessibilityFirst], which
+   * `trailblaze selector match` shares so a capture answers the way the device does.
    */
   private fun resolveSelectorWithFallback(
     baseTree: TrailblazeNode,
@@ -849,15 +924,7 @@ class AccessibilityDeviceManager(
     // Which selector a five-second poll was chasing is the first thing you want from the profile.
     args = if (TrailblazeTracer.isVerbose) mapOf("selector" to selector.description()) else emptyMap(),
   ) {
-    val filtered = baseTree.filterImportantForAccessibility()
-    val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector, templateContext)
-    if (filteredResult !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
-      return@traceDetail filteredResult
-    }
-    // Selector did not match in the default (filtered) tree shape. Try the unfiltered
-    // tree to support [SnapshotDetail.ALL_ELEMENTS]-generated selectors that target
-    // non-important nodes.
-    TrailblazeNodeSelectorResolver.resolve(baseTree, selector, templateContext)
+    resolveImportantForAccessibilityFirst(baseTree, selector, templateContext)
   }
 
   // --- Private helpers ---
@@ -896,8 +963,8 @@ class AccessibilityDeviceManager(
       "[ime-occlusion] resolved tap target ($x, $y) is occluded by the IME ($firstSignal) " +
         "— re-attempting dismissal before failing.",
     )
-    try {
-      hideKeyboard()
+    val dismissalSent = try {
+      dismissKeyboard()
     } catch (e: Exception) {
       // Even GLOBAL_ACTION_BACK refused — propagate so caller sees the real reason.
       error(
@@ -907,11 +974,17 @@ class AccessibilityDeviceManager(
     }
     val secondSignal = imeOcclusionSignal(x, y)
     if (secondSignal != null) {
+      val likelyCause = if (dismissalSent) {
+        "a modal screen whose BackHandler consumes GLOBAL_ACTION_BACK before the IME " +
+          "framework sees it"
+      } else {
+        "no BACK was sent, because the keyboard window draws nothing, yet `dumpsys " +
+          "input_method` reports the IME shown"
+      }
       error(
         "Tap target '$targetDescription' at ($x, $y) is occluded by the soft IME " +
           "($secondSignal), which would not dismiss. Tap would land on the keyboard " +
-          "instead of the intended target. (Likely cause: a modal screen whose " +
-          "BackHandler consumes GLOBAL_ACTION_BACK before the IME framework sees it.)",
+          "instead of the intended target. (Likely cause: $likelyCause.)",
       )
     }
     Console.log(
@@ -931,8 +1004,11 @@ class AccessibilityDeviceManager(
     val imeBounds = rect?.let { TrailblazeNode.Bounds(it.left, it.top, it.right, it.bottom) }
     // dumpsys is a ~300ms shell exec; pay it only when the windows list could not answer at
     // all, not whenever the keyboard happens to be down.
-    val imeShownAuthoritative = lookup is ImeWindowLookup.Unavailable &&
-      TrailblazeAccessibilityService.isImeShownAuthoritative()
+    // An Undrawn IME window keeps the conservative dumpsys answer here: it may be a keyboard
+    // mid-layout that is about to cover the point.
+    val imeShownAuthoritative =
+      (lookup is ImeWindowLookup.Unavailable || lookup is ImeWindowLookup.Undrawn) &&
+        TrailblazeAccessibilityService.isImeShownAuthoritative()
     // Only the unmeasurable-but-shown branch consults the screen size, to rule out a tap the
     // bottom-docked keyboard cannot reach — so only read the display in that case rather than on
     // every tap. Null on failure rather than a guessed size, which keeps the conservative answer.
@@ -1189,7 +1265,7 @@ class AccessibilityDeviceManager(
       return TapDispatchRoute.GESTURE
     }
     planTextLinkClickRoute(resolvedNode, longPress, tapRoute)?.let { linkText ->
-      return dispatchAndAwaitSettleBlocking {
+      return dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
         if (TrailblazeAccessibilityService.clickTextLinkSpan(linkText, centerX, centerY)) {
           Console.log("[tap-route] link-span click dispatched for \"$linkText\"")
           TapDispatchRoute.TEXT_LINK_SPAN
@@ -1227,7 +1303,7 @@ class AccessibilityDeviceManager(
       tapOrLongPress(centerX, centerY, longPress)
       return TapDispatchRoute.GESTURE
     }
-    return dispatchAndAwaitSettleBlocking {
+    return dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
       val dispatched = TrailblazeAccessibilityService.tapByActionClickOnBounds(
         plan.bounds.toAndroidRect(),
         plan.className,

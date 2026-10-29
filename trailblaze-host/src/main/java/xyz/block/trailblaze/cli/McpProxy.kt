@@ -51,7 +51,9 @@ import picocli.CommandLine
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.trailrunner.daemonJavaBin
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+import xyz.block.trailblaze.util.isWindows
 
 /** What a `/ping` probe learned about the daemon port. */
 enum class DaemonProbe {
@@ -615,8 +617,8 @@ class McpProxy(
       DaemonAutoStartAction.SPAWN -> Unit // fall through and actually spawn
     }
 
-    val launcher = findLauncher()
-    if (launcher == null) {
+    val command = daemonSpawnCommand()
+    if (command == null) {
       log("Cannot auto-start daemon: trailblaze launcher not found. Start it manually with: trailblaze app")
       return false
     }
@@ -626,7 +628,6 @@ class McpProxy(
     // this costs nothing — and it's what makes the `existing.isAlive` guard above mean
     // "the daemon is still coming up" instead of "the process that launched it hasn't
     // returned yet", which was true for a few milliseconds and then never again.
-    val command = daemonSpawnArgv(launcher, foreground = true, headless = true)
     val claimFile = daemonStartupClaimFile(port)
     val claimOwner = when (val claim = claimDaemonStartup(claimFile)) {
       is DaemonStartupClaim.Owner -> claim
@@ -648,6 +649,7 @@ class McpProxy(
 
     try {
       val pb = ProcessBuilder(command)
+      CliCallerContext.removeLauncherCwd(pb.environment())
       if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
         pb.environment()["TRAILBLAZE_PORT"] = port.toString()
       }
@@ -678,8 +680,6 @@ class McpProxy(
       return false
     }
   }
-
-  private fun findLauncher(): File? = findTrailblazeLauncher()
 
   /**
    * Forward a JSON-RPC request to the daemon, retrying if it's down.
@@ -1526,7 +1526,7 @@ class McpProxy(
         put("name", "approval_prompt")
         put(
           "description",
-          "Trail Runner permission approval. A human approves or denies this tool call in the Trail Runner UI.",
+          "Trailblaze App permission approval. A human approves or denies this tool call in the Trailblaze App UI.",
         )
         put(
           "inputSchema",
@@ -1572,7 +1572,7 @@ class McpProxy(
     val inputElement = args?.get("input")
     val toolUseId = args?.get("tool_use_id")?.jsonPrimitive?.contentOrNull
     val inputJson = inputElement?.let { Json.encodeToString(JsonElement.serializer(), it) }
-    log("Routing approval for '$toolName' to Trail Runner; waiting for the human to decide...")
+    log("Routing approval for '$toolName' to Trailblaze App; waiting for the human to decide...")
     val decision = postPermissionRequest(toolName, inputJson, toolUseId)
     val resultText = approvalDecisionResultText(
       behavior = decision.behavior,
@@ -1955,6 +1955,10 @@ internal fun resolveLauncherBesideJar(jarDir: File): File? = LAUNCHER_SIBLING_NA
  * For release builds, checks next to the running JAR, then the system PATH.
  */
 internal fun findTrailblazeLauncher(): File? {
+  // Every launcher this walk can find is a bash script, which Windows cannot exec — and `canExecute`
+  // is true there for any readable file, so the probes below would hand one back anyway. Windows
+  // starts its daemon from the JVM directly instead; see [daemonSpawnCommand].
+  if (isWindows()) return null
   System.getenv("TRAILBLAZE_LAUNCHER")?.let { path ->
     val file = File(path)
     if (file.exists() && file.canExecute()) return file
@@ -1970,10 +1974,107 @@ internal fun findTrailblazeLauncher(): File? {
 }
 
 /**
+ * Argv that starts a background daemon (`app start --foreground --headless`), or null when this
+ * process has no way to start one and the caller should fall back to running the daemon in-process.
+ *
+ * macOS and Linux re-enter the launcher script ([daemonSpawnArgv]), which carries the JVM flags and
+ * CDS archive a daemon starts with. Windows has no launcher the JVM can exec: its `trailblaze.cmd`
+ * would run under a `cmd.exe` parent, so the PID the startup claim records would not be the daemon's
+ * and destroying it would orphan the JVM. Windows starts this JVM's own `java` and JAR instead.
+ */
+internal fun daemonSpawnCommand(): List<String>? {
+  if (!isWindows()) {
+    return findTrailblazeLauncher()?.let { inOwnSession(daemonSpawnArgv(it, foreground = true, headless = true)) }
+  }
+  val jar = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
+    ?.let { File(it) }
+    ?.takeIf { it.isFile && it.extension.equals("jar", ignoreCase = true) }
+    // A source run loads this class from a library JAR, which `java -jar` cannot start.
+    ?.takeIf { jar ->
+      runCatching { java.util.jar.JarFile(jar).use { it.manifest?.mainAttributes?.getValue("Main-Class") } }
+        .getOrNull() != null
+    }
+    ?: return null
+  return directJvmDaemonSpawnArgv(
+    javaBin = daemonJavaBin(),
+    jar = jar,
+    currentJvmArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().inputArguments,
+  )
+}
+
+/**
+ * [argv] run as the leader of a new session, so a signal the terminal sends the CLI's process group
+ * does not also reach the daemon it starts.
+ *
+ * A terminal's Ctrl-C signals its whole foreground process group. A daemon started in it took that
+ * signal too, and its Playwright driver (Node resets inherited signal dispositions) died mid-trail
+ * before the CLI's run cancel reached the daemon, so the cancelled run ended Failed, not Cancelled.
+ * Both wrappers exec in place, so the PID the startup claim records is still the daemon's. A host
+ * with neither starts the daemon as before.
+ *
+ * Under CI (`CI` set, as CI services do) the daemon stays in the job's group: no
+ * one presses Ctrl-C there, and a cancelled job stops its daemon by killing that group — a detached
+ * one would outlive the job on a reused agent.
+ *
+ * SISTER-IMPL-TAG: daemon-own-session. The launcher's `tb_in_own_session` does the same for a
+ * daemon it starts itself.
+ */
+internal fun inOwnSession(
+  argv: List<String>,
+  setsid: File? = findOnPath("setsid"),
+  perl: File? = File("/usr/bin/perl").takeIf { it.canExecute() },
+  underCi: Boolean = !System.getenv("CI").isNullOrEmpty(),
+): List<String> = when {
+  underCi -> argv
+  setsid != null -> listOf(setsid.absolutePath) + argv
+  perl != null -> listOf(perl.absolutePath, "-MPOSIX", "-e", PERL_SETSID_THEN_EXEC, "--") + argv
+  else -> argv
+}
+
+/** `setsid` fails only for a process group leader, which a fresh child never is; exec either way. */
+private const val PERL_SETSID_THEN_EXEC = "POSIX::setsid(); exec { \$ARGV[0] } @ARGV or die \"exec \$ARGV[0]: \$!\\n\""
+
+/**
+ * The [daemonSpawnCommand] argv for a host with no launcher: `java <flags> -jar <jar> app start
+ * --foreground --headless`. Of this process's own JVM arguments it carries only the ones the
+ * launcher sets — heap size, IO parallelism and the UTF-8 encodings — so a debugger agent or an
+ * IDE's `-javaagent` on the CLI JVM does not also attach to the daemon.
+ */
+internal fun directJvmDaemonSpawnArgv(
+  javaBin: String,
+  jar: File,
+  currentJvmArgs: List<String>,
+): List<String> = buildList {
+  add(javaBin)
+  addAll(
+    currentJvmArgs.filter { arg -> LAUNCHER_JVM_ARG_PREFIXES.any { arg.startsWith(it) } },
+  )
+  add("-Djava.awt.headless=true")
+  add("-jar")
+  add(jar.absolutePath)
+  add("app")
+  add("start")
+  add("--foreground")
+  add("--headless")
+}
+
+/** The JVM arguments `trailblaze.cmd` sets, which a daemon spawned from its CLI inherits. */
+private val LAUNCHER_JVM_ARG_PREFIXES = listOf(
+  "-Xmx",
+  "-Dkotlinx.coroutines.io.parallelism=",
+  "-Dfile.encoding=",
+  "-Dsun.stdout.encoding=",
+  "-Dsun.stderr.encoding=",
+  "-Dstdout.encoding=",
+  "-Dstderr.encoding=",
+)
+
+/**
  * Argv for spawning a background daemon through [launcher].
  *
- * **`start` is spelled explicitly, not left implicit.** Bare `app` and `app start` are the
- * same command to picocli, but not to every layer a launcher can sit behind: an installed CLI
+ * **`start` is spelled explicitly, not left implicit.** `app --foreground --headless` and
+ * `app start --foreground --headless` are the same command to picocli, but not to every layer a
+ * launcher can sit behind: an installed CLI
  * may resolve to a wrapper that dispatches on its own command tree, and a wrapper that sees
  * `app` as a group — which it is, since `app` owns a `start` subcommand — answers a flags-only
  * `app --foreground --headless` with its own usage text and exit 0. The daemon then never

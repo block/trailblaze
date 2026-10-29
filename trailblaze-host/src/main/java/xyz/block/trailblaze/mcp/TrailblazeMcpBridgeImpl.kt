@@ -1,8 +1,12 @@
 package xyz.block.trailblaze.mcp
 
 import kotlinx.coroutines.CancellationException
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.host.util.BufferedImageUtils
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,8 +14,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.host.mergeDeviceMemory
+import xyz.block.trailblaze.host.yamlWithSecretsMasked
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -54,6 +63,7 @@ import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -76,6 +86,7 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
+import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsResponse as ComposeExecuteToolsResponse
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
@@ -666,6 +677,20 @@ class TrailblazeMcpBridgeImpl(
 
   companion object {
     /**
+     * The tool result in a Compose RPC response [body]. The server answers a failed tool with a
+     * successful response that carries the failure, so the failure is returned; a success keeps
+     * the raw body as its message. A body that doesn't decode is passed on as before.
+     */
+    internal fun composeRpcToolResult(body: String): TrailblazeToolResult {
+      val results = try {
+        TrailblazeJsonInstance.decodeFromString<ComposeExecuteToolsResponse>(body).results
+      } catch (_: SerializationException) {
+        emptyList()
+      }
+      return results.firstOrNull { it !is TrailblazeToolResult.Success } ?: TrailblazeToolResult.Success(message = body)
+    }
+
+    /**
      * [deviceId]'s driver from the [remembered] scan, running a fresh [scan] when that one didn't
      * see the device under its configured driver — a scan where that driver's discovery failed
      * still lists the device under the others, and answering from it would pick one of those.
@@ -937,17 +962,16 @@ class TrailblazeMcpBridgeImpl(
      *
      * The agent checks `ExecutableTrailblazeTool` first and expands **every**
      * [DelegatingTrailblazeTool] host-side, with no `requiresHost` gate. This inverts the two
-     * arms and gates the delegating one, because a composed tool without `requires_host` is
+     * arms and gates the delegating one, because a delegating tool without `requiresHost` is
      * decodable on the device and shipping it whole is one round trip instead of one per child —
      * the behavior that was already here, which the tests pin.
      *
-     * The residual gap is a composed tool without `requires_host` whose children include a
+     * The residual gap is a delegating tool without `requiresHost` whose children include a
      * host-local one: the agent routes that child to the host, this ships the parent to the
      * device and the child comes back "Unknown tool". Nothing in the shipped set has that shape
-     * (`eraseText` / `pressBack` expand to Maestro primitives), and workspace YAML configs
-     * default to `requires_host = true`, so closing it would cost every composed tool an extra
-     * round trip to fix a case that doesn't exist yet. Add the child-inspection here if one shows
-     * up.
+     * (the built-in delegating tools expand to device primitives), so closing it would cost every
+     * delegating tool an extra round trip to fix a case that doesn't exist yet. Add the
+     * child-inspection here if one shows up.
      */
     internal fun resolveToolDispatchRoute(tool: TrailblazeTool): ToolDispatchRoute = when {
       tool is DelegatingTrailblazeTool && tool.requiresHostInstance() -> ToolDispatchRoute.HOST_EXPAND
@@ -1118,14 +1142,10 @@ class TrailblazeMcpBridgeImpl(
      * `DelegatingTrailblazeTool.toExecutableTrailblazeTools` and returns the flattened
      * list of executable primitives. No bridge instance required — testable in isolation.
      *
-     * `YamlDefinedTrailblazeTool.toExecutableTrailblazeTools` (the typical implementer of
-     * `DelegatingTrailblazeTool`) reads `config.toolsList` and substitutes `{{params.x}}`
-     * tokens — it doesn't actually consume the `executionContext` argument today, but the
-     * API requires a non-null value. Synthesize a minimal one with a no-op logger and a
-     * fresh `AgentMemory()` since the expansion only needs structural data, not
-     * session-scoped state. Standard fallback sizing (1080x2400) mirrors the
-     * synthetic-device pattern in `TrailblazeMcpServer.buildSyntheticDeviceInfo` —
-     * `YamlDefinedTrailblazeTool` doesn't read screen dimensions during expansion.
+     * The API requires a non-null `executionContext`, but expansion only needs structural
+     * data, not session-scoped state. Synthesize a minimal one with a no-op logger and a
+     * fresh `AgentMemory()`. Standard fallback sizing (1080x2400) mirrors the
+     * synthetic-device pattern in `TrailblazeMcpServer.buildSyntheticDeviceInfo`.
      */
     internal fun expandDelegatingToolHostSide(
       tool: DelegatingTrailblazeTool,
@@ -1799,6 +1819,9 @@ class TrailblazeMcpBridgeImpl(
           referrer = TrailblazeReferrer.MCP,
           traceId = traceId,
           onComplete = onComplete,
+          // A prompt or tool driving the device by hand, even one that opens a session, runs in the
+          // language the device is already in; only a declared `locale:` changes it.
+          keepDeviceLanguage = true,
         )
       }
     } finally {
@@ -2220,12 +2243,9 @@ class TrailblazeMcpBridgeImpl(
     blocking: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult {
-    // Host-only `DelegatingTrailblazeTool` (e.g. `YamlDefinedTrailblazeTool` — the
-    // composed-tools-mode YAML body) with per-instance `requires_host = true` MUST expand
-    // host-side before any per-child dispatch. The default RPC path below ships the whole
-    // delegating-tool object to the device, where decode fails because the workspace
-    // config that defines the tool's body doesn't ship on-device — surfacing as
-    // `Unknown tool 'X' is not registered (YamlDefinedTrailblazeTool failed)`.
+    // A `DelegatingTrailblazeTool` flagged `requiresHost` MUST expand host-side before any
+    // per-child dispatch. The default RPC path below ships the whole delegating-tool object to
+    // the device, which has no registration for a host-only tool and answers "Unknown tool".
     //
     // Runs BEFORE the `trailblazeToolExecutor` short-circuit so custom executors (test
     // fixtures, OSS desktop callers) ALSO receive expanded primitives instead of the
@@ -2236,9 +2256,7 @@ class TrailblazeMcpBridgeImpl(
     // composition into a list of primitives, then recurse `executeTrailblazeTool(child)`
     // for each — so per-child routing kicks in. Maestro primitives (`back`, `inputText`,
     // etc.) take the device RPC path; nested host-only children take the local path. The
-    // delegating tool's `toolMetadata.requiresHost` is the gate: workspace YAML configs
-    // default to `requires_host = true` via `AppTargetDiscovery.registerWorkspaceYamlTools`;
-    // classpath-bundled `*.tool.yaml` files set the field explicitly (or leave it null).
+    // delegating tool's `requiresHostInstance()` is the gate.
     //
     // HOST_LOCAL is the same guard the trail-run agents apply before their own RPC fallback —
     // see [resolveToolDispatchRoute]. Without it a scripted / subprocess / `requiresHost` tool
@@ -2278,14 +2296,16 @@ class TrailblazeMcpBridgeImpl(
     // parser. Same resulting trail item (one ToolTrailItem) the old `- tools:` synthesis produced.
     val yaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
 
-    Console.log("Generated YAML:\n$yaml")
+    val secrets = (tool as? SensitiveValuesTrailblazeTool)?.sensitiveValues.orEmpty()
+    Console.log("Generated YAML:\n${yamlWithSecretsMasked(yaml, secrets)}")
 
     // For Compose driver, send the tool directly to the Compose RPC server.
     if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType == TrailblazeDriverType.COMPOSE) {
-      // The Compose RPC server answers with a raw response body, not a TrailblazeToolResult.
-      val result = executeComposeToolViaRpc(tool)
+      val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool) {
+        composeRpcToolResult(executeComposeToolViaRpc(tool))
+      }
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-      return TrailblazeToolResult.Success(message = result)
+      return result
     }
 
     // Host-native iOS drivers (e.g. IOS_AXE): dispatch through the driver's IosDeviceManager.
@@ -2294,7 +2314,12 @@ class TrailblazeMcpBridgeImpl(
     // run --driver IOS_AXE`), which gets real session logging that this one-shot MCP path
     // still doesn't (see warnIosNativeSessionLoggingGapOnce below).
     if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType?.hostNativeSimulatorDriver == true) {
-      val result = executeToolViaIosNativeDriver(tool, trailblazeDeviceId)
+      // That driver's agent runs the tool without the dispatch loop that records calls. The record
+      // diffs the memory the tool runs against, so both get the same one.
+      val toolMemory = AgentMemory()
+      val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool, memory = toolMemory) {
+        executeToolViaIosNativeDriver(tool, trailblazeDeviceId, toolMemory)
+      }
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -2308,7 +2333,17 @@ class TrailblazeMcpBridgeImpl(
       // the device via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
       // parser. (The host/Maestro path below keeps the trail-item `yaml` it decodes host-side.)
       val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, traceId)
+      // The device records the call in its own history; this is the host's record of it, so a host
+      // script that sent it here sees it among its calls. The session is resolved first, so the
+      // call that creates it is recorded in it rather than under the per-device fallback. The
+      // daemon keeps no memory between direct calls, so [deviceMemory] only collects what the
+      // device changed, for that record.
+      val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+      val sessionResolution = openOnDeviceSession(trailblazeDeviceId, driverType)
+      val deviceMemory = AgentMemory()
+      val result = ToolCallHistory.recordExecution(sessionResolution.sessionId, tool, memory = deviceMemory) {
+        executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, driverType, sessionResolution, traceId, deviceMemory)
+      }
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -2450,10 +2485,7 @@ class TrailblazeMcpBridgeImpl(
       ?: "tool"
     Console.log("[executeTrailblazeTool] Executing '$toolLabel' on the host JVM (driver=$driverType)")
 
-    val session = TrailblazeSession(
-      sessionId = getActiveSessionId() ?: SessionId.sanitized("mcp_${trailblazeDeviceId.instanceId}"),
-      startTime = Clock.System.now(),
-    )
+    val session = TrailblazeSession(sessionId = historySessionId(trailblazeDeviceId), startTime = Clock.System.now())
     // Scripted tools read `ctx.target.{id, appIds}` off this; a null hands a target-scoped tool
     // `ctx.target === undefined`, diverging from the trail-run path. Resolved through the
     // per-device session override so `trailblaze tool --target <id>` is honored.
@@ -2484,7 +2516,9 @@ class TrailblazeMcpBridgeImpl(
     // no more trustworthy than after a device dispatch — and no more trustworthy when the tool
     // throws partway through than when it succeeds.
     cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-    val result = tool.execute(context)
+    // Run here rather than through an agent's dispatch, so recorded here; its nested calls are
+    // dispatched and name it as their parent.
+    val result = ToolCallHistory.recordExecution(context, tool) { tool.execute(context) }
     return when (result) {
       is TrailblazeToolResult.Success -> toolResultWithFallbackMessage(
         message = result.message,
@@ -2621,6 +2655,7 @@ class TrailblazeMcpBridgeImpl(
   private suspend fun executeToolViaIosNativeDriver(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
+    memory: AgentMemory,
   ): TrailblazeToolResult.Success {
     val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? IosNativeConnectedDevice
       ?: error("Host-native iOS execution requires an IosNativeConnectedDevice in the persistent registry; got ${persistentDevices[trailblazeDeviceId.instanceId]?.let { it::class.simpleName }}")
@@ -2630,7 +2665,7 @@ class TrailblazeMcpBridgeImpl(
     // One span for the whole call, so the context's screen state below and the tool's own
     // pre-action reads share one capture (see IosDeviceManager.shareScreenReads).
     val result = deviceManager.shareScreenReads().use {
-      runIosNativeTool(tool, deviceManager, agent, persistentDevice)
+      runIosNativeTool(tool, deviceManager, agent, persistentDevice, memory)
     }
     return when (result) {
       is TrailblazeToolResult.Success ->
@@ -2648,6 +2683,7 @@ class TrailblazeMcpBridgeImpl(
     deviceManager: IosDeviceManager,
     agent: IosDriverTrailblazeAgent,
     persistentDevice: IosNativeConnectedDevice,
+    memory: AgentMemory,
   ): TrailblazeToolResult {
     val driverType = persistentDevice.trailblazeDriverType
     // Reuse the manager built above — `persistentDevice.screenState()` constructs a second
@@ -2672,7 +2708,7 @@ class TrailblazeMcpBridgeImpl(
       screenStateProvider = { deviceManager.getScreenState() },
       androidDeviceCommandExecutor = null,
       trailblazeLogger = noOpTrailblazeLogger(),
-      memory = AgentMemory(),
+      memory = memory,
       maestroTrailblazeAgent = agent,
       nodeSelectorMode = agent.nodeSelectorMode,
     )
@@ -2700,7 +2736,7 @@ class TrailblazeMcpBridgeImpl(
     // one would need is skipped rather than captured and discarded.
     logDriverActions = false,
     trailblazeToolRepo = TrailblazeToolRepo.withDynamicToolSets(
-      // The recording/replay surface (assertVisibleBySelector, assertVisibleWithText, …) on top
+      // The recording/replay surface (assertVisibleBySelector, …) on top
       // of the LLM catalog — same union `CustomTrailblazeTools.allForSerializationTools` uses —
       // because forwarded placeholders carry whatever name the caller's loop advertised,
       // including recording-only assertion tools.
@@ -2758,12 +2794,20 @@ class TrailblazeMcpBridgeImpl(
     val resolvedLogsRepo = logsRepo
     if (test.config.captureNetworkTraffic && resolvedLogsRepo != null) {
       runCatching {
-        WebNetworkCapture.start(
-          ctx = test.browserManager.currentPage.context(),
-          sessionId = syntheticSession.sessionId.value,
-          sessionDir = resolvedLogsRepo.getSessionDir(syntheticSession.sessionId),
-          tracker = agent.inflightRequestTracker,
-        )
+        // Bridged: `currentPage` can lazily create the page, and attaching makes a browser round
+        // trip that dispatches queued events — both are Playwright API calls, which must run on
+        // its thread.
+        test.browserManager.onPlaywrightThread {
+          WebNetworkCapture.start(
+            ctx = test.browserManager.currentPage.context(),
+            sessionId = syntheticSession.sessionId.value,
+            sessionDir = resolvedLogsRepo.getSessionDir(syntheticSession.sessionId),
+            tracker = agent.inflightRequestTracker,
+          )
+          // With the start, on the one thread: an overlapping dispatch can't start its capture
+          // between the two and then lose its pump to this one.
+          test.registerEventsWaitPump(syntheticSession.sessionId.value)
+        }
       }.onFailure {
         Console.log("MCP: Auto-start of web network capture failed: ${it.message}")
       }
@@ -2776,13 +2820,17 @@ class TrailblazeMcpBridgeImpl(
     // need — each one would hang for the full callback timeout. getScreenState and the
     // per-tool Playwright execution self-bridge.
     val screenState = test.browserManager.getScreenState()
-    val result = agent.runTrailblazeTools(
-      tools = listOf(tool),
-      traceId = traceId,
-      screenState = screenState,
-      elementComparator = NoOpElementComparator,
-      screenStateProvider = test.browserManager::getScreenState,
-    ).result
+    // No trail installs a Job here, so this MCP call's own Job is what cancels the dispatch — and
+    // with it any event wait or nested call the tool is blocked on.
+    val result = DispatchCancellation.withTrailJob(currentCoroutineContext()[Job]) {
+      agent.runTrailblazeTools(
+        tools = listOf(tool),
+        traceId = traceId,
+        screenState = screenState,
+        elementComparator = NoOpElementComparator,
+        screenStateProvider = test.browserManager::getScreenState,
+      ).result
+    }
     return when (result) {
       is TrailblazeToolResult.Success ->
         toolResultWithFallbackMessage(
@@ -2816,7 +2864,7 @@ class TrailblazeMcpBridgeImpl(
 
   /**
    * Host-side expansion + recursive dispatch for a `DelegatingTrailblazeTool` that's
-   * flagged `requires_host = true`. Extracted from [executeTrailblazeTool] so the
+   * flagged `requiresHost`. Extracted from [executeTrailblazeTool] so the
    * expansion contract is testable in isolation without going through the rest of the
    * driver-routing chain.
    *
@@ -2825,6 +2873,45 @@ class TrailblazeMcpBridgeImpl(
    * device-state lookup and the recursive per-child dispatch.
    */
   internal suspend fun expandDelegatingToolAndDispatch(
+    tool: DelegatingTrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult {
+    // On a device route the first child opens the session, so open it here first: the wrapper and
+    // its children then share one history instead of the wrapper landing under the fallback.
+    val sessionId = if (isOnDeviceInstrumentation()) {
+      openOnDeviceSession(trailblazeDeviceId, getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)).sessionId
+    } else {
+      historySessionId(trailblazeDeviceId)
+    }
+    return ToolCallHistory.recordExecution(sessionId, tool) {
+      expandAndDispatch(tool, trailblazeDeviceId, blocking, traceId)
+    }
+  }
+
+  /** Starts the on-device agent if it isn't running, then returns the device's session, opening one if none is active. */
+  private fun openOnDeviceSession(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType?,
+  ): DeviceSessionResolution {
+    startOnDeviceAgentBeforeRpc(trailblazeDeviceId, driverType)?.let { error(it) }
+    return trailblazeDeviceManager.getOrCreateSessionResolution(
+      trailblazeDeviceId = trailblazeDeviceId,
+      forceNewSession = false,
+      sessionIdPrefix = "yaml",
+    )
+  }
+
+  /**
+   * The session a daemon dispatch records its calls under, and a host-local tool's `ctx.history`
+   * reads: [trailblazeDeviceId]'s active session, else one per device.
+   */
+  private fun historySessionId(trailblazeDeviceId: TrailblazeDeviceId): SessionId =
+    trailblazeDeviceManager.getCurrentSessionIdForDevice(trailblazeDeviceId)
+      ?: SessionId.sanitized("mcp_${trailblazeDeviceId.instanceId}")
+
+  private suspend fun expandAndDispatch(
     tool: DelegatingTrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     blocking: Boolean,
@@ -2844,7 +2931,7 @@ class TrailblazeMcpBridgeImpl(
     )
     Console.log(
       "[executeTrailblazeTool] Host-expanding DelegatingTrailblazeTool " +
-        "'${tool::class.simpleName}' (requires_host=true) into ${expanded.size} child(ren); " +
+        "'${tool::class.simpleName}' (requiresHost=true) into ${expanded.size} child(ren); " +
         "recursing per-child for routing.",
     )
     // Last child wins, carrying its typed result: a composition whose final child returns a
@@ -2867,18 +2954,15 @@ class TrailblazeMcpBridgeImpl(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
+    driverType: TrailblazeDriverType?,
+    sessionResolution: DeviceSessionResolution,
     traceId: TraceId? = null,
+    deviceMemory: AgentMemory? = null,
   ): TrailblazeToolResult.Success {
-    val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
-    startOnDeviceAgentBeforeRpc(trailblazeDeviceId, driverType)?.let { error(it) }
+    // The caller started the on-device agent and resolved the session, to record under it.
     val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
 
     return run {
-      val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
-        trailblazeDeviceId = trailblazeDeviceId,
-        forceNewSession = false,
-        sessionIdPrefix = "yaml",
-      )
 
       // Honor "Capture Network Traffic" on the host-driven Android RPC path. The MCP bridge
       // doesn't go through BasePlaywrightNativeTest's `ensureWebNetworkCaptureStarted()`, so we
@@ -2927,6 +3011,8 @@ class TrailblazeMcpBridgeImpl(
               sessionDir = resolvedLogsRepoForAndroid.getSessionDir(sessionResolution.sessionId),
               deviceId = trailblazeDeviceId,
               targetAppIds = captureTargetAppIds,
+              // A cast member's streams carry its name, as in a trail's multi-device run.
+              deviceLabel = trailblazeDeviceManager.castMemberName(trailblazeDeviceId),
               requireTraffic = androidCaptureRequiresTraffic(TrailblazeReferrer.MCP),
             )
           }
@@ -2975,6 +3061,9 @@ class TrailblazeMcpBridgeImpl(
           //   this dispatch path exists to remove — and no wedge could be armed from it. Fail,
           //   matching [HostOnDeviceRpcTrailblazeAgent.toToolResult], which already rejects this
           //   shape.
+          // What the device's memory held after the call, merged as the host agent merges every
+          // reply: a tool that wrote memory and then failed still changed it.
+          deviceMemory?.mergeDeviceMemory(response.memorySnapshot, response.memoryDeletions, response.sensitiveMemoryKeys)
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
@@ -3051,6 +3140,7 @@ class TrailblazeMcpBridgeImpl(
   override suspend fun ensureSessionAndGetId(testName: String?): SessionId? {
     val deviceId = getEffectiveDeviceId() ?: return null
     // Use "yaml" prefix to match runYaml() - ensures we monitor the same session
+    val startedAt = Clock.System.now()
     val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
       trailblazeDeviceId = deviceId,
       forceNewSession = false,
@@ -3064,6 +3154,7 @@ class TrailblazeMcpBridgeImpl(
         sessionId = sessionResolution.sessionId,
         deviceId = deviceId,
         testName = testName,
+        startedAt = startedAt,
       )
     }
 
@@ -3078,6 +3169,12 @@ class TrailblazeMcpBridgeImpl(
     sessionId: SessionId,
     deviceId: TrailblazeDeviceId,
     testName: String? = null,
+    /**
+     * When the session began, taken before it existed and before the device probes below, which
+     * can take seconds: a session stopped meanwhile writes `Ended`, and status readers take the
+     * latest timestamp, so `Started` must sort first.
+     */
+    startedAt: Instant = Clock.System.now(),
   ) {
     val repo = logsRepo ?: return
 
@@ -3155,7 +3252,7 @@ class TrailblazeMcpBridgeImpl(
     val log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
       sessionStatus = sessionStartedStatus,
       session = sessionId,
-      timestamp = Clock.System.now(),
+      timestamp = startedAt,
     )
 
     repo.saveLogToDisk(log)
@@ -3231,6 +3328,12 @@ class TrailblazeMcpBridgeImpl(
           Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
           releasePersistentDeviceConnection(deviceId)
         }
+      } else {
+        // The kept driver's keyboard check still asks about the old target's apps first.
+        val deviceId = getEffectiveDeviceId()
+        if (deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+          HostIosDriverFactory.keyboardCheckTargetSelected(deviceId.instanceId, matchingTarget)
+        }
       }
       releaseAndroidTestConnectionOnTargetChange(previousTarget?.id, appTargetId)
     }
@@ -3273,7 +3376,7 @@ class TrailblazeMcpBridgeImpl(
    * [getSessionTargetAppIdForDevice], which prefers the per-device session
    * override (set via `setSessionTargetForBoundDevice` / `--target`) before
    * falling back here. Reading this directly from a per-device tool-list /
-   * tool-availability path is the bug that drops YAML-defined tools from the
+   * tool-availability path is the bug that drops target-declared tools from the
    * dispatch gate when the daemon-wide setting doesn't match the device's
    * `--target`.
    */
@@ -3305,7 +3408,14 @@ class TrailblazeMcpBridgeImpl(
     }
     val resolved = trailblazeDeviceManager.availableAppTargets.findById(appTargetId)
       ?: return null
-    trailblazeDeviceManager.setTargetForActiveSession(deviceId, appTargetId = resolved.id)
+    val startedAt = Clock.System.now()
+    val assignment = trailblazeDeviceManager.setTargetForActiveSession(deviceId, appTargetId = resolved.id)
+    // A session created here gets its Started log here: later commands reuse it, so
+    // [ensureSessionAndGetId] never sees it as new, and `session save` needs the device
+    // platform that log carries.
+    if (assignment.isNewSession) {
+      assignment.sessionId?.let { emitSessionStartedLog(sessionId = it, deviceId = deviceId, startedAt = startedAt) }
+    }
     return resolved.displayName
   }
 

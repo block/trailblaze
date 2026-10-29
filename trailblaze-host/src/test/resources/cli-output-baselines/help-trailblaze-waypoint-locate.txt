@@ -39,5 +39,8 @@ Given a captured screen state, report which waypoint(s) match.
                               *_TrailblazeLlmRequestLog.json files)
       --target=<id>         Trailmap id to operate on. Resolves --root to
                               <workspace>/trailmaps/<id>/waypoints/. Mutually
-                              exclusive with --root (--root wins if both given).
+                              exclusive with --root (--root wins if both
+                              given). Without it, `{{target.appId}}` selectors
+                              expand to the app ids of the target the session
+                              recorded.
   -V, --version             Print version information and exit.

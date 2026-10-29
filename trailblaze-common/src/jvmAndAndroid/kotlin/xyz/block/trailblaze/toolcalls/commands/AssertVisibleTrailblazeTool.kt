@@ -2,8 +2,17 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.describe
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -34,36 +43,21 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
 @Serializable
 @TrailblazeToolClass("assertVisible", isVerification = true, isRecordable = false)
 @LLMDescription(
-  "Assert an element is visible on screen by its ref ID from the snapshot. Use the " +
-    "short hash ref shown in square brackets (e.g., y778 from [y778] \"Network & internet\"). " +
-    "These refs are stable across captures of the same screen. Optionally pass " +
-    "`expectedText` to also verify the element's rendered text — use it whenever the case " +
-    "asks to verify a specific value (e.g. \"verify the checkout button shows \$5.00\", " +
-    "\"expect status to be Active\") instead of just confirming the element exists.",
+  "Assert an element is visible by its snapshot ref (e.g. y778 from [y778] \"Network & internet\"). " +
+    "Checks the current snapshot only; it does not wait for an element to appear. The element's " +
+    "text is checked too, so assert the element that shows the value you are verifying, and not " +
+    "one whose text changes from run to run (a timestamp, an order number): replay would fail on " +
+    "it, so assert a stable label beside it instead.",
 )
 data class AssertVisibleTrailblazeTool(
-  @param:LLMDescription("The element ref from the snapshot (e.g., 'y778')")
+  @param:LLMDescription("Element ref from the snapshot, e.g. 'y778'.")
   val ref: String,
-  @param:LLMDescription(
-    "Optional. When set, asserts the resolved element's rendered text equals this value " +
-      "after whitespace trimming (case-sensitive). Pass the stable rendered text verbatim — " +
-      "e.g. \"Charge \$5.00\", not \"the checkout button\". Exclude volatile state that " +
-      "changes run-to-run (live item counts like \"3 items\", timestamps, quantities); pin " +
-      "only the part that stays constant. Leave null when only the element's presence matters.",
-  )
-  val expectedText: String? = null,
   override val reasoning: String? = null,
 ) : DelegatingTrailblazeTool, ReasoningTrailblazeTool {
 
   override fun toExecutableTrailblazeTools(
     executionContext: TrailblazeToolExecutionContext,
   ): List<ExecutableTrailblazeTool> {
-    // Strip volatile state (e.g. live item counts) out of the captured expectedText before it
-    // becomes a strict EXACT pin. A captured "Review sale\n3 items" would fail replay whenever
-    // the live count differs; emitting the stable head with PREFIX keeps the value-pin without
-    // the brittleness. No volatile token → forward verbatim as EXACT (byte-identical to before).
-    val resolvedText = VolatileTextDetector.resolve(expectedText)
-
     val screenState = executionContext.screenState
       ?: throw TrailblazeToolExecutionException(
         message = "assertVisible: No screen state available",
@@ -98,30 +92,34 @@ data class AssertVisibleTrailblazeTool(
       "### assertVisible: Resolved '$ref' → ${targetNode.describe()} at (${center.first}, ${center.second})",
     )
 
-    // The selector the assert records. A presence check describes what a touch at the
-    // ref's center lands on, like `tap` ([selectorSourceNode]). A text check is a claim about
-    // THIS ref's text, so it records the ref's own node: the hit-test can settle on a child label
-    // under the center (a cell's "Model Name" inside "Model Name, iPhone 17") and the text check
-    // would then read the child. Lazy because the ANDROID Maestro path below records a
-    // TapSelectorV2 selector and never reads it.
-    //
-    // A text check also skips selectors that pick the ref out by `containsChild` /
-    // `containsDescendants`: the text post-pass reads those children instead of the node itself
-    // (that is what a hand-written one means), so a row whose own text repeats, told apart by a
-    // child, would be checked against the child. When every unique selector needs a child
-    // anchor, it records the best one anyway and the failure lists the fields it compared.
-    val recordedSelector by lazy {
-      if (resolvedText.expectedText == null) {
-        TrailblazeNodeSelectorGenerator.findBestSelector(
-          tree,
-          selectorSourceNode(tree, targetNode, center.first, center.second),
-        )
-      } else {
-        TrailblazeNodeSelectorGenerator.findAllValidSelectors(tree, targetNode, maxResults = Int.MAX_VALUE)
-          .map { it.selector }
-          .firstOrNull { it.containsChild == null && it.containsDescendants.isNullOrEmpty() }
-          ?: TrailblazeNodeSelectorGenerator.findBestSelector(tree, targetNode)
+    // The node the assert records. A ref that shows text of its own records itself: the assertion
+    // is about what it says, and the hit-test at its center can settle on a child label instead (a
+    // cell's "Model Name" inside "Model Name, iPhone 17"). A ref with no text of its own records
+    // what a touch at its center lands on, like `tap` ([selectorSourceNode]), unless that shows no
+    // text either: then the label inside it, which is the text the ref was shown with. A direct
+    // child's label comes first, as the snapshot shows it, so a nested badge isn't picked over it.
+    // A label showing a remembered secret is never picked: its selector would spell the secret.
+    val sourceNode by lazy {
+      if (TrailblazeNodeSelectorGenerator.showsText(targetNode)) return@lazy targetNode
+      val touched = selectorSourceNode(tree, targetNode, center.first, center.second)
+      if (TrailblazeNodeSelectorGenerator.showsText(touched)) return@lazy touched
+      val secrets = executionContext.memory.sensitiveValues()
+      val safeLabel = { node: TrailblazeNode ->
+        TrailblazeNodeSelectorGenerator.showsText(node) && !node.showsAny(secrets)
       }
+      targetNode.children.firstOrNull(safeLabel)
+        ?: targetNode.findFirst { it !== targetNode && safeLabel(it) }
+        ?: touched
+    }
+    // Every recorded selector also requires the text of the element it matches
+    // ([TrailblazeNodeSelectorGenerator.withMatchedElementText]): the minimizer keeps only what
+    // uniqueness needs, so without this an element with a unique id would assert presence only.
+    // Lazy because the ANDROID Maestro path below records a TapSelectorV2 selector and never reads it.
+    val recordedSelector by lazy {
+      tree.withMatchedElementTextUnlessSensitive(
+        TrailblazeNodeSelectorGenerator.findBestSelector(tree, sourceNode),
+        executionContext.memory,
+      )
     }
 
     // Accessibility-driver path: emit nodeSelector-only, mirroring [TapTrailblazeTool]'s
@@ -137,16 +135,14 @@ data class AssertVisibleTrailblazeTool(
         AssertVisibleBySelectorTrailblazeTool(
           reason = reasoning,
           nodeSelector = accessibilityNodeSelector,
-          expectedText = resolvedText.expectedText,
-          textMatchMode = resolvedText.mode,
         ),
       )
     }
 
     // Generate a rich TrailblazeNodeSelector where possible; AssertVisibleBySelectorTrailblazeTool
     // dispatches via nodeSelector or a Maestro-lowered projection of it based on NodeSelectorMode
-    // internally. For a presence check, [selectorSourceNode] resolves the frontmost node at the
-    // coordinates that the ref could actually have meant — the same round-trip validation as
+    // internally. For a ref with no text of its own, [selectorSourceNode] resolves the frontmost
+    // node at the coordinates that the ref could actually have meant — the same round-trip validation as
     // TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic, and SelectorSourceNode
     // for the occlusion case it overrides). It always answers, because a hit-test at the ref's
     // own center cannot miss: bounds contain their own center point. The `?: null` that used to
@@ -197,11 +193,49 @@ data class AssertVisibleTrailblazeTool(
               heightPixels = screenState.deviceHeight,
               spatialHints = null,
             ).selector.toTrailblazeNodeSelector(screenState.trailblazeDevicePlatform)
+              .let { tree.withMatchedElementTextUnlessSensitive(it, executionContext.memory) }
           },
         ),
-        expectedText = resolvedText.expectedText,
-        textMatchMode = resolvedText.mode,
       ),
     )
   }
 }
+
+/**
+ * [selector] with the text of the element it matches pinned
+ * ([TrailblazeNodeSelectorGenerator.withMatchedElementText]), unless that element shows a value the
+ * trail remembered as sensitive. Then it is left as is, like a password field: a recording is a
+ * file anyone can read, and the resolved selector also reaches logs and tool results.
+ */
+private fun TrailblazeNode.withMatchedElementTextUnlessSensitive(
+  selector: TrailblazeNodeSelector,
+  memory: AgentMemory,
+): TrailblazeNodeSelector {
+  val secrets = memory.sensitiveValues()
+  if (secrets.isNotEmpty()) {
+    val matched = (TrailblazeNodeSelectorResolver.resolve(this, selector) as? TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch)
+      ?.node ?: return selector
+    if (matched.showsAny(secrets)) return selector
+  }
+  return TrailblazeNodeSelectorGenerator.withMatchedElementText(this, selector)
+}
+
+/**
+ * Every value the trail remembered as sensitive, including an arg that copied one: the arg keeps
+ * its copy after the memory key it came from is deleted.
+ */
+private fun AgentMemory.sensitiveValues(): List<String> {
+  val keys = sensitiveKeys.mapNotNull { variables[it] }
+  val args = sensitiveArgNames.flatMap { name -> args[name]?.scalars().orEmpty() }
+  return (keys + args).filter { it.isNotEmpty() }
+}
+
+/** Every string, number or boolean inside [this], so an object arg's fields are checked one by one. */
+private fun JsonElement.scalars(): List<String> = when (this) {
+  is JsonPrimitive -> listOfNotNull(contentOrNull)
+  is JsonArray -> flatMap { it.scalars() }
+  is JsonObject -> values.flatMap { it.scalars() }
+}
+
+private fun TrailblazeNode.showsAny(secrets: List<String>): Boolean =
+  secrets.isNotEmpty() && driverDetail.textCandidates().any { text -> secrets.any { it in text } }

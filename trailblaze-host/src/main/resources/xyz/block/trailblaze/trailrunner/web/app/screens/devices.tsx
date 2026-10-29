@@ -99,7 +99,7 @@ function TargetDevicePicker({ go }) {
           <HelpButton title="How targets work" align="left"
             sub="A target is the app or site under test. Pick one, then choose every phone or browser you want to run it on.">
             <HelpCard ico="package" color="var(--tb-amber)" title="Targets group your devices">
-              Each card is a target and the devices that can run it. Mobile devices appear when the app is installed; browsers appear when the target declares Web. Selecting a target scopes Trail Runner to its tools and trailheads.
+              Each card is a target and the devices that can run it. Mobile devices appear when the app is installed; browsers appear when the target declares Web. Selecting a target scopes Trailblaze App to its tools and trailheads.
             </HelpCard>
             <HelpCard ico="smartphone" color="var(--tb-running)" title="Select multiple devices">
               Tick every device you want under the active target. Runs default to the first selected device (you pick which one in Configure run); the rest stay queued in your selection for quick switching.
@@ -131,7 +131,7 @@ function TargetDevicePicker({ go }) {
             <TargetCard key={g.id}
               icon={<AppIcon target={g.id} size={18} v={iconNonce} fallbackColor={selectedIds.length ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />}
               label={g.label} items={g.items} platforms={g.platforms} selectedIds={selectedIds}
-              statusLabel={restartIds.includes(g.id) ? 'Restart Trail Runner to activate' : undefined}
+              statusLabel={restartIds.includes(g.id) ? 'Restart Trailblaze App to activate' : undefined}
               onToggleTarget={() => toggleGroup(g)} onToggleDevice={(d) => toggleDevice(g.id, g.label, d)}
               onEdit={() => setEditingTarget({ id: g.id, label: g.label })} />
           );

@@ -11,6 +11,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.SerialKind
 import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -38,6 +39,10 @@ fun KType.asToolType(): ToolParameterType {
     Boolean::class -> ToolParameterType.Boolean
     Long::class -> ToolParameterType.Integer
     Double::class -> ToolParameterType.Float
+    JsonObject::class -> ToolParameterType.Object(emptyList(), additionalProperties = true)
+
+    // A free-form JSON payload: an object with no declared properties that accepts any keys.
+    JsonObject::class -> ToolParameterType.Object(properties = emptyList(), additionalProperties = true)
 
     List::class -> {
       val listItemType = this.arguments[0].type ?: error("List item type is null")
@@ -105,6 +110,10 @@ fun KType.asToolType(): ToolParameterType {
  * surfaced to scripted tools). Neither selector is a parameter the LLM/scripted author sets via the
  * descriptor anyway — scripted authors get the rich selector typing from the hand-curated
  * `built-in-tools.ts`, and the legacy `selector` field is itself deprecated.
+ *
+ * Keeping selectors out of the LLM's schemas is also policy, independent of the recursion: the LLM
+ * picks elements by snapshot ref, and a ref-taking tool resolves it to the selector that gets
+ * recorded. `LlmToolsTakeNoSelectorsTest` holds that for every LLM-visible tool.
  */
 private val excludedParameterTypes = setOf(
   TrailblazeNodeSelector::class.qualifiedName,

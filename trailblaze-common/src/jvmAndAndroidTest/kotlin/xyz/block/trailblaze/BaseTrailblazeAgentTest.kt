@@ -9,7 +9,14 @@ import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -32,6 +39,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
@@ -89,11 +97,11 @@ class BaseTrailblazeAgentTest {
     ): TrailblazeToolResult = result
   }
 
-  // ── Stub tool shaped like a YAML-defined one: a per-instance name, and a class annotation that
-  // every instance shares (`YamlDefinedTrailblazeTool` uses the reserved `_yaml_defined`) ──
+  // ── Stub tool shaped like a scripted one: a per-instance name, and a class annotation that
+  // every instance shares ──
 
   @Serializable
-  @TrailblazeToolClass("_yaml_defined")
+  @TrailblazeToolClass("_shared_impl")
   private class InstanceNamedStubTool(
     override val instanceToolName: String,
   ) : ExecutableTrailblazeTool, InstanceNamedTrailblazeTool {
@@ -291,15 +299,20 @@ class BaseTrailblazeAgentTest {
       traceId: TraceId,
       screenState: ScreenState?,
       screenStateProvider: (() -> ScreenState)?,
-    ) = TrailblazeToolExecutionContext(
-      screenState = screenState,
-      traceId = traceId,
-      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
-      sessionProvider = sessionProvider,
-      screenStateProvider = screenStateProvider,
-      trailblazeLogger = trailblazeLogger,
-      memory = memory,
-    )
+    ): TrailblazeToolExecutionContext {
+      lateinit var context: TrailblazeToolExecutionContext
+      context = TrailblazeToolExecutionContext(
+        screenState = screenState,
+        traceId = traceId,
+        trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+        sessionProvider = sessionProvider,
+        screenStateProvider = screenStateProvider,
+        trailblazeLogger = trailblazeLogger,
+        memory = memory,
+        nestedToolExecutor = nestedToolExecutorFor { context },
+      )
+      return context
+    }
 
     override fun executeTool(
       tool: TrailblazeTool,
@@ -398,6 +411,34 @@ class BaseTrailblazeAgentTest {
 
     assertThat((seenScreenStates[0] as LabeledScreenState).label).isEqualTo("first")
     assertThat((seenScreenStates[1] as LabeledScreenState).label).isEqualTo("fresh-capture")
+  }
+
+  @Test
+  fun `a nested call after a nested action reads the screen after that action`() = runBlocking {
+    // A scripted tool that taps and then reads the screen through two `ctx.tools` calls shares one
+    // context. The tap must re-arm lazy capture, or the read sees the screen from before the tap.
+    val agent = ScreenStateThreadingTestAgent()
+    var captures = 0
+    val provider: () -> ScreenState = { LabeledScreenState("capture-${++captures}") }
+    val seen = mutableListOf<ScreenState?>()
+    val reader = RecordingStubTool(onExecute = { ctx -> seen += ctx.screenState })
+    val tapThenRead = object : HostLocalExecutableTrailblazeTool {
+      override val advertisedToolName = "tap_then_read"
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+        val nested = toolExecutionContext.nestedToolExecutor!!
+        nested(StubTool())
+        return nested(reader)
+      }
+    }
+
+    agent.runTrailblazeTools(
+      tools = listOf(tapThenRead),
+      screenState = LabeledScreenState("before-tap"),
+      elementComparator = noOpComparator,
+      screenStateProvider = provider,
+    )
+
+    assertThat((seen.single() as LabeledScreenState).label).isEqualTo("capture-1")
   }
 
   @Test
@@ -578,6 +619,46 @@ class BaseTrailblazeAgentTest {
 
     assertThat(innerRanWithActiveScope).isEqualTo(true)
     assertThat(xyz.block.trailblaze.toolcalls.ToolBatchScope.isActive()).isEqualTo(false)
+  }
+
+  /** A host-local tool that runs [body], the way a scripted tool waits on events. */
+  private class BlockingHostLocalTool(val body: suspend () -> TrailblazeToolResult) : HostLocalExecutableTrailblazeTool {
+    override val advertisedToolName: String = "blocking_host_local"
+    override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext) = body()
+  }
+
+  @Test
+  fun `a host-local tool dispatched for a trail is cancelled with the trail`() {
+    val trail = Job()
+    val started = CompletableDeferred<Unit>()
+    val dispatch = Executors.newSingleThreadExecutor()
+    try {
+      val done = dispatch.submit<Throwable?> {
+        runCatching {
+          DispatchCancellation.withTrailJob(trail) {
+            run(TestAgent(), BlockingHostLocalTool { started.complete(Unit); awaitCancellation() })
+          }
+        }.exceptionOrNull()
+      }
+      runBlocking { withTimeout(5_000) { started.await() } }
+      trail.cancel()
+
+      assertThat(done.get(5, TimeUnit.SECONDS)).isNotNull().isInstanceOf(CancellationException::class)
+    } finally {
+      dispatch.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `a host-local tool that throws fails its own call, not the trail`() {
+    val trail = Job()
+
+    val result = DispatchCancellation.withTrailJob(trail) {
+      run(TestAgent(), BlockingHostLocalTool { error("boom") })
+    }
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+    assertThat(trail.isActive).isEqualTo(true)
   }
 
   @Test
@@ -888,6 +969,84 @@ class BaseTrailblazeAgentTest {
     assertThat(toolLogs).hasSize(1)
     assertThat(toolLogs[0].toolName).isEqualTo("stub_plain_host_local")
     assertThat(toolLogs[0].successful).isEqualTo(true)
+  }
+
+  // Exercise the real nested dispatch and log emitter without requiring an external script bundle.
+  @Test
+  fun nestedDispatchMasksValuesOverwrittenDuringExecution() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent =
+      object : TestAgent() {
+        override val trailblazeLogger =
+          TrailblazeLogger(LogEmitter { captured.add(it) }, ScreenStateLogger { "" })
+
+        override fun buildExecutionContext(
+          traceId: TraceId,
+          screenState: ScreenState?,
+          screenStateProvider: (() -> ScreenState)?,
+        ): TrailblazeToolExecutionContext {
+          lateinit var context: TrailblazeToolExecutionContext
+          context =
+            TrailblazeToolExecutionContext(
+              screenState = null,
+              traceId = traceId,
+              trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+              sessionProvider = sessionProvider,
+              trailblazeLogger = trailblazeLogger,
+              memory = memory,
+              nestedToolExecutor = nestedToolExecutorFor { context },
+            )
+          return context
+        }
+      }
+    val oldValue = "FAKE_TEST_ONLY_PRE_DISPATCH"
+    val newValue = "FAKE_TEST_ONLY_POST_DISPATCH"
+    agent.memory.rememberSensitive("pin", oldValue)
+    val payload =
+      kotlinx.serialization.json.buildJsonObject {
+        put("previous", kotlinx.serialization.json.JsonPrimitive(oldValue))
+        put("current", kotlinx.serialization.json.JsonPrimitive(newValue))
+      }
+    val tool =
+      object :
+        HostLocalExecutableTrailblazeTool,
+        xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool {
+        override val advertisedToolName = "overwriting_nested_tool"
+        override val instanceToolName
+          get() = advertisedToolName
+
+        override val rawToolArguments = payload
+
+        override suspend fun execute(
+          toolExecutionContext: TrailblazeToolExecutionContext
+        ): TrailblazeToolResult {
+          toolExecutionContext.memory.rememberSensitive("pin", newValue)
+          return TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "$oldValue $newValue",
+            structuredPayload = payload,
+          )
+        }
+      }
+    val result = run(agent, NestingHostLocalTool(inner = tool))
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat(agent.memory.variables["pin"]).isEqualTo(newValue)
+    assertThat(tool.rawToolArguments).isEqualTo(payload)
+    val log =
+      captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single {
+        it.toolName == tool.advertisedToolName
+      }
+    val fields =
+      listOfNotNull(
+        log.trailblazeTool.raw.toString(),
+        log.rawTrailblazeTool?.raw?.toString(),
+        log.exceptionMessage,
+        log.errorPayload?.toString(),
+      )
+    kotlin.test.assertTrue(
+      fields.none { it.contains(oldValue) || it.contains(newValue) },
+      "Nested dispatch must mask pre-call and current sensitive values",
+    )
+    assertThat(log.isRecordable).isEqualTo(false)
   }
 
   // Stand-in for SubprocessTrailblazeTool — same interface shape (HostLocal + RawArgument, no
@@ -1288,8 +1447,8 @@ class BaseTrailblazeAgentTest {
 
   @Test
   fun `a tool that names itself gets that name, not its class annotation`() = runBlocking {
-    // Every `tools:`-authored tool shares one class, whose annotation is the reserved
-    // `_yaml_defined`. Going by the annotation collapses them all into one span name, and the
+    // Many named tools can share one implementation class (and so one class annotation). Going by
+    // the annotation collapses them all into one span name, and the
     // question the trace exists to answer — which of my tools was slow — stops having an answer.
     run(
       TestAgent(),

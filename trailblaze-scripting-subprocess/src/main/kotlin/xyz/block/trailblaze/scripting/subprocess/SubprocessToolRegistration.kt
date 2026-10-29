@@ -2,8 +2,11 @@ package xyz.block.trailblaze.scripting.subprocess
 
 import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
@@ -108,7 +111,12 @@ class SubprocessToolRegistration(
     registered.inputSchema.toTrailblazeToolDescriptor(
       name = registered.advertisedName.toolName,
       description = registered.description,
-    ).copy(source = source)
+    ).let { descriptor ->
+      // The full schema lets coerceArgsToDescriptorTypes re-type nested args (e.g.
+      // `overrides[].value`), as LazyYamlScriptedToolRegistration does for in-process tools.
+      // `copy` drops body properties, so carry it across.
+      descriptor.copy(source = source).apply { inputSchema = descriptor.inputSchema }
+    }
 
   override fun buildKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
@@ -117,30 +125,29 @@ class SubprocessToolRegistration(
     // doesn't model today (`array`, `object`, etc.); those fall back to String rather than
     // crashing session startup.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = SubprocessToolSerializer(
-      registered.advertisedName,
-      sessionProvider,
-      callbackContext,
-      registered.meta.sensitiveArgs,
-    )
+    val serializer = serializer()
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
       executeTool = { args: SubprocessTrailblazeTool ->
         val context = trailblazeToolContextProvider()
-        val result = args.execute(context)
+        // The model calls this directly, not through an agent's dispatch, so record it here.
+        val result = ToolCallHistory.recordExecution(context, args) { args.execute(context) }
         "Executed subprocess tool: ${registered.advertisedName.toolName} — result: $result"
       },
     )
   }
 
   override fun decodeToolCall(argumentsJson: String): TrailblazeTool {
-    val serializer = SubprocessToolSerializer(
-      registered.advertisedName,
-      sessionProvider,
-      callbackContext,
-      registered.meta.sensitiveArgs,
-    )
+    val serializer = serializer()
     return Json.decodeFromString(serializer, argumentsJson)
   }
+
+  private fun serializer() = SubprocessToolSerializer(
+    advertisedName = registered.advertisedName,
+    sessionProvider = sessionProvider,
+    callbackContext = callbackContext,
+    sensitiveArgs = registered.meta.sensitiveArgs,
+    isRecordable = registered.meta.isRecordable,
+  )
 }

@@ -4,9 +4,7 @@
 
 # `web_click`
 
-Click on a web element identified by its element ID, ARIA descriptor, or CSS selector.
-Use the element ID from the page elements list (e.g., 'e5'), an ARIA descriptor (e.g., 'button "Submit"'),
-or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testid="submit"]').
+Click a web element.
 
 ## Source
 
@@ -24,7 +22,7 @@ or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testi
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-id', 'css=[data-testid="btn"]').
+  Element ID ('e5'), ARIA descriptor ('button "Submit"'), or 'css=<selector>'.
 - `reasoning` — `String`
 
 ## Output

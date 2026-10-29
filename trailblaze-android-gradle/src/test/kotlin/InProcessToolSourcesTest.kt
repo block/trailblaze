@@ -43,25 +43,94 @@ class InProcessToolSourcesTest {
     assertEquals(listOf("sidecarless.ts"), discoveredNames())
   }
 
+  @Test fun `includes a descriptor-less trailhead declared with trailblaze_trailhead`() {
+    write("launchApp.ts", "export const launchApp = trailblaze.trailhead(async () => \"ok\")\n")
+    assertEquals(listOf("launchApp.ts"), discoveredNames())
+  }
+
   @Test fun `excludes a shared helper module that never calls trailblaze_tool`() {
     write("app_shared.ts", "export function textSelector(t: string) { return { t } }\n")
     assertEquals(emptyList(), discoveredNames())
   }
 
   @Test fun `excludes a subprocess tool gated by its yaml sidecar`() {
-    // Subprocess is declared ONLY via the YAML sidecar's `runtime: subprocess` — the inline
-    // `trailblaze.tool(...)` spec (`TrailblazeTypedToolSpec`) has no `runtime` field, so a
-    // descriptor-less `.ts` is always in-process. This branch is the sole subprocess gate.
+    // This branch is the sole subprocess gate: the spec's `runtime` takes the analyzer to read, so
+    // a descriptor-less `.ts` is always in-process here.
     write("subprocessYaml.ts", toolBody)
     write("subprocessYaml.yaml", "name: subprocessYaml\nruntime: subprocess\n")
     assertEquals(emptyList(), discoveredNames())
   }
 
+  @Test fun `a same-basename yaml for another script does not decide this tool's runtime`() {
+    // `foo.yaml` describes `./bar.ts` as a subprocess tool; `foo.ts` is its own in-process tool.
+    write("foo.ts", toolBody)
+    write("bar.ts", toolBody)
+    write("foo.yaml", "script: ./bar.ts\nname: barTool\nruntime: subprocess\n")
+    assertEquals(listOf("foo.ts"), discoveredNames())
+  }
+
+  @Test fun `a differently named yaml that runs a script in-process includes it`() {
+    write("reader.ts", "export async function run() { return \"ok\" }\n")
+    write("card_reader.yaml", "script: ./reader.ts\nname: cardReader\n")
+    assertEquals(listOf("reader.ts"), discoveredNames())
+  }
+
+  @Test fun `a yaml that is not a valid descriptor does not claim its script`() {
+    write("bar.ts", toolBody)
+    write("broken.yaml", "script: ./bar.ts\nname: []\nruntime: subprocess\n")
+    assertEquals(listOf("bar.ts"), discoveredNames())
+  }
+
+  @Test fun `a quoted script path with spaces names its script`() {
+    write("legacy helper.ts", toolBody)
+    write("legacy.yaml", "script: \"./legacy helper.ts\"\nname: legacyHelper\nruntime: subprocess\n")
+    assertEquals(emptyList(), discoveredNames())
+  }
+
+  @Test fun `a block tools list after a comment still describes its legacy script`() {
+    write("legacy.ts", "export async function grouped() { return \"ok\" }\n")
+    write("legacy.yaml", "tools: # grouped actions\n  - name: grouped\n")
+    assertEquals(listOf("legacy.ts"), discoveredNames())
+  }
+
+  @Test fun `an absolute script path names its script`() {
+    write("legacy.ts", "export async function run() { return \"ok\" }\n")
+    write("legacy.yaml", "script: ${File(dir, "legacy.ts").absolutePath}\nname: legacy\n")
+    assertEquals(listOf("legacy.ts"), discoveredNames())
+  }
+
+  @Test fun `a double-quoted script path has its escapes decoded`() {
+    write("legacy helper.ts", "export async function run() { return \"ok\" }\n")
+    write("legacy.yaml", "script: \"./legacy\\u0020helper.ts\"\nname: legacy\n")
+    assertEquals(listOf("legacy helper.ts"), discoveredNames())
+  }
+
+  @Test fun `a block-style script path names its script`() {
+    write("legacy.ts", "export async function run() { return \"ok\" }\n")
+    write("legacy.yaml", "script: >-\n  ./legacy.ts\nname: legacy\n")
+    write("reader.ts", toolBody)
+    write("reader.yaml", "script: |-\n  ./reader.ts\nname: reader\nruntime: subprocess\n")
+    assertEquals(listOf("legacy.ts"), discoveredNames())
+  }
+
+  @Test fun `a folded script path joins its lines with a space`() {
+    write("legacy helper.ts", "export async function run() { return \"ok\" }\n")
+    write("legacy.yaml", "script: >-\n  ./legacy\n  helper.ts\nname: legacy\n")
+    assertEquals(listOf("legacy helper.ts"), discoveredNames())
+  }
+
+  @Test fun `an optional field set to null is absent`() {
+    write("legacy.ts", "export async function run() { return \"ok\" }\n")
+    write("legacy.yaml", "script: ./legacy.ts\nname: legacy\ntools: null\n")
+    write("reader.ts", toolBody)
+    write("reader.yaml", "script: ./reader.ts\nname: ~\nruntime: subprocess\n")
+    assertEquals(listOf("legacy.ts"), discoveredNames())
+  }
+
   @Test fun `includes a descriptor-less tool whose comment mentions runtime subprocess`() {
     // Regression: discovery used to grep the `.ts` text for `runtime: subprocess` to gate out
-    // subprocess tools. But a descriptor-less `.ts` can't declare that (the inline spec has no
-    // `runtime` field), so the phrase only ever appeared in a comment — here, one explaining the
-    // tool does NOT pin it. That false match dropped the tool's on-device bundle: advertised in the
+    // subprocess tools, and the phrase matched a comment — here, one explaining the tool does NOT
+    // pin it. That false match dropped the tool's on-device bundle: advertised in the
     // target config but no `.bundle.js` in the APK, failing at runtime with "Unknown tool … not
     // registered". A descriptor-less tool's comments must not gate it out.
     write(

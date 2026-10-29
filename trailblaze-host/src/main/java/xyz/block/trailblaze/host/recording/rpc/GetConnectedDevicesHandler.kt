@@ -16,8 +16,7 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  *
  * Calls [TrailblazeDeviceManager.loadDevicesSuspend] before reading the state flow so
  * headless daemon callers (the web viewer, MCP, CLI) see a freshly-discovered device list
- * — without this, only the desktop UI's [LaunchedEffect] populates the flow and headless
- * surfaces would see an empty list until the UI happens to refresh.
+ * — without this, nothing else populates the flow and they would see an empty list.
  */
 class GetConnectedDevicesHandler(
   private val deviceManager: TrailblazeDeviceManager,

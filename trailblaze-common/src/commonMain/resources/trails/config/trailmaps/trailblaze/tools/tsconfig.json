@@ -1,0 +1,28 @@
+// Resolves `@trailblaze/scripting` for the framework scripted tools in this directory, so
+// `bun test` can run their `*.test.ts` files. Hand-authored and committed: the framework
+// trailmaps that ship inside this module have no workspace and never have `trailblaze check` run
+// against them, which is what would otherwise emit one.
+//
+// Nine `..` segments: the depth of this directory below the source-tree root that holds
+// `sdks/typescript/`.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@trailblaze/scripting": ["../../../../../../../../../sdks/typescript/dist/index"],
+      "@trailblaze/scripting/*": ["../../../../../../../../../sdks/typescript/dist/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.js"],
+  "exclude": ["**/*.test.ts", "**/*.bundle.js"]
+}

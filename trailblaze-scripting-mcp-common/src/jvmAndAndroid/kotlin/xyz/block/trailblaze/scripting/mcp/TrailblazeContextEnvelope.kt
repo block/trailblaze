@@ -15,6 +15,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.util.HostPlatform
 
 /**
  * Builders for the two envelopes Trailblaze injects into every `tools/call`:
@@ -54,6 +55,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *     instanceId: string; // emulator serial / simulator UDID — what host CLIs name the device by
  *     trailblazePort?: number; // host-computed; android/ios only, never on-device
  *   };
+ *   hostPlatform?: { os: "macos" | "windows" | "linux"; arch: string }; // never on-device
  *   target?: {
  *     id: string;
  *     displayName?: string;
@@ -182,6 +184,15 @@ object TrailblazeContextEnvelope {
       put("sessionId", sessionId.value)
       put("invocationId", invocationId)
       putDeviceObject(device, runtime)
+      // The computer the tool runs on. The on-device runtime has none to report: there the "host"
+      // is the Android device itself, which `device` already describes.
+      if (runtime != RUNTIME_ONDEVICE) {
+        val hostPlatform = HostPlatform.current()
+        putJsonObject("hostPlatform") {
+          put("os", hostPlatform.os.hostOsName)
+          put("arch", hostPlatform.arch?.hostArchName)
+        }
+      }
       if (target != null) putTargetObject(target)
       putJsonObject(META_KEY_MEMORY) {
         memory.variables.forEach { (k, v) ->

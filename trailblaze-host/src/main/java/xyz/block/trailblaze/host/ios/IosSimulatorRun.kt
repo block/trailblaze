@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -64,13 +65,17 @@ internal suspend fun runIosSimulatorYaml(
     noLogging = runOnHostParams.noLogging,
   ) {
     override fun ensureTargetAppIsStopped() {
+      stopTargetAppForCleanup()
+    }
+
+    override fun stopTargetAppForCleanup(): Boolean {
       // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
       // membership-style Set<String>.
       val possibleAppIds = runOnHostParams.targetTestApp
         ?.getPossibleAppIdsForPlatform(runOnHostParams.trailblazeDevicePlatform)
         ?.toSet()
         ?: emptySet()
-      MobileDeviceUtils.ensureAppsAreForceStopped(
+      return MobileDeviceUtils.ensureAppsAreForceStopped(
         possibleAppIds = possibleAppIds,
         trailblazeDeviceId = trailblazeDeviceId
       )
@@ -112,6 +117,7 @@ internal suspend fun runIosSimulatorYaml(
     onProgressMessage = onProgressMessage,
     screenshotProvider = hostTbRunner.screenStateProvider,
     noLogging = runOnHostParams.noLogging,
+    metadata = runYamlRequest.trailSessionMetadata(),
     cleanup = {
       // Shut down subprocess MCP servers before the driver goes away — they're tied to
       // this session's lifetime and every registration's sessionProvider closes over
@@ -159,6 +165,7 @@ internal suspend fun runIosSimulatorYaml(
     TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
       targetTestApp = runOnHostParams.targetTestApp,
       config = runYamlRequest.config,
+      trailFilePath = runYamlRequest.trailFilePath,
       sessionId = session.sessionId,
       deviceInfo = hostTbRunner.trailblazeDeviceInfo,
       logsRepo = hostTbRunner.hostLoggingRule.logsRepo,
@@ -176,9 +183,11 @@ internal suspend fun runIosSimulatorYaml(
       trailblazeDeviceId = trailblazeDeviceId,
       traceId = runYamlRequest.traceId,
       sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+      keepDeviceLanguage = runOnHostParams.keepDeviceLanguage,
       initialMemorySeeds = runYamlRequest.initialMemorySeeds,
       initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
       initialArgs = runYamlRequest.initialArgs,
+      trailSourceUrl = runYamlRequest.trailSourceUrl,
     )
     // Surface the last successful tool's payload back out through HostYamlRunResult.
     lastToolResult = yamlRun.lastToolResult

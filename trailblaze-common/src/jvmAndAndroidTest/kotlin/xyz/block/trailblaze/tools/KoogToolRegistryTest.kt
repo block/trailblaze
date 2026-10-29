@@ -6,7 +6,7 @@ import org.junit.Test
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
 import xyz.block.trailblaze.util.Console
 
 @OptIn(InternalAgentToolsApi::class)
@@ -17,8 +17,8 @@ class KoogToolRegistryTest {
     val trailblazeAgent = FakeTrailblazeAgent()
     val toolRepo = TrailblazeToolRepo(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Input Text Only",
-        setOf(InputTextTrailblazeTool::class),
+        "Clear Text Only",
+        setOf(ClearTextTrailblazeTool::class),
       ),
     )
     val toolRegistry = toolRepo.asToolRegistry({
@@ -32,15 +32,15 @@ class KoogToolRegistryTest {
         maestroTrailblazeAgent = trailblazeAgent,
       )
     })
-    val inputTextTool = toolRegistry.getTool("inputText")
-    Console.log("Koog Tool: $inputTextTool")
-    Console.log("descriptor: ${inputTextTool.descriptor}")
-    val trailblazeToolArgs = InputTextTrailblazeTool("hello world")
+    val clearTextTool = toolRegistry.getTool("clearText")
+    Console.log("Koog Tool: $clearTextTool")
+    Console.log("descriptor: ${clearTextTool.descriptor}")
+    val trailblazeToolArgs = ClearTextTrailblazeTool
     val result = runBlocking {
-      inputTextTool.executeUnsafe(args = trailblazeToolArgs)
+      clearTextTool.executeUnsafe(args = trailblazeToolArgs)
     }
     Console.log("Result: $result")
-    Console.log("InputTextTool args: $trailblazeToolArgs")
+    Console.log("ClearTextTool args: $trailblazeToolArgs")
     Console.log("Tools: " + toolRegistry.tools.map { it.name })
   }
 }

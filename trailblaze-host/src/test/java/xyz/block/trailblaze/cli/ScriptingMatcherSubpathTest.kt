@@ -9,7 +9,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * End-to-end guard for the `@trailblaze/scripting/matcher` specifier, run from a **consumer
@@ -50,10 +49,6 @@ class ScriptingMatcherSubpathTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
-    // `check` delegates its compile half to `CompileCommand`, which registers the workspace's
-    // `*.tool.yaml` files on the process-global YAML-tool registry. Clear it so a later test
-    // in the same JVM doesn't resolve names against this test's temp workspace.
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
   }
 
   @Test

@@ -8,7 +8,7 @@ import com.microsoft.playwright.TimeoutError
  *
  * Playwright's `expect()` (`assertThat(...)`) makes one check with no time limit before its timed
  * retries start. When the page's main thread is blocked, that check waits for as long as the block
- * lasts: a `web_verifyTextVisible` with the default 5s timeout was observed waiting 1,000s while a
+ * lasts: a text visibility check with the default 5s timeout was observed waiting 1,000s while a
  * page sat frozen, then passing. `waitForFunction` does honor its timeout, so a trivial script run
  * through it answers first, and the assertion only starts on a page that can answer it.
  *

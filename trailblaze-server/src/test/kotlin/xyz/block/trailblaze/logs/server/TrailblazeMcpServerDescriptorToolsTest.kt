@@ -1,6 +1,23 @@
 package xyz.block.trailblaze.logs.server
 
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.core.tools.annotations.LLMDescription
+import ai.koog.agents.core.tools.annotations.Tool
+import ai.koog.agents.core.tools.reflect.ToolSet
+import ai.koog.agents.core.tools.reflect.asTools
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.delay
+import xyz.block.trailblaze.mcp.utils.FakeClientConnection
+import kotlin.test.assertSame
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
@@ -19,6 +36,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -30,6 +48,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.mcp.newtools.DeviceClassifiersProvider
+import xyz.block.trailblaze.mcp.newtools.platformOnlyDeviceClassifiers
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.mcp.utils.McpToolArgumentValidationException
 import xyz.block.trailblaze.mcp.utils.McpToolExecutionException
@@ -43,15 +63,19 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -62,20 +86,20 @@ import kotlin.test.fail
  * [TrailblazeMcpServer]:
  *
  *  - [TrailblazeMcpServer.executeDescriptorBackedTool] — the `tools/call` dispatch for
- *    scripted/YAML tools: argument validation gates dispatch (nothing reaches the bridge on a
+ *    scripted tools: argument validation gates dispatch (nothing reaches the bridge on a
  *    contract violation), valid calls route through the same bridge executor recorded replay
  *    uses, and violations surface as [McpToolArgumentValidationException] (rendered as a clean
  *    MCP error by the bridge, never as a raw Kotlin exception).
- *  - [TrailblazeMcpServer.registerTools] — the bound target's YAML-defined and scripted tools
- *    register as real MCP tools with their parameter schemas, the target's `excluded_tools:`
- *    surface is honored, and a re-registration after a target switch (what
+ *  - [TrailblazeMcpServer.registerTools] — the bound target's scripted tools register as real
+ *    MCP tools with their parameter schemas, the target's `excluded_tools:` surface is honored,
+ *    and a re-registration after a target switch (what
  *    [TrailblazeMcpServer.refreshToolsForSession] triggers) swaps the descriptor surface
  *    because the per-session name tracking covers descriptor tools too.
  *
- * `eraseText` (a global YAML-defined tool with one optional integer parameter) is the subject
- * throughout: on this driver it arrives via the always-enabled `core_interaction` catalog
- * toolset, so the target-switch test exercises the exclusion side — a target whose
- * `excluded_tools:` names it must not advertise it.
+ * Two scripted tools are the subjects: the catalog's `openUrl`, which the always-enabled
+ * `core_interaction` toolset delivers through the real in-process runtime, and [SCRIPTED_TOOL]
+ * (one optional integer parameter), a target-declared scripted tool whose runtime the tests
+ * install through the test seam ([scriptedToolRepo]) so no bundle has to load.
  */
 class TrailblazeMcpServerDescriptorToolsTest {
 
@@ -92,24 +116,22 @@ class TrailblazeMcpServerDescriptorToolsTest {
     trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
   )
 
-  private val eraseTarget = YamlToolTarget(
-    id = "erasetarget",
-    displayName = "Erase Target",
-    yamlNames = setOf(ToolName("eraseText")),
-  )
-  private val excludingTarget = YamlToolTarget(
-    id = "excludingtarget",
-    displayName = "Excluding Target",
-    yamlNames = emptySet(),
-    excludedYamlNames = setOf(ToolName("eraseText")),
+  private val scriptedTarget = ScriptedToolTarget(
+    id = "scriptedtarget",
+    displayName = "Scripted Target",
+    scriptedNames = setOf(ToolName(SCRIPTED_TOOL)),
   )
 
-  private fun newServer(bridge: TrailblazeMcpBridge): TrailblazeMcpServer = TrailblazeMcpServer(
+  private fun newServer(
+    bridge: TrailblazeMcpBridge,
+    deviceClassifiersProvider: DeviceClassifiersProvider = platformOnlyDeviceClassifiers,
+  ): TrailblazeMcpServer = TrailblazeMcpServer(
     logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
     mcpBridge = bridge,
     trailsDirProvider = { tempFolder.newFolder("trails") },
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
     llmModelListsProvider = { emptySet() },
+    deviceClassifiersProvider = deviceClassifiersProvider,
   )
 
   private fun ctx(sessionId: String): TrailblazeMcpSessionContext = TrailblazeMcpSessionContext(
@@ -159,28 +181,23 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `a sibling's exclusion cannot strip a tool the active target's own toolsets deliver`() {
-    // `eraseText` reaches this session two ways: the sibling declares it, and the active target's
-    // always-enabled `core_interaction` toolset carries it on this driver. A sibling opting out
-    // speaks only for its own declaration — it must not delete a tool the active trailmap supplies,
-    // or one app's config silently removes another app's tool from a shared daemon session.
-    val active = ScopedYamlTarget(id = "activeapp", toolSetIds = listOf("verification"))
-    val sibling = YamlToolTarget(
+    // `hideKeyboard` reaches this session two ways: the sibling declares it, and the active
+    // target's always-enabled `core_interaction` toolset carries it on this driver. A sibling opting
+    // out speaks only for its own declaration — it must not delete a tool the active trailmap
+    // supplies, or one app's config silently removes another app's tool from a shared daemon session.
+    val active = ScopedToolSetTarget(id = "activeapp", toolSetIds = listOf("verification"))
+    val sibling = ClassToolTarget(
       id = "siblingapp",
-      displayName = "Sibling",
-      yamlNames = setOf(ToolName("eraseText")),
-      excludedYamlNames = setOf(ToolName("eraseText")),
+      customTools = setOf(HideKeyboardTrailblazeTool::class),
+      excludedTools = setOf(HideKeyboardTrailblazeTool::class),
     )
     val bridge = RecordingBridge(targets = setOf(active, sibling), currentTargetId = active.id)
     val server = newServer(bridge)
-    val sessionId = "sibling-excluded-yaml"
+    val sessionId = "sibling-excluded-toolset-tool"
     server.installSessionContextForTest(sessionId, ctx(sessionId))
 
     val result = runBlocking {
-      server.executeDescriptorBackedTool(
-        sessionId,
-        "eraseText",
-        buildJsonObject { put("charactersToErase", 3) },
-      )
+      server.executeDescriptorBackedTool(sessionId, "hideKeyboard", buildJsonObject { })
     }
 
     assertEquals("[OK] executed", result, "the active target's own toolset tool must still dispatch")
@@ -222,21 +239,327 @@ class TrailblazeMcpServerDescriptorToolsTest {
   // ── executeDescriptorBackedTool dispatch contracts ────────────────────────
 
   @Test
-  fun `valid YAML tool call dispatches through the bridge executor`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
-    val server = newServer(bridge)
-
-    // No session context installed → no scripted runtime → the YAML-only fallback repo path.
-    val result = runBlocking {
-      server.executeDescriptorBackedTool(
-        sessionId = "no-such-session",
-        toolName = "eraseText",
-        arguments = buildJsonObject { put("charactersToErase", 5) },
-      )
+  fun `a re-check that changes the device's classifiers rebuilds the runtime and refreshes tools`() {
+    // The runtime was gated against `android-phone`; the device now also reports `rig`. A runtime
+    // kept across that change would keep hiding rig-only tools (or keep a dropped one loaded).
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      deviceClassifiersProvider = { listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier) },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-recheck-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    var refreshDevice: TrailblazeDeviceId? = null
+    server.onToolsRefreshedForTest = {
+      refreshDevice = McpDeviceContext.currentDeviceId.get()
+      refreshed.complete(it)
     }
+    val builtForPhone = scriptedToolRepo()
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier),
+      recheckClassifiers = true,
+    )
 
-    assertEquals("[OK] executed", result, "Executor result must be returned to the MCP handler")
-    assertEquals(1, bridge.executedTools.size, "Exactly one tool must reach the bridge executor")
+    val refreshedSession = runBlocking { withTimeout(10_000) { refreshed.await() } }
+
+    assertEquals(sessionId, refreshedSession, "the session's tools/list must be refreshed")
+    assertNotSame(
+      builtForPhone,
+      server.sessionScriptToolRepoForTest(sessionId),
+      "the runtime gated against the old classifiers must be rebuilt, not reused",
+    )
+    // The rebuild runs in the background, where nothing else binds a device: without its own
+    // binding the bridge would fall back to the daemon's last-selected device.
+    assertEquals(androidDevice, refreshDevice, "the rebuild must run against the session's own device")
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild that times out keeps the old runtime and is retried`() {
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      deviceClassifiersProvider = { rigClassifiers },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    server.descriptorCollectionTimeoutMsForTest = 250
+    val sessionId = "classifier-timeout-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    server.onToolsRefreshedForTest = { refreshed.complete(it) }
+    val builtForPhone = scriptedToolRepo()
+    // The device wedges before the re-check, so the rebuild it starts can't finish.
+    bridge.hangDeviceDiscovery = true
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+
+    runBlocking {
+      withTimeout(10_000) {
+        // A second hung discovery means the first rebuild hit its deadline and was retried.
+        while (bridge.hungDiscoveries.get() < 2) delay(10)
+      }
+    }
+    assertFalse(refreshed.isCompleted, "a rebuild that timed out must not refresh the tools")
+    assertSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId), "the old runtime must be kept")
+
+    // Once the device answers, a retry applies the change.
+    bridge.hangDeviceDiscovery = false
+    assertEquals(sessionId, runBlocking { withTimeout(10_000) { refreshed.await() } })
+    assertNotSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId))
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild that leaves no scripted tools still refreshes the tools`() {
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-empty-rebuild-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    server.onToolsRefreshedForTest = { refreshed.complete(it) }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = scriptedToolRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    // By the re-check the device has no target, so the rebuild has nothing to run.
+    bridge.currentTargetId = null
+
+    assertEquals(sessionId, runBlocking { withTimeout(10_000) { refreshed.await() } })
+    assertNull(server.sessionScriptToolRepoForTest(sessionId), "the old runtime must be dropped")
+  }
+
+  @Test(timeout = 30_000)
+  fun `a re-check for a device the session has left changes nothing`() {
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val probes = AtomicInteger(0)
+    val server = newServer(bridge, deviceClassifiersProvider = { probes.incrementAndGet(); rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-left-device-session"
+    val sessionContext = ctx(sessionId)
+    server.installSessionContextForTest(sessionId, sessionContext)
+    val refreshes = AtomicInteger(0)
+    server.onToolsRefreshedForTest = { refreshes.incrementAndGet() }
+    val builtForPhone = scriptedToolRepo()
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    // The session moves to a device that never resolves classifiers (e.g. it has no target).
+    sessionContext.setAssociatedDevice(TrailblazeDeviceId("emulator-5556", TrailblazeDevicePlatform.ANDROID))
+
+    runBlocking {
+      withTimeout(10_000) { while (probes.get() < 1) delay(10) }
+      delay(500)
+    }
+    assertEquals(0, refreshes.get(), "the old device's change must not re-register the session's tools")
+    assertSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId))
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild whose tools fail to register is retried`() {
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    server.descriptorCollectionTimeoutMsForTest = 250
+    val sessionId = "classifier-refresh-failure-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val mcpServer = server.configureMcpServer()
+    server.installSessionMcpServerForTest(sessionId, mcpServer)
+    val refreshes = AtomicInteger(0)
+    // The first refresh's descriptor collection wedges past its deadline.
+    server.onToolsRefreshedForTest = { if (refreshes.incrementAndGet() == 1) bridge.hangDeviceDiscovery = true }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = scriptedToolRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+
+    // The device's answer never changes again, so only a retry of the failed apply registers them.
+    runBlocking {
+      withTimeout(10_000) {
+        while (bridge.hungDiscoveries.get() < 1) delay(10)
+        bridge.hangDeviceDiscovery = false
+        while (!mcpServer.tools.containsKey("openUrl")) delay(10)
+      }
+    }
+    assertTrue(refreshes.get() >= 2, "the tools must be registered by a retry, not the failed refresh")
+  }
+
+  // A background rebuild must never swap the runtime under a running call, whichever way that
+  // call reached MCP. Each test holds one call open on a different registration path.
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running scripted tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = scriptedTarget,
+      toolName = SCRIPTED_TOOL,
+      arguments = buildJsonObject { put(SCRIPTED_PARAM, 1) },
+    )
+  }
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running class-backed tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = ClassToolTarget(id = "classapp", customTools = setOf(HeldClassTool::class)),
+      toolName = "heldClassTool",
+      arguments = buildJsonObject { },
+    )
+  }
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running session tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = scriptedTarget,
+      toolName = "heldKoogTool",
+      arguments = buildJsonObject { },
+    )
+  }
+
+  private val phoneClassifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier)
+  private val rigClassifiers = listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier)
+
+  /**
+   * A runtime repo carrying [SCRIPTED_TOOL]'s dynamic registration — what the scripted-tool
+   * launcher produces in production, installed via the test seam so no bundle has to load. A call
+   * decodes to a plain [ScriptedProbeTool], so it dispatches through the bridge.
+   */
+  private fun scriptedToolRepo() = TrailblazeToolRepo(
+    TrailblazeToolSet.DynamicTrailblazeToolSet(
+      name = "BuiltForPhone",
+      toolClasses = emptySet(),
+      scriptedToolNames = setOf(ToolName(SCRIPTED_TOOL)),
+    ),
+  ).also { repo ->
+    repo.addDynamicTools(
+      listOf(
+        FakeDynamicRegistration(
+          name = SCRIPTED_TOOL,
+          schema = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") { putJsonObject(SCRIPTED_PARAM) { put("type", "integer") } }
+          },
+          optionalParameters = listOf(SCRIPTED_PARAM),
+          decode = { ScriptedProbeTool() },
+        ),
+      ),
+    )
+  }
+
+  /**
+   * Binds [sessionId] to the Android device on [scriptedTarget], with [scriptedToolRepo] installed
+   * as its runtime so dispatch is a cache hit (no launcher). Returns the session id.
+   */
+  private fun installScriptedSession(
+    server: TrailblazeMcpServer,
+    sessionId: String,
+    sessionContext: TrailblazeMcpSessionContext = ctx(sessionId),
+  ): String {
+    server.installSessionContextForTest(sessionId, sessionContext)
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = scriptedTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = scriptedToolRepo(),
+    )
+    return sessionId
+  }
+
+  /**
+   * Holds a call to [toolName] open through its registered MCP handler, lets the device's
+   * classifiers change meanwhile, and asserts the rebuild that change starts runs only after the
+   * call finishes.
+   */
+  private fun assertClassifierRebuildWaitsForRunningCall(
+    target: TrailblazeHostAppTarget,
+    toolName: String,
+    arguments: kotlinx.serialization.json.JsonObject,
+  ) {
+    val hold = CallHold()
+    val bridge = RecordingBridge(targets = setOf(target), currentTargetId = target.id)
+    bridge.callHold = hold
+    val classifierAnswer = CompletableDeferred<List<TrailblazeDeviceClassifier>>()
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      additionalToolsProvider = { _, _ -> ToolRegistry { tools(HeldKoogToolSet(hold).asTools()) } },
+      // The re-check's probe answers only when the test says so, once the call is running.
+      deviceClassifiersProvider = { classifierAnswer.await() },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(10L)
+    val sessionId = "held-$toolName"
+    val sessionContext = ctx(sessionId)
+    server.installSessionContextForTest(sessionId, sessionContext)
+    val refreshed = CompletableDeferred<Unit>()
+    server.onToolsRefreshedForTest = {
+      hold.events += "refreshed"
+      refreshed.complete(Unit)
+    }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = target.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = scriptedToolRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    val mcpServer = server.configureMcpServer()
+    server.registerTools(mcpServer, McpSessionId(sessionId), sessionContext)
+    val registered = mcpServer.tools[toolName]
+      ?: fail("$toolName must be registered. Registered: ${mcpServer.tools.keys.sorted()}")
+
+    runBlocking {
+      withTimeout(20_000) {
+        // The HTTP handler binds the calling session, as it does in production.
+        val call = async(Dispatchers.Default + TrailblazeMcpServer.currentMcpSessionId.asContextElement(sessionId)) {
+          registered.handler.invoke(
+            FakeClientConnection,
+            CallToolRequest(CallToolRequestParams(name = toolName, arguments = arguments)),
+          )
+        }
+        hold.started.await()
+        classifierAnswer.complete(rigClassifiers)
+        delay(300)
+        assertEquals(emptyList(), hold.events.toList(), "the rebuild must not start while the call runs")
+
+        hold.release.complete(Unit)
+        call.await()
+        refreshed.await()
+      }
+    }
+    assertEquals(listOf("call finished", "refreshed"), hold.events.toList())
   }
 
   @Test
@@ -244,7 +567,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // Two sessions bound to two different devices. Device-bound dispatch must resolve the CALLING
     // session's device — without the per-session McpDeviceContext binding, the bridge falls back to
     // the global last-selected device and one session's call could land on the other's device.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
 
     fun installBoundSession(sessionId: String, device: TrailblazeDeviceId) {
@@ -258,24 +581,17 @@ class TrailblazeMcpServerDescriptorToolsTest {
       // this test is about which device gets bound at dispatch, not runtime construction.
       server.installSessionScriptToolRuntimeForTest(
         sessionId = sessionId,
-        targetId = eraseTarget.id,
+        targetId = scriptedTarget.id,
         driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        toolRepo = TrailblazeToolRepo(
-          TrailblazeToolSet.DynamicTrailblazeToolSet(
-            name = "DeviceBindingTestToolSet",
-            toolClasses = emptySet(),
-            yamlToolNames = setOf(ToolName("eraseText")),
-            scriptedToolNames = emptySet(),
-          ),
-        ),
+        toolRepo = scriptedToolRepo(),
       )
     }
     installBoundSession("session-a", androidDevice)
     installBoundSession("session-b", androidDeviceB)
 
     runBlocking {
-      server.executeDescriptorBackedTool("session-a", "eraseText", buildJsonObject { put("charactersToErase", 1) })
-      server.executeDescriptorBackedTool("session-b", "eraseText", buildJsonObject { put("charactersToErase", 2) })
+      server.executeDescriptorBackedTool("session-a", SCRIPTED_TOOL, buildJsonObject { put(SCRIPTED_PARAM, 1) })
+      server.executeDescriptorBackedTool("session-b", SCRIPTED_TOOL, buildJsonObject { put(SCRIPTED_PARAM, 2) })
     }
 
     assertEquals(
@@ -287,14 +603,15 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `unknown argument key is rejected before anything reaches the device`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
+    val sessionId = installScriptedSession(server, "unknown-key-session")
 
     val exception = assertFailsWith<McpToolArgumentValidationException> {
       runBlocking {
         server.executeDescriptorBackedTool(
-          sessionId = "no-such-session",
-          toolName = "eraseText",
+          sessionId = sessionId,
+          toolName = SCRIPTED_TOOL,
           arguments = buildJsonObject { put("bogus", 1) },
         )
       }
@@ -312,13 +629,14 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `unknown tool name is rejected with a directed message`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
+    val sessionId = installScriptedSession(server, "unknown-tool-session")
 
     val exception = assertFailsWith<McpToolArgumentValidationException> {
       runBlocking {
         server.executeDescriptorBackedTool(
-          sessionId = "no-such-session",
+          sessionId = sessionId,
           toolName = "noSuchTool",
           arguments = buildJsonObject {},
         )
@@ -350,7 +668,6 @@ class TrailblazeMcpServerDescriptorToolsTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "DecodeFailureToolSet",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
         scriptedToolNames = emptySet(),
       ),
     )
@@ -395,12 +712,11 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `scripted tool with no runtime available fails with a directed runtime message`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
 
-    // A name that is NOT a known YAML-defined tool and has no scripted runtime for the
-    // session (no session context installed). Falling through to YAML resolution would
-    // produce a misleading "unknown tool"; the real condition is "scripted runtime gone".
+    // No scripted runtime for the session (no session context installed). Reporting a generic
+    // "unknown tool" would mislead; the real condition is "scripted runtime gone".
     val exception = assertFailsWith<McpToolArgumentValidationException> {
       runBlocking {
         server.executeDescriptorBackedTool(
@@ -638,7 +954,6 @@ class TrailblazeMcpServerDescriptorToolsTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "HostLocalTestToolSet",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
         scriptedToolNames = emptySet(),
       ),
     )
@@ -667,9 +982,16 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `registerTools registers the target's descriptor tools and a target switch honors exclusions`() {
+    val plainTarget = ClassToolTarget(id = "plainapp")
+    val excludingTarget = ScriptedToolTarget(
+      id = "excludingtarget",
+      displayName = "Excluding Target",
+      scriptedNames = emptySet(),
+      excludedScriptedNames = setOf(ToolName("openUrl")),
+    )
     val bridge = RecordingBridge(
-      targets = setOf(eraseTarget, excludingTarget),
-      currentTargetId = eraseTarget.id,
+      targets = setOf(plainTarget, excludingTarget),
+      currentTargetId = plainTarget.id,
     )
     val server = newServer(bridge)
     val sessionContext = ctx("descriptor-session")
@@ -678,44 +1000,57 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
     server.registerTools(mcpServer, McpSessionId("descriptor-session"), sessionContext)
 
-    val registered = mcpServer.tools["eraseText"]?.tool
-      ?: fail(
-        "eraseText must be registered as a first-class MCP tool while the bound target " +
-          "surfaces it. Registered: ${mcpServer.tools.keys.sorted()}",
-      )
-    val properties = registered.inputSchema.properties ?: fail("inputSchema.properties must be present")
-    assertTrue(
-      "charactersToErase" in properties.keys,
-      "The YAML tool's parameter must be advertised in the MCP inputSchema. Got: ${properties.keys}",
-    )
-    assertFalse(
-      registered.inputSchema.required.orEmpty().contains("charactersToErase"),
-      "charactersToErase is optional in the YAML config and must not be advertised as required",
-    )
-    // The scripted (.ts) side of the descriptor surface: openUrl arrives via the same catalog
-    // toolset and must advertise its analyzer-extracted schema (a `url` property), not an
-    // empty placeholder.
+    // openUrl arrives via the always-enabled `core_interaction` catalog toolset and must advertise
+    // its analyzer-extracted schema (a `url` property), not an empty placeholder.
     val openUrl = mcpServer.tools["openUrl"]?.tool
       ?: fail("Scripted catalog tool openUrl must be registered. Registered: ${mcpServer.tools.keys.sorted()}")
     assertTrue(
       "url" in (openUrl.inputSchema.properties?.keys ?: emptySet()),
       "openUrl must advertise its real JSON Schema. Got: ${openUrl.inputSchema.properties?.keys}",
     )
+    val notExcluded = mcpServer.tools.keys - "openUrl"
 
-    // Target switch: the new target EXCLUDES eraseText via its `excluded_tools:` surface.
+    // Target switch: the new target EXCLUDES openUrl via its `excluded_tools:` surface.
     // refreshToolsForSession routes back through registerTools — the per-session tracked name
-    // set must remove it, while non-excluded descriptor tools re-register.
+    // set must remove it, while everything not excluded re-registers.
     bridge.currentTargetId = excludingTarget.id
     server.registerTools(mcpServer, McpSessionId("descriptor-session"), sessionContext)
 
     assertFalse(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey("openUrl"),
       "After switching to a target that excludes the tool, re-registration must remove " +
-        "eraseText from the MCP surface (per-session name tracking must cover descriptor tools)",
+        "it from the MCP surface (per-session name tracking must cover descriptor tools)",
     )
     assertTrue(
-      mcpServer.tools.containsKey("openUrl"),
-      "Non-excluded descriptor tools must survive the target switch",
+      mcpServer.tools.keys.containsAll(notExcluded),
+      "Tools the new target does not exclude must survive the target switch. " +
+        "Missing: ${(notExcluded - mcpServer.tools.keys).sorted()}",
+    )
+  }
+
+  @Test
+  fun `registerTools advertises a scripted tool's optional parameter without requiring it`() {
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
+    val server = newServer(bridge)
+    val sessionContext = ctx("scripted-schema-session")
+    val sessionId = installScriptedSession(server, "scripted-schema-session", sessionContext)
+    val mcpServer = server.configureMcpServer()
+
+    server.registerTools(mcpServer, McpSessionId(sessionId), sessionContext)
+
+    val registered = mcpServer.tools[SCRIPTED_TOOL]?.tool
+      ?: fail(
+        "The target's scripted tool must be registered as a first-class MCP tool. " +
+          "Registered: ${mcpServer.tools.keys.sorted()}",
+      )
+    val properties = registered.inputSchema.properties ?: fail("inputSchema.properties must be present")
+    assertTrue(
+      SCRIPTED_PARAM in properties.keys,
+      "The tool's parameter must be advertised in the MCP inputSchema. Got: ${properties.keys}",
+    )
+    assertFalse(
+      registered.inputSchema.required.orEmpty().contains(SCRIPTED_PARAM),
+      "$SCRIPTED_PARAM is optional in the tool's schema and must not be advertised as required",
     )
   }
 
@@ -728,8 +1063,8 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // class-backed surface it already registered, and simply omit the descriptor tools until
     // a later refresh retries.
     val bridge = RecordingBridge(
-      targets = setOf(eraseTarget),
-      currentTargetId = eraseTarget.id,
+      targets = setOf(scriptedTarget),
+      currentTargetId = scriptedTarget.id,
       hangDeviceDiscovery = true,
     )
     val server = newServer(bridge)
@@ -741,7 +1076,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.registerTools(mcpServer, McpSessionId("wedged-session"), sessionContext)
 
     assertFalse(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey("openUrl"),
       "The wedged descriptor collection must not have produced descriptor tools",
     )
     assertTrue(
@@ -759,7 +1094,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // registers), so the refresh path must emit through the custom SSE sender — the same
     // channel progress notifications use. This is the client-visible contract that makes a
     // mid-session target switch actually reach a connected MCP client.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("sse-session")
     val sentNotifications = mutableListOf<String>()
@@ -780,7 +1115,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   fun `a tools refresh with no notification stream open completes without error`() {
     // Documented contract: sendToolListChangedNotification no-ops when the client has no
     // custom SSE stream open — such a client sees the new surface on its next tools/list.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("no-stream-session") // customSseNotificationSender left null
     server.installSessionContextForTest("no-stream-session", sessionContext)
@@ -792,7 +1127,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
   @Test
   fun `a closing session ignores tools refreshes`() {
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("closing-session")
     var refreshCount = 0
@@ -810,7 +1145,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   fun `a failing notification stream does not fail the tools refresh`() {
     // Documented contract: a sender failure (client stream torn down mid-send) is swallowed —
     // the refresh itself (re-registration) must still complete.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("failing-stream-session")
     sessionContext.customSseNotificationSender = { error("stream torn down") }
@@ -821,7 +1156,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.refreshToolsForSession("failing-stream-session")
 
     assertTrue(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey("openUrl"),
       "The refresh's re-registration must complete even when the notification send fails",
     )
   }
@@ -832,7 +1167,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // listener — but the re-registration is the routing table for the CLI's NEXT one-shot
     // tools/call. Both halves of that contract, on one refresh: the surface updates, the
     // notification channel stays silent.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("cli-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
     val sentNotifications = mutableListOf<String>()
@@ -844,7 +1179,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     server.refreshToolsForSession("cli-session")
 
     assertTrue(
-      mcpServer.tools.containsKey("eraseText"),
+      mcpServer.tools.containsKey("openUrl"),
       "A CLI session's refresh must re-register the tool surface — the Server's tool table " +
         "routes the CLI's next one-shot tools/call. Registered: ${mcpServer.tools.keys.sorted()}",
     )
@@ -862,7 +1197,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
     // When the refresh skipped CLI sessions wholesale, a CLI session's roster could reach two
     // devices — with `device INFO` advertising "Hand the session over with switchDevice" — while
     // switchDevice itself was never registered, so the handover was unreachable.
-    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val bridge = RecordingBridge(targets = setOf(scriptedTarget), currentTargetId = scriptedTarget.id)
     val server = newServer(bridge)
     val sessionContext = ctx("cli-roster-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
     server.installSessionContextForTest("cli-roster-session", sessionContext)
@@ -929,7 +1264,6 @@ class TrailblazeMcpServerDescriptorToolsTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "InlineTestToolSet",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
         scriptedToolNames = emptySet(),
       ),
     )
@@ -974,7 +1308,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
   private class SharedDeclaredTool : TrailblazeTool
 
   /** A target that scopes itself to specific catalog toolsets, declaring no tools of its own. */
-  private class ScopedYamlTarget(
+  private class ScopedToolSetTarget(
     id: String,
     private val toolSetIds: List<String>,
   ) : TrailblazeHostAppTarget(id, id) {
@@ -1034,12 +1368,15 @@ class TrailblazeMcpServerDescriptorToolsTest {
   private class FakeDynamicRegistration(
     name: String,
     schema: kotlinx.serialization.json.JsonObject,
+    /** Integer parameter names declared optional, so argument-key validation has a schema to check. */
+    optionalParameters: List<String> = emptyList(),
     private val decode: ((String) -> TrailblazeTool)? = null,
   ) : DynamicTrailblazeToolRegistration {
     override val name: ToolName = ToolName(name)
     override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
       name = name,
       description = "Inline test tool",
+      optionalParameters = optionalParameters.map { TrailblazeToolParameterDescriptor(name = it, type = "integer") },
     ).also { it.inputSchema = schema }
 
     override fun buildKoogTool(
@@ -1070,15 +1407,47 @@ class TrailblazeMcpServerDescriptorToolsTest {
     }
   }
 
+  /** A tool call the test holds open, recording when it finishes. */
+  internal class CallHold {
+    val started = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val events: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    suspend fun hold() {
+      started.complete(Unit)
+      release.await()
+      events += "call finished"
+    }
+  }
+
+  /** A koog tool, which reaches MCP through the server's own registration rather than the bridge. */
+  internal class HeldKoogToolSet(private val hold: CallHold) : ToolSet {
+    @LLMDescription("Runs until the test releases it.")
+    @Tool("heldKoogTool")
+    suspend fun heldKoogTool(): String {
+      hold.hold()
+      return "done"
+    }
+  }
+
+  /** A class-backed tool, registered from its class rather than from a descriptor. */
+  @Serializable
+  @TrailblazeToolClass("heldClassTool")
+  @LLMDescription("Runs until the test releases it.")
+  private class HeldClassTool : TrailblazeTool
+
   /** Inert tool identity used to observe nested dispatch reaching the bridge. */
   private class NestedProbeTool : TrailblazeTool
 
-  /** App-target stub with configurable YAML-tool inclusions and exclusions. */
-  private class YamlToolTarget(
+  /** What a call to [SCRIPTED_TOOL] decodes to: a plain tool, so it dispatches through the bridge. */
+  private class ScriptedProbeTool : TrailblazeTool
+
+  /** App-target stub with configurable scripted-tool inclusions and exclusions. */
+  private class ScriptedToolTarget(
     id: String,
     displayName: String,
-    private val yamlNames: Set<ToolName>,
-    private val excludedYamlNames: Set<ToolName> = emptySet(),
+    private val scriptedNames: Set<ToolName>,
+    private val excludedScriptedNames: Set<ToolName> = emptySet(),
   ) : TrailblazeHostAppTarget(id, displayName) {
     override fun getPossibleAppIdsForPlatform(
       platform: TrailblazeDevicePlatform,
@@ -1088,13 +1457,13 @@ class TrailblazeMcpServerDescriptorToolsTest {
       driverType: TrailblazeDriverType,
     ): Set<KClass<out TrailblazeTool>> = emptySet()
 
-    override fun getCustomYamlToolNamesForDriver(
+    override fun getCustomScriptedToolNamesForDriver(
       driverType: TrailblazeDriverType,
-    ): Set<ToolName> = yamlNames
+    ): Set<ToolName> = scriptedNames
 
-    override fun getExcludedYamlToolNamesForDriver(
+    override fun getExcludedScriptedToolNamesForDriver(
       driverType: TrailblazeDriverType,
-    ): Set<ToolName> = excludedYamlNames
+    ): Set<ToolName> = excludedScriptedNames
   }
 
   /**
@@ -1110,9 +1479,15 @@ class TrailblazeMcpServerDescriptorToolsTest {
      * the live failure mode of a stuck cold scripted-tool runtime build (device discovery /
      * on-device session launch that never completes).
      */
-    private val hangDeviceDiscovery: Boolean = false,
+    var hangDeviceDiscovery: Boolean = false,
   ) : TrailblazeMcpBridge {
     val executedTools = mutableListOf<TrailblazeTool>()
+
+    /** How many device discoveries have hung, so a test can wait for a deadline to pass. */
+    val hungDiscoveries = AtomicInteger(0)
+
+    /** Set to hold every dispatch until the test releases it. */
+    var callHold: CallHold? = null
 
     /** Device id bound in [McpDeviceContext] at the moment each tool dispatched (null if unbound). */
     val dispatchedDeviceInstanceIds = mutableListOf<String?>()
@@ -1125,7 +1500,10 @@ class TrailblazeMcpServerDescriptorToolsTest {
     override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? = currentTargetId
 
     override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> {
-      if (hangDeviceDiscovery) awaitCancellation()
+      if (hangDeviceDiscovery) {
+        hungDiscoveries.incrementAndGet()
+        awaitCancellation()
+      }
       return setOf(
         TrailblazeConnectedDeviceSummary(
           trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
@@ -1145,6 +1523,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
       executedTools += tool
       dispatchedDeviceInstanceIds += McpDeviceContext.currentDeviceId.get()?.instanceId
       dispatchedTraceIds += traceId
+      callHold?.hold()
       return "[OK] executed"
     }
 
@@ -1190,5 +1569,12 @@ class TrailblazeMcpServerDescriptorToolsTest {
     override fun getActiveSessionId(): SessionId? = null
     override fun cancelAutomation(deviceId: TrailblazeDeviceId) {}
     override fun selectAppTarget(appTargetId: String): String? = null
+  }
+
+  private companion object {
+    /** A target-declared scripted tool with one optional integer parameter, [SCRIPTED_PARAM]. */
+    const val SCRIPTED_TOOL = "fixture_scriptedCount"
+
+    const val SCRIPTED_PARAM = "count"
   }
 }

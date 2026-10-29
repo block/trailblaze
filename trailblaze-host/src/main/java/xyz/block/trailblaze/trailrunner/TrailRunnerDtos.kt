@@ -508,6 +508,9 @@ data class SessionEventDto(
   // `timeMs` and trace step `ts`.
   val timeMs: Long,
   val data: JsonElement,
+  // `"device"` when [timeMs] is still on the device's clock: a device-stamped record the session
+  // measured no offset to convert with. Absent (null) means the host clock.
+  val clock: String? = null,
 )
 
 @Serializable
@@ -548,6 +551,10 @@ data class SessionSummary(
   val imported: Boolean = false,
   /** Consumer-injected key/values from the trail's `config.metadata`, for shared-report parity. */
   val metadata: Map<String, TrailMetadataValue>? = null,
+  /** Immutable GitHub permalink to the trail source that triggered this run, when known. */
+  val trailSourceUrl: String? = null,
+  /** The trail's `config.context`: what the case proves and the setup it assumes. */
+  val context: String? = null,
 )
 
 @Serializable
@@ -611,8 +618,8 @@ data class ToolCatalogResponse(val tools: List<ToolCatalogEntry>)
 data class ToolUsageCountsResponse(val counts: Map<String, Int>)
 
 /**
- * What kind of tool a [ToolCatalogEntry] is. The three kinds are exhaustive — a tool is a
- * `@TrailblazeToolClass` Kotlin tool, a `.tool.yaml` declaration, or a `.ts` scripted tool. There is
+ * What kind of tool a [ToolCatalogEntry] is. The two kinds are exhaustive — a tool is a
+ * `@TrailblazeToolClass` Kotlin tool or a `.ts` scripted tool. There is
  * deliberately no `UNKNOWN`: a tool that can't be classified is a real authoring bug (e.g. an
  * unparseable `.tool.yaml`), which `ToolCatalogBuilder` logs and drops rather than surfacing as a
  * bogus catalog entry. `@SerialName` keeps the wire values the lowercase strings the UI already uses.
@@ -621,9 +628,6 @@ data class ToolUsageCountsResponse(val counts: Map<String, Int>)
 enum class ToolFlavor {
   @SerialName("kotlin")
   KOTLIN,
-
-  @SerialName("yaml")
-  YAML,
 
   @SerialName("scripted")
   SCRIPTED,
@@ -950,7 +954,6 @@ data class SettingsDto(
   val serverHttpsPort: Int,
   val showTrailsTab: Boolean,
   val showDevicesTab: Boolean,
-  val showWaypointsTab: Boolean,
   val preferHostAgent: Boolean = true,
   val trailsDirectory: String? = null,
   val logsDirectory: String? = null,
@@ -987,7 +990,6 @@ data class SettingsPatchRequest(
   val serverHttpsPort: Int? = null,
   val showTrailsTab: Boolean? = null,
   val showDevicesTab: Boolean? = null,
-  val showWaypointsTab: Boolean? = null,
   val preferHostAgent: Boolean? = null,
   val trailsDirectory: String? = null,
   val logsDirectory: String? = null,

@@ -326,8 +326,7 @@ class TrailYamlValidationTest {
  * Every place a tool NAME can be declared in this repo, and how the gate above decides a name is
  * real. Split into two groups:
  *
- * **Registry (runtime).** [TrailblazeSerializationInitializer.buildAllTools] (class-backed),
- * [TrailblazeSerializationInitializer.buildYamlDefinedTools] (`tools:`-mode YAML) and
+ * **Registry (runtime).** [TrailblazeSerializationInitializer.buildAllTools] (class-backed) and
  * [ScriptedToolNameDiscoverer.discoverAllNames] (statically-named scripted descriptors), reached
  * through [ToolNameResolver.isKnown]. These see only this test's CLASSPATH, which is a small slice
  * of the repo: `:trailblaze-common:jvmTest` carries its own bundled trailmaps and nothing else — no
@@ -337,18 +336,18 @@ class TrailYamlValidationTest {
  *
  * **Worktree (filesystem).** The declarations the classpath can't reach, read from the git tree so
  * the gate covers the whole repo rather than one module's slice: `id:` in
- * `*.tool.yaml` / `*.shortcut.yaml` / `*.trailhead.yaml`, `name:` in scripted-tool descriptors and
+ * `*.tool.yaml` / `*.trailhead.yaml`, `name:` in scripted-tool descriptors and
  * in a target's inline `tools:` entries, `registerTool("…")` in an MCP subprocess server,
  * `@TrailblazeToolClass("…")` in Kotlin sources, and — for scripted TypeScript tools, whose names
  * are only fully knowable by running the analyzer — a deliberate SUPERSET built from two
  * independent extractors: every candidate `.ts` basename, and every
- * `export const X = trailblaze.tool` declaration.
+ * `export const X = trailblaze.tool` (or `trailblaze.trailhead`) declaration.
  *
  * The superset bias is the point: its only failure mode is MISSING a typo, never inventing one. A
  * false failure here would get the gate disabled, which is strictly worse than a measured blind
  * spot. Two blind spots follow from that and are reported on every run rather than implied:
  *  1. a typo that collides with a `.ts` basename or an exported symbol reads as known;
- *  2. tool calls nested inside another tool's arguments (a `block_runIf`-style wrapper, whose
+ *  2. tool calls nested inside another tool's arguments (a `runIf`-style wrapper, whose
  *     recorded body decodes to an opaque raw-args map) are not walked, so their names are not
  *     adjudicated at all.
  *
@@ -358,7 +357,7 @@ class TrailYamlValidationTest {
 private object ToolNameBackings {
 
   const val REGISTRY_ENTRY_POINTS =
-    "TrailblazeSerializationInitializer.buildAllTools/buildYamlDefinedTools, " +
+    "TrailblazeSerializationInitializer.buildAllTools, " +
       "ScriptedToolNameDiscoverer.discoverAllNames"
 
   /**
@@ -372,7 +371,7 @@ private object ToolNameBackings {
   private val ANNOTATED_NAME = Regex("""@TrailblazeToolClass\(\s*(?:name\s*=\s*)?"([^"]+)"""")
   private val YAML_TOOL_ID = Regex("""^id:\s*(\S+)\s*$""", RegexOption.MULTILINE)
   private val DESCRIPTOR_NAME = Regex("""^\s*(?:-\s+)?name:\s*"?($WORD+)"?\s*$""", RegexOption.MULTILINE)
-  private val EXPORTED_TOOL = Regex("""export\s+const\s+($WORD+)\s*=\s*trailblaze\s*\.\s*tool""")
+  private val EXPORTED_TOOL = Regex("""export\s+const\s+($WORD+)\s*=\s*trailblaze\s*\.\s*(?:tool|trailhead)""")
 
   /**
    * A tool advertised by an MCP server the host spawns as a subprocess at session start (the
@@ -416,7 +415,7 @@ private object ToolNameBackings {
           "known-not-a-typo, not known-to-exist",
       )
       appendLine(
-        "  blind spot: tool calls nested inside another tool's args (e.g. a `block_runIf` body) " +
+        "  blind spot: tool calls nested inside another tool's args (e.g. a `runIf` body) " +
           "decode to opaque raw args and are NOT walked",
       )
       appendLine(if (unknown.isEmpty()) "  unknown: 0" else "  unknown: ${unknown.size} -> ${unknown.joinToString(", ")}")
@@ -467,8 +466,7 @@ private object ToolNameBackings {
 
             !inConfig -> Unit
 
-            name.endsWith(".tool.yaml") || name.endsWith(".shortcut.yaml") ||
-              name.endsWith(".trailhead.yaml") -> read(file)?.let { text ->
+            name.endsWith(".tool.yaml") || name.endsWith(".trailhead.yaml") -> read(file)?.let { text ->
               YAML_TOOL_ID.findAll(text).forEach { yamlToolIds.add(it.groupValues[1]) }
             }
 
@@ -499,10 +497,10 @@ private object ToolNameBackings {
     return Backings(
       listOf(
         Partition(
-          "classpath registry (class-backed / YAML-defined / scripted descriptors)",
+          "classpath registry (class-backed / scripted descriptors)",
           registryNames().filter { resolver.isKnown(it) }.toSet(),
         ),
-        Partition("worktree *.tool|shortcut|trailhead.yaml `id:`", yamlToolIds),
+        Partition("worktree *.tool|trailhead.yaml `id:`", yamlToolIds),
         Partition("worktree `name:` in scripted descriptors / target `tools:` entries", descriptorNames),
         Partition("worktree Kotlin @TrailblazeToolClass(\"…\")", annotatedNames),
         Partition("worktree MCP subprocess registerTool(\"…\")", mcpAdvertisedNames),
@@ -519,7 +517,6 @@ private object ToolNameBackings {
    */
   private fun registryNames(): Set<String> = buildSet {
     TrailblazeSerializationInitializer.buildAllTools().keys.forEach { add(it.toolName) }
-    TrailblazeSerializationInitializer.buildYamlDefinedTools().keys.forEach { add(it.toolName) }
     ScriptedToolNameDiscoverer.discoverAllNames().forEach { add(it.toolName) }
   }
 

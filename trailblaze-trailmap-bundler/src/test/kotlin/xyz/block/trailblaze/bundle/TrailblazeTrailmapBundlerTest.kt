@@ -839,7 +839,7 @@ class TrailblazeTrailmapBundlerTest {
 
   @Test
   fun `operational tool YAMLs in tools dir are skipped during scripted-tool discovery`() {
-    // `tools/foo.tool.yaml` is a pure-YAML operational tool (auto-discovered from the same
+    // `tools/foo.tool.yaml` is a class-backed operational tool (auto-discovered from the same
     // directory but bound by suffix, not by name). It must not appear in the scripted-tool
     // registry — otherwise the bundler would try to decode it as a `TrailmapScriptedToolFile`
     // and either fail or shadow a legitimate scripted-tool name.
@@ -867,7 +867,7 @@ class TrailblazeTrailmapBundlerTest {
     writeTool(
       trailmapsDir, trailmapId = "p", toolFile = "tools/legacy.tool.yaml",
       toolYaml = """
-        # A pure-YAML composed tool — unrelated to the scripted-tool descriptor shape.
+        # A class-backed operational tool — unrelated to the scripted-tool descriptor shape.
         id: legacyOperationalTool
         description: Not a scripted tool.
       """.trimIndent(),

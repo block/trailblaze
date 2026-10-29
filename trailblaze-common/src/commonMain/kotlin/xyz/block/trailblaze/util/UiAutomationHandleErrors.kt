@@ -32,25 +32,56 @@ object UiAutomationHandleErrors {
   const val NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE =
     "cached handle could not be cleared via reflection"
 
-  // Matches both the platform's own "UiAutomation not connected!" error and our
-  // [silentShellWedgeMessage], which starts with it on purpose so one check covers both.
+  // The platform's own "UiAutomation not connected!" error.
   const val STALE_HANDLE_NOT_CONNECTED_PHRASE = "UiAutomation not connected"
+
+  /** What became of a UiAutomation shell that went silent; see [silentShellMessage]. */
+  enum class SilentShellOutcome {
+    /** The dead handle was dropped; the fresh connection answered, or there was no budget to ask. */
+    HANDLE_DROPPED,
+
+    /** The fresh connection is silent too, or could not be made. */
+    RECONNECT_FAILED,
+
+    /** The dead handle could not be dropped. */
+    CACHE_CLEAR_FAILED,
+  }
 
   /**
    * Error for the silent-shell wedge: a dead UiAutomation connection makes every shell command
-   * return `""` while appearing to succeed. Detected by a liveness probe in
-   * `AdbCommandUtil.execShellCommand`. Starts with [STALE_HANDLE_NOT_CONNECTED_PHRASE] so
-   * [isStaleHandleSignature] treats it as recoverable and the normal reconnect-and-retry runs.
+   * return `""` while appearing to succeed. Detected by the liveness probe in
+   * `readShellCheckingLiveness`, after [command] returned nothing.
+   *
+   * Never one of the [isStaleHandleSignature] phrases, because that recovery replays the work and
+   * [command] may already have taken effect: the connection can die between the command and the
+   * probe. [SilentShellOutcome.HANDLE_DROPPED] is an ordinary failure, since the next command gets a
+   * fresh connection. The other two carry [isNonRecoverableStaleHandleSignature], because nothing
+   * in-process can bring the shell back and the host has to relaunch the runner.
+   *
+   * @param command must already be redacted — this text is logged.
    */
-  fun silentShellWedgeMessage(command: String): String =
-    "$STALE_HANDLE_NOT_CONNECTED_PHRASE (silent-shell wedge): the shell liveness probe returned " +
-      "no output after '$command' — every shell command is silently returning nothing."
+  fun silentShellMessage(command: String, outcome: SilentShellOutcome): String {
+    val head = "Silent-shell wedge: the UiAutomation shell answered nothing to '$command' or to the " +
+      "liveness probe after it, so '$command' may or may not have run. It is NOT retried, because " +
+      "it may already have taken effect."
+    return when (outcome) {
+      SilentShellOutcome.HANDLE_DROPPED ->
+        "$head The dead UiAutomation handle was dropped, so the next command reconnects."
+      SilentShellOutcome.RECONNECT_FAILED ->
+        "$head $NON_RECOVERABLE_RETRY_FAILED_PHRASE to bring the shell back: the on-device " +
+          "server's instrumentation is in a $NON_RECOVERABLE_STATE_PHRASE. Restart the Trailblaze " +
+          "on-device server (kill + re-launch the test APK process)."
+      SilentShellOutcome.CACHE_CLEAR_FAILED ->
+        "$head The dead UiAutomation $NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE. Restart the " +
+          "Trailblaze on-device server (kill + re-launch the test APK process)."
+    }
+  }
 
   /**
    * Error for a shell command whose output stream never finished: the read was bounded and gave up.
    *
-   * Deliberately **not** one of the [isStaleHandleSignature] phrases, unlike the silent-shell
-   * wedge. Recovery from those is clear-the-handle-*and-replay*, and replaying is wrong here: the
+   * Deliberately **not** one of the [isStaleHandleSignature] phrases, for the same reason as
+   * [silentShellMessage]. Recovery from those is clear-the-handle-*and-replay*, and replaying is wrong here: the
    * command may well have run and only its output wedged, so a replay repeats whatever it did —
    * `pm clear`, `input tap`, `am force-stop` — and a persistently wedged command fails at twice
    * the bound instead of at it. Nor is the replay's upside reachable: the caller bounding the

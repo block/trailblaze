@@ -54,6 +54,17 @@ object MultiDeviceTargetBinding {
     .flatMapTo(mutableSetOf()) { it.getCustomToolsForDriver(driverType) }
 
   /**
+   * The tools the LLM is shown even on a turn where the decision engine hides tools: the union of
+   * every bound target's `always_shown_tools` for [driverTypes]. One agent drives every device in
+   * a session, so after it switches to a companion, that device's target's tools must stay shown.
+   */
+  fun alwaysShownTools(
+    boundTargets: List<TrailblazeHostAppTarget>,
+    driverTypes: Collection<TrailblazeDriverType>,
+  ): Set<String> = boundTargets
+    .flatMapTo(mutableSetOf()) { target -> driverTypes.flatMap { target.getAlwaysShownToolNamesForDriver(it) } }
+
+  /**
    * What the session tool repo must carry ON TOP of the start device's target, so a step recorded
    * on a companion can actually dispatch.
    *
@@ -83,10 +94,26 @@ object MultiDeviceTargetBinding {
       .map { it.resolveToolScopeForDriver(driverType) }
     return ResolvedAgentToolbox(
       toolClasses = companionScopes.flatMapTo(mutableSetOf()) { it.toolClasses },
-      yamlToolNames = companionScopes.flatMapTo(mutableSetOf()) { it.yamlToolNames },
       scriptedToolNames = companionScopes.flatMapTo(mutableSetOf()) { it.scriptedToolNames },
     )
   }
+
+  /** Each bound target's scope per companion driver: its recorded steps decode and its catalog
+   *  scripted tools are advertised. Web is built separately; a target's own scripted tools stay out. */
+  fun companionDriverToolboxes(
+    boundTargets: List<TrailblazeHostAppTarget>,
+    companionDrivers: Set<TrailblazeDriverType>,
+  ): List<ResolvedAgentToolbox> = companionDrivers
+    .filter { it != TrailblazeDriverType.PLAYWRIGHT_NATIVE }
+    .flatMap { companionDriver ->
+      boundTargets.map { target ->
+        val scope = target.resolveToolScopeForDriver(companionDriver)
+        ResolvedAgentToolbox(
+          toolClasses = scope.toolClasses,
+          scriptedToolNames = scope.fromTrailmap.scriptedToolNames - scope.excluded.scriptedToolNames,
+        )
+      }
+    }
 
   /**
    * The handover tool a multi-device session adds to its own tool surface: `switchDevice`, read from
@@ -105,18 +132,14 @@ object MultiDeviceTargetBinding {
     isMultiDeviceSession: Boolean,
     catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
   ): ResolvedAgentToolbox = if (!isMultiDeviceSession) {
-    ResolvedAgentToolbox(toolClasses = emptySet(), yamlToolNames = emptySet())
+    ResolvedAgentToolbox(toolClasses = emptySet())
   } else {
-    // All three name kinds, even though `multi_device.yaml` declares only a class-backed tool
-    // today: reading two of three would make "the catalog is the source of truth" false the first
+    // Both name kinds, even though `multi_device.yaml` declares only a class-backed tool today:
+    // reading only the classes would make "the catalog is the source of truth" false the first
     // time the toolset gains a scripted tool, and silently — a missing scripted name doesn't fail
     // the session, it just never advertises.
     ResolvedAgentToolbox(
       toolClasses = TrailblazeToolSetCatalog.entryToolClasses(
-        SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
-        catalog,
-      ),
-      yamlToolNames = TrailblazeToolSetCatalog.entryYamlToolNames(
         SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
         catalog,
       ),
@@ -151,15 +174,35 @@ object MultiDeviceTargetBinding {
    * that runs it (its device info), which is what a runtime carries as its static device context.
    *
    * The start device comes first so its runtime registers before any companion's, and a tool name
-   * both targets declare resolves to the launch device's copy. A companion that inherits the
-   * session target adds no entry — it shares the start device's runtime.
+   * both targets declare resolves to the launch device's copy. A target's inline tools register
+   * per driver, so a companion sharing a target adds an entry only when it runs another driver.
    */
   fun <DeviceContext> scriptedToolLaunchPlan(
     startDeviceTarget: TrailblazeHostAppTarget?,
+    startDeviceDriver: TrailblazeDriverType,
+    startDeviceContext: DeviceContext,
+    companions: List<Triple<TrailblazeHostAppTarget?, TrailblazeDriverType, DeviceContext>>,
+  ): List<Pair<TrailblazeHostAppTarget?, DeviceContext>> = (
+    listOf(Triple(startDeviceTarget, startDeviceDriver, startDeviceContext)) +
+      companions.filter { (target, _, _) -> target != null }
+    ).distinctBy { (target, driver, _) -> target?.id to driver }
+    .map { (target, _, context) -> target to context }
+
+  /**
+   * The contexts of every device that runs [target]: the start device when [target] is its target,
+   * and each companion bound to it — a companion with no target of its own runs the start
+   * device's. A target's `excluded_tools:` are judged on these devices' drivers, never on a driver
+   * only another target's device brings into the session.
+   */
+  fun <DeviceContext> devicesRunning(
+    target: TrailblazeHostAppTarget?,
+    startDeviceTarget: TrailblazeHostAppTarget?,
     startDeviceContext: DeviceContext,
     companions: List<Pair<TrailblazeHostAppTarget?, DeviceContext>>,
-  ): List<Pair<TrailblazeHostAppTarget?, DeviceContext>> = (
+  ): List<DeviceContext> = (
     listOf(startDeviceTarget to startDeviceContext) +
-      companions.filter { (target, _) -> target != null }
-    ).distinctBy { (target, _) -> target?.id }
+      companions.map { (companionTarget, context) -> (companionTarget ?: startDeviceTarget) to context }
+    )
+    .filter { (deviceTarget, _) -> deviceTarget?.id == target?.id }
+    .map { (_, context) -> context }
 }

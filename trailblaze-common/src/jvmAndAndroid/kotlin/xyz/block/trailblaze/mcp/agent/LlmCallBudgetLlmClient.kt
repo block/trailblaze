@@ -10,6 +10,7 @@ import ai.koog.prompt.message.LLMChoice
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
+import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import xyz.block.trailblaze.exception.MaxCallsLimitReachedException
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.atomic.AtomicInteger
@@ -28,6 +29,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * the budget exists to bound cost and a summarization round-trip costs the same as a reasoning one.
  * [moderate] is not counted: it is not a generation, and the agent never calls it.
  *
+ * A move the decision engine made instead ([AnsweredWithoutLlm]) spends a separate budget of the same
+ * size: engine moves are quick and cheap, and must not shorten the LLM's turns, but an engine stuck
+ * repeating itself still ends the objective. It gives its LLM call back only when no LLM request was
+ * sent for the turn; in race mode one was, and was dropped but usually still billed. A turn still
+ * needs an LLM call left to start, since the engine may hand it to the LLM.
+ *
  * Sits OUTERMOST in the decorator stack so a refused request never captures a screenshot or writes an
  * LLM-request log — nothing was sent, and the session's end status carries the reason.
  *
@@ -44,13 +51,17 @@ class LlmCallBudgetLlmClient(
   }
 
   private val callsMade = AtomicInteger(0)
+  private val engineMoves = AtomicInteger(0)
 
   /** Label carried by the exception so the session end status names the objective that ran out. */
   @Volatile
   private var objective: String = ""
 
-  /** Requests forwarded to [delegate] for the current objective. */
+  /** Requests a model answered for the current objective. */
   val llmCallsMade: Int get() = callsMade.get()
+
+  /** Moves the decision engine made for the current objective, without a model. */
+  val engineMovesMade: Int get() = engineMoves.get()
 
   /**
    * Starts a fresh budget for [objective]. The agent is built once per objective, but calling this
@@ -59,6 +70,7 @@ class LlmCallBudgetLlmClient(
   fun beginObjective(objective: String) {
     this.objective = objective
     callsMade.set(0)
+    engineMoves.set(0)
   }
 
   private fun reserveCall() {
@@ -78,7 +90,19 @@ class LlmCallBudgetLlmClient(
     tools: List<ToolDescriptor>,
   ): Message.Assistant {
     reserveCall()
-    return delegate.execute(prompt, model, tools)
+    val response = delegate.execute(prompt, model, tools)
+    if (AnsweredWithoutLlm.of(response) != null) {
+      if (!AnsweredWithoutLlm.llmRequestSent(response)) callsMade.decrementAndGet()
+      if (engineMoves.incrementAndGet() > maxLlmCalls) {
+        Console.log("[KOOG_BUDGET] decision engine budget of $maxLlmCalls moves exhausted; failing the objective")
+        throw MaxCallsLimitReachedException(
+          maxCalls = maxLlmCalls,
+          objectivePrompt = objective,
+          message = "Decision engine move limit of $maxLlmCalls reached for objective: $objective",
+        )
+      }
+    }
+    return response
   }
 
   override suspend fun executeMultipleChoices(

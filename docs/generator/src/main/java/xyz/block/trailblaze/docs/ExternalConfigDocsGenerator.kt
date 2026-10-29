@@ -150,7 +150,7 @@ class ExternalConfigDocsGenerator(
         appendLine()
         appendLine(
           "The binary auto-discovers `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/targets` and " +
-            "every `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/<id>/{tools,toolsets,shortcuts,trailheads}/` " +
+            "every `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/<id>/{tools,toolsets,trailheads}/` " +
             "tree. `trailmaps:` entries in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` pull " +
             "trailmap manifests through the same loader path. `mcp/` is just a convention for the " +
             "JS/TS files you reference from trailmap or target YAML. `providers/` remains the " +
@@ -223,16 +223,14 @@ class ExternalConfigDocsGenerator(
             "must already be on the JVM classpath. |",
         )
         appendLine(
-          "| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | Yes | " +
-            "YAML-defined tool composition. Workspace-authored entries register through " +
-            "`AppTargetDiscovery` and resolve via the toolset → tool dispatch chain the same " +
-            "way classpath-bundled tools do. |",
+          "| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | No | A YAML list of other tool " +
+            "calls is skipped at load with a warning, so a trail that calls it fails as an " +
+            "unknown tool. Write a tool that composes other tools as a TypeScript tool instead. |",
         )
         appendLine(
           "| `${TrailblazeProjectConfigLoader.CONFIG_FILENAME}` targets / toolsets / tools | " +
             "Partially | Targets and toolsets are live today, and class-backed `tools:` entries " +
-            "participate in discovery. Provider refs and external YAML-defined (`tools:` mode) " +
-            "project tools are still follow-up work. |",
+            "participate in discovery. Provider refs are still follow-up work. |",
         )
         appendLine()
 
@@ -249,6 +247,7 @@ class ExternalConfigDocsGenerator(
         appendLine("| `platforms.<platform>.tool_sets` | Toolset ids enabled for that platform section. |")
         appendLine("| `platforms.<platform>.tools` | Extra tool names added directly for that platform section. |")
         appendLine("| `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |")
+        appendLine("| `platforms.<platform>.always_shown_tools` | Tool names the LLM is always shown on that platform, even on a turn where the decision engine hides the tools it judges the move won't need (`TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`). Use for an app's own tools a step needs often, such as one that replaces an excluded default tool. |")
         appendLine("| `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |")
         appendLine("| `platforms.<platform>.min_build_version` | Optional minimum build gate. |")
         appendLine()
@@ -309,8 +308,8 @@ class ExternalConfigDocsGenerator(
             .sorted()
             .ifEmpty { listOf("all drivers") }
             .joinToString(", ") { "`$it`" }
-          // The complete advertised surface, via the single union accessor: class-backed,
-          // YAML-defined, AND scripted tools (e.g. `openUrl` in `navigation`). Reading the
+          // The complete advertised surface, via the single union accessor: class-backed AND
+          // scripted tools (e.g. `openUrl` in `navigation`). Reading the
           // partitions by hand is what undercounted every toolset that ships a scripted tool.
           val toolCount = toolSet.allToolNames.size
           appendLine(
@@ -321,11 +320,10 @@ class ExternalConfigDocsGenerator(
 
         appendLine("## Authoring Tools")
         appendLine()
-        appendLine("Tool definitions have three current shapes:")
+        appendLine("Tool definitions have two current shapes:")
         appendLine()
         appendLine("1. **Class-backed YAML** in `trailmaps/<id>/tools/*.tool.yaml`.")
-        appendLine("2. **YAML-defined composition** in `trailmaps/<id>/tools/*.tool.yaml` with a `tools:` block.")
-        appendLine("3. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).")
+        appendLine("2. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).")
         appendLine()
         appendLine("### Class-Backed YAML")
         appendLine()
@@ -340,50 +338,36 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
 
-        appendLine("### YAML-Defined Composition")
-        appendLine()
-        appendLine("```yaml")
-        appendLine("id: eraseTextSafely")
-        appendLine("description: \"Erases characters from the focused field.\"")
-        appendLine("parameters:")
-        appendLine("  - name: charactersToErase")
-        appendLine("    type: integer")
-        appendLine("    required: false")
-        appendLine("tools:")
-        appendLine("  - mobile_maestro:")
-        appendLine("      commands:")
-        appendLine("        - eraseText:")
-        appendLine("            charactersToErase: \"{{params.charactersToErase}}\"")
-        appendLine("```")
-        appendLine()
-        appendLine(
-          "This authoring mode is part of the tool schema today, but new filesystem contributions " +
-            "of this kind are not yet wired into the binary's global tool resolver.",
-        )
-        appendLine()
-
         appendLine("### JS / TS Scripted Tools")
         appendLine()
         appendLine(
           "For binary users, JS/TS tools are the path that does **not** require rebuilding " +
-            "Trailblaze. Put each tool's `<name>.ts` (or `.js`) file plus a sibling `<name>.yaml` " +
-            "descriptor under `<trailmap>/tools/`, and list the tool's `name:` under the trailmap's " +
-            "`target.tools:` block.",
+            "Trailblaze. Put each tool's `<name>.ts` (or `.js`) file, optionally with a sibling " +
+            "`<name>.yaml` descriptor, under `<trailmap>/tools/`. Every tool there is on the " +
+            "trailmap's target without being listed; name one under " +
+            "`target.platforms.<platform>.excluded_tools:` to keep it off.",
         )
         appendLine()
         appendLine("```yaml")
         appendLine("# trailmaps/<your-trailmap>/trailmap.yaml")
         appendLine("target:")
-        appendLine("  tools:")
-        appendLine("    - yourTool")
+        appendLine("  platforms:")
+        appendLine("    android:")
+        appendLine("      excluded_tools:")
+        appendLine("        - yourDebugOnlyTool")
         appendLine("```")
         appendLine()
         appendLine(
-          "Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime " +
+          "Runtime " +
             "selection happens per descriptor: tools run in-process (QuickJS) by default; set " +
             "`runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. " +
             "The file extension is not a runtime hint. `requiresHost: true` is a separate, " +
             "on-device visibility gate — not a runtime selector.",
+        )
+        appendLine()
+        appendLine(
+          "A tool that composes other tools is a scripted tool too: call them from its handler. " +
+            "A `.tool.yaml` with a `tools:` body (a YAML list of tool calls) fails to load.",
         )
         appendLine()
 
@@ -422,9 +406,9 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
         appendLine(
-          "What is still missing for a full remote-download story is install/update UX and " +
-            "filesystem discovery for YAML-defined `tools:` compositions. The directory shape " +
-            "above is still the right place to put those contributions as the wiring lands.",
+          "What is still missing for a full remote-download story is install/update UX. The " +
+            "directory shape above is still the right place to put those contributions as the " +
+            "wiring lands.",
         )
         appendLine()
 

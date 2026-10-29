@@ -40,10 +40,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
 @LLMDescription("Tap an Android element by selector. Works for both classic Views and composables.")
 data class AndroidTestTapTool(
   val nodeSelector: TrailblazeNodeSelector,
-  @param:LLMDescription(
-    "Hold the press past the long-press timeout instead of tapping, for a gesture the app only " +
-      "reacts to when held — entering an edit mode, opening a context menu.",
-  )
+  @param:LLMDescription("Long press instead of tap, e.g. to open a context menu.")
   val longPress: Boolean = false,
   @param:LLMDescription(RESOLVE_TIMEOUT_DESCRIPTION) val timeoutMs: Long? = null,
 ) : AndroidTestExecutableTool {
@@ -116,7 +113,17 @@ data class AndroidTestAssertVisibleTool(
   override suspend fun executeWithAndroidTest(
     target: AndroidTestTarget,
     context: TrailblazeToolExecutionContext,
-  ): TrailblazeToolResult = runCatching {
+  ): TrailblazeToolResult = runCatching { verify(target, context) }
+    .getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
+
+  /**
+   * The check itself, throwing on failure. A wait that ran out is a [SelectorWaitMissException],
+   * which is how the Maestro interpreter tells "the screen said no" from a broken check.
+   */
+  internal fun verify(
+    target: AndroidTestTarget,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult.Success {
     // Asserted against the backend as well as the selector: the selector proved the node is in the
     // tree with on-screen bounds, and the native check proves the backend agrees it is displayed.
     //
@@ -131,8 +138,8 @@ data class AndroidTestAssertVisibleTool(
       is ResolvedNode.ComposeNode ->
         AndroidComposeActions.assertDisplayed(target, resolved.semanticsId)
     }
-    TrailblazeToolResult.Success(message = "Verified ${nodeSelector.description()} is visible.")
-  }.getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
+    return TrailblazeToolResult.Success(message = "Verified ${nodeSelector.description()} is visible.")
+  }
 }
 
 @Serializable
@@ -147,7 +154,14 @@ data class AndroidTestAssertNotVisibleTool(
   override suspend fun executeWithAndroidTest(
     target: AndroidTestTarget,
     context: TrailblazeToolExecutionContext,
-  ): TrailblazeToolResult = runCatching {
+  ): TrailblazeToolResult = runCatching { verify(target, context) }
+    .getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
+
+  /** The check itself, throwing on failure. See [AndroidTestAssertVisibleTool.verify]. */
+  internal fun verify(
+    target: AndroidTestTarget,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult.Success {
     // The resolve poll inverted: the expected answer is "no placed match" on the first read, and
     // a match gets until the deadline to LEAVE — an outgoing screen's node is still in the tree
     // while it animates away, the same settling the positive assert tolerates in the other
@@ -159,15 +173,14 @@ data class AndroidTestAssertNotVisibleTool(
       val deadline = SystemClock.uptimeMillis() + budgetMs
       while (isOnScreen(target, nodeSelector, context)) {
         if (SystemClock.uptimeMillis() >= deadline) {
-          throw TrailblazeToolExecutionException(
+          throw SelectorWaitMissException(
             "Selector still matched a visible element after ${budgetMs}ms: " +
               nodeSelector.description(),
-            this,
           )
         }
         SystemClock.sleep(RESOLVE_POLL_MS)
       }
-      TrailblazeToolResult.Success(
+      return TrailblazeToolResult.Success(
         message = "Verified ${nodeSelector.description()} is not visible.",
       )
     } finally {
@@ -175,14 +188,14 @@ data class AndroidTestAssertNotVisibleTool(
       // the benchmark's orchestration side, exactly like the positive assert's resolve poll.
       AndroidTestPhaseAttribution.addOrchestration(orchestration.elapsedMs())
     }
-  }.getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
+  }
 }
 
 @Serializable
 @TrailblazeToolClass("androidTest_scrollUntilVisible")
 @LLMDescription(
-  "Scroll until an Android element is on screen, by selector. Use when the element is below the " +
-    "fold — a lazy list does not put off-screen rows in the hierarchy, so waiting never finds them."
+  "Scroll until an Android element is on screen, by selector. Use when it is below the fold: lazy " +
+    "lists omit off-screen rows, so waiting never finds them."
 )
 data class AndroidTestScrollUntilVisibleTool(
   val nodeSelector: TrailblazeNodeSelector,
@@ -487,7 +500,7 @@ private fun pollForNode(
         }
       }
       if (SystemClock.uptimeMillis() >= deadline) {
-        throw TrailblazeToolExecutionException(
+        throw SelectorWaitMissException(
           when {
             ambiguousCount > 0 ->
               "Selector matched $ambiguousCount elements after ${timeoutMs}ms and none of them " +
@@ -499,7 +512,6 @@ private fun pollForNode(
               "Selector matched no element after ${timeoutMs}ms: " +
                 "${selector.description()}\n${screenState.onScreenSummary()}"
           },
-          tool,
         )
       }
       // Blocking sleep, not `delay`: Espresso and the Compose rule are driven from the
@@ -641,13 +653,21 @@ private fun TrailblazeNode.isPlaced(): Boolean {
   return bounds.width > 0 && bounds.height > 0
 }
 
+/**
+ * A wait that ran out with the screen still saying no: the selector never matched a placed element
+ * (or, for a not-visible check, never stopped matching one) before its deadline.
+ *
+ * Its own type so the Maestro interpreter can tell the screen's answer apart from every other
+ * failure, and report it the way Maestro does. See [MaestroCommandAdapters].
+ */
+internal class SelectorWaitMissException(message: String) : RuntimeException(message)
+
 /** Transitions and fake network responses land asynchronously, so give the screen time to arrive. */
 private const val RESOLVE_TIMEOUT_MS = 8_000L
 
 private const val RESOLVE_TIMEOUT_DESCRIPTION =
-  "How long to wait for the selector to match, in milliseconds. Defaults to 8000. Raise it only " +
-    "for a step that waits on work the app owns and does not declare as idle — a first-run data " +
-    "sync, for example. It costs nothing when the element arrives sooner."
+  "Max ms to wait for the selector to match. Default 8000; raise only for slow app work the app " +
+    "does not report as idle, such as a first-run data sync."
 private const val RESOLVE_POLL_MS = 50L
 
 /** Enough to identify the screen and find a missed element; short of dumping a whole long list. */

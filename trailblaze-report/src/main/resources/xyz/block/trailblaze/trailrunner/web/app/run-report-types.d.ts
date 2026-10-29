@@ -32,6 +32,9 @@ interface RunMeta {
   deviceType?: string;
   platform?: string;
   trailId?: string;
+  /** The trail's `config.context`: what the case proves and the setup it assumes. Multi-line. */
+  context?: string;
+  trailSourceUrl?: string;
   steps?: number;
   ranAt?: string;
   duration?: string;
@@ -84,6 +87,8 @@ interface RunMeta {
    * cell inert rather than linked.
    */
   reportUrl?: string;
+  /** This attempt supplies the test-case verdict in the producer's summary. */
+  retainedResult?: boolean;
   /**
    * LLM call count and spend for a run whose payload isn't embedded (see [reportUrl]), precomputed
    * by the generator because there are no calls in the document to count. Null/absent renders as
@@ -110,6 +115,18 @@ interface ActionMark {
   dh: number;
   /** AssertCondition outcome; `false` renders the red full-screen border. */
   ok?: boolean;
+  /** `false` for a not-visible assertion, whose point is only the screen's center. */
+  visible?: false;
+  /** The element a visibility assertion found, in device pixels, when the capture's tree had one
+   * centered on its point. */
+  box?: MarkBox;
+}
+
+interface MarkBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
 /** A tool the outer tool delegated to (expandable child row). */
@@ -150,6 +167,13 @@ interface TraceChild {
   captureIds?: string[];
   /** Tap/swipe/assert overlay for this dispatch's frame (see ActionMark). */
   mark?: ActionMark | null;
+  /** The instant the driver drew `mark` (see TraceStep.markTs) — later than `ts` when the dispatch
+   * waited before acting. Present ONLY when it is known and differs from `ts`; consumers fall back
+   * to `ts`. */
+  markTs?: number | null;
+  /** The device binding a successful `switchDevice` dispatch handed the session over to. Absent on
+   * every other dispatch and on a failed handover (which never moved the session). */
+  switchTo?: string | null;
   /** Live Trail Runner detail source. Deliberately omitted from the slim shared-report payload. */
   _logs?: TrailblazeLogRecord[];
 }
@@ -175,6 +199,9 @@ interface TraceStep {
   objective: boolean;
   /** True when the objective is the trail's `trailhead:` (step 0) — rendered as TRAILHEAD, unnumbered. */
   trailhead: boolean;
+  /** True for the "Teardown" objective: the trailhead's teardown after the trail. Never a step
+   * of the trail, never its verdict. */
+  teardown?: boolean;
   /** True when recorded actions for this authored objective failed and self-heal took over. */
   selfHeal?: boolean;
   /** Recorded tool that triggered self-heal, retained for the recovery summary. */
@@ -185,6 +212,12 @@ interface TraceStep {
   selfHealSource?: boolean;
   /** True for trailing non-action rows (final/failure snapshots, errors) — never a step's "first tool call". */
   terminal?: boolean;
+  /**
+   * True for the rows the run logs once it has finished — the final or failure screenshot and the
+   * run's error — which follow any teardown but belong to the trail. A snapshot named during
+   * teardown is terminal but not end-of-run.
+   */
+  endOfRun?: boolean;
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;
@@ -366,12 +399,16 @@ interface NetworkEvent {
   durationMs: number | null;
   urlPath: string;
   phase: string;
+  /** The trail phase the request started in (trailhead / trail / teardown); null or absent when unknown. */
+  trailPhase?: string | null;
 }
 
 /** One generic session event: offset epoch ms (or null) + pre-truncated serialized data. */
 interface SessionEvent {
   t: number | null;
   d: string;
+  /** `"device"` when `t` is still on the device's clock (no measured offset to convert it with). */
+  clock?: "device";
 }
 
 /** Tone accent for a formatted row or badge. */
@@ -424,6 +461,14 @@ interface FormattedRow {
 interface FormatterEntry {
   t: number | null;
   data: any;
+  /** `"device"` when `t` is still on the device's clock (no measured offset to convert it with). */
+  clock?: "device";
+  /**
+   * The device-clock stamp the line carried — the event's own emit time — before `t` was moved onto
+   * the host clock. Absent for a host-stamped line. Tells a formatter that `t` is when the event
+   * happened, not when it arrived.
+   */
+  deviceT?: number;
 }
 
 /**

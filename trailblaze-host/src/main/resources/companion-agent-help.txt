@@ -1,16 +1,16 @@
-Trail Runner companion mode - for coding agents authoring a trail from their own CLI session.
+Trailblaze App companion mode - for coding agents authoring a trail from their own CLI session.
 
-The agent is the single writer: edit the trail folder directly on disk. Trail Runner renders a
+The agent is the single writer: edit the trail folder directly on disk. Trailblaze App renders a
 read-only live view of that folder and sends the human's actions back through the event stream.
 
 Workflow:
   1. trailblaze companion start --folder <relative-folder> --title "<goal>" \
        [--agent claude|codex] [--label "<label>"] [--trails-dir <workspace-root>]
-     The command starts or attaches to the daemon, opens Trail Runner, and prints a JSON handle.
+     The command starts or attaches to the daemon, opens Trailblaze App, and prints a JSON handle.
      Keep runId; every later command needs it.
   2. Edit files under <primaryRoot>/<folder> and narrate progress:
        trailblaze companion event <runId> --text "Scaffolding the login steps."
-  3. Steer Trail Runner with standing directives:
+  3. Steer Trailblaze App with standing directives:
        trailblaze companion send <runId> banner --text "Reviewing your feedback..."
        trailblaze companion send <runId> checklist --title Plan --item Scaffold --item Record
        trailblaze companion send <runId> actions --item "Looks good" --item "Change a step"

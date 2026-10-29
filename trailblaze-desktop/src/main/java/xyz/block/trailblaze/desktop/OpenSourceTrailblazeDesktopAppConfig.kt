@@ -24,10 +24,8 @@ import xyz.block.trailblaze.llm.providers.OpenRouterTrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
 import xyz.block.trailblaze.util.Console
@@ -120,23 +118,15 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   // then cache a construction failure for every subsequent access).
   override val logsRepo by lazy { LogsRepo(logsDir, costEnricher = costEnricher::enrich) }
 
-  val trailsDir = File(
-    TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
-      trailblazeSettingsRepo.serverStateFlow.value.appConfig,
-    ),
-  ).apply { mkdirs() }
+  init {
+    // A clean install has a trails directory to browse before its first save.
+    trailblazeSettingsRepo.getCurrentTrailsDir().mkdirs()
+  }
 
+  // Resolved per call, so a workspace switch reaches saves without a daemon restart.
   override val recordedTrailsRepo = RecordedTrailsRepoJvm(
-    trailsDirectory = trailsDir
+    trailsDirectoryProvider = trailblazeSettingsRepo::getCurrentTrailsDir,
   )
-  override val customEnvVarNames: List<String> = buildList {
-    BUILT_IN_MODEL_LISTS.mapNotNullTo(this) { trailblazeLlmModelList ->
-      JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmModelList.provider)
-    }
-    loadedConfig.providers.values.mapNotNullTo(this) { it.auth.envVar }
-    add(RevylCliClient.REVYL_API_KEY_ENV)
-  }.distinct()
-
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
     return JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(
       getAllSupportedLlmModelLists(),
@@ -173,8 +163,6 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
       defaultModel = selected.defaultModel,
     )
   }
-
-  override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
   override fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String> {
     return MobileDeviceUtils.getInstalledAppIds(trailblazeDeviceId)
   }

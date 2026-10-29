@@ -260,6 +260,84 @@ class TrailblazeAndroidGradlePluginTest {
   }
 
   @Test
+  fun `source URL is emitted only for the trail that has provenance`() {
+    val sourceUrl =
+      "https://github.com/example/trails/blob/" +
+        "0123456789012345678901234567890123456789/checkout/case-123/trail.yaml"
+    val rendered =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "GitTrailsLongTest",
+        mode = TestHostMode.BaseClass("xyz.block.trailblaze.rules.SquareTrailblazeTest"),
+        methods =
+          listOf(
+            namedTrail("GitTrailsLongTest", "checkoutCase123")
+              .copy(trailSourceUrl = sourceUrl),
+            namedTrail("GitTrailsLongTest", "legacyTrail"),
+          ),
+      )
+
+    assertTrue(
+      rendered.contains(
+        "@Test fun checkoutCase123() = runFromAsset(trailSourceUrl = \"$sourceUrl\")"
+      ),
+      rendered,
+    )
+    assertTrue(rendered.contains("@Test fun legacyTrail() = runFromAsset()"), rendered)
+  }
+
+  @Test
+  fun `source URL survives wrapped inline call and Kotlin string escaping`() {
+    val sourceUrl =
+      "https://github.com/example/trails/blob/" +
+        "0123456789012345678901234567890123456789/" +
+        "a-very-long-trail-path-that-forces-the-generated-call-to-wrap\nwith\ttab\"and\\backslash\$value"
+    val rendered =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "VeryLongClassNameForAnAndroidLongTestThatPushesPastNinetyFive",
+        mode = TestHostMode.InlineRule("xyz.block.trailblaze.android.AndroidTrailblazeRule"),
+        methods =
+          listOf(
+            namedTrail(
+                "VeryLongClassNameForAnAndroidLongTestThatPushesPastNinetyFive",
+                "aSimilarlyLongMethodName",
+              )
+              .copy(trailSourceUrl = sourceUrl)
+          ),
+      )
+
+    assertTrue(rendered.contains("fun aSimilarlyLongMethodName() =\n"), rendered)
+    assertTrue(rendered.contains("trailSourceUrl = \"https://github.com/example/trails/blob/"), rendered)
+    assertTrue(rendered.contains("path-that-forces-the-generated-call-to-wrap\\nwith\\ttab"), rendered)
+    assertTrue(rendered.contains("\\\"and\\\\backslash\\\$value"), rendered)
+  }
+
+  @Test
+  fun `changing the source commit changes the generated immutable URL`() {
+    val commitA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    val commitB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    fun render(commit: String) =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "GitTrailsLongTest",
+        mode = TestHostMode.InlineRule("xyz.block.trailblaze.android.AndroidTrailblazeRule"),
+        methods =
+          listOf(
+            namedTrail("GitTrailsLongTest", "checkoutCase123").copy(
+              trailSourceUrl = "https://github.com/example/trails/blob/$commit/checkout/case.trail.yaml"
+            )
+          ),
+      )
+
+    val renderedA = render(commitA)
+    val renderedB = render(commitB)
+    assertTrue(renderedA.contains("/blob/$commitA/"), renderedA)
+    assertTrue(renderedB.contains("/blob/$commitB/"), renderedB)
+    assertFalse(renderedA == renderedB)
+  }
+
+  @Test
   fun `rejects an asset directory whose name is not a valid Kotlin simple identifier`() {
     val e =
       assertFailsWith<IllegalArgumentException> {

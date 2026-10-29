@@ -25,7 +25,7 @@ function IntegrationCard({ it, go }) {
           return;
         }
         if (!TbWorkspaceNavigation.navigate(it.action)) {
-          throw new Error('Integration workspaces must stay inside Trail Runner.');
+          throw new Error('Integration workspaces must stay inside Trailblaze App.');
         }
       } catch (e) {
         setResult(e?.message || 'Invalid integration workspace.');
@@ -175,7 +175,7 @@ function IntegrationsScreen({ embedded, go }) {
       ) : (
         <React.Fragment>
           {list.length === 0 && (
-            <EmptyState ico="puzzle" title="No optional integrations" sub="This Trail Runner build has not registered any extra integration providers." />
+            <EmptyState ico="puzzle" title="No optional integrations" sub="This Trailblaze App build has not registered any extra integration providers." />
           )}
           {connected.length > 0 && (
             <React.Fragment>

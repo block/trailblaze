@@ -18,7 +18,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
-import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -69,10 +68,6 @@ class TrailblazeSettingsRepo(
       trailblazeJson.decodeFromString(
         SavedTrailblazeAppConfig.serializer(),
         settingsFile.readText(),
-      ).copy(
-        // Clear session-specific state on app restart
-        currentSessionId = null,
-        currentSessionViewMode = SessionViewMode.DEFAULT.name,
       ).withRetiredDriversReplaced { platform, driver, replacement ->
         replacedARetiredDriver = true
         Console.log(
@@ -256,8 +251,10 @@ class TrailblazeSettingsRepo(
     // anchor's own directory instead. The declared dir need not sit under the config dir — an
     // absolute declaration can leave the repo entirely — and walking up from there would land
     // on Scratch, so the very file that redirected the app would lose its own `defaults.target`.
-    TrailblazeDesktopUtil.launchWorkspaceDeclaration()?.let { return it.configDir.toPath() }
-    return File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverStateFlow.value.appConfig))
+    // Like the config dir, this follows the declaration behind the trails dir in effect.
+    val appConfig = serverStateFlow.value.appConfig
+    TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(appConfig)?.let { return it.toPath() }
+    return File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
       .takeIf { it.isDirectory }
       ?.toPath()
       ?: Paths.get("")

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.utils
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import io.modelcontextprotocol.kotlin.sdk.server.ClientConnection
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
@@ -25,7 +26,9 @@ import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.ServerNotification
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -34,6 +37,8 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.Test
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -45,9 +50,15 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -55,13 +66,13 @@ import kotlin.test.fail
 
 /**
  * Contract tests for [TrailblazeToolToMcpBridge.registerTrailblazeToolDescriptors] — the
- * registration path that makes scripted (`.ts`) and YAML-defined tools first-class MCP tools.
+ * registration path that makes scripted (`.ts`) tools first-class MCP tools.
  *
  * The observable contract under test:
  *  - a descriptor carrying a full JSON Schema ([TrailblazeToolDescriptor.inputSchema], a body
  *    property that `copy()` silently drops) advertises that schema verbatim — nested shapes
  *    included;
- *  - a descriptor without one (YAML-defined tools) advertises the flat parameter view with the
+ *  - a descriptor without one advertises the flat parameter view with the
  *    same required/optional split class-backed registration uses;
  *  - `tools/call` routes through the caller-supplied executor and wraps its return in a success
  *    result;
@@ -257,6 +268,84 @@ class TrailblazeToolToMcpBridgeDescriptorTest {
     )
   }
 
+  // ── Daemon log ────────────────────────────────────────────────────────────
+
+  @Test
+  fun `a class-backed call logs its arguments with the tool's secrets masked`() {
+    val token = "fixture-session-token-7f3a"
+    val server = newMcpServer()
+    newBridge().registerTrailblazeTools(
+      toolClasses = setOf(SecretArgumentsTool::class),
+      mcpServer = server,
+      mcpSessionId = McpSessionId("test-session"),
+    )
+
+    val logged = captureConsoleLog {
+      callTool(
+        server,
+        "test_secretArguments",
+        buildJsonObject {
+          put("appId", "com.example.app")
+          putJsonObject("arguments") { put("SessionToken", token) }
+        },
+      )
+    }
+
+    assertTrue(logged.contains("SessionToken"), "The call must still be logged. Got: $logged")
+    assertTrue(!logged.contains(token), "The token must not reach the daemon log. Got: $logged")
+  }
+
+  @Test
+  fun `a call that fails to decode reports why without its argument values`() {
+    // A quote makes the decoder's rendering of the value differ from the value itself.
+    val token = "fixture\"session-token-7f3a"
+    val server = newMcpServer()
+    newBridge().registerTrailblazeTools(
+      toolClasses = setOf(SecretArgumentsTool::class),
+      mcpServer = server,
+      mcpSessionId = McpSessionId("test-session"),
+    )
+
+    val errors = ByteArrayOutputStream()
+    val originalErr = System.err
+    System.setErr(PrintStream(errors, true, Charsets.UTF_8))
+    lateinit var result: CallToolResult
+    val logged = try {
+      captureConsoleLog {
+        result = callTool(
+          server,
+          "test_secretArguments",
+          buildJsonObject { putJsonObject("appId") { put("SessionToken", token) } },
+        )
+      }
+    } finally {
+      System.setErr(originalErr)
+    }
+
+    assertTrue(result.isError == true, "The call must fail. Got: ${resultText(result)}")
+    assertTrue(resultText(result).contains("appId"), "The reason must survive. Got: ${resultText(result)}")
+    for (output in listOf(resultText(result), logged, errors.toString(Charsets.UTF_8))) {
+      assertTrue(!output.contains("session-token-7f3a"), "The token must not be reported. Got: $output")
+    }
+  }
+
+  /** [Console] holds its own stream reference, so swap that rather than `System.out`. */
+  private fun captureConsoleLog(block: () -> Unit): String {
+    val buffer = ByteArrayOutputStream()
+    val field = Console::class.java.getDeclaredField("out").apply { isAccessible = true }
+    val original = field.get(Console)
+    val wasQuiet = Console.isQuietMode()
+    field.set(Console, PrintStream(buffer, true, Charsets.UTF_8))
+    if (wasQuiet) Console.disableQuietMode()
+    try {
+      block()
+    } finally {
+      field.set(Console, original)
+      if (wasQuiet) Console.enableQuietMode()
+    }
+    return buffer.toString(Charsets.UTF_8)
+  }
+
   // ── Fixture ───────────────────────────────────────────────────────────────
 
   private fun newBridge(): TrailblazeToolToMcpBridge = TrailblazeToolToMcpBridge(
@@ -285,6 +374,21 @@ class TrailblazeToolToMcpBridgeDescriptorTest {
 
   private fun resultText(result: CallToolResult): String =
     result.content.filterIsInstance<TextContent>().joinToString("\n") { it.text.orEmpty() }
+}
+
+/** A tool whose string argument values are secret, as `ios_openApp`'s launch arguments are. */
+@Serializable
+@TrailblazeToolClass("test_secretArguments")
+@LLMDescription("Opens an app with secret arguments.")
+internal data class SecretArgumentsTool(
+  val appId: String,
+  val arguments: JsonObject? = null,
+) : ExecutableTrailblazeTool, SensitiveValuesTrailblazeTool {
+  override val sensitiveValues: Collection<String>
+    get() = arguments?.values.orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+    TrailblazeToolResult.Success()
 }
 
 /** The bridge is only consulted for screenshots on success paths these tests don't enable. */
@@ -324,7 +428,7 @@ private class NoOpBridge : TrailblazeMcpBridge {
 
 /** MCP handlers are `suspend ClientConnection.(CallToolRequest) -> CallToolResult`; the
  *  descriptor handlers never touch the connection, so every member can be inert. */
-private object FakeClientConnection : ClientConnection {
+internal object FakeClientConnection : ClientConnection {
   override val sessionId: String = "fake-client-connection"
   override suspend fun notification(notification: ServerNotification, relatedRequestId: RequestId?) {}
   override suspend fun ping(request: PingRequest, options: RequestOptions?): EmptyResult = error("not used")

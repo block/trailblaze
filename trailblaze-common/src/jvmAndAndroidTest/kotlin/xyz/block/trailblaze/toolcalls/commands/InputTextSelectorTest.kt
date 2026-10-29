@@ -83,6 +83,7 @@ class InputTextSelectorTest {
       nodeSelector: TrailblazeNodeSelector,
       longPress: Boolean,
       tapRoute: TapRouteOverride?,
+      timeoutMs: Long?,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       if (!usesAccessibilityDriver) return null
@@ -94,6 +95,7 @@ class InputTextSelectorTest {
       nodeSelector: TrailblazeNodeSelector,
       text: String,
       hideKeyboardAfter: Boolean,
+      clearFirst: Boolean,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       val result = focusAndTypeResult ?: return null

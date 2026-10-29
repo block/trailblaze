@@ -45,7 +45,7 @@
       ai.koog.utils
   " />
 
-  <!-- Read-only, and test-only: InProcessVocabularyOnDeviceTest asserts that networkConnection
+  <!-- Read-only, and test-only: InProcessVocabularyOnDeviceTest asserts that mobile_networkConnection
        really switched the radios, which means asking the framework what state Wi-Fi is in. The
        tool itself needs no permission — it drives `svc` on the instrumentation's shell channel. -->
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

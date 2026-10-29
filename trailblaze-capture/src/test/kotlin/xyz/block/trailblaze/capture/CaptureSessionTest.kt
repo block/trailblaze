@@ -11,6 +11,8 @@ import xyz.block.trailblaze.capture.video.AndroidVideoCapture
 import xyz.block.trailblaze.capture.video.IosVideoCapture
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.logs.model.DeviceClockSample
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -52,7 +54,7 @@ class CaptureSessionTest {
   }
 
   @Test
-  fun `stopAll ignores crash lines from an unscoped log stream`() {
+  fun `stopAll ignores crash lines from an unscoped log stream that cannot name the app`() {
     val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
     try {
       val session = CaptureSession(
@@ -65,6 +67,25 @@ class CaptureSessionTest {
       session.stopAll()
 
       assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `stopAll indexes crashes from a whole-device log stream that knows the app's process`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val session = CaptureSession(
+        streams = listOf(FakeLogStream(isAppScoped = false, appProcessName = "com.example.store")),
+        options = CaptureOptions.NONE,
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+      session.stopAll()
+
+      assertTrue(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").isFile)
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -221,7 +242,8 @@ class CaptureSessionTest {
       CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = true, captureMemory = false),
       TrailblazeDevicePlatform.ANDROID,
     )
-    assertNull(session)
+    assertNotNull(session, "an Android session still measures the device clock")
+    assertTrue(streamsOf(session).isEmpty())
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -383,12 +405,13 @@ class CaptureSessionTest {
   }
 
   @Test
-  fun `all flags off returns null regardless of platform`() {
-    val session = CaptureSession.fromOptions(
-      CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = false, captureMemory = false),
-      TrailblazeDevicePlatform.ANDROID,
-    )
-    assertNull(session)
+  fun `all flags off leaves an Android session that only measures the device clock`() {
+    val allOff = CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = false, captureMemory = false)
+    val session = CaptureSession.fromOptions(allOff, TrailblazeDevicePlatform.ANDROID)
+    assertNotNull(session, "app events are device-stamped with every stream off, so the clock is still measured")
+    assertTrue(streamsOf(session).isEmpty())
+    assertNull(CaptureSession.fromOptions(allOff, TrailblazeDevicePlatform.ANDROID, sampleDeviceClock = false))
+    assertNull(CaptureSession.fromOptions(allOff, TrailblazeDevicePlatform.IOS))
   }
 
   @Test
@@ -441,6 +464,7 @@ class CaptureSessionTest {
 
   private class FakeLogStream(
     override val isAppScoped: Boolean = true,
+    override val appProcessName: String? = null,
   ) : CaptureStream, AppScopedCaptureStream {
     override val type = CaptureType.LOGCAT
     private lateinit var outputFile: File
@@ -449,7 +473,10 @@ class CaptureSessionTest {
 
     override fun start(sessionDir: File, deviceId: String, appId: String?) {
       outputFile = File(sessionDir, "device.log").apply {
-        writeText("1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main")
+        writeText(
+          "1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main\n" +
+            "1772846522.234  123  123 E AndroidRuntime: Process: com.example.store, PID: 123",
+        )
       }
     }
 
@@ -485,6 +512,31 @@ class CaptureSessionTest {
         startTimestampMs = 1772846522234L,
         endTimestampMs = 1772846525234L,
       )
+    }
+  }
+
+  @Test
+  fun `an Android session samples the device clock for as long as it runs`() {
+    val sessionDir = Files.createTempDirectory("capture-session-clock").toFile()
+    try {
+      val sample = DeviceClockSample(hostBeforeMs = 1_000, hostAfterMs = 1_010, deviceMs = 6_005)
+      val session =
+        CaptureSession(
+          streams = listOf(FakeLogStream()),
+          options = CaptureOptions.NONE,
+          platform = TrailblazeDevicePlatform.ANDROID,
+          clockSamplerFactory = { dir, deviceId ->
+            DeviceClockSampler(dir, deviceId) { DeviceClock.Measurement.Measured(sample, listOf(sample)) }
+          },
+        )
+
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+      session.stopAll()
+
+      val samples = DeviceClockSyncFile.read(sessionDir)!!.track("emulator-5554")!!.samples
+      assertEquals(2, samples.size, "a sample at start and one at stop")
+    } finally {
+      sessionDir.deleteRecursively()
     }
   }
 }

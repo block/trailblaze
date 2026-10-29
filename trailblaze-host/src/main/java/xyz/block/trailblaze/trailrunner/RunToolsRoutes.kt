@@ -15,9 +15,12 @@ import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.getAgentToolboxForDriver
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.util.Console
 
@@ -28,8 +31,8 @@ import xyz.block.trailblaze.util.Console
 //      `assets/icons/ios_<bundle_id>.png` / `favicon_<host>.png`). This is what lets a fresh /
 //      open-source workspace light up its target list just by dropping files into
 //      `assets/icons/`, with no per-target authoring.
-//   2. The bundled `app_icon_<id>.png` classpath resource the desktop app ships (see
-//      BlockAppTargets.BlockAppIconProvider) — the internal-build fallback.
+//   2. A bundled `app_icon_<id>.png` classpath resource a downstream build ships — the
+//      internal-build fallback.
 // Nothing resolves → 404 (the UI falls back to a generic glyph).
 //
 // An optional `?platform=android|ios|web` query param scopes step 1 to that platform's explicit
@@ -379,34 +382,34 @@ internal suspend fun buildRunToolsResponse(
           .getOrDefault(emptyList())
         val catalog = runCatching { TrailblazeToolSetCatalog.defaultEntries() }
           .getOrDefault(emptyList())
-        // Authoritative set of class/YAML tool names that actually register for this
+        // Authoritative set of class-backed tool names that actually register for this
         // target+driver at session start: getAgentToolboxForDriver applies surface_to_llm
-        // filtering, drops YAML tools with no config, removes the target's excluded_tools,
-        // and folds in the target's own custom tools. We use it to filter each toolset's
+        // filtering, removes the target's excluded_tools, and folds in the target's own
+        // custom tools. We use it to filter each toolset's
         // tools so the tab matches what the agent sees (not the static catalog union).
-        // Scripted (.ts) tools live outside this set, so they're kept as-is per toolset.
+        // Toolset-carried scripted (.ts) tools live outside this set, so they're kept as-is.
         val registered: Set<String> = runCatching {
           val tb = target.getAgentToolboxForDriver(driverType)
-          tb.toolClasses.map { it.toolName().toolName }.toSet() + tb.yamlToolNames.map { it.toolName }.toSet()
+          tb.toolClasses.map { it.toolName().toolName }.toSet()
         }.getOrDefault(emptySet())
         // Empty only if resolution failed; then don't filter (degrade to the catalog union)
         // rather than show nothing.
         val keep = { name: String -> registered.isEmpty() || name in registered }
 
-        val coveredClassYaml = mutableSetOf<String>()
+        val covered = mutableSetOf<String>()
         val toolsets = catalog
           .filter { it.isCompatibleWith(driverType) && (it.alwaysEnabled || it.id in declaredIds) }
           .sortedWith(compareByDescending<ToolSetCatalogEntry> { it.alwaysEnabled }.thenBy { it.id })
           .map { entry ->
-            val classYaml = (entry.toolClasses.map { it.toolName().toolName } + entry.yamlToolNames.map { it.toolName })
-              .filter(keep)
-            coveredClassYaml += classYaml
+            val classBacked = entry.toolClasses.map { it.toolName().toolName }.filter(keep)
             val scripted = entry.scriptedToolNames.map { it.toolName }
+            covered += classBacked
+            covered += scripted
             RunToolSetDto(
               id = entry.id,
               description = entry.description,
               alwaysEnabled = entry.alwaysEnabled,
-              tools = (classYaml + scripted).distinct().sorted(),
+              tools = (classBacked + scripted).distinct().sorted(),
             )
           }
           // Drop toolsets that surface nothing for this run (e.g. framework-only sets whose
@@ -415,9 +418,10 @@ internal suspend fun buildRunToolsResponse(
           .toMutableList()
 
         // Tools that register for this target but belong to no declared/always toolset —
-        // typically the target's own `tools:` (custom/inline) entries. Surface them so the
-        // tab doesn't silently drop what the agent will actually have.
-        val other = (registered - coveredClassYaml).sorted()
+        // the target's own custom classes and the scripted tools its trailmap declares
+        // directly. Surface them so the tab doesn't silently drop what the agent will have.
+        val other = (registered + runCatching { targetScriptedToolNames(target, driverType) }.getOrDefault(emptySet()) - covered)
+          .sorted()
         if (other.isNotEmpty()) {
           toolsets += RunToolSetDto(
             id = "target-tools",
@@ -435,6 +439,23 @@ internal suspend fun buildRunToolsResponse(
         )
       }
     }
+
+/**
+ * The scripted tools [target] declares itself (its trailmap's `.ts` tools, outside any toolset)
+ * that a [driverType] session offers the agent: not opted out by `excluded_tools:`, not hidden by
+ * `surfaceToLlm`, and registering for the driver. The device is unknown here, so classifier
+ * requirements don't hide a tool.
+ */
+internal fun targetScriptedToolNames(target: TrailblazeHostAppTarget, driverType: TrailblazeDriverType): Set<String> {
+  val excluded = target.getExcludedToolSurfaceForDriver(driverType).scriptedToolNames.mapTo(mutableSetOf()) { it.toolName }
+  return target.getInlineScriptTools()
+    .filter { tool ->
+      val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
+      tool.name !in excluded && tool.surfaceToLlm && meta.surfaceToLlm &&
+        meta.shouldRegister(driverType, preferHostAgent = true)
+    }
+    .mapTo(mutableSetOf()) { it.name }
+}
 
 // Prefer the device's exact driver (e.g. ANDROID_ONDEVICE_ACCESSIBILITY); the platform is the
 // fallback for a caller who knows only a platform string, so the toolset-compatibility filter

@@ -114,7 +114,7 @@ This is the canonical action form. `<tool-name>` is one of the
 primitives or custom tools available on the connected device's driver.
 **Primitive names are platform-namespaced on web** (e.g. `web_click`,
 `web_type`, `web_scroll`, `web_verify_*`) and unprefixed on mobile
-(e.g. `tap`, `inputText`). Use `trailblaze toolbox` (below) to see
+(e.g. `tap`, `type`). Use `trailblaze toolbox` (below) to see
 the real names available for your device.
 
 `<arg-pairs>` are `key=value` pairs that vary by tool — `ref=e3` for

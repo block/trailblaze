@@ -4,7 +4,7 @@
 
 # `hideKeyboard`
 
-Hide the keyboard on the screen. Use after entering text into an input field.
+Hide the on-screen keyboard.
 
 ## Source
 

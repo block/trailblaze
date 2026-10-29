@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import xyz.block.trailblaze.util.Console
 
 object TrailblazeProcessBuilderUtils {
@@ -20,6 +21,9 @@ object TrailblazeProcessBuilderUtils {
    * being parsed. With false, stderr is discarded rather than left as an unread pipe, so a chatty
    * process can't block on a buffer nobody drains.
    *
+   * [loggedSecrets] are masked in the logged command line (the process still receives them), for
+   * callers whose argv carries a credential.
+   *
    * `@JvmOverloads` keeps the pre-[mergeErrorStream] bytecode signature so binary-linked consumers
    * of this published artifact (trailblaze-common) don't NoSuchMethodError when the slot is added.
    */
@@ -28,6 +32,7 @@ object TrailblazeProcessBuilderUtils {
     args: List<String>,
     workingDir: File? = null,
     mergeErrorStream: Boolean = true,
+    loggedSecrets: Collection<String> = emptyList(),
   ): ProcessBuilder = try {
     val processBuilder = ProcessBuilder(args)
     if (mergeErrorStream) {
@@ -55,13 +60,16 @@ object TrailblazeProcessBuilderUtils {
     Console.log(
       buildString {
         append("Starting process: ")
-        append(processBuilder.command().joinToString(" "))
+        append(redactSensitiveValuesIn(processBuilder.command().joinToString(" "), loggedSecrets))
       },
     )
 
     processBuilder
   } catch (e: Exception) {
-    throw RuntimeException("Failed to start process for $args. Error: ${e.message}", e)
+    throw RuntimeException(
+      redactSensitiveValuesIn("Failed to start process for $args. Error: ${e.message}", loggedSecrets),
+      e,
+    )
   }
 
   /**
@@ -93,7 +101,7 @@ object TrailblazeProcessBuilderUtils {
    *
    *  - **Cooperative cancellation.** `process.waitFor()` is wrapped in [runInterruptible],
    *    so coroutine cancellation (agent abort, driver disconnect, session shutdown)
-   *    translates into thread interruption and the subprocess gets [Process.destroyForcibly]
+   *    translates into thread interruption and the subprocess and its children are killed
    *    in the `finally`. The simple extension blocks indefinitely on `waitFor()` and
    *    leaves a hung subprocess running.
    *  - **Optional wall-clock timeout.** When [timeoutSeconds] is non-null, [Process.waitFor]
@@ -146,7 +154,7 @@ object TrailblazeProcessBuilderUtils {
         }
       }
       if (!finished) {
-        process.destroyForcibly()
+        process.destroyTreeForcibly()
       }
       // The reader exits on its own once the subprocess closes stdout (normal exit or
       // forced kill). Joining guarantees [outputLines] is fully populated before read.
@@ -156,7 +164,7 @@ object TrailblazeProcessBuilderUtils {
         exitCode = if (finished) process.exitValue() else -1,
       ) to !finished
     } finally {
-      if (process.isAlive) process.destroyForcibly()
+      if (process.isAlive) process.destroyTreeForcibly()
     }
   }
 

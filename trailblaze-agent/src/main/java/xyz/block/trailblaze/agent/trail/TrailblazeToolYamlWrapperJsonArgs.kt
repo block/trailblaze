@@ -10,6 +10,7 @@ import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Converts a [TrailblazeToolYamlWrapper] to a flat-shape [JsonObject] of executor arguments.
@@ -59,6 +60,7 @@ fun TrailblazeToolYamlWrapper.toJsonArgs(): JsonObject {
 /**
  * Tracks wrapper names whose encode has already produced a failure log so each offending
  * name logs at most once per process — same throttling pattern as
- * `encodeFailureKeysLogged` in `TrailblazeToolPayload.kt`.
+ * `encodeFailureKeysLogged` in `TrailblazeToolPayload.kt`. Concurrent: `trailblaze check` encodes
+ * recorded tool calls on several threads at once.
  */
-private val toJsonArgsFailureNamesLogged: MutableSet<String> = mutableSetOf()
+private val toJsonArgsFailureNamesLogged: MutableSet<String> = ConcurrentHashMap.newKeySet()

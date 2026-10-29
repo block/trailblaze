@@ -12,17 +12,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_hover")
-@LLMDescription(
-  """
-Hover over a web element identified by its element ID, ARIA descriptor, or CSS selector.
-Useful for triggering hover states, tooltips, or dropdown menus.
-""",
-)
+@LLMDescription("Hover over a web element, e.g. to open a tooltip or hover menu.")
 data class PlaywrightNativeHoverTool(
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'link \"About\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#my-id').",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('link \"About\"'), or 'css=<selector>'.")
   val ref: String? = null,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

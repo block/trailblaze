@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -87,22 +88,25 @@ class SessionLogSnapshot(
 
     /**
      * [recordTimestamp] moved onto the host clock, for a record that says it was stamped by a
-     * device. Keyed by the record's own `deviceName` exactly where a decoded log would be — tool
-     * logs — because a multi-device session binds devices with independent skews, and the
-     * session-wide minimum under-shifts every device but the furthest-behind one, which is enough
-     * to sort its tool before the host objective that launched it. Records with no parseable
-     * timestamp sort first, as before.
+     * device. Keyed by device exactly as a decoded log would be — its own `deviceName`, its tool's
+     * device by `traceId`, else the handover active when the host received it — because a multi-device session binds devices
+     * with independent skews, and the session-wide minimum under-shifts every device but the
+     * furthest-behind one, which is enough to sort its tool before the host objective that
+     * launched it. Records with no parseable timestamp sort first, as before.
      */
     private fun hostTimelineMs(record: JsonElement, offsets: TrailblazeDeviceClockOffsets?): Long? {
       val timestamp = recordTimestamp(record) ?: return null
       val obj = record as? JsonObject
       val isDeviceStamped = obj?.get("clock")?.jsonPrimitive?.content == TrailblazeClockDomain.DEVICE.wireName
       if (!isDeviceStamped || offsets == null) return timestamp.toEpochMilliseconds()
-      val offsetMs = if (obj.simpleClassName() == TOOL_LOG_CLASS_NAME) {
-        offsets.offsetMsForDeviceName(obj["deviceName"]?.jsonPrimitive?.contentOrNull)
-      } else {
-        offsets.sessionWideOffsetMs
-      }
+      val hostReceivedAtMs = obj["hostReceivedAt"]?.jsonPrimitive?.contentOrNull
+        ?.let { runCatching { Instant.parse(it).toEpochMilliseconds() }.getOrNull() }
+      val offsetMs = offsets.offsetMsForRecord(
+        isToolLog = obj.simpleClassName() == TOOL_LOG_CLASS_NAME,
+        deviceName = obj["deviceName"]?.jsonPrimitive?.contentOrNull,
+        traceId = (obj["traceId"] as? JsonPrimitive)?.contentOrNull,
+        hostReceivedAtMs = hostReceivedAtMs,
+      )
       return timestamp.toEpochMilliseconds() + offsetMs
     }
 

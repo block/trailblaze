@@ -693,6 +693,8 @@ function comparisonEventStreamsOf(session: { events?: EventStream[] | null; netw
  */
 export function timedEventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, TimedEventObject[]> {
   const byStream = new Map<string, TimedEventObject[]>();
+  // A multi-device session writes each device's network capture as `network.<device>`.
+  const isNetworkStream = (name: string) => name === 'network' || name.startsWith('network.');
   comparisonEventStreamsOf(session).forEach(({ name, stream }) => {
     const objects: TimedEventObject[] = stream.comparisonValues && stream.comparisonValues.length
       // Match the parsed network side-channel: its reduced records have no trustworthy event
@@ -708,9 +710,10 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
       // test here made a stream of `{"timeMs":1,"d":"ready"}` records read as empty.
       : (stream.events || []).map((event) => {
         try {
+          const value = JSON.parse(event.d) as unknown;
           return {
             t: typeof event.t === 'number' && Number.isFinite(event.t) ? event.t : null,
-            value: JSON.parse(event.d) as unknown,
+            value: isNetworkStream(name) ? withoutTrailPhase(value) : value,
           };
         } catch { return null; }
       }).filter((o): o is TimedEventObject => o != null);
@@ -718,10 +721,18 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
   });
   if (session.network && session.network.length) {
     // Parsed network side-channel records do not carry the event-stream clock. They remain fully
-    // diffable by content, but assigning them to a trail step would invent a relationship.
-    byStream.set('network', session.network.map((value) => ({ t: null, value })));
+    // diffable by content, but assigning them to a trail step would invent a relationship. The
+    // trail phase is a label on when, like the clock, so it is left out: older captures and the
+    // records a plugin formatter projects carry none, and identical traffic must not read as changed.
+    byStream.set('network', session.network.map((value) => ({ t: null, value: withoutTrailPhase(value) })));
   }
   return byStream;
+}
+
+function withoutTrailPhase(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('trailPhase' in value)) return value;
+  const { trailPhase: _trailPhase, ...rest } = value as Record<string, unknown>;
+  return rest;
 }
 
 export function eventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, unknown[]> {
@@ -939,28 +950,32 @@ const unquoted = (rendered: string): string => (rendered.length >= 2 && rendered
  */
 export function eventSummary(value: unknown, volatile: Set<string>, groupPath: string | null, keepNoisyFields = false): string {
   const crop = (line: string) => (line.length > MAX_SUMMARY_CHARS ? `${line.slice(0, MAX_SUMMARY_CHARS)}…` : line);
-  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value == null || typeof value !== 'object') {
     return crop(value == null ? 'null' : contentValue(value));
   }
-  const fields: Array<{ path: string; text: string; noisy: boolean }> = [];
-  const walk = (v: unknown, path: string, depth: number) => {
+  const fields: Array<{ path: string; text: string; noisy: boolean; item: number }> = [];
+  const walk = (v: unknown, path: string, depth: number, item: number) => {
     if (depth > MAX_DEPTH) return;
     const noisy = volatile.has(path) || ORDER_KEY_NAMES.has(path.toLowerCase());
     if (Array.isArray(v)) {
       // A summary says how big a list is; its items are payload, and payload lives in the detail.
-      fields.push({ path, text: `[${v.length}]`, noisy });
+      fields.push({ path, text: `[${v.length}]`, noisy, item });
     } else if (v != null && typeof v === 'object') {
-      Object.keys(v as Record<string, unknown>).forEach((key) => walk((v as Record<string, unknown>)[key], path ? `${path}.${key}` : key, depth + 1));
+      Object.keys(v as Record<string, unknown>).forEach((key) => walk((v as Record<string, unknown>)[key], path ? `${path}.${key}` : key, depth + 1, item));
     } else {
-      fields.push({ path, text: v == null ? 'null' : contentValue(v), noisy });
+      fields.push({ path, text: v == null ? 'null' : contentValue(v), noisy, item });
     }
   };
-  Object.keys(value as Record<string, unknown>).forEach((key) => walk((value as Record<string, unknown>)[key], key, 0));
+  // An event that is itself a list has no fields of its own: its items are the payload, walked
+  // under eventLines' `[]` paths so volatile item fields mask the same way.
+  if (Array.isArray(value)) value.forEach((entry, item) => walk(entry, '[]', 0, item));
+  else Object.keys(value as Record<string, unknown>).forEach((key) => walk((value as Record<string, unknown>)[key], key, 0, 0));
   const quiet = fields.filter((f) => !f.noisy);
   const shown = keepNoisyFields || !quiet.length ? fields : quiet;
   const lead = groupPath == null ? undefined : shown.find((f) => f.path === groupPath);
   const rest = shown.filter((f) => f !== lead);
-  const body = rest.map((f) => `${f.path}=${f.text}`).join(' ');
+  const named = (f: (typeof fields)[number]) => (f.path === '[]' ? f.text : `${f.path.replace(/^\[\]\./, '')}=${f.text}`);
+  const body = rest.map((f, at) => `${at && f.item !== rest[at - 1].item ? '· ' : ''}${named(f)}`).join(' ');
   return crop([lead ? unquoted(lead.text) : '', body].filter(Boolean).join('  ')) || '(no fields)';
 }
 

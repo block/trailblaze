@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
 /**
  * Pins the trailmap-bundled tool discovery added alongside the library/target trailmap
  * distinction. Tools that ship inside a trailmap at
- * `trails/config/trailmaps/<id>/{tools,shortcuts,trailheads}/<name>.<kind>.yaml`
+ * `trails/config/trailmaps/<id>/{tools,trailheads}/<name>.<kind>.yaml`
  * must surface in the same global tool registry that the flat
  * `trails/config/tools/` scan populates so toolset YAMLs and trail YAMLs can
  * reference them by bare id regardless of which trailmap ships them. Without this
@@ -22,7 +22,6 @@ import xyz.block.trailblaze.toolcalls.ToolName
  *
  * Each operational class lives under its own top-level dir:
  *  - `<trailmap>/tools/<name>.tool.yaml`
- *  - `<trailmap>/shortcuts/<name>.shortcut.yaml`
  *  - `<trailmap>/trailheads/<name>.trailhead.yaml`
  *
  * Subdirectories below each top-level dir are organizational only (any depth).
@@ -70,7 +69,9 @@ class ToolYamlLoaderTrailmapBundledTest {
   }
 
   @Test
-  fun `trailmap-bundled shortcut tool surfaces in discoverYamlDefinedTools when tools-mode`() {
+  fun `leftover shortcut YAML in a shortcuts dir is NOT picked up`() {
+    // Shortcuts were removed. A workspace that still ships `<trailmap>/shortcuts/*.shortcut.yaml`
+    // must keep loading, with the file ignored rather than registered as a tool.
     val root = newTempDir()
     val trailmapShortcutsDir = File(root, "trails/config/trailmaps/sample/shortcuts").apply { mkdirs() }
     File(trailmapShortcutsDir, "go_to_home.shortcut.yaml").writeText(
@@ -80,17 +81,12 @@ class ToolYamlLoaderTrailmapBundledTest {
       shortcut:
         from: app/elsewhere
         to: app/home
-      tools:
-        - tap: { selector: "home_button" }
       """.trimIndent(),
     )
 
     withClasspathRoot(root) {
-      val resolved = ToolYamlLoader.discoverYamlDefinedTools()
-      assertTrue(
-        ToolName("go_to_home") in resolved,
-        "Expected trailmap-bundled shortcut tool to surface, got: ${resolved.keys}",
-      )
+      assertEquals(emptyMap(), ToolYamlLoader.discoverAndLoadAll())
+      assertEquals(emptyMap(), ToolYamlLoader.discoverTrailheads())
     }
   }
 
@@ -119,7 +115,7 @@ class ToolYamlLoaderTrailmapBundledTest {
   @Test
   fun `trailmap-bundled YAML in unrecognized top-level subdirectory is NOT picked up as a tool`() {
     // The convention layout pins each operational class to a single top-level dir:
-    // `tools/`, `shortcuts/`, `trailheads/`. A YAML at some other path inside the trailmap
+    // `tools/`, `trailheads/`. A YAML at some other path inside the trailmap
     // tree (e.g. a misplaced waypoint file with a `.tool.yaml` suffix) must not register
     // as a tool — discovery is intentionally narrow.
     val root = newTempDir()
@@ -138,27 +134,22 @@ class ToolYamlLoaderTrailmapBundledTest {
   }
 
   @Test
-  fun `trailmap-bundled shortcut YAML under tools dir is NOT picked up`() {
-    // Each suffix has exactly one home: `.shortcut.yaml` belongs under `shortcuts/`,
-    // not `tools/`. Putting it in the wrong sibling dir causes discovery to silently
-    // ignore it — symmetric with the misplaced-misc-dir case above.
+  fun `trailmap-bundled trailhead YAML under tools dir is NOT picked up`() {
+    // Each suffix has exactly one home: `.trailhead.yaml` belongs under `trailheads/`,
+    // not `tools/`. Putting it in the wrong sibling dir causes discovery to skip it
+    // with a warning — symmetric with the misplaced-misc-dir case above.
     val root = newTempDir()
     val toolsDir = File(root, "trails/config/trailmaps/sample/tools").apply { mkdirs() }
-    File(toolsDir, "misplaced.shortcut.yaml").writeText(
+    File(toolsDir, "misplaced.trailhead.yaml").writeText(
       """
       id: misplaced
-      description: A shortcut placed in the wrong directory.
-      shortcut:
-        from: app/a
+      trailhead:
         to: app/b
-      tools:
-        - tap: { selector: "go" }
       """.trimIndent(),
     )
 
     withClasspathRoot(root) {
-      val resolved = ToolYamlLoader.discoverYamlDefinedTools()
-      assertEquals(emptyMap(), resolved)
+      assertEquals(emptyMap(), ToolYamlLoader.discoverTrailheads())
     }
   }
 
@@ -189,7 +180,7 @@ class ToolYamlLoaderTrailmapBundledTest {
   @Test
   fun `trailmap-bundled YAML at multiple depths under tools subdirectory all register`() {
     // Pin: depth is unrestricted under each top-level dir. A trailmap can use shallow
-    // (tools/web/, shortcuts/web/) and deep (tools/android/checkout/keypad/) nesting in
+    // (tools/web/, trailheads/web/) and deep (tools/android/checkout/keypad/) nesting in
     // the same trailmap — subdirs are organizational only.
     val root = newTempDir()
     val webDir = File(root, "trails/config/trailmaps/sample/tools/web").apply { mkdirs() }
@@ -216,8 +207,8 @@ class ToolYamlLoaderTrailmapBundledTest {
   }
 
   @Test
-  fun `trailmap-bundled shortcuts and trailheads in their own dirs surface alongside tools`() {
-    // Pin the cross-class layout: a single trailmap with all three operational classes,
+  fun `trailmap-bundled trailheads in their own dir surface alongside tools`() {
+    // Pin the cross-class layout: a single trailmap with both operational classes,
     // each in its own top-level dir, all register together.
     val root = newTempDir()
     val trailmapDir = File(root, "trails/config/trailmaps/multi").apply { mkdirs() }
@@ -235,18 +226,6 @@ class ToolYamlLoaderTrailmapBundledTest {
       class: xyz.block.trailblaze.config.FakeToolYamlLoaderTool
       """.trimIndent(),
     )
-    val shortcutsDir = File(trailmapDir, "shortcuts/web").apply { mkdirs() }
-    File(shortcutsDir, "open_form.shortcut.yaml").writeText(
-      """
-      id: multi_open_form
-      description: Open the form.
-      shortcut:
-        from: app/home
-        to: app/form
-      tools:
-        - tap: { selector: "form_button" }
-      """.trimIndent(),
-    )
     val trailheadsDir = File(trailmapDir, "trailheads/android").apply { mkdirs() }
     File(trailheadsDir, "launch.trailhead.yaml").writeText(
       """
@@ -259,18 +238,16 @@ class ToolYamlLoaderTrailmapBundledTest {
 
     withClasspathRoot(root) {
       val classBacked = ToolYamlLoader.discoverAndLoadAll()
-      val yamlDefined = ToolYamlLoader.discoverYamlDefinedTools()
       assertTrue(ToolName("multi_save") in classBacked, "tool: $classBacked")
       assertTrue(ToolName("multi_launch") in classBacked, "trailhead: $classBacked")
-      assertTrue(ToolName("multi_open_form") in yamlDefined, "shortcut: $yamlDefined")
     }
   }
 
   @Test
-  fun `metadata-only trailhead (no body) surfaces in discoverShortcutsAndTrailheads but not as a tool`() {
+  fun `metadata-only trailhead (no body) surfaces in discoverTrailheads but not as a tool`() {
     // A body-less *.trailhead.yaml attaches trailhead metadata to a tool registered elsewhere by
     // the same id — e.g. a scripted `.ts` tool delivered via a target's `target.tools:`, which has
-    // no Kotlin class for a `class:` body. It must NOT be instantiated as a class/yaml tool (there's
+    // no Kotlin class for a `class:` body. It must NOT be instantiated as a class tool (there's
     // nothing to instantiate), but MUST surface in nav-metadata discovery so the picker / graph /
     // toolbox still treat the underlying tool as a trailhead.
     val root = newTempDir()
@@ -293,12 +270,10 @@ class ToolYamlLoaderTrailmapBundledTest {
 
     withClasspathRoot(root) {
       val classBacked = ToolYamlLoader.discoverAndLoadAll()
-      val yamlDefined = ToolYamlLoader.discoverYamlDefinedTools()
-      val navMeta = ToolYamlLoader.discoverShortcutsAndTrailheads()
+      val navMeta = ToolYamlLoader.discoverTrailheads()
 
       val name = ToolName("scripted_launchAppSignedIn")
       assertTrue(name !in classBacked, "metadata-only trailhead must not register as a class tool: $classBacked")
-      assertTrue(name !in yamlDefined, "metadata-only trailhead must not register as a yaml tool: $yamlDefined")
       assertTrue(name in navMeta, "metadata-only trailhead must surface in nav-metadata discovery: ${navMeta.keys}")
       assertEquals(ToolYamlConfig.Mode.METADATA, navMeta.getValue(name).mode)
       assertEquals("scripted/android/home", navMeta.getValue(name).trailhead?.to)

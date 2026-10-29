@@ -197,13 +197,17 @@ class McpSubprocessSessionConnectCleanupTest {
    * it. Every other dead-subprocess case here is satisfied by the organic EOF path, so deleting the
    * lever would leave them green — this one goes red.
    *
-   * The fixture works by DELAYING the organic path, not removing it. `sh -c 'sleep 2 & exit 0'` exits
-   * immediately, so `onExit()` fires at once, but the backgrounded grandchild inherits the stdout
-   * pipe's write end and holds it open — so for the next 2s the process is dead with no EOF in sight,
-   * `initialize` is never answered, and the await just parks. The lever claims that park after its
-   * ~250ms grace, roughly 8x sooner than the deferred EOF at 2s, which makes
-   * [McpSubprocessExitedDuringHandshakeException] the outcome and pins the exit code (0 — a clean exit
-   * that never served MCP) too. Verified by mutation: disable the lever and this is the only test in
+   * The fixture works by DELAYING the organic path, not removing it. [STDIO_HOLDING_EXIT]
+   * exits as soon as it has read the client's `initialize`, so `onExit()` fires then, but the
+   * backgrounded grandchild inherits the stdout pipe's write end and holds it open — so for the
+   * next 2s the process is dead with no EOF in sight, `initialize` is never answered, and the await
+   * just parks. Exiting only after that read is load-bearing: once the child exits, the JDK closes
+   * the parent's stdin and drains stdout unless a read is already blocked on it, so a child that
+   * exits before the client has written and started reading fails the connect with "Connection
+   * closed" instead. Exiting at once lost that race on every attempt on a busy Linux CI agent.
+   * The lever claims that park after its ~250ms grace, roughly 8x sooner than the deferred EOF at
+   * 2s, which makes [McpSubprocessExitedDuringHandshakeException] the outcome and pins the exit code
+   * (0 — a clean exit that never served MCP) too. Verified by mutation: disable the lever and this is the only test in
    * the class that goes red — it then burns all five attempts and reports `McpException` once each
    * grandchild finally releases stdout at 2s.
    *
@@ -211,7 +215,7 @@ class McpSubprocessSessionConnectCleanupTest {
    * timeout racer never enters the picture.
    *
    * The retry is on FIXTURE SETUP, not on the assertion. Two things can cost an attempt, and neither
-   * is a defect in the lever: `sleep 2 &` is a fork the shell can lose (measured at roughly 1 in 100,
+   * is a defect in the lever: the backgrounded `sleep` is a fork the shell can lose (measured at roughly 1 in 100,
    * the grandchild never takes the descriptor, EOF arrives at once), and a badly starved runner could
    * in principle spend the whole 2s window between the grace elapsing and the CAS. Either way the
    * attempt is discarded and the fixture is rebuilt. A real lever regression misses every attempt, so
@@ -222,14 +226,14 @@ class McpSubprocessSessionConnectCleanupTest {
     runBlocking {
       var lastOutcome: Throwable? = null
       repeat(FIXTURE_ATTEMPTS) {
-        val process = ProcessBuilder(binSh!!.absolutePath, "-c", "sleep 2 & exit 0")
+        val process = ProcessBuilder(binSh!!.absolutePath, "-c", STDIO_HOLDING_EXIT)
           .redirectErrorStream(false)
           .start()
         try {
           val spawned = SpawnedProcess(
             process = process,
             scriptFile = binSh,
-            argv = listOf(binSh.absolutePath, "-c", "sleep 2 & exit 0"),
+            argv = listOf(binSh.absolutePath, "-c", STDIO_HOLDING_EXIT),
           )
           val capture = StderrCapture()
 
@@ -263,7 +267,7 @@ class McpSubprocessSessionConnectCleanupTest {
       throw AssertionError(
         "The exit lever never claimed the handshake in $FIXTURE_ATTEMPTS attempts — last outcome was " +
           "${lastOutcome?.let { it::class.simpleName }}: ${lastOutcome?.message}. Either the lever " +
-          "regressed, or `sleep 2 &` stopped holding the stdout descriptor on this platform.",
+          "regressed, or the backgrounded `sleep` stopped holding the stdio descriptors on this platform.",
       )
     }
   }
@@ -346,6 +350,9 @@ class McpSubprocessSessionConnectCleanupTest {
      * still failing fast when the lever itself is gone (every attempt misses, not just one).
      */
     const val FIXTURE_ATTEMPTS = 5
+
+    /** Exits once it reads one line, leaving a grandchild that holds stdout open for 2s. */
+    const val STDIO_HOLDING_EXIT = "sleep 2 & read -r _; exit 0"
 
     /** First of [candidates] that exists and is executable, or null if none (e.g. Windows). */
     fun firstExecutable(vararg candidates: String): File? =

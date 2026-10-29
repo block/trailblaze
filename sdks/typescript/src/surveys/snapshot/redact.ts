@@ -65,7 +65,15 @@ const HEADER = new RegExp(`(?<![A-Za-z0-9_])("?(?:${HEADER_WORDS})"?\\s*[=:]\\s*
 // credential in a field and miss it in the summary line printed from that field. What still does
 // not match is a credential word with something after it — `"tokens":` and `inputTokens=5` need the
 // separator to come straight after the word, and it does not.
-const INLINE = new RegExp(`("?[A-Za-z0-9_]*(?:${WORDS})"?)(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s,)}\\]]+)`, "gi");
+//
+// The name is read as one whole word-character run, then checked for ending in a credential word.
+// `[A-Za-z0-9_]*(?:WORDS)` matches the same names, but the engine tries it from every character of
+// a run and backs up through the rest of the run each time. A long base64 or hex body made that
+// quadratic, and it was most of a snapshot's build time. The lookahead + backreference takes the
+// run once with no backing up, and the lookbehind refuses a start inside a run. A name found
+// mid-run would also be found from the run's start, which the engine reaches first, so the result
+// is the same.
+const INLINE = new RegExp(`("?(?<![A-Za-z0-9_])(?=([A-Za-z0-9_]*))\\2(?<=(?:${WORDS}))"?)(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s,)}\\]]+)`, "gi");
 // `and password '12345678'` — no separator at all, which is how a trail step written in English
 // names one. Only a quoted value counts here, so "the password is wrong" keeps its sentence.
 const QUOTED = new RegExp(`(?<![A-Za-z0-9_])((?:${WORDS})\\s+(?:is\\s+|of\\s+)?)(['"])[^'"]*\\2`, "gi");
@@ -75,13 +83,29 @@ const QUOTED = new RegExp(`(?<![A-Za-z0-9_])((?:${WORDS})\\s+(?:is\\s+|of\\s+)?)
 // eating every sentence that mentions a password, which would make the summaries unreadable.
 const BARE = new RegExp(`(?<![A-Za-z0-9_])((?:${WORDS})\\s+(?:is\\s+|was\\s+|of\\s+)?)((?=\\S*\\d)[^\\s,;)}\\]'"]{4,})`, "gi");
 
+/**
+ * Every text rule, in the order they run. Each must need a [REDACTION_TRIGGERS] term to match:
+ * `redactText` skips them all on text with none of those words, so a rule that could match without
+ * one (a bare `eyJ…` matcher, say) would silently never run. A test holds every rule here to that.
+ */
+export const REDACTION_RULES: ReadonlyArray<readonly [RegExp, (...m: string[]) => string]> = [
+  [PAIR, (_m, k) => `${k}"${REDACTED}"`],
+  [HEADER, (_m, k) => `${k}"${REDACTED}"`],
+  [INLINE, (_m, k, _run, sep) => `${k}${sep}"${REDACTED}"`],
+  [QUOTED, (_m, lead, q) => `${lead}${q}${REDACTED}${q}`],
+  [BARE, (_m, lead) => `${lead}${REDACTED}`],
+];
+
+/** The word lists every rule is built around. */
+export const REDACTION_TRIGGERS: ReadonlyArray<string> = [WORDS, HEADER_WORDS];
+
+// A line with none of the trigger words is left as it is without running the rules. Most lines of
+// a device log have none, and five scans of each of 100,000 lines was most of the time a
+// session's snapshot took.
+const ANY_WORD = new RegExp(REDACTION_TRIGGERS.join("|"), "i");
+
 /** The same for a line of text, where the credential is spelled out rather than held in a field. */
 export function redactText(s: string): string {
-  return s
-    .replace(PAIR, `$1"${REDACTED}"`)
-    .replace(HEADER, `$1"${REDACTED}"`)
-    .replace(INLINE, (_m, k: string, sep: string) => `${k}${sep}"${REDACTED}"`)
-    .replace(QUOTED, (_m, lead: string, q: string) => `${lead}${q}${REDACTED}${q}`)
-    .replace(BARE, (_m, lead: string) => `${lead}${REDACTED}`);
+  if (!ANY_WORD.test(s)) return s;
+  return REDACTION_RULES.reduce((text, [rule, replace]) => text.replace(rule, replace), s);
 }
-

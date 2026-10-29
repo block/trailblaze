@@ -39,6 +39,10 @@ SENSITIVE_RESPONSE_HEADERS = {"set-cookie"}
 
 INLINE_BODY_MAX_BYTES = 4 * 1024
 BODY_TRUNCATE_BYTES = 1024 * 1024
+# Mirrors SessionCaptureHealth.markerFileName("network"): one line naming what this stream lost.
+CAPTURE_INCOMPLETE_MARKER = "capture-incomplete.network.txt"
+# Mirrors MitmproxyAndroidNetworkCaptureActivator.CAPTURE_INCOMPLETE_LINE_PREFIX.
+CAPTURE_INCOMPLETE_LINE_PREFIX = "[mitm-capture] capture-incomplete: "
 
 # Content types we treat as "likely text" and therefore safe to inline as a string.
 _TEXT_CONTENT_HINTS = (
@@ -171,24 +175,49 @@ class _Sink:
         self.ndjson_path = os.path.join(session_dir, "network.ndjson")
         self.bodies_dir = os.path.join(session_dir, "bodies")
         self._lock = threading.Lock()
+        self._loss_reported = False
         os.makedirs(session_dir, exist_ok=True)
 
     def write(self, event: dict[str, Any], sidecars: list[tuple[str, bytes]]) -> None:
         with self._lock:
-            session_root = os.path.realpath(self.session_dir)
-            for rel_path, payload in sidecars:
-                abs_path = os.path.realpath(os.path.join(self.session_dir, rel_path))
-                # Defense in depth: rel_path is built from a sanitized event_id (see
-                # decide_body), but never let a sidecar escape the session dir even if a
-                # future caller passes an unsanitized path.
-                if abs_path != session_root and not abs_path.startswith(session_root + os.sep):
-                    print(f"[mitm-capture] refusing to write sidecar outside session dir: {rel_path}", file=sys.stderr)
-                    continue
-                os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-                with open(abs_path, "wb") as fh:
-                    fh.write(payload)
-            with open(self.ndjson_path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(event, separators=(",", ":")) + "\n")
+            try:
+                self._write_locked(event, sidecars)
+            except OSError as e:
+                # The event is lost. Say so where event queries look (SessionCaptureHealth), so an
+                # absence check doesn't read a dropped record as one that never happened.
+                print(f"[mitm-capture] could not write event {event.get('id')}: {e}", file=sys.stderr)
+                self._mark_incomplete(f"proxy network capture: a write failed ({e.strerror or e})")
+
+    def _mark_incomplete(self, reason: str) -> None:
+        # Reported on the output stream first: the host reads it in memory, so the loss still
+        # counts when the disk that failed this write can't take the marker either.
+        if not self._loss_reported:
+            self._loss_reported = True
+            print(f"{CAPTURE_INCOMPLETE_LINE_PREFIX}{reason}", file=sys.stderr, flush=True)
+        marker = os.path.join(self.session_dir, CAPTURE_INCOMPLETE_MARKER)
+        if os.path.exists(marker):
+            return  # the first loss is the one reported
+        try:
+            with open(marker, "w", encoding="utf-8") as fh:
+                fh.write(reason + "\n")
+        except OSError as e:
+            print(f"[mitm-capture] could not write {CAPTURE_INCOMPLETE_MARKER}: {e}", file=sys.stderr)
+
+    def _write_locked(self, event: dict[str, Any], sidecars: list[tuple[str, bytes]]) -> None:
+        session_root = os.path.realpath(self.session_dir)
+        for rel_path, payload in sidecars:
+            abs_path = os.path.realpath(os.path.join(self.session_dir, rel_path))
+            # Defense in depth: rel_path is built from a sanitized event_id (see
+            # decide_body), but never let a sidecar escape the session dir even if a
+            # future caller passes an unsanitized path.
+            if abs_path != session_root and not abs_path.startswith(session_root + os.sep):
+                print(f"[mitm-capture] refusing to write sidecar outside session dir: {rel_path}", file=sys.stderr)
+                continue
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as fh:
+                fh.write(payload)
+        with open(self.ndjson_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, separators=(",", ":")) + "\n")
 
 
 def _headers_to_dict(headers: Any) -> dict[str, str]:

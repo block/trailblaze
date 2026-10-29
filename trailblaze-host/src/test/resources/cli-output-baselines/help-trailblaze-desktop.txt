@@ -6,10 +6,9 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze desktop [-hV] [COMMAND]
-Internal Compose desktop driver — snapshot/drive the running Trailblaze desktop
-window.
+Internal Compose desktop driver — snapshot/drive a running Compose Desktop app.
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
-  snapshot  Capture a screen-state snapshot of the running Trailblaze desktop
-              window via the Compose RPC server.
+  snapshot  Capture a screen-state snapshot of a running Compose Desktop app
+              via its Compose RPC server.

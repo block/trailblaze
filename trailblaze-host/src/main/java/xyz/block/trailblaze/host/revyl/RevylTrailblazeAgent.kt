@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.revyl
 
+import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.BaseTrailblazeAgent
@@ -8,6 +9,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.revyl.RevylScreenState
@@ -42,6 +44,8 @@ class RevylTrailblazeAgent(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
   override val trailblazeToolRepo: TrailblazeToolRepo? = null,
+  /** Where trailhead events are written and queried; null leaves them off. */
+  private val sessionDirProvider: ((SessionId) -> File)? = null,
 ) : BaseTrailblazeAgent() {
 
   override fun buildExecutionContext(
@@ -66,6 +70,7 @@ class RevylTrailblazeAgent(
       // bridge throws "toolRepo not wired" on every Kotlin-side call site in a
       // Revyl-driven session.
       toolRepo = trailblazeToolRepo,
+      sessionDirProvider = sessionDirProvider,
     )
   }
 

@@ -2,7 +2,6 @@ package xyz.block.trailblaze.host.devices
 
 import device.SimctlIOSDevice
 import ios.LocalIOSDevice
-import ios.devicectl.DeviceControlIOSDevice
 import ios.xctest.XCTestIOSDevice
 import kotlinx.coroutines.runBlocking
 import maestro.device.DeviceOrientation
@@ -23,8 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.io.File
-import java.nio.file.Paths
-import kotlin.io.path.pathString
+import java.util.concurrent.ConcurrentHashMap
 import xyz.block.trailblaze.util.Console
 
 internal object HostIosDriverFactory {
@@ -84,6 +82,18 @@ internal object HostIosDriverFactory {
   fun driverWrapperKey(appTarget: TrailblazeHostAppTarget?): String? =
     appTarget?.takeIf { it.hasCustomIosDriver }?.id
 
+  /** Each device's current target app ids, read by its [KeyboardCheckAppList] on every check. */
+  private val keyboardCheckAppIds = ConcurrentHashMap<String, List<String>>()
+
+  /**
+   * Points [deviceId]'s keyboard check at [appTarget]'s apps. A cached driver is shared by every
+   * target without a custom iOS driver, so a switch between two of them keeps the driver and must
+   * still move the check to the new target's apps.
+   */
+  fun keyboardCheckTargetSelected(deviceId: String, appTarget: TrailblazeHostAppTarget?) {
+    keyboardCheckAppIds[deviceId] = appTarget?.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS).orEmpty()
+  }
+
   /**
    * Stops the XCTest runner hosts this JVM started when it exits. Without it every `trailblaze stop`
    * leaves one `xcodebuild` per simulator behind, and the next daemon's runner is killed by it.
@@ -111,8 +121,15 @@ internal object HostIosDriverFactory {
     deviceType: Device.DeviceType,
     appTarget: TrailblazeHostAppTarget? = null,
   ): Driver {
+    // Before anything touches the device's port or runner processes.
+    if (deviceType != Device.DeviceType.SIMULATOR) {
+      throw UnsupportedOperationException(
+        "Only iOS simulators are supported; $deviceId is a $deviceType device.",
+      )
+    }
     val targetPort = driverHostPort
     val wrapperKey = driverWrapperKey(appTarget)
+    keyboardCheckTargetSelected(deviceId, appTarget)
     var created = false
     val driver = drivers.acquireOrCreate(
       key = deviceId,
@@ -177,7 +194,6 @@ internal object HostIosDriverFactory {
           targetPort = targetPort,
           reinstallDriver = reinstall,
           platformConfiguration = platformConfiguration,
-          deviceType = deviceType,
           appTarget = appTarget,
         ).also { portOwners.connected(port = targetPort, deviceId = deviceId) }
       } catch (e: Throwable) {
@@ -196,64 +212,22 @@ internal object HostIosDriverFactory {
     targetPort: Int,
     reinstallDriver: Boolean,
     platformConfiguration: WorkspaceConfig.PlatformConfiguration?,
-    deviceType: Device.DeviceType,
     appTarget: TrailblazeHostAppTarget?,
   ): Driver {
-    val iOSDeviceType = when (deviceType) {
-      Device.DeviceType.REAL -> IOSDeviceType.REAL
-      Device.DeviceType.SIMULATOR -> IOSDeviceType.SIMULATOR
-      else -> {
-        throw UnsupportedOperationException("Unsupported device type $deviceType for iOS platform")
-      }
-    }
-    val iOSDriverConfig = when (deviceType) {
-      Device.DeviceType.REAL -> {
-        val maestroDirectory = Paths.get(System.getProperty("user.home"), ".maestro")
-        val driverPath = maestroDirectory.resolve("maestro-iphoneos-driver-build").resolve("driver-iphoneos")
-          .resolve("Build").resolve("Products")
-        IOSDriverConfig(
-          prebuiltRunner = false,
-          sourceDirectory = driverPath.pathString,
-          context = Context.CLI,
-          snapshotKeyHonorModalViews = platformConfiguration?.ios?.snapshotKeyHonorModalViews,
-        )
-      }
-
-      Device.DeviceType.SIMULATOR -> {
-        IOSDriverConfig(
-          prebuiltRunner = false,
-          sourceDirectory = "driver-iPhoneSimulator",
-          context = Context.CLI,
-          snapshotKeyHonorModalViews = platformConfiguration?.ios?.snapshotKeyHonorModalViews,
-        )
-      }
-
-      else -> throw UnsupportedOperationException("Unsupported device type $deviceType for iOS platform")
-    }
-
-    val deviceController = when (deviceType) {
-      Device.DeviceType.REAL -> {
-        val device = util.LocalIOSDevice().listDeviceViaDeviceCtl(deviceId)
-        val deviceCtlDevice = DeviceControlIOSDevice(deviceId = device.identifier)
-        deviceCtlDevice
-      }
-
-      Device.DeviceType.SIMULATOR -> {
-        val simctlIOSDevice = SimctlIOSDevice(
-          deviceId = deviceId,
-        )
-        simctlIOSDevice
-      }
-
-      else -> throw UnsupportedOperationException("Unsupported device type $deviceType for iOS platform")
-    }
+    val iOSDriverConfig = IOSDriverConfig(
+      prebuiltRunner = false,
+      sourceDirectory = "driver-iPhoneSimulator",
+      context = Context.CLI,
+      snapshotKeyHonorModalViews = platformConfiguration?.ios?.snapshotKeyHonorModalViews,
+    )
+    val deviceController = SimctlIOSDevice(deviceId = deviceId)
 
     val xcTestInstaller = LocalXCTestInstaller(
       deviceId = deviceId,
       host = defaultXctestHost,
       defaultPort = targetPort,
       reinstallDriver = reinstallDriver,
-      deviceType = iOSDeviceType,
+      deviceType = IOSDeviceType.SIMULATOR,
       iOSDriverConfig = iOSDriverConfig,
       deviceController = deviceController,
       // Maestro 2.6.1 added a required logsDir for the XCUITest (xcodebuild) subprocess logs.
@@ -274,7 +248,9 @@ internal object HostIosDriverFactory {
     val xcTestDevice = XCTestIOSDevice(
       deviceId = deviceId,
       client = xcTestDriverClient,
-      getInstalledApps = { XCRunnerCLIUtils().listApps(deviceId) },
+      getInstalledApps = KeyboardCheckAppList(
+        preferredAppIds = { keyboardCheckAppIds[deviceId].orEmpty() },
+      ) { XCRunnerCLIUtils().listApps(deviceId) },
     )
 
     val baseIosDriver = IOSDriver(

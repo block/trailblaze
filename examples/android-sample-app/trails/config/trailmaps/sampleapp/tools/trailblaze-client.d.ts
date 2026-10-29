@@ -5,6 +5,18 @@
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
     /**
+     * Confirm text IS on screen by running assertNotVisibleWithText on it and expecting that check to
+     * fail. Passes when assertNotVisibleWithText finds the text; fails when it reports the text absent.
+     */
+    sampleapp_assertTextStillShown: {
+      args: {
+        /** The element's full text, copied exactly from the screen. */
+        text: string;
+      };
+      result: string;
+    };
+
+    /**
      * Launch the Sample App, open the Loading demo, start the load, and wait for "Content Loaded" to
      * appear. Lands the trail on the loaded-content screen regardless of which delay (1s / 3s / 6s) is
      * selected, because it waits for the result rather than sleeping a fixed amount of time.

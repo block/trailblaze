@@ -35,5 +35,5 @@ exercise the change; before deleting one, confirm nothing invokes it.
                          the workspace's effective trails directory
                          (TRAILBLAZE_TRAILS_DIR, the workspace `trails:`
                          declaration, or the configured default) plus any extra
-                         roots configured in Trail Runner.
+                         roots configured in Trailblaze App.
   -V, --version        Print version information and exit.

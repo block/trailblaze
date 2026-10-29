@@ -12,6 +12,7 @@ import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.report.StoryboardHtmlBuilder
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Renders a session as a single "storyboard" image — a CSS grid of every step's
@@ -117,7 +118,7 @@ object ReportStoryboardExporter {
     val ownsTmpHtml = outputHtml == null
     htmlFile.writeText(prepared.html)
     if (outputHtml != null) {
-      Console.info("Storyboard HTML: file://${outputHtml.absolutePath}")
+      Console.info("Storyboard HTML: ${outputHtml.fileUrl()}")
     }
 
     try {

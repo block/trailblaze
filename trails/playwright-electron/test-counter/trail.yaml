@@ -18,9 +18,11 @@ trail:
   - step: "Verify the counter value shows \"0\""
     recording:
       web:
-        - web_verifyTextVisible:
-            text: 'Current value: 0'
-            reasoning: 'The objective requires verifying that the counter value displays ''0''. The paragraph element [e9] clearly shows ''Current value: 0'', which matches the expected format. This verification directly addresses the objective.'
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: 'Current value: 0'
 
   - step: "Click the \"Increment\" button (the + button) three times"
     recording:
@@ -47,9 +49,11 @@ trail:
   - step: "Verify the counter value shows \"3\""
     recording:
       web:
-        - web_verifyTextVisible:
-            text: 'Current value: 3'
-            reasoning: 'The objective requires verifying that the counter value shows ''3''. The paragraph element [e9] contains the text "Current value: 3" as indicated in the view hierarchy. Verifying that this text is visible will confirm that the objective has been met.'
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: 'Current value: 3'
 
   - step: "Click the \"Decrement\" button (the - button) once"
     recording:
@@ -64,9 +68,11 @@ trail:
   - step: "Verify the counter value shows \"2\""
     recording:
       web:
-        - web_verifyTextVisible:
-            text: 'Current value: 2'
-            reasoning: 'The objective is to verify that the counter value shows ''2''. The screen shows a paragraph with the text ''Current value: 2'', so verifying this text will directly satisfy the objective.'
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: 'Current value: 2'
 
   - step: "Click the \"Reset\" button"
     recording:
@@ -81,6 +87,8 @@ trail:
   - step: "Verify the counter value shows \"0\""
     recording:
       web:
-        - web_verifyTextVisible:
-            text: 'Current value: 0'
-            reasoning: 'The objective requires verifying that the counter value is ''0''. The paragraph element [e9] displays the text ''Current value: 0'', so I will verify this text is visible on the screen.'
+        - web_verifyElementVisible:
+            nodeSelector:
+              web:
+                ariaRole: paragraph
+                ariaNameRegex: 'Current value: 0'

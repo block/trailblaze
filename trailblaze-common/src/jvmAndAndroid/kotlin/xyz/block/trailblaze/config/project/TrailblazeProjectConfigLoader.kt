@@ -4,6 +4,7 @@ import java.io.File
 import java.io.IOException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -742,9 +743,9 @@ object TrailblazeProjectConfigLoader {
   ): ResolvedTrailmap {
     // Auto-discover every scripted-tool descriptor under `<trailmap>/tools/` and index it by the
     // `name:` field declared inside (or by each entry's `name:` for multi-tool descriptors).
-    // `target.tools:` then names which of those discovered tools the target exposes — names,
-    // not paths. The registry also serves the duplicate-name guard so two files declaring the
-    // same tool name fail loudly with both file paths in the error.
+    // Every discovered tool is on the target; `target.tools:` and `platforms.<p>.tools:` may still
+    // name them (names, not paths). The registry also serves the duplicate-name guard so two files
+    // declaring the same tool name fail loudly with both file paths in the error.
     val discovery = discoverTrailmapScriptedTools(loadedManifest, scriptedToolEnrichment)
     val scriptedToolRegistry = discovery.registry
 
@@ -868,6 +869,20 @@ object TrailblazeProjectConfigLoader {
         platformConfig.copy(tools = retainedNames)
       }
 
+    // Every other scripted tool under `<trailmap>/tools/` is on the target too — listing it above
+    // is optional. Nothing is pruned here: each session already registers a tool only where its
+    // `supportedPlatforms` / `supportedDrivers` allow and `excluded_tools:` doesn't remove it.
+    // Appended after the listed tools in name order. Mirror of the build-time generator's step 2a.
+    if (loadedManifest.manifest.target != null) {
+      scriptedToolRegistry.keys
+        .filter { it !in mergedScriptedTools }
+        .sorted()
+        .forEach { toolName ->
+          resolveScriptedToolConfigsByName(toolName, scriptedToolRegistry, loadedManifest.source)
+            ?.forEach { cfg -> mergedScriptedTools.putIfAbsent(cfg.name, cfg) }
+        }
+    }
+
     val resolvedScriptedTools: List<InlineScriptToolConfig> = mergedScriptedTools.values.toList()
     val resolvedSystemPrompt: String? =
       loadedManifest.manifest.target?.systemPromptFile?.let { path ->
@@ -885,13 +900,12 @@ object TrailblazeProjectConfigLoader {
       ?.let { config -> if (rewrittenPlatforms != null) config.copy(platforms = rewrittenPlatforms) else config }
     val resolvedToolsets = discoverTrailmapToolsets(loadedManifest)
 
-    // Operational tool YAMLs auto-discovered from three sibling directories, one per
+    // Operational tool YAMLs auto-discovered from two sibling directories, one per
     // operational class:
     //   - `<trailmap>/tools/**.tool.yaml`
-    //   - `<trailmap>/shortcuts/**.shortcut.yaml`
     //   - `<trailmap>/trailheads/**.trailhead.yaml`
     // Each dir is walked recursively at any depth — subdirs are organizational only
-    // (e.g. `shortcuts/web/`, `trailheads/android/`), matching the existing
+    // (e.g. `tools/web/`, `trailheads/android/`), matching the existing
     // `<trailmap>/waypoints/` convention. Library-trailmap contract: a trailmap with no `target:`
     // block cannot ship trailhead tools (a trailhead bootstraps to a known waypoint).
     // Enforced here because the trailhead block lives inside the tool YAML, not the
@@ -1128,8 +1142,8 @@ object TrailblazeProjectConfigLoader {
   private const val TRAILMAP_SCRIPTED_TOOLS_DIR = "tools"
 
   /**
-   * Line-anchored regex matching the `export const <name> = trailblaze.tool<…>(…)` binding
-   * shape the analyzer's [extract-tool-defs.mjs] shim extracts. The `(?m)` flag scopes
+   * Line-anchored regex matching the `export const <name> = trailblaze.tool<…>(…)` (or
+   * `trailblaze.trailhead<…>(…)`) binding shape the analyzer's [extract-tool-defs.mjs] shim extracts. The `(?m)` flag scopes
    * `^` to line starts, and the optional leading whitespace lets indented modules match —
    * but a `//`-prefixed comment line can't, since `//` doesn't satisfy `\s*export`. The
    * `[<(]` tail accepts both the typed (`<I>(...)`) and the untyped (`(...)`) overloads.
@@ -1140,7 +1154,7 @@ object TrailblazeProjectConfigLoader {
    * surface a "no typed declaration found" failure on every workspace compile.
    */
   private val TYPED_TOOL_BINDING_PATTERN =
-    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.tool\s*[<(]""")
+    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
 
   /**
    * Filename suffixes that mark an operational tool YAML under `<trailmap>/tools/` rather than a
@@ -1155,9 +1169,10 @@ object TrailblazeProjectConfigLoader {
    */
   val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
     ".tool.yaml",
-    ".shortcut.yaml",
     ".trailhead.yaml",
     ".waypoint.yaml",
+    // Shortcuts were removed; a leftover file is skipped, never decoded as a descriptor.
+    ".shortcut.yaml",
   )
 
   /**
@@ -1454,14 +1469,9 @@ object TrailblazeProjectConfigLoader {
       if (path.endsWith(".test.ts")) return@forEach
       if (path in yamlCoveredScriptPaths) return@forEach
       val content = loadedManifest.source.readSibling(path) ?: return@forEach
-      // A descriptor-less `.ts` is a meta-only tool source only when it declares EXACTLY ONE typed
-      // export. Zero = a helper/shared module. Two-or-more = a multi-export file the meta-only path
-      // can't disambiguate (it needs a YAML `tools:` descriptor naming the exports), so skip it here
-      // rather than letting enrichment throw and fail the whole workspace; a `target.tools:`
-      // reference to such a name still surfaces the located UnknownScriptedToolName. Recursive
-      // discovery now reaches subdir reference examples the old flat walk never saw (e.g. the
-      // android-sample-app `host-tools/` / `quickjs-tools/` multi-export examples).
-      if (TYPED_TOOL_BINDING_PATTERN.findAll(content).count() != 1) return@forEach
+      // No typed export = a helper/shared module, not a tool source. A file with several exports
+      // registers every one of them, each under its own export name.
+      if (!TYPED_TOOL_BINDING_PATTERN.containsMatchIn(content)) return@forEach
       val basename = path.substringAfterLast('/')
       deferred += ScriptedToolEnrichment.DeferredDescriptor(
         relativePath = path,
@@ -1549,6 +1559,10 @@ object TrailblazeProjectConfigLoader {
   ): Set<String> {
     val filesystemSource = loadedManifest.source as? TrailmapSource.Filesystem
     if (filesystemSource == null) {
+      // A bare `.ts` whose build wrote a `.tooldefs.json` beside it already carries the analyzer's
+      // output, so it resolves here with no analyzer and no baked target YAML.
+      val remaining = enrichFromGeneratedToolDefs(loadedManifest, deferred, registry)
+      if (remaining.isEmpty()) return emptySet()
       // Classpath-loaded trailmap: prefer repairing the deferred descriptors from the trailmap's
       // build-time-baked `targets/<id>.yaml` (present for classpath-bundled TARGET trailmaps) —
       // the baked entries are the same analyzer output a filesystem enrichment would produce, so
@@ -1558,7 +1572,7 @@ object TrailblazeProjectConfigLoader {
       // author set one, else the trailmap id (mirrors the build-time generator's naming).
       val bakedTargetId = loadedManifest.manifest.target?.id ?: loadedManifest.manifest.id
       loadBakedClasspathTargetTools(bakedTargetId)?.let { bakedToolsByName ->
-        return enrichFromBakedTargetYaml(loadedManifest, deferred, registry, bakedToolsByName)
+        return enrichFromBakedTargetYaml(loadedManifest, remaining, registry, bakedToolsByName)
       }
       // The analyzer can't walk classpath `.ts` sources, so these enrichment-shape descriptors
       // can't be resolved here. Do NOT throw — throwing aborts the WHOLE trailmap and silently drops its
@@ -1567,7 +1581,7 @@ object TrailblazeProjectConfigLoader {
       // AppTargetYamlConfig.getInlineScriptTools), NOT this trailmap-sibling path, so skipping the
       // deferred scripted tools here loses nothing the daemon dispatches from — while the
       // trailmap's waypoints/toolsets (which only this path provides) are preserved. Log and skip.
-      val files = deferred.joinToString(", ") { "'${it.relativePath}'" }
+      val files = remaining.joinToString(", ") { "'${it.relativePath}'" }
       Console.log(
         "Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
           "scripted-tool descriptor(s) $files need analyzer enrichment but the trailmap is " +
@@ -1581,7 +1595,7 @@ object TrailblazeProjectConfigLoader {
       // target that `AppTargetDiscovery.mergeTargets` could let OVERRIDE the baked `targets/<id>.yaml`.
       // Meta-only / bare-`.ts` descriptors never registered an eager entry (their name comes from the
       // `.ts` export), so there's nothing to remove for those.
-      val eagerNames = deferred.flatMap { it.descriptor.declaredScriptedToolNames() }
+      val eagerNames = remaining.flatMap { it.descriptor.declaredScriptedToolNames() }
       eagerNames.forEach { name -> registry.remove(name) }
       // Tool names whose `target.tools:` resolution should throw the recoverable
       // [ClasspathScriptedToolUnavailableException] (so waypoints survive) instead of the generic
@@ -1589,7 +1603,7 @@ object TrailblazeProjectConfigLoader {
       // descriptors the name lives in the `.ts`'s `export const <name> = trailblaze.tool(...)` binding —
       // the same shape the analyzer extracts — so we read it straight from the source. A name that
       // isn't one of these is a genuine unknown-name author error and keeps throwing the generic error.
-      val exportedNames = deferred.flatMap { descriptorExportedToolNames(loadedManifest.source, it) }
+      val exportedNames = remaining.flatMap { descriptorExportedToolNames(loadedManifest.source, it) }
       return (eagerNames + exportedNames).toSet()
     }
     if (scriptedToolEnrichment == null) {
@@ -1695,6 +1709,58 @@ object TrailblazeProjectConfigLoader {
     // Filesystem path resolves (or throws) every deferred descriptor — nothing is classpath-skipped.
     return emptySet()
   }
+
+  /**
+   * Classpath stand-in for analyzer enrichment of a bare `.ts`: reads the `<tool>.tooldefs.json` the
+   * build wrote beside it (see [GeneratedScriptedToolDefsFile]) and registers each tool it lists,
+   * resolved the same way the live analyzer path resolves a descriptor-less `.ts`. Returns the
+   * deferred descriptors with no usable generated file, for the caller's other fallbacks.
+   */
+  private fun enrichFromGeneratedToolDefs(
+    loadedManifest: LoadedTrailblazeTrailmapManifest,
+    deferred: List<ScriptedToolEnrichment.DeferredDescriptor>,
+    registry: MutableMap<String, ScriptedToolRegistryEntry>,
+  ): List<ScriptedToolEnrichment.DeferredDescriptor> = deferred.filter { deferredDescriptor ->
+    val tsPath = deferredDescriptor.relativePath
+    if (!tsPath.endsWith(".ts")) return@filter true
+    val content = loadedManifest.source.readSibling(
+      tsPath.removeSuffix(".ts") + GeneratedScriptedToolDefsFile.SUFFIX,
+    ) ?: return@filter true
+    val defs = try {
+      generatedToolDefsJson.decodeFromString(GeneratedScriptedToolDefsFile.serializer(), content).tools
+    } catch (e: SerializationException) {
+      Console.log("Warning: unreadable generated tool definitions beside '$tsPath': ${e.message}")
+      return@filter true
+    }
+    // Projected up front so a bad value (an unknown spec `runtime`) drops this file to the
+    // caller's other fallbacks, like an unreadable one, rather than failing the whole resolve.
+    val configs = try {
+      defs.map { def -> def to ScriptedToolDefProjection.descriptorlessConfig(def, deferredDescriptor.descriptor.script) }
+    } catch (e: IllegalArgumentException) {
+      Console.log("Warning: invalid generated tool definitions beside '$tsPath': ${e.message}")
+      return@filter true
+    }
+    configs.forEach { (def, config) ->
+      val previous = registry[def.name]
+      if (previous != null) {
+        throw TrailblazeProjectConfigException(
+          "Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
+            "two scripted-tool descriptors under <trailmap>/tools/ declare the same tool name " +
+            "'${def.name}': '${previous.relativePath}' and '$tsPath'. Tool names must be unique " +
+            "within a trailmap — rename one of the descriptors' `name:` field or the `.ts` " +
+            "file's exported const.",
+        )
+      }
+      registry[def.name] = ScriptedToolRegistryEntry(
+        relativePath = tsPath,
+        descriptor = deferredDescriptor.descriptor,
+        enrichedConfig = config,
+      )
+    }
+    false
+  }
+
+  private val generatedToolDefsJson = Json { ignoreUnknownKeys = true }
 
   /**
    * Load the build-time-baked `trails/config/targets/<id>.yaml` for a classpath-bundled trailmap
@@ -1944,8 +2010,8 @@ class ClasspathScriptedToolUnavailableException(message: String, cause: Throwabl
  *   trailmaps (those without a `target:` block).
  * @property toolsets Toolset YAML configs declared via the trailmap manifest's `toolsets:` list.
  * @property tools Operational tool YAMLs auto-discovered under the trailmap's `tools/` /
- *   `shortcuts/` / `trailheads/` directories. These are the pure-YAML composed tools
- *   (`.tool.yaml`), not the scripted tools listed under `target.tools:` (those live on
+ *   `trailheads/` directories (`.tool.yaml` / `.trailhead.yaml` — class-backed or metadata
+ *   descriptors), not the scripted tools listed under `target.tools:` (those live on
  *   [target] via `AppTargetYamlConfig.tools`).
  * @property waypoints Waypoints auto-discovered under the trailmap's `waypoints/` directory.
  */

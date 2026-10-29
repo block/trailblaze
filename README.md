@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="trailblaze-host/src/main/resources/icons/icon.png" alt="Trailblaze" width="120" height="120">
+<img src="docs/images/trailblaze-icon.png" alt="Trailblaze" width="120" height="120">
 
 # Trailblaze
 
@@ -53,6 +53,12 @@ you if it's missing):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
+```
+
+On Windows (Android and web; no iOS), install from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex
 ```
 
 Optional extras: `ffmpeg` for video capture in reports, `esbuild` for bundling scripted
@@ -168,11 +174,10 @@ trailmap template with typed custom tools you can copy:
 | [`examples/wikipedia`](examples/wikipedia/) | Web | Canonical web reference — typed tools driving live `en.wikipedia.org`. |
 | [`examples/playwright-native`](examples/playwright-native/) | Web | Smallest end-to-end scripted-tool setup, with a bundled sample app. |
 
-## Desktop app
+## Trailblaze App
 
 ```bash
-trailblaze app         # legacy visual trail authoring and session browsing
-trailblaze app --v2    # Trail Runner workspace and trace viewer
+trailblaze app         # Trailblaze App workspace and trace viewer
 ```
 
 ## Active prototype: Waypoints

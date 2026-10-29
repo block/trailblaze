@@ -8,10 +8,15 @@ import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.beginDispatch
+import xyz.block.trailblaze.history.endDispatch
+import xyz.block.trailblaze.history.sensitiveSnapshot
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
@@ -233,6 +238,15 @@ abstract class BaseTrailblazeAgent(
       // The dispatch's own trace, so an observer's record joins to this tool's logs instead of
       // being matched on name and time. One trace covers the whole batch (see `context.traceId`).
       observedSession?.let { ToolCallObservers.notifyBefore(it, toolName, context.traceId) }
+      // Every call, nested ones included: `ctx.history` is the whole run. Started before the tool
+      // runs, so the calls it makes name it as their parent.
+      val historyCall = ToolCallHistory.beginDispatch(
+        context = context,
+        toolName = toolName,
+        tool = resolved,
+        device = context.deviceBindings?.activeName ?: activeDeviceName,
+        memory = memory,
+      )
       // The one span every driver shares. Tool dispatch is the boundary between "the agent decided
       // to do something" and the device work that decision costs, and it is the same boundary for
       // the Android RPC, Playwright, Maestro and iOS agents — so instrumenting it here is what
@@ -293,6 +307,11 @@ abstract class BaseTrailblazeAgent(
               // gets its string fields resolved like every other tool.
               val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
               val timeBeforeExecution = Clock.System.now()
+              // A composing call can overwrite a sensitive key before its resolved payload is
+              // logged. Keep only this invocation's pre-call redaction inputs, never session
+              // history.
+              val sensitiveMemoryBeforeExecution =
+                if (context.nestedDispatchDepth.get() > 0) memory.sensitiveSnapshot() else null
               // Catch throws so the log emit still fires on the exception path. The contract
               // is "every dispatch logs" — if `execute` lets an exception escape (custom
               // HostLocal author, transport bug, etc.), the prior shape would skip the log
@@ -301,7 +320,7 @@ abstract class BaseTrailblazeAgent(
               // treats it the same as a returned error. `CancellationException` re-throws so
               // structured concurrency for session teardown / agent abort stays intact.
               val hostResult: TrailblazeToolResult = try {
-                runBlocking { memoryResolvedTool.execute(context) }
+                runBlocking { DispatchCancellation.linked(this) { memoryResolvedTool.execute(context) } }
               } catch (e: CancellationException) {
                 throw e
               } catch (e: Throwable) {
@@ -319,6 +338,7 @@ abstract class BaseTrailblazeAgent(
                 // tool's device-emitted log.
                 dispatchedHostSide = true,
                 rawTool = resolved.takeIf { it !== memoryResolvedTool },
+                sensitiveMemoryBeforeExecution = sensitiveMemoryBeforeExecution,
               )
               hostResult
             }
@@ -330,10 +350,14 @@ abstract class BaseTrailblazeAgent(
             // the tool spliced into its error message, so scrub both.
           }.withAuthoredFailureContent(resolved, memory)
         }
+      } catch (e: Throwable) {
+        ToolCallHistory.endDispatch(historyCall, e, memory)
+        throw e
       } finally {
         // In a `finally`, so a tool that throws still closes the pair an observer opened.
         observedSession?.let { ToolCallObservers.notifyAfter(it, toolName, context.traceId) }
       }
+      ToolCallHistory.endDispatch(historyCall, result, memory)
       if (!result.isSuccess()) {
         return RunTrailblazeToolsResult(
           inputTools = tools,
@@ -357,6 +381,11 @@ abstract class BaseTrailblazeAgent(
       // device — gating on it would let post-tap queries read stale trees.
       if (resolved !is ReadOnlyTrailblazeTool && !resolved.isVerificationToolInstance()) {
         SnapshotCache.invalidateCurrent(traceTag = context.traceId?.traceId)
+        // A nested `ctx.tools` call shares its caller's context, so re-arm lazy capture: the
+        // caller's next nested call must read the screen after this action, not before it.
+        if (context.nestedDispatchDepth.get() > 0 && context.screenStateProvider != null) {
+          context.screenState = null
+        }
       }
       lastSuccessResult = result
     }
@@ -499,8 +528,8 @@ abstract class BaseTrailblazeAgent(
    * Two details a hand-rolled copy keeps getting wrong, and the reason to call this instead:
    *
    *  - The name comes from [resolveToolName], which unwraps [OtherTrailblazeTool], honors an
-   *    instance's own name (every `tools:`-authored tool shares one annotation, so going by the
-   *    annotation collapses them all into `YamlDefinedTrailblazeTool`), and cannot return null
+   *    instance's own name (one implementation class can back many named tools, so going by the
+   *    annotation collapses them into one name), and cannot return null
    *    the way `::class.simpleName` can.
    *  - The wrapper note states an OBSERVATION and lists the causes; it does not pick one.
    *    Arriving wrapped means only that nothing resolved the name. It may be unregistered, its
@@ -583,7 +612,22 @@ abstract class BaseTrailblazeAgent(
     var lastResult: TrailblazeToolResult = TrailblazeToolResult.Success()
     for (mappedTool in mappedTools) {
       toolsExecuted.add(mappedTool)
-      val result = executeExpanded(mappedTool)
+      // Each expanded tool runs here, not through dispatch, so it is recorded here, as a call the
+      // delegating tool made.
+      val historyCall = ToolCallHistory.beginDispatch(
+        context = context,
+        toolName = mappedTool.resolveToolName(),
+        tool = mappedTool,
+        device = context.deviceBindings?.activeName ?: activeDeviceName,
+        memory = memory,
+      )
+      val result = try {
+        executeExpanded(mappedTool)
+      } catch (e: Throwable) {
+        ToolCallHistory.endDispatch(historyCall, e, memory)
+        throw e
+      }
+      ToolCallHistory.endDispatch(historyCall, result, memory)
       if (!result.isSuccess()) return result
       lastResult = result
     }

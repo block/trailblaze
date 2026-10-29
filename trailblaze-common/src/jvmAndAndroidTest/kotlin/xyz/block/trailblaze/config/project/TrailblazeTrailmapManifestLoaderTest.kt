@@ -213,8 +213,7 @@ class TrailblazeTrailmapManifestLoaderTest {
   }
 
   // ==========================================================================
-  // Deprecation warning for the removed `routes:` field. Removed 2026-04-28 as
-  // part of the shortcuts-as-tools unification. Same string-scan + dedup
+  // Deprecation warning for the removed `routes:` field. Same string-scan + dedup
   // pattern as the legacy-compose warning above; tests mirror that flow.
   // ==========================================================================
 
@@ -244,8 +243,8 @@ class TrailblazeTrailmapManifestLoaderTest {
         "Expected deprecation warning naming `routes`; got: $log",
       )
       assertTrue(
-        log.contains("shortcuts-as-tools"),
-        "Expected migration nudge to mention shortcuts-as-tools; got: $log",
+        log.contains("remove them"),
+        "Expected the warning to tell the author to remove the field; got: $log",
       )
     } finally {
       tempDir.deleteRecursively()
@@ -507,6 +506,7 @@ class TrailblazeTrailmapManifestLoaderTest {
           "mobile_clearAppData",
           "mobile_listInstalledApps",
           "mobile_listInstalledAppsDetailed",
+          "mobile_networkConnection",
           "mobile_pasteClipboard",
           "mobile_setClipboard",
         ),
@@ -548,7 +548,16 @@ class TrailblazeTrailmapManifestLoaderTest {
         toolsetUrl.readText(),
       )
       assertEquals("ios_primitives", toolset.id)
-      assertEquals(listOf("ios_grantPrivacy", "ios_terminate"), toolset.tools)
+      assertEquals(
+        listOf(
+          "ios_openApp",
+          "ios_openUrl",
+          "ios_resetKeychain",
+          "ios_setPermissions",
+          "ios_terminate",
+        ),
+        toolset.tools,
+      )
       // Always-enabled for the same reason as android_primitives: nothing activates a toolset the
       // LLM cannot see, so a trailhead's first `ctx.tools.ios_*` callback would otherwise fail.
       assertTrue(toolset.alwaysEnabled)

@@ -19,6 +19,7 @@ import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.yaml.TrailConfig
 
 class TrailRunnerPathsTest {
 
@@ -77,6 +78,15 @@ class TrailRunnerPathsTest {
   )
 
   @Test
+  fun `a session summary carries the trail's authored context`() {
+    val config = TrailConfig(id = "suite/case", title = "Push notification", context = "Must persist.")
+    val summary = toSessionSummary(sessionOn("emulator-5554", "android", "phone").copy(trailConfig = config))
+    assertEquals("Must persist.", summary.context)
+    val bare = toSessionSummary(sessionOn("emulator-5554", "android", "phone"))
+    assertNull(bare.context)
+  }
+
+  @Test
   fun `a session summary names the device instance the run actually used`() {
     assertEquals("emulator-5556", toSessionSummary(sessionOn("emulator-5556", "android", "tablet")).deviceInstanceId)
   }
@@ -126,5 +136,44 @@ class TrailRunnerPathsTest {
       hasRecordedSteps = false,
     )
     assertNull(toSessionSummary(info).deviceInstanceId)
+  }
+
+  @Test
+  fun `a session summary carries the trail source URL`() {
+    val sourceUrl =
+      "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml"
+    val info = sessionOn("source", "android", "phone").copy(trailSourceUrl = sourceUrl)
+
+    assertEquals(sourceUrl, toSessionSummary(info).trailSourceUrl)
+  }
+
+  @Test
+  fun `a root that ends in a separator still contains its children`() {
+    // A filesystem root's canonical path already ends in a separator: `/` here, `D:\` on Windows.
+    val root = File.listRoots().first().canonicalPath
+    val child = File(root, "tests/smoke.trail.yaml").path
+
+    assertTrue(isInside(child, root))
+    assertTrue(isSameOrInside(root, root))
+    assertFalse(isInside(root, root))
+  }
+
+  @Test
+  fun `a sibling that shares a name prefix is not inside`() {
+    val root = tmp.newFolder("trails").canonicalPath
+
+    assertFalse(isInside("$root-old${File.separator}x.trail.yaml", root))
+    assertTrue(isInside("$root${File.separator}x.trail.yaml", root))
+  }
+
+  @Test
+  fun `a sibling that differs from the root only in case is not inside`() {
+    // In a case-sensitive Windows folder, `TRAILS` and `trails` are two folders.
+    val parent = tmp.newFolder("cased").canonicalPath
+    val root = "$parent${File.separator}trails"
+    val sibling = "$parent${File.separator}TRAILS"
+
+    assertFalse(isInside("$sibling${File.separator}secret.trail.yaml", root))
+    assertFalse(isSameOrInside(sibling, root))
   }
 }

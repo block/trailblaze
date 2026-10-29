@@ -23,58 +23,28 @@ import maestro.ElementFilter
 import maestro.Filters
 import maestro.Filters.asFilter
 import maestro.Maestro
-import maestro.MaestroException
-import maestro.ViewHierarchy
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.filter.FilterWithDescription
 import maestro.orchestra.filter.TraitFilters
 import maestro.utils.StringUtils.toRegexSafe
 
 /**
- * A two-function remnant of Maestro's `Orchestra`, kept only so selector matching can reuse
+ * A one-function remnant of Maestro's `Orchestra`, kept only so selector matching can reuse
  * Maestro's own matching logic instead of reimplementing it.
  *
  * Nothing calls this class directly. `ElementMatcherUsingMaestro` (in `trailblaze-common`) reaches
- * it by reflection, BY STRING: the fully-qualified name below, plus the names and arities of the
- * two private functions. See the README in this package before touching any of those.
+ * it by reflection, BY STRING: the fully-qualified name below, plus the name and arity of the
+ * private `buildFilter`. See the README in this package before touching any of those.
  *
  * The command-executing body this was cut down from went away with the on-device UiAutomator
  * driver — it was the only thing that ever ran a Maestro flow on a device.
  *
- * Derived from Maestro v2.6.1:
- * https://github.com/mobile-dev-inc/Maestro/blob/cli-2.6.1/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
+ * Derived from Maestro v2.11.0:
+ * https://github.com/mobile-dev-inc/Maestro/blob/cli-2.11.0/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
  */
 class Orchestra(
   private val maestro: Maestro,
 ) {
-
-  private suspend fun findElementViewHierarchy(
-    selector: ElementSelector?,
-    timeout: Long,
-  ): ViewHierarchy {
-    if (selector == null) {
-      return maestro.viewHierarchy()
-    }
-    val parentViewHierarchy = findElementViewHierarchy(selector.childOf, timeout)
-    val (description, filterFunc) = buildFilter(selector = selector)
-    val debugMessage = """
-            Element with $description not found. Check the UI hierarchy in debug artifacts to verify if the element exists.
-
-            Possible causes:
-            - Element selector may be incorrect - check if there are similar elements with slightly different names/properties.
-            - Element may be temporarily unavailable due to loading state.
-            - This could be a real regression that needs to be addressed.
-    """.trimIndent()
-    return maestro.findElementWithTimeout(
-      timeout,
-      filterFunc,
-      parentViewHierarchy,
-    )?.hierarchy ?: throw MaestroException.ElementNotFound(
-      "Element not found: $description",
-      parentViewHierarchy.root,
-      debugMessage = debugMessage,
-    )
-  }
 
   private fun buildFilter(
     selector: ElementSelector,
@@ -141,6 +111,11 @@ class Orchestra(
         relativeFilters += Filters.containsDescendants(descendantSelectors.map { buildFilter(it).filterFunc })
       }
 
+    selector.childOf
+      ?.let {
+        descriptions += "Child of: ${it.description()}"
+      }
+
     selector.traits
       ?.map {
         TraitFilters.buildFilter(it)
@@ -148,6 +123,11 @@ class Orchestra(
       ?.forEach { (description, filter) ->
         descriptions += description
         basicFilters += filter
+      }
+
+    selector.index
+      ?.let {
+        descriptions += "Index: ${it.toDoubleOrNull()?.toInt() ?: it}"
       }
 
     selector.enabled

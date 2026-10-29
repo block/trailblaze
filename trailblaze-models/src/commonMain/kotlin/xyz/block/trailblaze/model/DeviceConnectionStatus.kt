@@ -36,16 +36,5 @@ sealed interface DeviceConnectionStatus {
       override val statusText: String =
         "Connection failed $errorMessage"
     }
-
-    data class ThereIsAlreadyAnActiveConnection(
-      val deviceId: TrailblazeDeviceId,
-    ) : DeviceConnectionError {
-      override val statusText: String = "There is already an active connection with device $deviceId."
-    }
-    data class NoConnection(
-      val deviceId: TrailblazeDeviceId
-    ) : DeviceConnectionError {
-      override val statusText: String = "No active connections to any devices."
-    }
   }
 }

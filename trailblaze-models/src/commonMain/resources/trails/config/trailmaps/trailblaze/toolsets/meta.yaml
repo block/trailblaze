@@ -1,12 +1,18 @@
 # Framework meta tools — always enabled.
 # - objectiveStatus: lets the LLM declare a step complete or failed.
+# - runIf: the recorded-trail conditional (a scripted tool, `trailmaps/trailblaze/tools/runIf.ts`).
+#   It is `surfaceToLlm: false`, so the LLM never sees it; it is here so every session that launches
+#   scripted tools registers it and a recording can dispatch it by name on any target. A scripted
+#   tool is only dispatchable when some toolset delivers it, and this is the one toolset every driver
+#   always has. Compose and Revyl sessions launch no scripted tools, so it does not reach them.
 #
 # `drivers:` is intentionally omitted. Every driver's agent needs a way to end a step, so this
-# toolset is genuinely driver-agnostic; the catalog reads an absent `drivers:` as "compatible
-# with every driver". Noted explicitly so a future audit of driver-agnostic toolsets can tell a
-# deliberate omission from an oversight.
+# toolset is genuinely driver-agnostic; the
+# catalog reads an absent `drivers:` as "compatible with every driver". Noted explicitly so a future
+# audit of driver-agnostic toolsets can tell a deliberate omission from an oversight.
 id: meta
 description: "Framework meta tools for objective reporting."
 always_enabled: true
 tools:
   - objectiveStatus
+  - runIf

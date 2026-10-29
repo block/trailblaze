@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.AgentMemory
@@ -30,6 +31,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.HostPlatform
 
 /**
  * Direct coverage for [QuickJsTrailblazeTool.execute] — the path the LLM-side dispatch
@@ -242,6 +244,28 @@ class QuickJsTrailblazeToolTest {
       ).getTrailblazeOnDeviceSpecificPort(),
       device["trailblazePort"]!!.jsonPrimitive.int,
     )
+  }
+
+  @Test
+  fun `execute ctx carries the host computer's platform`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readCtx"] = {
+        name: "readCtx",
+        spec: {},
+        handler: async (_args, ctx) => ({
+          content: [{ type: "text", text: JSON.stringify(ctx) }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val result = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {}).execute(buildContext())
+    val rendered = (result as TrailblazeToolResult.Success).message!!
+    val hostPlatform = kotlinx.serialization.json.Json.parseToJsonElement(rendered).jsonObject["hostPlatform"]!!.jsonObject
+    // This test runs on the host JVM; the Android actual sends null, since a device has no host.
+    assertEquals(HostPlatform.current().os.hostOsName, hostPlatform["os"]!!.jsonPrimitive.content)
+    assertEquals(HostPlatform.current().arch?.hostArchName, hostPlatform["arch"]!!.jsonPrimitive.contentOrNull)
   }
 
   @Test

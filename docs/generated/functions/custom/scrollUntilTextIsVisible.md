@@ -4,17 +4,7 @@
 
 # `scrollUntilTextIsVisible`
 
-Scrolls the screen in the specified direction until a target element becomes visible in the view hierarchy.
-
-Provide EXACTLY ONE target:
-- 'text' — substring match: finds elements where this text appears anywhere within the element's text.
-- 'textRegex' — anchored full-match regex, used verbatim (the same semantics selector tools use), so
-  'Loyalty' matches only "Loyalty" and not "Loyalty Enroll". Use this when you need an exact match.
-- (or 'id' alone) — scroll until the element with this id is visible.
-
-At least one of 'text', 'textRegex', or 'id' is required; a call with none is rejected (it would match
-every element). If both 'text' and 'textRegex' are given, 'textRegex' takes precedence. Only provide the
-additional disambiguation fields (e.g. 'index') when multiple elements match the same target.
+Scroll until the target element is visible. Give one target: 'text' (substring), 'textRegex' (whole-text regex), or 'id'.
 
 ## Source
 
@@ -32,23 +22,23 @@ additional disambiguation fields (e.g. 'index') when multiple elements match the
 ### Optional parameters
 
 - `text` — `String`
-  Text to search for while scrolling (substring match). Provide this OR 'textRegex'.
+  Text to scroll to (substring match).
 - `textRegex` — `String`
-  Full-match regex to scroll until visible, used verbatim (anchored, like selector tools). Use instead of 'text' for an exact match, e.g. 'Loyalty' won't match 'Loyalty Enroll'.
+  Regex that must match the element's whole text, e.g. 'Loyalty' won't match 'Loyalty Enroll'. Overrides 'text'.
 - `id` — `String`
-  The element id to scroll until. At least one of 'text', 'textRegex', or 'id' is required.
+  Element id to scroll to.
 - `index` — `Integer`
-  A 0-based index to disambiguate multiple views with the same text. Default is '0'.
+  0-based index when several elements match. Default 0.
 - `direction` — `enum(UP | DOWN | RIGHT | LEFT)`
-  Direction to scroll. Default is 'DOWN'.
+  Scroll direction. Default DOWN.
 - `visibilityPercentage` — `Integer`
-  Percentage of element visible in viewport. Default is '100'.
+  Percent of the element that must be visible. Default 100.
 - `centerElement` — `Boolean`
-  If true, keeps scrolling until the found element is near the screen center instead of stopping at first visibility — so a tab bar, sticky footer or promo banner cannot intercept a tap aimed at it. Omit to use the driver-tuned default (true for vertical scrolls on the Android accessibility driver, which needs the extra travel; false elsewhere, including horizontal scrolls, where a correction can carry the target off the opposite edge).
+  Keep scrolling until the element is near screen center, so bars or banners can't intercept a tap. Omit for the driver default.
 - `scrollStartPosition` — `enum(CENTER | TOP | BOTTOM)`
-  Which part of the screen to scroll from. Default is 'CENTER'.
+  Screen region each swipe starts from. Default CENTER.
 - `scrollDurationMs` — `Integer`
-  Duration in milliseconds of each scroll swipe gesture. Lower is a faster swipe. Omit to use the driver-tuned default (400ms on Android on-device). Set a lower value (e.g. '200') on screens where a slower swipe is misread as a tap.
+  Duration of each swipe in ms; lower is faster. Omit for the driver default; lower it (e.g. 200) if swipes register as taps.
 - `reasoning` — `String`
 
 ## Output

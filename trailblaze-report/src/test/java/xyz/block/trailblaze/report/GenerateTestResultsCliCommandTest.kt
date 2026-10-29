@@ -159,6 +159,79 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `source URL is carried into the per-session result`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-source-url-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    val sourceUrl =
+      "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml"
+    try {
+      writePassedSession(
+        logsDir = logsDir,
+        sessionId = SessionId("source-url-session"),
+        deviceInfo = webDeviceInfo(),
+        trailFilePath = "trails/checkout.trail.yaml",
+        trailSourceUrl = sourceUrl,
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(sourceUrl, report.results.single().trail_source_url)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `summary repository links discard clone credentials`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("repository-session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+      captureStdout {
+        GenerateTestResultsCliCommand(
+          environment = mapOf(
+            "GITHUB_SERVER_URL" to "https://ci-user:credential@git.example.com:8443",
+            "GITHUB_REPOSITORY" to "example/trails.git",
+          ),
+        ).main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals("https://git.example.com:8443/example/trails", report.metadata.git_repository_url)
+      assertFalse(outputFile.readText().contains("credential@"))
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a build triggered by a scheduled parent records the parent's source`() {
+    // A triggered build's own source is the CI's "triggered" value, so without the parent's
+    // TRAILBLAZE_BUILD_SOURCE a scheduled run would drop out of every query for scheduled runs.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("2026_10_09_triggered_session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+
+      captureStdout {
+        GenerateTestResultsCliCommand(
+          // Padded, as a hand-written env value can be: queries match the exact `schedule`.
+          environment = mapOf("BUILDKITE_SOURCE" to "trigger_job", "TRAILBLAZE_BUILD_SOURCE" to " schedule "),
+        ).main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals("schedule", report.metadata.ci_build_source)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `config_id is read from the environment so every leg of a config reports the same value`() {
     // CONFIG_ID and DEVICE_KEY are separate env vars, so every leg of a config reports the same
     // config_id and one predicate gathers them all.
@@ -323,6 +396,7 @@ class GenerateTestResultsCliCommandTest {
       val attempts = command.attemptReport()!!.results
       assertTrue(attempts.none { it.outcome == Outcome.SKIPPED }, "skips reached the attempt projection")
       assertEquals(1, attempts.count { it.outcome == Outcome.PASSED })
+      assertNull(report.attempts, "a run with no retries should not repeat its rows in attempts")
       assertEquals("checkout/refund", skipped.test_key)
       assertEquals("backend outage, see #2194", skipped.failure_reason)
       assertEquals(1, report.results.count { it.outcome == Outcome.PASSED })
@@ -2626,6 +2700,10 @@ class GenerateTestResultsCliCommandTest {
 
       val attempts = command.attemptReport()!!.results.associateBy { it.session_id }
       assertEquals(2, attempts.size)
+      // The on-disk summary is what CI indexes download. Its verdict stays deduplicated, while
+      // the attempt projection survives serialization so earlier sessions remain linkable.
+      assertEquals(listOf(failedSessionId, passedSessionId), report.attempts!!.map { it.session_id })
+      assertEquals(attempts, report.attempts!!.associateBy { it.session_id })
       assertEquals(1, attempts.getValue(failedSessionId).attempt)
       assertEquals(2, attempts.getValue(failedSessionId).total_attempts)
       assertEquals(passedSessionId, attempts.getValue(failedSessionId).superseded_by)
@@ -2901,6 +2979,7 @@ class GenerateTestResultsCliCommandTest {
     sessionId: SessionId,
     deviceInfo: TrailblazeDeviceInfo,
     trailFilePath: String,
+    trailSourceUrl: String? = null,
   ) {
     writeLog(
       logsDir = logsDir,
@@ -2916,6 +2995,7 @@ class GenerateTestResultsCliCommandTest {
           trailblazeDeviceInfo = deviceInfo,
           trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
           rawYaml = null,
+          trailSourceUrl = trailSourceUrl,
         ),
         session = sessionId,
         timestamp = Instant.parse("2026-08-26T10:00:00Z"),

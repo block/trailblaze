@@ -9,9 +9,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.datetime.Clock
 import kotlin.test.Test
 import maestro.orchestra.Command
+import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -30,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.utils.ElementComparator
 
@@ -76,10 +79,15 @@ class MaestroNestedToolCompositionTest {
       TrailblazeSession(sessionId = SessionId("fixture-session"), startTime = Clock.System.now())
     },
   ) {
+    val executedCommands = mutableListOf<Command>()
+
     override suspend fun executeMaestroCommands(
       commands: List<Command>,
       traceId: TraceId?,
-    ): TrailblazeToolResult = TrailblazeToolResult.Success()
+    ): TrailblazeToolResult {
+      executedCommands += commands
+      return TrailblazeToolResult.Success()
+    }
   }
 
   /**
@@ -262,6 +270,248 @@ class MaestroNestedToolCompositionTest {
     assertThat(toolLogs[0].isRecordable).isEqualTo(false) // nested2 (depth 2)
     assertThat(toolLogs[1].isRecordable).isEqualTo(false) // nested1 (depth 1)
     assertThat(toolLogs[2].isRecordable).isEqualTo(true) // parent  (depth 0, top-level)
+  }
+
+  @Test
+  fun `recorded launches retain authored memory references and exclude resolved credentials`() = runBlocking {
+    for (reference in listOf("{{oauth2Token}}", "\${oauth2Token}", "{{ oauth2Token }}", "\${ oauth2Token }", "{{session-token}}", "prefix-{{oauth2Token}}")) {
+      val captured = mutableListOf<TrailblazeLog>()
+      val agent = FixtureAgent(logger = TrailblazeLogger(
+        logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+      ))
+      agent.memory.remember("oauth2Token", "fixture-session-secret")
+      agent.memory.remember("session-token", "fixture-session-secret")
+      agent.memory.remember("apiVersion", "2")
+      val launch = MaestroTrailblazeTool(
+        """- launchApp: {appId: com.example.app, arguments: {credential: "$reference", apiVersion: "{{apiVersion}}"}}""",
+      )
+
+      val result = agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+      assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+      val delivered = agent.executedCommands.filterIsInstance<LaunchAppCommand>().single()
+      kotlin.test.assertContains(delivered.launchArguments?.get("credential").toString(), "fixture-session-secret")
+      val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+      assertThat(log.isRecordable).isEqualTo(true)
+      if (reference.startsWith("prefix-")) {
+        kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains(reference))
+        kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "<redacted>")
+      } else {
+        kotlin.test.assertContains(log.rawTrailblazeTool.toString(), reference)
+      }
+      kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{apiVersion}}")
+      kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
+    }
+  }
+
+  @Test
+  fun `reference shaped resolved credential is masked but its authored reference remains recordable`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.remember("oauth2Token", "prefix-{{literal}}-suffix")
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "{{oauth2Token}}"}}""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertThat(log.isRecordable).isEqualTo(true)
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{oauth2Token}}")
+    kotlin.test.assertFalse(log.toString().contains("prefix-{{literal}}-suffix"))
+  }
+
+  @Test
+  fun `resolved launch value does not poison authored app id or unrelated text`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("host", JsonPrimitive("example"))
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {host: "{{args.host}}"}}
+- inputText: "Connected to example"""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "com.example.app")
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "Connected to example")
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{args.host}}")
+    kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains("<redacted>"))
+    kotlin.test.assertFalse(log.trailblazeTool.toString().contains("Connected to example"))
+  }
+
+  @Test
+  fun `mixed launch template masks its literal suffix when reused in authored text`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("user", JsonPrimitive("alice"))
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "{{args.user}}:FAKESECRET"}}
+- inputText: FAKESECRET""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains("FAKESECRET"))
+    kotlin.test.assertFalse(log.trailblazeTool.toString().contains("FAKESECRET"))
+  }
+
+  @Test
+  fun `mixed launch prefix masks its full resolved value reused in authored text`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("key", JsonPrimitive("47391"))
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "sk-{{args.key}}"}}
+- inputText: sk-47391""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains("sk-47391"))
+    kotlin.test.assertFalse(log.trailblazeTool.toString().contains("sk-47391"))
+  }
+
+  @Test
+  fun `numeric launch argument is masked after dispatch while its reference remains recordable`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("pin", JsonPrimitive(47391))
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "{{args.pin}}"}}""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertThat(log.isRecordable).isEqualTo(true)
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{args.pin}}")
+    kotlin.test.assertFalse(log.toString().contains("47391"))
+  }
+
+  @Test
+  fun `a launch credential reused in input text is masked outside launch arguments`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.remember("token", "fixture-session-secret")
+    val tool = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "{{token}}"}}
+- inputText: "{{token}}"""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(tool), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{token}}")
+  }
+
+  @Test
+  fun `mixed literal and reference launch argument masks the literal part of the raw form`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("token", JsonPrimitive("fixture-session-secret"))
+    agent.memory.putArg("suffix", JsonPrimitive("v2"))
+    val tool = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {a: "{{args.token}}", b: "fixture-session-secret-{{args.suffix}}"}}""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(tool), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{args.token}}")
+    kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains("<redacted>-{{args.suffix}}"))
+    kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "<redacted>")
+  }
+
+  @Test
+  fun `mixed launch template never retains its literal prefix without another credential argument`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    agent.memory.putArg("suffix", JsonPrimitive("v2"))
+    val tool = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: "fixture-session-secret-{{args.suffix}}"}}""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(tool), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
+    kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains("{{args.suffix}}"))
+    kotlin.test.assertContains(log.trailblazeTool.toString(), "<redacted>")
+  }
+
+  @Test
+  fun `literal launch credential is masked before the recording generator inspects it`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(logger = TrailblazeLogger(
+      logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
+    ))
+    val launch = MaestroTrailblazeTool(
+      """- launchApp: {appId: com.example.app, arguments: {credential: fixture-session-secret}}""",
+    )
+
+    agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertThat(log.isRecordable).isEqualTo(true)
+    kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
+  }
+
+  @Test
+  fun `nested launch passes real arguments to the driver but excludes them from tool logs`() = runBlocking {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = FixtureAgent(
+      logger = TrailblazeLogger(
+        logEmitter = LogEmitter { captured += it },
+        screenStateLogger = ScreenStateLogger { "" },
+      ),
+    )
+    val launch = MaestroTrailblazeTool(
+      """
+      - launchApp:
+          appId: com.example.app
+          arguments:
+            appCredential: fixture-app-secret
+            sessionCredential: fixture-session-secret
+      """.trimIndent(),
+    )
+    val parent = LambdaTool { ctx -> ctx.nestedToolExecutor!!.invoke(launch) }
+
+    val result = agent.runTrailblazeTools(tools = listOf(parent), elementComparator = noOpComparator)
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val delivered = agent.executedCommands.filterIsInstance<LaunchAppCommand>().single()
+    assertThat(delivered.launchArguments?.get("appCredential")).isEqualTo("fixture-app-secret")
+    assertThat(delivered.launchArguments?.get("sessionCredential")).isEqualTo("fixture-session-secret")
+    val logs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    val launchLog = logs.single { it.toolName == "mobile_maestro" }
+    assertThat(launchLog.isRecordable).isEqualTo(false)
+    assertThat(logs.last().isRecordable).isEqualTo(true)
+    kotlin.test.assertContains(launchLog.trailblazeTool.raw.toString(), "com.example.app")
+    for (secret in listOf("fixture-app-secret", "fixture-session-secret")) {
+      kotlin.test.assertFalse(launchLog.toString().contains(secret))
+    }
   }
 
   /**

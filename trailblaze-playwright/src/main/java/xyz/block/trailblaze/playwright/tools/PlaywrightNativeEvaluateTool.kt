@@ -34,15 +34,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 )
 @LLMDescription(
   """
-Executes a JavaScript expression in the current page context and returns the result as a
-string. Internal framework utility — not exposed to the LLM and not captured in trail
-recordings; available for host-side composition only.
+Run a JavaScript expression in the page and return the result as a string. Framework-only: not shown to the LLM or recorded. Must not navigate.
 """,
 )
 data class PlaywrightNativeEvaluateTool(
-  @param:LLMDescription(
-    "JavaScript expression or IIFE. Use `(() => { ... })()` shape if you need statements.",
-  )
+  @param:LLMDescription("JavaScript expression; wrap statements as `(() => { ... })()`.")
   val script: String,
 ) : PlaywrightExecutableTool {
 

@@ -22,6 +22,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
@@ -273,15 +274,16 @@ class DirectMcpAgentIntegrationTest {
   }
 
   @Test
-  fun `agent executes pressBack tool correctly`() = runTest {
+  fun `agent executes pressKey BACK correctly`() = runTest {
     val responses = mutableListOf(
-      """{"tool": "pressBack", "args": {}}""",
+      """{"tool": "pressKey", "args": {"keyCode": "BACK"}}""",
       """{"complete": true, "summary": "Went back"}""",
     )
 
     var pressedBack = false
     val mockAgent = MockTrailblazeAgent { tools ->
-      if (tools.first().javaClass.simpleName.contains("PressBack")) {
+      val tool = tools.first()
+      if (tool is PressKeyTrailblazeTool && tool.keyCode == PressKeyTrailblazeTool.PressKeyCode.BACK) {
         pressedBack = true
       }
       successResult(tools)

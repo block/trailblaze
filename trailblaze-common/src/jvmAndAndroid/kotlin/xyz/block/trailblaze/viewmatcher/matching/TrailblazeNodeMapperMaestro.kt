@@ -26,15 +26,13 @@ fun TreeNode.toTrailblazeNodeIosMaestro(): TrailblazeNode? =
   toTrailblazeNodeIosMaestro(NodeIdCounter())
 
 /**
- * Platform-dispatched conversion: returns the [TrailblazeNode] tree shape the selector
- * generator consumes for [platform], or null when the platform doesn't have a Maestro-driven
- * mapper (web / desktop go through their own paths). Lives here so screen-state, recording,
- * and any future Maestro-backed surface all converge on the same dispatch — the previous
- * inline `when (platform) { IOS -> ...; ANDROID -> ...; else -> null }` was duplicated at
- * each call site and would have drifted when a new platform got added.
+ * Platform-dispatched conversion for the host's Maestro-backed surfaces: returns the
+ * [TrailblazeNode] tree shape the selector generator consumes for [platform], or null when the
+ * host has no Maestro driver for it. Only iOS qualifies — the host drives Android through the
+ * on-device accessibility runner, and [toTrailblazeNodeAndroidMaestro] survives solely for the
+ * on-device migration capture.
  */
 fun TreeNode.toTrailblazeNode(platform: Platform): TrailblazeNode? = when (platform) {
-  Platform.ANDROID -> toTrailblazeNodeAndroidMaestro()
   Platform.IOS -> toTrailblazeNodeIosMaestro()
   else -> null
 }

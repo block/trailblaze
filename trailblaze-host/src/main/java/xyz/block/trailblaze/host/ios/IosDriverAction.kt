@@ -15,12 +15,15 @@ sealed interface IosDriverAction {
 
   // --- Gestures ---
 
-  data class Tap(val x: Int, val y: Int) : IosDriverAction {
-    override val description get() = "Tap on ($x, $y)"
+  /** [repeat] > 1 taps that many times in quick succession (2 = double-tap). */
+  data class Tap(val x: Int, val y: Int, val repeat: Int = 1) : IosDriverAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($x, $y)"
   }
 
-  data class TapRelative(val percentX: Double, val percentY: Double) : IosDriverAction {
-    override val description get() = "Tap on ($percentX%, $percentY%)"
+  /** [repeat] > 1 taps that many times in quick succession (2 = double-tap). */
+  data class TapRelative(val percentX: Double, val percentY: Double, val repeat: Int = 1) :
+    IosDriverAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($percentX%, $percentY%)"
   }
 
   data class LongPress(val x: Int, val y: Int, val durationMs: Long = 500L) : IosDriverAction {
@@ -72,6 +75,15 @@ sealed interface IosDriverAction {
   /** Erases characters by sending [PressKey.BACKSPACE] keycodes. */
   data class EraseText(val characters: Int) : IosDriverAction {
     override val description get() = "Erase $characters characters"
+  }
+
+  /**
+   * Empties the focused field by selecting all of it and pressing [PressKey.BACKSPACE] once — two
+   * key events however long the field is, where [EraseText] is one per character. One more
+   * [PressKey.BACKSPACE] then checks it: a field it changes still held text, and the action fails.
+   */
+  data object ClearText : IosDriverAction {
+    override val description get() = "Clear the focused text field"
   }
 
   // --- Hardware buttons ---
@@ -197,6 +209,29 @@ sealed interface IosDriverAction {
     override val description get() = "Clear state for $bundleId"
   }
 
+  /**
+   * Standalone `setPermissions:` (no launch) — the same permissions map [LaunchApp] applies, with
+   * the same semantics (see [IosSimulatorPermissions]): `simctl privacy`
+   * for every service it supports, and it replaces the notification-alert answer, as Maestro's
+   * runner replaces its stored map.
+   */
+  data class SetPermissions(val bundleId: String, val permissions: Map<String, String>) : IosDriverAction {
+    override val description get() = "Set permissions for $bundleId: $permissions"
+  }
+
+  /**
+   * `ios_setPermissions`' `notifications`: how the driver answers [bundleId]'s notifications alert whenever a
+   * screen read sees it. [allow] true taps Allow, false taps Don't Allow, null leaves the alert to
+   * the trail. iOS has no privacy service for notifications, so the alert tap is the only answer.
+   */
+  data class AnswerNotificationsAlert(val bundleId: String, val allow: Boolean?) : IosDriverAction {
+    override val description get() = when (allow) {
+      true -> "Answer $bundleId's notifications alert: Allow"
+      false -> "Answer $bundleId's notifications alert: Don't Allow"
+      null -> "Leave $bundleId's notifications alert unanswered"
+    }
+  }
+
   /** Standalone `clearKeychain:` (no launch) — resets the whole simulator keychain. */
   data object ClearKeychain : IosDriverAction {
     override val description get() = "Clear keychain"
@@ -224,3 +259,5 @@ sealed interface IosDriverAction {
     const val DEFAULT_ELEMENT_TIMEOUT_MS: Long = 5_000L
   }
 }
+
+private fun repeatSuffix(repeat: Int) = if (repeat > 1) " x$repeat" else ""

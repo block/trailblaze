@@ -2,8 +2,17 @@ package xyz.block.trailblaze.scripting.callback
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
+import xyz.block.trailblaze.toolcalls.toolDecodeFailureReason
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
@@ -51,9 +60,11 @@ object JsScriptingCallbackDispatcher {
     request: JsScriptingCallbackRequest,
     maxDepth: Int = resolveMaxDepth(),
     timeoutMs: Long = resolveTimeoutMs(),
+    hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
   ): JsScriptingCallbackResult {
     val actionSummary = when (val action = request.action) {
       is JsScriptingCallbackAction.CallTool -> "call_tool name=${action.toolName}"
+      is JsScriptingCallbackAction.CallHost -> "call_host name=${action.functionName}"
     }
     // START log — one per dispatch, tagged with session + invocation so every hop can be
     // correlated via `grep <sessionId>` in logcat/daemon logs.
@@ -93,20 +104,33 @@ object JsScriptingCallbackDispatcher {
       )
     }
 
+    // The depth gate bounds script -> Kotlin -> script recursion. A host function is gated like a
+    // tool: it gets the full execution context, so it could dispatch a scripted tool too.
     if (entry.depth >= maxDepth) {
       Console.log(
         "[JsScriptingCallbackDispatcher] REJECTED depth ${entry.depth} >= max $maxDepth for invocation " +
           "${request.invocationId} (session ${request.sessionId})",
       )
-      return JsScriptingCallbackResult.CallToolResult(
-        success = false,
-        errorMessage = "Callback reentrance depth ${entry.depth} reached max $maxDepth; " +
-          "refusing further dispatch.",
-      )
+      val refusal = "Callback reentrance depth ${entry.depth} reached max $maxDepth; refusing further dispatch."
+      return when (request.action) {
+        is JsScriptingCallbackAction.CallTool ->
+          JsScriptingCallbackResult.CallToolResult(success = false, errorMessage = refusal)
+        is JsScriptingCallbackAction.CallHost ->
+          JsScriptingCallbackResult.CallHostResult(success = false, errorMessage = refusal)
+      }
     }
 
-    val result = when (val action = request.action) {
-      is JsScriptingCallbackAction.CallTool -> dispatchCallTool(entry, action, timeoutMs)
+    // The HTTP request runs under the server's Job, not the tool call's: linking it means a cancelled
+    // tool takes its outstanding callbacks (an event wait, a nested tool) down with it. Each dispatch
+    // below also installs its timeout's Job for the blocking dispatches it makes, so a nested tool's
+    // event wait ends when the callback times out or its tool is cancelled, not when the wait gives up.
+    val result = coroutineScope {
+      DispatchCancellation.linked(this, entry.job) {
+        when (val action = request.action) {
+          is JsScriptingCallbackAction.CallTool -> dispatchCallTool(entry, action, timeoutMs)
+          is JsScriptingCallbackAction.CallHost -> dispatchCallHost(entry, action, timeoutMs, hostFunctions)
+        }
+      }
     }
     // END log — pairs with START so a tester can confirm a full round-trip happened. Result
     // summary is a one-liner; detailed error branches already log above at the point of
@@ -124,6 +148,7 @@ object JsScriptingCallbackDispatcher {
           "call_tool_result success=false structured=$structured"
         }
       }
+      is JsScriptingCallbackResult.CallHostResult -> "call_host_result success=${result.success}"
       is JsScriptingCallbackResult.Error -> "error"
     }
     Console.log(
@@ -190,6 +215,41 @@ object JsScriptingCallbackDispatcher {
     return raw.toIntOrNull()?.takeIf { it > 0 } ?: JsScriptingInvocationRegistry.MAX_CALLBACK_DEPTH
   }
 
+  private suspend fun dispatchCallHost(
+    entry: JsScriptingInvocationRegistry.Entry,
+    action: JsScriptingCallbackAction.CallHost,
+    timeoutMs: Long,
+    hostFunctions: TrailblazeHostFunctionRegistry,
+  ): JsScriptingCallbackResult.CallHostResult = try {
+    // Same depth stamp as a tool callback, so a scripted tool the function dispatches registers one
+    // level deeper and stays under the cap.
+    val outcome = withTimeout(timeoutMs) {
+      withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1) + DispatchCancellation.element(currentCoroutineContext().job)) {
+        TrailblazeHostFunctionDispatcher.call(
+          action.functionName,
+          action.argumentsJson,
+          entry.executionContext,
+          hostFunctions,
+        )
+      }
+    }
+    when (outcome) {
+      is TrailblazeHostFunctionDispatcher.Outcome.Success ->
+        JsScriptingCallbackResult.CallHostResult(success = true, value = outcome.value)
+      is TrailblazeHostFunctionDispatcher.Outcome.Failure ->
+        JsScriptingCallbackResult.CallHostResult(success = false, errorMessage = outcome.message)
+    }
+  } catch (e: TimeoutCancellationException) {
+    Console.log(
+      "[JsScriptingCallbackDispatcher] TIMEOUT host function '${action.functionName}' after ${timeoutMs}ms " +
+        "(session ${entry.sessionId.value})",
+    )
+    JsScriptingCallbackResult.CallHostResult(
+      success = false,
+      errorMessage = "Host function '${action.functionName}' timed out after ${timeoutMs}ms",
+    )
+  }
+
   private suspend fun dispatchCallTool(
     entry: JsScriptingInvocationRegistry.Entry,
     action: JsScriptingCallbackAction.CallTool,
@@ -244,15 +304,17 @@ object JsScriptingCallbackDispatcher {
       // Throwable, not Exception: `serializer()` on a global class-backed tool that isn't in
       // the session's toolset can raise NoClassDefFoundError, and the HTTP endpoint wrapping
       // this dispatcher doesn't catch around [dispatch]. Include the exception class since
-      // an unchecked throw out of a custom KSerializer often carries a null message.
+      // an unchecked throw out of a custom KSerializer often carries a null message. The
+      // arguments can carry credentials and no tool exists yet to mask them, so the reason masks
+      // every string they hold.
+      val reason = toolDecodeFailureReason(e, action.argumentsJson)
       Console.log(
         "[JsScriptingCallbackDispatcher] DESERIALIZE_FAILED tool '${action.toolName}' in session " +
-          "${entry.sessionId.value}: ${e::class.simpleName}: ${e.message}",
+          "${entry.sessionId.value}: $reason",
       )
       return JsScriptingCallbackResult.CallToolResult(
         success = false,
-        errorMessage = "Failed to deserialize tool call '${action.toolName}': " +
-          (e.message ?: e::class.simpleName),
+        errorMessage = "Failed to deserialize tool call '${action.toolName}': $reason",
       )
     }
 
@@ -285,7 +347,7 @@ object JsScriptingCallbackDispatcher {
     // Known remaining gap vs the QuickJS transport: [SessionScopedHostBinding.executeResolved]
     // expands a [xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool] into its executable
     // sub-tools, while this path rejects one as NON_EXECUTABLE. Pre-existing for
-    // session-registered YAML tools; unfiltered resolution widens which tools reach it.
+    // session-registered tools; unfiltered resolution widens which tools reach it.
     if (tool !is ExecutableTrailblazeTool) {
       Console.log(
         "[JsScriptingCallbackDispatcher] NON_EXECUTABLE tool '${action.toolName}' in session " +
@@ -304,9 +366,11 @@ object JsScriptingCallbackDispatcher {
       // itself at `entry.depth + 1` and the depth gate catches a runaway recursive chain
       // at the next callback, not the one after it.
       withTimeout(timeoutMs) {
-        withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1)) {
+        withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1) + DispatchCancellation.element(currentCoroutineContext().job)) {
+          // With no nested executor (e.g. Revyl) the tool runs here, outside any dispatch, so it is
+          // recorded here.
           val result = entry.executionContext.nestedToolExecutor?.invoke(tool)
-            ?: tool.execute(entry.executionContext)
+            ?: ToolCallHistory.recordExecution(entry.executionContext, tool) { tool.execute(entry.executionContext) }
           when (result) {
             is TrailblazeToolResult.Success ->
               JsScriptingCallbackResult.CallToolResult(

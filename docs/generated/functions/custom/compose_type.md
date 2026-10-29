@@ -4,10 +4,7 @@
 
 # `compose_type`
 
-Type text into a UI input element.
-Identify the element using its element ID from the view hierarchy (e.g., 'e3'),
-or by existing text content.
-By default this clears the field first. Set clearFirst to false to append text instead.
+Type into an input, identified by elementId (preferred), testTag, or existingText. Clears the field first unless clearFirst is false.
 
 ## Source
 
@@ -25,20 +22,20 @@ By default this clears the field first. Set clearFirst to false to append text i
 ### Required parameters
 
 - `text` — `String`
-  The text to type into the element.
+  Text to type.
 
 ### Optional parameters
 
 - `elementId` — `String`
-  Element ID from the view hierarchy, e.g., 'e3'. Preferred method.
+  Element ID, e.g. 'e3'.
 - `testTag` — `String`
-  Accessibility identifier of the input element.
+  Input testTag.
 - `existingText` — `String`
-  The existing text content of the input element.
+  Input's current text, exact whole-text match.
 - `element` — `String`
-  Human-readable description of the element being typed into, for logging.
+  Short description of the element, for logs.
 - `clearFirst` — `Boolean`
-  If true (default), clear the field before typing. If false, append to existing text.
+  Clear the field before typing (default true); false appends.
 
 ## Output
 

@@ -330,6 +330,39 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `a survey bundles against the sandbox surveys entry, never the one that reads files`() = runBlocking {
+    // `@trailblaze/scripting/surveys` resolves for authors to the host entry, which imports node:fs
+    // to read finished sessions. Mid-trail a survey runs in the tool sandbox, so its bundle must take
+    // the sandbox entry instead, from either SDK layout: the source tree's `surveys/in-process.ts`,
+    // or an installed CLI's flat `surveys-in-process.js`.
+    assumeEsbuildPresent()
+    val dist = tempFolder.newFolder("flatSurveysSdk", "dist")
+    val flatEntry = File(dist, "index.js").apply { writeText("export const trailblaze = {};\n") }
+    File(dist, "surveys-in-process.js").writeText(
+      "export const trailblaze = { survey: (spec) => spec };\n" +
+        "export const runNamedLiveSurvey = () => \"sandbox-surveys-entry\";\n",
+    )
+    File(dist, "surveys.js").writeText("import \"node:fs\";\nexport const trailblaze = {};\n")
+    val flatBundler = DaemonScriptedToolBundler(
+      esbuildBinary = esbuild,
+      inProcessSdkEntryOverride = flatEntry,
+      cacheDir = tempFolder.newFolder("flat-surveys-cache"),
+    )
+    val survey = File(tempFolder.newFolder("surveys"), "checkout.survey.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting/surveys";
+        |export const checkoutDone = trailblaze.survey({ feature: "shop.checkout" });
+        |""".trimMargin(),
+      )
+    }
+    val text = flatBundler.bundleSurvey(survey).readText()
+    assertTrue(text.contains("sandbox-surveys-entry"), "expected the flat sandbox entry inlined")
+    assertFalse(text.contains("node:fs"), "the host surveys entry leaked into a sandbox bundle")
+    assertTrue(text.contains("var __trailblazeSurveyBundle"), "expected the bundle to assign its global")
+  }
+
+  @Test
   fun `bundleOne hits cache on second call with unchanged source`() = runBlocking {
     assumeEsbuildPresent()
     val src = writeTinyTs("cache-me.ts")

@@ -122,16 +122,15 @@ class HostDriverPortUtilsTest {
     // This JVM holding a client socket is the case the listener-only filter exists for: the daemon
     // connects to a runner's port, and killing everything on it would kill the daemon.
     val path = System.getenv("PATH").orEmpty().split(File.pathSeparator)
-    assumeTrue(
-      "needs lsof and nc on PATH",
-      listOf("lsof", "nc").all { command -> path.any { File(it, command).canExecute() } },
-    )
+    val hasLsof = path.any { File(it, "lsof").canExecute() }
+    // CI installs lsof for this test, so missing it there is a broken agent, not a reason to skip.
+    if (System.getenv("CI") == "true") assertTrue(hasLsof, "lsof must be on PATH in CI")
+    assumeTrue("needs lsof on PATH", hasLsof)
     val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
-    // -k keeps the listening socket open while a connection is up, as an XCTest runner does.
-    val listener = ProcessBuilder("nc", "-lk", "$port").start()
+    val listener = startListenerProcess(port)
     try {
-      val client = connectWithin(port, timeoutMs = 5_000)
-      assumeTrue("nc -lk did not start listening on $port", client != null)
+      val client = connectWithin(port, timeoutMs = 10_000)
+      assertTrue(client != null, "the listener process did not start listening on $port")
       client!!.use {
         val pids = HostDriverPortUtils.listeningPids(port)
         assertTrue(listener.pid().toString() in pids, "the listener must be found; got $pids")
@@ -147,6 +146,29 @@ class HostDriverPortUtilsTest {
     } finally {
       listener.destroyForcibly()
     }
+  }
+
+  /**
+   * A separate process listening on [port] that keeps listening while a connection is up, as an
+   * XCTest runner does. A JVM running a single source file, so the test needs nothing beyond the
+   * JDK it is already running on.
+   */
+  private fun startListenerProcess(port: Int): Process {
+    val source = File.createTempFile("PortListener", ".java").apply { deleteOnExit() }
+    source.writeText(
+      """
+      public class PortListener {
+        public static void main(String[] args) throws Exception {
+          java.net.ServerSocket server = new java.net.ServerSocket(
+              Integer.parseInt(args[0]), 50, java.net.InetAddress.getLoopbackAddress());
+          java.util.List<java.net.Socket> open = new java.util.ArrayList<>();
+          while (true) open.add(server.accept());
+        }
+      }
+      """.trimIndent(),
+    )
+    val java = File(System.getProperty("java.home"), "bin/java").path
+    return ProcessBuilder(java, source.path, "$port").redirectErrorStream(true).start()
   }
 
   private fun connectWithin(port: Int, timeoutMs: Long): Socket? {

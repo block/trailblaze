@@ -15,6 +15,7 @@ import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.OnDeviceOpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
@@ -77,7 +78,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         // Session-owning dispatch: the handler emits SessionEnded once this returns, so
         // the driver-log join has to happen inside this call, not in a next action.
-        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog
+        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+        traceId = runYamlRequest.traceId,
       )
     }
     return lastToolSuccess
@@ -163,10 +165,12 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       waitForSettled = AccessibilitySettleGate::waitForSettled,
       deviceClassifiers = getDeviceClassifiers(),
       // The host is tearing the connection down, so no session on it dispatches again. It may be
-      // about to end the session too, so the last dispatch's log uploads land first.
+      // about to end the session too, so the last dispatch's log uploads land first, and a
+      // keyboard the last action hid comes back for whoever uses the device next.
       onDrain = {
         val logUploadsLeftPending = AccessibilityTrailRunner.flushLogsBeforeSessionEnd()
         ScriptedToolBundleReuse.releaseAll()
+        TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
         logUploadsLeftPending
       },
     )

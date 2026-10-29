@@ -73,6 +73,41 @@ class OnDeviceScriptedToolBundlePlanTest {
     assertEquals(plan.declaredToolNames, plan.advertisementOverrides.keys)
   }
 
+  @Test
+  fun `only an excluded tool this launch registered is hidden, and only on the driver that excludes it`() {
+    val target = object : TrailblazeHostAppTarget(id = "planapp", displayName = "Plan App") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getExcludedScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
+        if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+          setOf(ToolName("app_excluded"), ToolName("app_unregistered"))
+        } else {
+          emptySet()
+        }
+    }
+    val registered = setOf(ToolName("app_excluded"), ToolName("app_kept"))
+
+    assertEquals(
+      setOf(ToolName("app_excluded")),
+      OnDeviceScriptedToolBundlePlan.targetExclusionsToHide(
+        target,
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        registered,
+      ),
+    )
+    assertTrue(
+      OnDeviceScriptedToolBundlePlan.targetExclusionsToHide(
+        target,
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        registered,
+      ).isEmpty(),
+    )
+  }
+
   private fun resolve(
     target: TrailblazeHostAppTarget,
     alreadyRegistered: Set<ToolName> = emptySet(),

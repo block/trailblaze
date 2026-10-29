@@ -1,10 +1,24 @@
 import java.io.File
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Project
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileCopyDetails
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.file.RelativePath
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Nested-block spec for `trailblazeAndroid { trailmap { ... } }` — one instance per `trailmap { }`
@@ -18,6 +32,12 @@ abstract class TrailmapToolBundleSpec {
 
   /** The trailmap's scripted-tool source directory — the `tools/` dir containing `*.ts` files. */
   abstract val toolsDir: Property<File>
+
+  /**
+   * The trailmap's survey directory, whose `*.survey.ts` files `ctx.surveys` runs mid-trail. Defaults
+   * to `surveys/` beside [toolsDir]; nothing is packaged when it holds no survey files.
+   */
+  abstract val surveysDir: Property<File>
 }
 
 /**
@@ -127,21 +147,188 @@ internal fun registerTrailmapToolBundle(
       }
     extension.allStagingTasks.add(stageTask)
   }
+
+  registerTrailmapToolDefs(project, extension, id, toolsDir, sdkRoot)
+  registerTrailmapSurveyBundles(
+    project,
+    extension,
+    id,
+    surveysDir = spec.surveysDir.orNull ?: File(toolsDir.parentFile, "surveys"),
+    sdkRoot = sdkRoot,
+    esbuild = esbuild,
+  )
 }
+
+/**
+ * Stages a `<tool>.tooldefs.json` beside the bundle of each in-process tool with no descriptor YAML
+ * (see [ScriptedToolDefsExtraction]), so the device and the host jar can discover it by name — a
+ * toolset can then deliver it — with the `.ts` as its only declaration.
+ *
+ * Extraction is skipped when the SDK at [sdkRoot] has no analyzer shim: an external SDK install may
+ * predate it, and such a consumer's descriptor-less tools stay reachable through `target.tools:` as
+ * before. The stage task is registered regardless, because it also removes this trailmap's stale
+ * files from the shared staging root — a deleted tool's, or one that has since gained a YAML — and
+ * a trailmap whose last descriptor-less tool just went still has those to remove.
+ */
+private fun registerTrailmapToolDefs(
+  project: Project,
+  extension: TrailblazeAndroidGradleExtension,
+  id: String,
+  toolsDir: File,
+  sdkRoot: File,
+) {
+  val descriptorless = inProcessToolSources(toolsDir).filter { ScriptedToolDefsExtraction.isDescriptorless(it) }
+  val extractor = File(sdkRoot, "tools/extract-tool-defs.mjs")
+  val capId = id.replaceFirstChar { it.uppercase() }
+  val extractTask =
+    if (descriptorless.isEmpty() || !extractor.isFile) {
+      null
+    } else {
+      project.tasks.register("extractTrailmap${capId}ToolDefs", ExtractTrailmapToolDefsTask::class.java) { task ->
+        task.group = "trailblaze"
+        task.description = "Reads the `$id` trailmap's descriptor-less scripted tools into `.tooldefs.json` files."
+        task.toolsDir.set(toolsDir)
+        task.toolSources.set(descriptorless.map { it.relativeTo(toolsDir).invariantSeparatorsPath })
+        // Every `.ts` and descriptor in the dir: a tool's schema can come from a sibling type module,
+        // and a descriptor added later takes a tool off this list.
+        task.inputSources.from(
+          project.fileTree(toolsDir) {
+            it.include("**/*.ts", "**/*.yaml")
+            it.exclude("**/.trailblaze-wrapper-*")
+          },
+        )
+        task.extractor.set(extractor)
+        task.sdkDir.set(sdkRoot)
+        task.analyzerDependencies.from(analyzerDependencyFiles(sdkRoot))
+        task.outputDir.set(project.layout.buildDirectory.dir("intermediates/trailblaze/trailmap-tool-defs/$id"))
+        task.logFile.set(project.layout.buildDirectory.file("tmp/extract-trailmap-tool-defs-$id.log"))
+        extension.sdkInstallTaskPath.orNull?.let { task.dependsOn(it) }
+      }
+    }
+  val stagedToolsDir = extension.stagingRoot.map { it.dir("trails/config/trailmaps/$id/tools") }
+  val sweepTask =
+    project.tasks.register("sweepTrailmap${capId}ToolDefs", SweepStagedToolDefsTask::class.java) { task ->
+      task.group = "trailblaze"
+      task.description = "Removes the `$id` trailmap's staged `.tooldefs.json` files before restaging."
+      task.stagedToolsDir.set(stagedToolsDir)
+    }
+  val stageTask =
+    project.tasks.register("stageTrailmap${capId}ToolDefs", Copy::class.java) { task ->
+      task.group = "trailblaze"
+      task.description = "Stages the `$id` trailmap's `.tooldefs.json` files beside its bundles."
+      // A dependency, not a `doFirst`: with nothing to copy this task is skipped as NO-SOURCE, and
+      // the sweep must still run then.
+      task.dependsOn(sweepTask)
+      extractTask?.let { extract ->
+        task.from(extract.flatMap { it.outputDir }) { it.into("trails/config/trailmaps/$id/tools") }
+      }
+      task.into(extension.stagingRoot)
+    }
+  extension.allStagingTasks.add(stageTask)
+}
+
+/**
+ * Deletes one trailmap's `.tooldefs.json` files from the shared staging root. Not a `Sync` on the
+ * stage task: the root also holds every other task's bundles, so only these files may go.
+ */
+@DisableCachingByDefault(because = "Deletes stale files from a staging directory shared with other tasks")
+abstract class SweepStagedToolDefsTask : DefaultTask() {
+  /**
+   * `<stagingRoot>/trails/config/trailmaps/<id>/tools`. Declared as an output although the stage
+   * tasks share it: Gradle never runs tasks with overlapping outputs at the same time, and without
+   * that this task deletes files while a stage task is fingerprinting the root.
+   */
+  @get:OutputDirectory abstract val stagedToolsDir: DirectoryProperty
+
+  init {
+    // With overlapping outputs Gradle tracks only the files a task wrote, and this one writes none,
+    // so it would otherwise be up-to-date forever after its first run. Deleting a few files is cheap.
+    outputs.upToDateWhen { false }
+  }
+
+  @TaskAction
+  fun sweep() {
+    stagedToolsDir.get().asFile.walkTopDown()
+      .filter { it.isFile && it.name.endsWith(ScriptedToolDefsExtraction.SUFFIX) }
+      .forEach { it.delete() }
+  }
+}
+
+/** Runs [ScriptedToolDefsExtraction] over one trailmap's descriptor-less tools. */
+@DisableCachingByDefault(because = "Uses locally installed analyzer tools that are not fully tracked as inputs")
+abstract class ExtractTrailmapToolDefsTask : DefaultTask() {
+  @get:Internal abstract val toolsDir: DirectoryProperty
+
+  /** Tools-relative paths of the `.ts` files to read. */
+  @get:Input abstract val toolSources: ListProperty<String>
+
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val inputSources: ConfigurableFileCollection
+
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val extractor: RegularFileProperty
+
+  @get:Internal abstract val sdkDir: DirectoryProperty
+
+  /**
+   * The SDK's lockfile and the installed analyzer packages' manifests: the extractor imports
+   * `typescript` and `ts-json-schema-generator` from [sdkDir], so a version change there can change
+   * the output with no tool edited. Missing files are fine; the extractor then fails on its own.
+   */
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val analyzerDependencies: ConfigurableFileCollection
+
+  @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+  @get:Internal abstract val logFile: RegularFileProperty
+
+  @TaskAction
+  fun extract() {
+    val root = toolsDir.get().asFile
+    val out = outputDir.get().asFile
+    out.deleteRecursively()
+    ScriptedToolDefsExtraction.extract(
+      extractor = extractor.get().asFile,
+      sdkDir = sdkDir.get().asFile,
+      sources = toolSources.get().map { File(root, it) },
+      logFile = logFile.get().asFile,
+    ).forEach { (src, json) ->
+      File(out, ScriptedToolDefsExtraction.fileNameFor(src.relativeTo(root).invariantSeparatorsPath))
+        .apply { parentFile.mkdirs() }
+        .writeText(json)
+    }
+  }
+}
+
+/** Files whose change can change what the analyzer extracts, besides the tools themselves. */
+internal fun analyzerDependencyFiles(sdkRoot: File): List<File> =
+  listOf(
+    "package.json",
+    "bun.lock",
+    "node_modules/typescript/package.json",
+    "node_modules/ts-json-schema-generator/package.json",
+  ).map { File(sdkRoot, it) }
 
 /** Asset-tree-relative path for a tool's bundle — kept in lockstep with the runtime resolver. */
 internal fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String =
   "trails/config/trailmaps/$trailmapId/tools/$toolsRelativeStem.bundle.js"
 
 /**
- * Returns the in-process scripted-tool `.ts` files in [toolsDir] — a `<name>.ts` qualifies when
- * either a sibling `<name>.yaml`'s runtime isn't `subprocess`, or (descriptor-less) the `.ts`
- * declares the tool inline via `trailblaze.tool<…>(…)`. Excludes `.test.ts`, `.d.ts`, and helper
- * modules that never call `trailblaze.tool`. Sorted for deterministic task registration order.
+ * Returns the in-process scripted-tool `.ts` files in [toolsDir] — a `.ts` qualifies when either a
+ * descriptor YAML for it has a runtime other than `subprocess`, or (descriptor-less) the `.ts`
+ * declares the tool inline via `trailblaze.tool<…>(…)` or `trailblaze.trailhead<…>(…)`. A YAML is
+ * the descriptor for the `.ts` its top-level `script:` names, or for its same-basename sibling when
+ * it names none — so a `foo.yaml` pointing at `./bar.ts` says nothing about `foo.ts`, as in analyzer
+ * discovery. A YAML that would not decode as a descriptor (`name: []`, say) describes nothing, as in
+ * the loader. Excludes `.test.ts`, `.d.ts`, and helper modules that call neither. Sorted for
+ * deterministic task registration order.
  *
- * A descriptor-less `.ts` is ALWAYS in-process: the inline `trailblaze.tool(...)` spec
- * (`TrailblazeTypedToolSpec`) has no `runtime` field, so subprocess tools are declared solely via a
- * YAML sidecar's `runtime: subprocess` — caught by the sibling-yaml branch. Discovery must not try
+ * A descriptor-less `.ts` is ALWAYS in-process here. The inline spec can set `runtime`, but reading
+ * it needs the analyzer, so a subprocess tool also declares it in a YAML sidecar's
+ * `runtime: subprocess` — caught by the sibling-yaml branch. Discovery must not try
  * to infer subprocess-ness from `.ts` text: `runtime: subprocess` only ever appears there in a
  * comment or an error-message string (e.g. a tool's doc comment documents that it does NOT pin it),
  * and grepping for it dropped that tool's on-device bundle — it stayed advertised in the target
@@ -149,9 +336,21 @@ internal fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String
  * not registered".
  */
 internal fun inProcessToolSources(toolsDir: File): List<File> {
-  val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
-  val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
+  val toolExport = Regex("""trailblaze\s*\.\s*(?:tool|trailhead)\s*[<(]""")
   if (!toolsDir.isDirectory) return emptyList()
+  // Per `.ts`, whether every descriptor YAML for it runs it as a subprocess.
+  val allOwnersSubprocess = mutableMapOf<File, Boolean>()
+  toolsDir.walkTopDown()
+    .filter { f -> f.isFile && f.name.endsWith(".yaml") && OPERATIONAL_TOOL_YAML_SUFFIXES.none { f.name.endsWith(it) } }
+    .forEach { yaml ->
+      val keys = topLevelYamlValues(yaml.readText())
+      // A YAML the loader can't decode as a descriptor describes nothing, so it claims no script.
+      if (!isToolDescriptor(keys)) return@forEach
+      val script = keys["script"]?.let(::yamlScalar) ?: (yaml.name.removeSuffix(".yaml") + ".ts")
+      val ts = (File(script).takeIf { it.isAbsolute } ?: File(yaml.parentFile, script)).canonicalFile
+      val subprocess = keys["runtime"]?.let(::yamlScalar) == "subprocess"
+      allOwnersSubprocess[ts] = (allOwnersSubprocess[ts] ?: true) && subprocess
+    }
   // Recursive so `tools/<subdir>/`-organized tools are bundled too, preserving subpath to match
   // the on-device resolver (ScriptedToolNameDiscoverer.bundleResourcePathForScript).
   return toolsDir
@@ -161,15 +360,126 @@ internal fun inProcessToolSources(toolsDir: File): List<File> {
         f.name.endsWith(".ts") &&
         !f.name.endsWith(".test.ts") &&
         !f.name.endsWith(".d.ts") &&
-        // Sibling descriptor lives in the SAME directory as the `.ts` (root or organizational subdir).
-        File(f.parentFile, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
-          if (yaml.isFile) {
-            !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
-          } else {
-            toolExport.containsMatchIn(f.readText())
-          }
-        }
+        (allOwnersSubprocess[f.canonicalFile]?.not() ?: toolExport.containsMatchIn(f.readText()))
     }
     .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
     .toList()
+}
+
+/** Tool-directory YAMLs that are not tool descriptors — the loader's `OPERATIONAL_TOOL_YAML_SUFFIXES`. */
+private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(".tool.yaml", ".trailhead.yaml", ".waypoint.yaml", ".shortcut.yaml")
+
+private val TOP_LEVEL_YAML_KEY = Regex("""^([A-Za-z_][\w-]*):(?:\s+(.*?))?\s*$""")
+private val DOUBLE_QUOTED_YAML = Regex("""^"((?:[^"\\]|\\.)*)"""")
+private val SINGLE_QUOTED_YAML = Regex("""^'((?:[^']|'')*)'""")
+
+private val BLOCK_SCALAR_HEADER = Regex("""^([|>])([1-9]?)([-+]?)([1-9]?)(?:\s+#.*)?$""")
+
+/**
+ * Each top-level key of a YAML [text], mapped to its raw inline value with any trailing comment
+ * dropped — `""` when the value is a nested block. A `|` or `>` block scalar maps to its decoded
+ * content, re-quoted so [yamlScalar] reads it like any quoted value.
+ */
+private fun topLevelYamlValues(text: String): Map<String, String> {
+  val lines = text.lines()
+  val values = mutableMapOf<String, String>()
+  lines.forEachIndexed { index, line ->
+    val match = TOP_LEVEL_YAML_KEY.matchEntire(line) ?: return@forEachIndexed
+    val raw = match.groupValues[2]
+    val quoted = raw.startsWith('"') || raw.startsWith('\'')
+    val block = BLOCK_SCALAR_HEADER.matchEntire(raw)
+    values[match.groupValues[1]] = when {
+      quoted -> raw
+      block != null -> "'" + blockScalar(block, lines.drop(index + 1)).replace("'", "''") + "'"
+      else -> raw.substringBefore(" #").takeUnless { it.startsWith("#") }.orEmpty().trim()
+    }
+  }
+  return values
+}
+
+/**
+ * The content of the top-level block scalar whose [header] (`|`, `>-`, `|2+`, ...) precedes [following],
+ * decoded per the YAML spec: `|` keeps line breaks, `>` folds them into spaces, and the chomping
+ * indicator strips (`-`), keeps (`+`), or clips to one (default) the trailing breaks.
+ */
+private fun blockScalar(header: MatchResult, following: List<String>): String {
+  val (style, indentBefore, chomping, indentAfter) = header.destructured
+  val explicitIndent = (indentBefore + indentAfter).toIntOrNull()
+  val indent = explicitIndent
+    ?: following.firstOrNull { it.isNotBlank() }?.let { it.length - it.trimStart(' ').length }?.takeIf { it > 0 }
+    ?: return ""
+  val body = following
+    .takeWhile { it.isBlank() || it.length - it.trimStart(' ').length >= indent }
+    .map { if (it.isBlank() && it.length <= indent) "" else it.substring(indent) }
+  val content = body.dropLastWhile { it.isEmpty() }
+  if (content.isEmpty()) return if (chomping == "+") "\n".repeat(body.size) else ""
+  val text = if (style == "|") content.joinToString("\n") else foldBlockLines(content)
+  return text + when (chomping) {
+    "-" -> ""
+    "+" -> "\n".repeat(body.size - content.size + 1)
+    else -> "\n"
+  }
+}
+
+/** Folded (`>`) block [lines] joined: a break between two plain lines is a space, a blank line a break. */
+private fun foldBlockLines(lines: List<String>): String {
+  val folded = StringBuilder()
+  var previous: String? = null
+  var blankRun = 0
+  fun moreIndented(line: String) = line.startsWith(' ') || line.startsWith('\t')
+  for (line in lines) {
+    if (line.isEmpty()) {
+      blankRun++
+      continue
+    }
+    folded.append(
+      when {
+        previous == null -> "\n".repeat(blankRun)
+        moreIndented(previous) || moreIndented(line) -> "\n".repeat(blankRun + 1)
+        blankRun == 0 -> " "
+        else -> "\n".repeat(blankRun)
+      },
+    )
+    folded.append(line)
+    previous = line
+    blankRun = 0
+  }
+  return folded.toString()
+}
+
+/** [raw] as a YAML string scalar, unquoted and without its comment; `null` for a list, map, block, or null. */
+private fun yamlScalar(raw: String): String? {
+  DOUBLE_QUOTED_YAML.find(raw)?.let { return unescapeDoubleQuotedYaml(it.groupValues[1]) }
+  SINGLE_QUOTED_YAML.find(raw)?.let { return it.groupValues[1].replace("''", "'") }
+  val plain = raw.substringBefore(" #").trim()
+  return plain.takeUnless { it.isEmpty() || it == "~" || it == "null" || it.first() in "[{|>&*!\"'" }
+}
+
+private val DOUBLE_QUOTED_YAML_ESCAPE = Regex("""\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)""")
+private val SIMPLE_YAML_ESCAPES = mapOf(
+  '0' to "\u0000", 'a' to "\u0007", 'b' to "\b", 't' to "\t", 'n' to "\n", 'v' to "\u000B", 'f' to "\u000C",
+  'r' to "\r", 'e' to "\u001B", ' ' to " ", '"' to "\"", '/' to "/", '\\' to "\\", 'N' to "\u0085",
+  '_' to "\u00A0", 'L' to "\u2028", 'P' to "\u2029",
+)
+
+/** A double-quoted YAML scalar's [body] with its escapes (`\\`, `\"`, `\t`, `\u0020`, ...) decoded. */
+private fun unescapeDoubleQuotedYaml(body: String): String =
+  DOUBLE_QUOTED_YAML_ESCAPE.replace(body) { match ->
+    val escape = match.groupValues[1]
+    when (escape[0]) {
+      'x', 'u', 'U' -> String(Character.toChars(escape.substring(1).toInt(16)))
+      else -> SIMPLE_YAML_ESCAPES[escape[0]] ?: match.value
+    }
+  }
+private val YAML_NULLS = setOf("~", "null", "Null", "NULL")
+
+/**
+ * Whether top-level [keys] decode as a scripted-tool descriptor: `script:` and `name:`, when set, are non-empty
+ * string scalars, and `tools:`, when set, is a non-empty list. A YAML like `name: []` describes no tool. An
+ * optional field set to null (`tools: null`, `name: ~`) is absent, as in the loader; `script:` is required.
+ */
+private fun isToolDescriptor(keys: Map<String, String>): Boolean {
+  val present = keys.filter { (key, value) -> key == "script" || value !in YAML_NULLS }
+  return listOf("script", "name").all { key -> present[key]?.let { !yamlScalar(it).isNullOrEmpty() } ?: true } &&
+    (present["tools"]?.let { it.isEmpty() || (it.startsWith("[") && it != "[]") } ?: true)
 }

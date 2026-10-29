@@ -1,12 +1,23 @@
 package xyz.block.trailblaze.util
 
 import java.io.File
+import java.io.IOException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import xyz.block.trailblaze.device.InstalledApp
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcessWithTimeout
 
 object IosHostSimctlUtils {
 
@@ -84,51 +95,168 @@ object IosHostSimctlUtils {
   }
 
   /**
-   * `xcrun simctl launch <deviceId> <appId>`: starts the app, or brings it to the front if it is
-   * already running (same pid, nothing restarted). Throws with simctl's output on failure, which for
-   * an app that is not installed names the bundle id it could not open.
+   * The process identity of [appId] as installed on [deviceId], read from
+   * `xcrun simctl appinfo <deviceId> <appId>`: its `CFBundleExecutable`, which is the name the
+   * unified log records as `process`, and the install's own `.app` directory. A bundle id's last
+   * component is only a guess at either: `com.example.wallet.dogfood` can run as `Wallet` from
+   * `Wallet.app`. Returns null on non-macOS hosts, when the app isn't installed, when appinfo
+   * reports no executable, or when appinfo doesn't answer within [APPINFO_TIMEOUT_SECONDS]: log
+   * capture starts synchronously with the session, so a stalled probe must not hold it up.
    */
-  fun launchApp(deviceId: String, appId: String) {
+  fun getInstalledAppProcess(deviceId: String, appId: String): IosAppProcess? {
+    if (!isMacOs()) return null
+    val (output, timedOut) = runBlocking {
+      TrailblazeProcessBuilderUtils.createProcessBuilder(SimctlCommand.argv("appinfo", deviceId, appId))
+        .runProcessWithTimeout(APPINFO_TIMEOUT_SECONDS)
+    }
+    if (timedOut) {
+      Console.log("simctl appinfo for '$appId' timed out after ${APPINFO_TIMEOUT_SECONDS}s")
+      return null
+    }
+    if (output.exitCode != 0) return null
+    return parseAppProcessFromAppInfo(output.outputLines)
+  }
+
+  private const val APPINFO_TIMEOUT_SECONDS = 10L
+
+  /**
+   * Parses [IosAppProcess] from `xcrun simctl appinfo` output, the same plist-style dictionary
+   * one `listapps` entry holds (`    CFBundleExecutable = Wallet;`, `    Path = "/…/Wallet.app";`).
+   *
+   * [IosAppProcess.installDir] is the `.app` directory with its parent, the per-install container
+   * (`/<container-id>/Wallet.app/`). The container is what tells this install apart from another
+   * build of the same app that shares the executable and `.app` names.
+   *
+   * `internal` (widened just enough for the same-module parser unit test): the only production
+   * caller is [getInstalledAppProcess].
+   */
+  internal fun parseAppProcessFromAppInfo(outputLines: List<String>): IosAppProcess? {
+    fun field(key: String): String? {
+      val regex = Regex("^\\s+$key\\s*=\\s*\"?([^;\"]*)\"?\\s*;")
+      return outputLines.firstNotNullOfOrNull { regex.matchEntire(it)?.groupValues?.get(1)?.trim() }
+        ?.takeIf { it.isNotEmpty() }
+    }
+    val executable = field("CFBundleExecutable") ?: return null
+    val pathParts = field("Path")?.trimEnd('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
+    val installDir =
+      if (pathParts.size >= 2 && pathParts.last().endsWith(".app")) {
+        "/${pathParts[pathParts.size - 2]}/${pathParts.last()}/"
+      } else {
+        null
+      }
+    return IosAppProcess(executableName = executable, installDir = installDir)
+  }
+
+  /**
+   * `xcrun simctl launch <deviceId> <appId> [arguments…]`: starts the app, or brings it to the front
+   * if it is already running (same pid, nothing restarted). [arguments] become the process's argv
+   * after its executable, so they reach only a launch that starts the process: an app already
+   * running keeps its own and silently drops these. [secrets] are masked wherever the command line
+   * or its output is logged or thrown. Throws with simctl's output on failure, which for an app that
+   * is not installed names the bundle id it could not open.
+   */
+  fun launchApp(
+    deviceId: String,
+    appId: String,
+    arguments: List<String> = emptyList(),
+    secrets: Collection<String> = emptyList(),
+  ) {
     requireMacOs("simctl launch")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "launch", deviceId, appId),
-    ).runProcess {}
+    val output = runSimctlBlocking(
+      "launch $appId",
+      listOf("xcrun", "simctl", "launch", deviceId, appId) + arguments,
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+      secrets,
+    )
     check(output.exitCode == 0) {
-      "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
+      redactSensitiveValuesIn(
+        "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}",
+        secrets,
+      )
     }
   }
 
   /**
    * `xcrun simctl terminate <deviceId> <appId>`. Returns false when the app was not running
    * (simctl exits nonzero with "found nothing to terminate" — the state the caller wanted anyway);
-   * throws on any other failure.
+   * throws on any other failure. simctl returns once the signal is sent, so this then waits for the
+   * process to exit: a launch right after must start a new one.
    */
-  fun terminateApp(deviceId: String, appId: String): Boolean {
+  suspend fun terminateApp(deviceId: String, appId: String): Boolean {
     requireMacOs("simctl terminate")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "terminate", deviceId, appId),
-    ).runProcess {}
-    if (output.exitCode == 0) return true
+    val output = runSimctl("terminate $appId", listOf("xcrun", "simctl", "terminate", deviceId, appId), SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS)
+    if (output.exitCode == 0) {
+      awaitAppExit(deviceId, appId)
+      return true
+    }
     val text = output.outputLines.joinToString("\n").trim()
     if (isNotRunningTerminateOutput(text)) return false
     error("simctl terminate $appId failed (exit ${output.exitCode}): $text")
   }
 
   /**
-   * `xcrun simctl privacy <deviceId> grant <service> <appId>`. simctl terminates the app if it is
-   * running when a grant changes, so grant before launching. Throws with simctl's output on failure
-   * (e.g. an unknown service name).
+   * `xcrun simctl privacy <deviceId> <action> <service> <appId>`, where [action] is `grant`,
+   * `revoke` or `reset`. simctl terminates the app if it is running when a grant changes, so set
+   * these before launching. Throws with simctl's output on failure (e.g. an unknown service name).
    */
-  fun grantPrivacy(deviceId: String, appId: String, service: String) {
+  suspend fun setPrivacy(deviceId: String, appId: String, action: String, service: String) {
     requireMacOs("simctl privacy")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "privacy", deviceId, "grant", service, appId),
-    ).runProcess {}
+    val output = runSimctl(
+      "privacy $action $service $appId",
+      listOf("xcrun", "simctl", "privacy", deviceId, action, service, appId),
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
     check(output.exitCode == 0) {
-      "simctl privacy grant $service $appId failed (exit ${output.exitCode}): " +
+      "simctl privacy $action $service $appId failed (exit ${output.exitCode}): " +
         output.outputLines.joinToString("\n").trim()
     }
   }
+
+  /**
+   * `xcrun simctl keychain <deviceId> reset`: empties the simulator's keychain for every app.
+   * Deleting an app's data container leaves its keychain items behind, so a signed-in app comes
+   * back signed in without this.
+   */
+  suspend fun resetKeychain(deviceId: String) {
+    requireMacOs("simctl keychain reset")
+    val output = runSimctl("keychain reset", listOf("xcrun", "simctl", "keychain", deviceId, "reset"))
+    check(output.exitCode == 0) {
+      "simctl keychain reset failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
+    }
+  }
+
+  /**
+   * Runs [argv], killing it after [timeoutSeconds] or on cancellation: a stalled CoreSimulator
+   * otherwise hangs the step, and the session teardown behind it, indefinitely. Throws on timeout;
+   * the caller judges the exit code.
+   */
+  private suspend fun runSimctl(
+    what: String,
+    argv: List<String>,
+    timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
+    secrets: Collection<String> = emptyList(),
+  ): CommandProcessResult {
+    val (output, timedOut) = TrailblazeProcessBuilderUtils.createProcessBuilder(argv, loggedSecrets = secrets)
+      .runProcessWithTimeout(timeoutSeconds)
+    check(!timedOut) { "simctl $what did not finish within ${timeoutSeconds}s" }
+    return output
+  }
+
+  /** [runSimctl] for the blocking callers. */
+  private fun runSimctlBlocking(
+    what: String,
+    argv: List<String>,
+    timeoutSeconds: Long = SIMCTL_ACTION_TIMEOUT_SECONDS,
+    secrets: Collection<String> = emptyList(),
+  ): CommandProcessResult = runBlocking { runSimctl(what, argv, timeoutSeconds, secrets) }
+
+  private const val SIMCTL_ACTION_TIMEOUT_SECONDS = 10L
+
+  /**
+   * Launch, privacy grant and the app-data clear's lookup, terminate and exit wait can wait on a
+   * cold or loaded simulator, as on a fresh CI agent. Generous: it costs nothing when simctl is quick.
+   */
+  private const val SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS = 120L
 
   /** simctl's wording for "that app is not running" varies across Xcode versions. */
   internal fun isNotRunningTerminateOutput(output: String): Boolean {
@@ -143,19 +271,122 @@ object IosHostSimctlUtils {
     check(isMacOs()) { "$what needs a macOS host with Xcode" }
   }
 
-  fun clearAppDataContainer(deviceId: String, appId: String) {
-    if (!isMacOs()) return
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      SimctlCommand.argv("get_app_container", deviceId, appId, "data"),
-    ).runProcess {}
+  /** What [clearAppDataContainer] found. */
+  enum class ClearAppDataOutcome { CLEARED, NOT_INSTALLED }
 
-    output.outputLines.firstOrNull()?.let { dataContainerPath ->
-      val dataContainerDirectory = File(dataContainerPath)
-      if (dataContainerDirectory.exists() && dataContainerDirectory.isDirectory) {
-        Console.log("Clearing $appId data container under $dataContainerPath")
-        dataContainerDirectory.listFiles()?.forEach { it.deleteRecursively() }
+  /**
+   * Empties [appId]'s data container in place: terminates the app, waits for its process to exit
+   * (a dying app can flush state back into the container after the wipe), then deletes the
+   * container's children without following symlinks, so a link inside the container can't reach
+   * host files. Throws when the lookup or any deletion fails: a partial wipe that reports success
+   * would start the next step against stale data. The keychain and privacy grants are untouched.
+   */
+  suspend fun clearAppDataContainer(deviceId: String, appId: String): ClearAppDataOutcome {
+    requireMacOs("simctl get_app_container")
+    val lookup = runSimctl(
+      "get_app_container $appId data",
+      listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "data"),
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
+    val lookupText = lookup.outputLines.joinToString("\n").trim()
+    if (lookup.exitCode != 0) {
+      if (isNotInstalledContainerOutput(lookupText)) return ClearAppDataOutcome.NOT_INSTALLED
+      error("simctl get_app_container $appId data failed (exit ${lookup.exitCode}): $lookupText")
+    }
+    val dataPath = Paths.get(lookup.outputLines.first { it.isNotBlank() }.trim())
+
+    terminateApp(deviceId, appId)
+
+    // simctl can name a container the simulator hasn't created yet (seen right after a boot); an
+    // absent container holds no data, and the next launch creates it fresh.
+    if (!Files.isDirectory(dataPath)) {
+      Console.log("$appId has no data container at $dataPath yet; nothing to clear")
+      return ClearAppDataOutcome.CLEARED
+    }
+    Console.log("Clearing $appId data container under $dataPath")
+    val undeleted = deleteChildrenWithoutFollowingLinks(dataPath)
+    check(undeleted.isEmpty()) { "failed to delete from $appId's data container: ${undeleted.joinToString(", ")}" }
+    return ClearAppDataOutcome.CLEARED
+  }
+
+  /**
+   * `simctl terminate` returns once the signal is sent. Polls the simulator's launchd until [appId]
+   * has no running process, failing after [timeoutMillis] rather than reporting a live app stopped.
+   */
+  private suspend fun awaitAppExit(
+    deviceId: String,
+    appId: String,
+    timeoutMillis: Long = SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS * 1_000,
+  ) {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (true) {
+      if (!isAppRunning(deviceId, appId)) return
+      check(System.currentTimeMillis() < deadline) { "$appId was still running ${timeoutMillis}ms after terminate" }
+      delay(250)
+    }
+  }
+
+  /** Whether the simulator's launchd lists a live process for [appId]. Throws if it can't be read. */
+  suspend fun isAppRunning(deviceId: String, appId: String): Boolean {
+    requireMacOs("simctl spawn launchctl list")
+    val list = runSimctl(
+      "spawn launchctl list",
+      listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "list"),
+      SIMCTL_SLOW_ACTION_TIMEOUT_SECONDS,
+    )
+    check(list.exitCode == 0) {
+      "simctl spawn launchctl list failed (exit ${list.exitCode}): ${list.outputLines.joinToString("\n").trim()}"
+    }
+    return isAppRunning(list.outputLines, appId)
+  }
+
+  /** A `launchctl list` row for a UIKit app with a live pid (first column numeric, not `-`). */
+  internal fun isAppRunning(launchctlList: List<String>, appId: String): Boolean =
+    launchctlList.any { line ->
+      line.contains("UIKitApplication:$appId[") && line.substringBefore('\t').trim().toIntOrNull() != null
+    }
+
+  /** `get_app_container` exits with POSIX ENOENT when the app isn't installed. */
+  internal fun isNotInstalledContainerOutput(output: String): Boolean =
+    "NSPOSIXErrorDomain, code=2)" in output
+
+  /**
+   * Deletes everything under [root], leaving [root] itself. Symlinks are deleted as links, never
+   * followed. Returns the paths that could not be deleted.
+   */
+  internal fun deleteChildrenWithoutFollowingLinks(root: Path): List<String> {
+    val undeleted = mutableListOf<String>()
+    Files.newDirectoryStream(root).use { children ->
+      children.forEach { child ->
+        Files.walkFileTree(
+          child,
+          object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+              if (!tryDelete(file)) undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+              undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+              if (exc != null || !tryDelete(dir)) undeleted += dir.toString()
+              return FileVisitResult.CONTINUE
+            }
+          },
+        )
       }
     }
+    return undeleted
+  }
+
+  private fun tryDelete(path: Path): Boolean = try {
+    Files.deleteIfExists(path)
+    true
+  } catch (e: IOException) {
+    false
   }
 
   /**
@@ -165,13 +396,61 @@ object IosHostSimctlUtils {
    * `pbcopy`/`pbpaste`/`pbsync` are the supported pasteboard subcommands.) Used by
    * the cross-platform `mobile_setClipboard` tool's iOS branch.
    *
-   * Pipe IO and lock acquisition share a bounded deadline. Text stays off process arguments
-   * and diagnostics; stderr is discarded rather than mixing it with clipboard contents.
+   * Text stays off process arguments and diagnostics; stderr is discarded rather than mixing it
+   * with clipboard contents.
+   *
+   * Returns only once `pbpaste` reads [text] back, and throws otherwise. While Xcode 27's
+   * DeviceHub.app syncs its pasteboard, `pbcopy` exits 0 and changes nothing; CI quits DeviceHub
+   * before booting a simulator, and anywhere else the error says to quit it. [timeoutMillis] bounds
+   * the whole write, lock included. AXe text entry uses this to stage what it pastes.
    */
-  fun setPasteboard(deviceId: String, text: String) {
+  fun setPasteboard(deviceId: String, text: String, timeoutMillis: Long = PASTEBOARD_WRITE_TIMEOUT_MS) {
     if (!isMacOs()) error("setPasteboard is only supported on macOS hosts")
-    runPasteboardCommand(SimctlCommand.argv("pbcopy", deviceId), text)
+    writePasteboardVerified(deviceId, text, timeoutMillis)
   }
+
+  /**
+   * [setPasteboard] without the macOS guard. One [timeoutMillis] deadline covers lock acquisition,
+   * every command and the readback waits. [runCommand] is [runPasteboardCommand]'s
+   * `(argv, stdin, timeoutMillis) -> stdout`, and [sleep] and [nanoTime] drive the deadline; all
+   * are replaceable for tests.
+   */
+  internal fun writePasteboardVerified(
+    deviceId: String,
+    text: String,
+    timeoutMillis: Long = PASTEBOARD_WRITE_TIMEOUT_MS,
+    runCommand: (args: List<String>, stdin: String, timeoutMillis: Long) -> String =
+      { args, stdin, timeout -> runPasteboardCommand(args, stdin, timeout) },
+    sleep: (Long) -> Unit = Thread::sleep,
+    nanoTime: () -> Long = System::nanoTime,
+  ) {
+    val deadline = nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    fun remainingMillis(): Long = TimeUnit.NANOSECONDS.toMillis(deadline - nanoTime())
+    fun run(args: List<String>, stdin: String = ""): String {
+      val remaining = remainingMillis()
+      check(remaining > 0) { "Setting the simulator pasteboard took longer than ${timeoutMillis}ms" }
+      return runCommand(args, stdin, remaining)
+    }
+
+    withPasteboardLock(
+      timeoutMillis = remainingMillis().coerceAtLeast(0),
+      onTimeout = { error("Timed out waiting for the simulator pasteboard lock") },
+    ) {
+      run(SimctlCommand.argv("pbcopy", deviceId), text)
+      repeat(PASTEBOARD_READBACK_ATTEMPTS) { attempt ->
+        if (attempt > 0) sleep(PASTEBOARD_READBACK_INTERVAL_MS.coerceAtMost(remainingMillis().coerceAtLeast(0)))
+        if (run(SimctlCommand.argv("pbpaste", deviceId)) == text) return@withPasteboardLock
+      }
+      error(
+        "simctl pbcopy exited 0 but $deviceId's pasteboard did not take the text. Xcode's DeviceHub " +
+          "(or Simulator.app) syncing its pasteboard drops these writes; quit it and retry.",
+      )
+    }
+  }
+
+  private const val PASTEBOARD_WRITE_TIMEOUT_MS = 30_000L
+  private const val PASTEBOARD_READBACK_ATTEMPTS = 10
+  private const val PASTEBOARD_READBACK_INTERVAL_MS = 100L
 
   /**
    * Reads the iOS simulator's current pasteboard (clipboard) content via
@@ -417,3 +696,10 @@ object IosHostSimctlUtils {
     }
   }
 }
+
+/**
+ * How an installed iOS app shows up in the unified log: [executableName] is its `process`, and
+ * [installDir] (`/<container-id>/Wallet.app/`) is the directory every one of its binaries,
+ * extensions included, runs from. Null when appinfo reported no `.app` path.
+ */
+data class IosAppProcess(val executableName: String, val installDir: String?)

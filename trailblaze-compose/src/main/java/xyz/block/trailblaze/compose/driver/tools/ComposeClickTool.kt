@@ -10,21 +10,15 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("compose_click")
-@LLMDescription(
-  """
-Click on a UI element.
-Identify the element using its element ID from the view hierarchy (e.g., 'e5'),
-or by text content.
-""",
-)
+@LLMDescription("Click an element, identified by elementId (preferred), testTag, or text.")
 data class ComposeClickTool(
-  @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e5'. Preferred method.")
+  @param:LLMDescription("Element ID, e.g. 'e5'.")
   val elementId: String? = null,
-  @param:LLMDescription("Accessibility identifier of the element to click.")
+  @param:LLMDescription("Element testTag.")
   val testTag: String? = null,
-  @param:LLMDescription("The text content of the element to click.")
+  @param:LLMDescription("Element text, exact whole-text match.")
   val text: String? = null,
-  @param:LLMDescription("Human-readable description of the element being clicked, for logging.")
+  @param:LLMDescription("Short description of the element, for logs.")
   val element: String = "",
 ) : ComposeExecutableTool {
 

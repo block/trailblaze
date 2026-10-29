@@ -14,10 +14,10 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 /**
  * Endpoint that serves the home page of the Trailblaze logs server.
  *
- * Renders a server-side list of available sessions with quick summary info
- * (status, title, when, duration). Each row links to `/report?session=<id>`,
- * which generates that one session's interactive report and opens straight on
- * its detail view — much smaller than the all-sessions report.
+ * A status console for the daemon: run outcome counts, the connected devices, and a filterable
+ * list of sessions with quick summary info (status, title, when, duration). Each row links to
+ * `/report?session=<id>`, which generates that one session's interactive report and opens
+ * straight on its detail view. That page is much smaller than the all-sessions report.
  */
 object HomeEndpoint {
 
@@ -25,61 +25,44 @@ object HomeEndpoint {
     val sessions = logsRepo.getSessionIds()
       .mapNotNull { logsRepo.getSessionInfo(it) }
       .sortedByDescending { it.timestamp }
+    val kindCounts = sessions.groupingBy { statusLabelAndKind(it.latestStatus).second }.eachCount()
+    fun count(kind: String) = kindCounts[kind] ?: 0
 
     val rows = if (sessions.isEmpty()) {
-      """<tr><td colspan="4" class="empty">No sessions yet. Run a trail to populate this list.</td></tr>"""
+      """<tr class="empty-row"><td colspan="5" class="empty">No sessions yet. Run a trail to populate this list.</td></tr>"""
     } else {
-      sessions.joinToString("\n") { sessionRow(it) }
+      sessions.joinToString("\n") { sessionRow(it) } +
+        """<tr class="empty-row filtered-empty" hidden><td colspan="5" class="empty">No sessions match this filter.</td></tr>"""
     }
-    val hasTrailRunner = trailRunnerPath != null
-    val heroClass = if (hasTrailRunner) "hero" else "hero report-only"
-    val heroDescription = if (hasTrailRunner) {
-      "Create, record, and run natural-language UI tests in Trail Runner, or inspect the sessions produced by this daemon."
-    } else {
-      "Review reports, storyboards, connected devices, and the sessions produced by this daemon."
-    }
-    val trailRunnerButton = trailRunnerPath?.let { path ->
-      """<a class="button primary" href="${htmlEscape(path)}">Open Trail Runner <span aria-hidden="true">&rarr;</span></a>"""
-    }.orEmpty()
-    val reportButtonClass = if (hasTrailRunner) "button" else "button primary"
     // `/report` covers the most recent DEFAULT_SESSION_LIMIT sessions; say so rather than
     // implying it covers everything, and offer the explicit opt-in when it doesn't.
     val cappedReport = sessions.size > GenerateReportEndpoint.DEFAULT_SESSION_LIMIT
-    val reportScopeDescription = if (cappedReport) {
+    val reportTitle = if (cappedReport) {
       "The ${GenerateReportEndpoint.DEFAULT_SESSION_LIMIT} most recent of ${sessions.size} runs, in one shareable HTML page"
     } else {
       "Every captured run in one shareable HTML page"
     }
-    val allSessionsUtility = if (cappedReport) {
-      """
-              <a class="utility" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_URL}">
-                <span class="utility-copy"><strong>All ${sessions.size} sessions</strong><span>Every run in one page &mdash; slower and much larger</span></span>
-                <span class="utility-arrow" aria-hidden="true">&rarr;</span>
-              </a>
-      """.trimIndent()
+    val allSessionsLink = if (cappedReport) {
+      """<a class="text-link" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_URL}" title="Every run in one page, slower and much larger">Report of all ${sessions.size}</a>"""
     } else {
       ""
     }
-    val trailRunnerWorkflow = if (hasTrailRunner) {
-      """
-              <div class="workflow" aria-hidden="true">
-                <div class="flow-step">
-                  <div class="flow-icon">1</div>
-                  <div class="flow-copy"><strong>Describe the flow</strong><span>Turn an objective into clear steps</span></div>
-                </div>
-                <div class="flow-step">
-                  <div class="flow-icon">2</div>
-                  <div class="flow-copy"><strong>Record on a device</strong><span>Capture the tools that perform each step</span></div>
-                </div>
-                <div class="flow-step">
-                  <div class="flow-icon">3</div>
-                  <div class="flow-copy"><strong>Replay deterministically</strong><span>Run the saved trail whenever you need it</span></div>
-                </div>
-              </div>
-      """.trimIndent()
-    } else {
-      ""
-    }
+    val trailRunnerButton = trailRunnerPath?.let { path ->
+      """<a class="button primary" href="${htmlEscape(path)}">Open Trailblaze App <span aria-hidden="true">&rarr;</span></a>"""
+    }.orEmpty()
+    val reportButtonClass = if (trailRunnerPath != null) "button" else "button primary"
+    val lastRun = sessions.firstOrNull()?.let { timeElement(it) } ?: "&mdash;"
+    val filters = listOf(
+      Triple("all", "All", sessions.size),
+      Triple("prog", "Running", count("prog")),
+      Triple("fail", "Failed", count("fail")),
+      Triple("pass", "Passed", count("pass")),
+      Triple("other", "Other", count("other")),
+    ).filter { (key, _, n) -> key == "all" || n > 0 }
+      .joinToString("") { (key, label, n) ->
+        val pressed = if (key == "all") "true" else "false"
+        """<button type="button" class="filter" data-filter="$key" aria-pressed="$pressed">$label <span class="filter-count">$n</span></button>"""
+      }
 
     return """
     <!DOCTYPE html>
@@ -103,397 +86,473 @@ object HomeEndpoint {
         </script>
         <style>
           :root {
-            --text-standard: #fff;
-            --text-subtle: #878787;
-            --text-subtle-variant: #a2a2a2;
-            --bg-window: #0f0f0f;
-            --bg-sheet: #1a1a1a;
-            --bg-subtle: #0f0f0f;
-            --bg-standard: #181818;
-            --bg-prominent: #232323;
-            --bg-extra-prominent: #333;
-            --tb-hairline: rgba(255, 255, 255, .07);
-            --tb-hairline-strong: rgba(255, 255, 255, .12);
-            --tb-primary-green: #00e013;
-            --tb-running: #5e9bff;
-            --tb-ai: #b58cff;
-            --tb-fail: #f84752;
-            --tb-warning: #ff9d2e;
-            --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-            --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color-scheme: light;
+            --radius: 10px;
+            --background: oklch(0.985 0.002 247.84);
+            --foreground: oklch(0.145 0.014 258.34);
+            --card: oklch(1 0 0);
+            --primary: oklch(0.205 0.015 258.34);
+            --primary-foreground: oklch(0.985 0.002 247.84);
+            --muted: oklch(0.96 0.004 264.54);
+            --muted-foreground: oklch(0.48 0.021 264.36);
+            --accent: oklch(0.94 0.006 264.53);
+            --destructive: oklch(0.577 0.245 27.325);
+            --border: oklch(0.90 0.007 264.53);
+            --input: oklch(0.90 0.007 264.53);
+            --ring: oklch(0.62 0.15 151.71);
+            --green: oklch(0.53 0.16 149.21);
+            --blue: oklch(0.55 0.17 258.34);
+            --shadow-xs: 0 1px 2px oklch(0 0 0 / 5%);
+            --shadow-sm: 0 1px 3px oklch(0 0 0 / 8%);
+            --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           }
 
-          html[data-theme="light"] {
-            --text-standard: #14161a;
-            --text-subtle: #525964;
-            --text-subtle-variant: #434a55;
-            --bg-window: #edeff3;
-            --bg-sheet: #fff;
-            --bg-subtle: #f1f4f8;
-            --bg-standard: #fff;
-            --bg-prominent: #e7eaf0;
-            --bg-extra-prominent: #dce1e9;
-            --tb-hairline: rgba(15, 23, 42, .10);
-            --tb-hairline-strong: rgba(15, 23, 42, .16);
+          :root[data-theme="dark"] {
+            color-scheme: dark;
+            --background: oklch(0.135 0.012 258.34);
+            --foreground: oklch(0.97 0.003 264.54);
+            --card: oklch(0.175 0.013 258.34);
+            --primary: oklch(0.92 0.006 264.53);
+            --primary-foreground: oklch(0.205 0.015 258.34);
+            --muted: oklch(0.235 0.015 258.34);
+            --muted-foreground: oklch(0.68 0.015 264.37);
+            --accent: oklch(0.265 0.017 258.34);
+            --destructive: oklch(0.704 0.191 22.216);
+            --border: oklch(1 0 0 / 12%);
+            --input: oklch(1 0 0 / 15%);
+            --ring: oklch(0.72 0.15 150.10);
+            --green: oklch(0.72 0.15 150.10);
+            --blue: oklch(0.70 0.14 258.34);
           }
 
           * { box-sizing: border-box; }
-          html { min-height: 100%; background: var(--bg-window); }
+          html { min-height: 100%; background: var(--background); scrollbar-gutter: stable; }
           body {
             min-height: 100vh;
             margin: 0;
-            background: var(--bg-window);
-            color: var(--text-standard);
-            font-family: var(--font-display);
+            background: var(--background);
+            color: var(--foreground);
+            font-family: var(--font-sans);
+            font-size: 14px;
+            line-height: 1.45;
             -webkit-font-smoothing: antialiased;
           }
           a { color: inherit; }
-          a:focus-visible {
-            outline: 2px solid var(--tb-primary-green);
-            outline-offset: 3px;
-            border-radius: 8px;
+          a:focus-visible, button:focus-visible {
+            outline: 2px solid color-mix(in oklab, var(--ring) 60%, transparent);
+            outline-offset: 2px;
           }
-          .page { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 22px 0 56px; }
-          .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 42px;
-            margin-bottom: 18px;
-            padding: 0 4px;
-          }
-          .brand { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 700; }
+          [hidden] { display: none !important; }
+          .page { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 20px 0 56px; }
+
+          .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; margin-bottom: 20px; }
+          .topbar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
+          .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
           .brand-mark {
             position: relative;
             width: 24px;
             height: 24px;
-            border: 1px solid var(--tb-hairline-strong);
-            border-radius: 8px;
-            background: var(--bg-prominent);
+            flex: 0 0 24px;
+            border-radius: 6px;
+            background: var(--primary);
           }
           .brand-mark::before,
           .brand-mark::after {
             position: absolute;
             content: "";
             border-radius: 99px;
-            background: var(--tb-primary-green);
+            background: var(--primary-foreground);
           }
-          .brand-mark::before { width: 4px; height: 4px; top: 6px; left: 6px; box-shadow: 8px 8px 0 var(--tb-primary-green); }
-          .brand-mark::after { width: 11px; height: 2px; top: 11px; left: 7px; transform: rotate(45deg); }
+          .brand-mark::before { width: 4px; height: 4px; top: 6px; left: 6px; box-shadow: 8px 8px 0 var(--primary-foreground); }
+          .brand-mark::after { width: 11px; height: 2px; top: 11px; left: 6.5px; transform: rotate(45deg); }
           .daemon-status {
             display: inline-flex;
             align-items: center;
             gap: 7px;
-            color: var(--text-subtle-variant);
+            padding-left: 16px;
+            border-left: 1px solid var(--input);
+            color: var(--muted-foreground);
             font-size: 12px;
             font-weight: 600;
             text-decoration: none;
+            white-space: nowrap;
           }
           .daemon-status::before {
             width: 7px;
             height: 7px;
             content: "";
             border-radius: 99px;
-            background: var(--tb-primary-green);
-            box-shadow: 0 0 0 4px rgba(0, 224, 19, .10);
+            background: var(--green);
+            box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 18%, transparent);
           }
-          .daemon-status:hover { color: var(--text-standard); }
-          .sheet {
-            overflow: hidden;
-            border: 1px solid var(--tb-hairline);
-            border-radius: 18px;
-            background: var(--bg-sheet);
-            box-shadow: 0 18px 50px rgba(0, 0, 0, .16);
-          }
-          .hero {
-            display: grid;
-            grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr);
-            gap: 44px;
-            align-items: center;
-            min-height: 350px;
-            padding: 50px 54px;
-            border-bottom: 1px solid var(--tb-hairline);
-          }
-          .hero.report-only { grid-template-columns: minmax(0, 720px); }
-          .eyebrow {
-            margin: 0 0 14px;
-            color: var(--text-subtle);
-            font-size: 10.5px;
-            font-weight: 700;
-            letter-spacing: .1em;
-            text-transform: uppercase;
-          }
-          h1 {
-            max-width: 650px;
-            margin: 0;
-            font-size: clamp(36px, 5vw, 58px);
-            font-weight: 500;
-            letter-spacing: -.04em;
-            line-height: .98;
-          }
-          h1 span { color: var(--tb-primary-green); }
-          .lede {
-            max-width: 600px;
-            margin: 20px 0 28px;
-            color: var(--text-subtle-variant);
-            font-size: 16px;
-            line-height: 1.55;
-          }
-          .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+          .daemon-status:hover { color: var(--foreground); }
+          .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
           .button {
             display: inline-flex;
             align-items: center;
-            justify-content: center;
-            gap: 9px;
-            min-height: 44px;
-            padding: 0 19px;
-            border: 1px solid var(--tb-hairline-strong);
-            border-radius: 999px;
-            background: var(--bg-prominent);
-            color: var(--text-standard);
+            gap: 7px;
+            height: 32px;
+            padding: 0 13px;
+            border: 1px solid var(--input);
+            border-radius: calc(var(--radius) - 2px);
+            background: var(--background);
+            box-shadow: var(--shadow-xs);
+            color: var(--foreground);
             font-size: 13px;
-            font-weight: 700;
+            font-weight: 500;
             text-decoration: none;
-            transition: background .15s, transform .15s;
+            white-space: nowrap;
+            transition: background .12s, border-color .12s;
           }
-          .button:hover { background: var(--bg-extra-prominent); transform: translateY(-1px); }
-          .button.primary { border-color: transparent; background: var(--tb-primary-green); color: #00220a; }
-          .button.primary:hover { background: #00c711; }
-          .workflow {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            padding: 22px;
-            border: 1px solid var(--tb-hairline);
-            border-radius: 16px;
-            background: var(--bg-subtle);
+          .button:hover { background: var(--accent); }
+          .button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
+          .button.primary:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+
+          .sheet {
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: calc(var(--radius) + 4px);
+            background: var(--card);
+            box-shadow: var(--shadow-sm);
           }
-          .workflow::before {
-            position: absolute;
-            top: 46px;
-            bottom: 46px;
-            left: 39px;
-            width: 1px;
-            content: "";
-            background: var(--tb-hairline-strong);
+          .sheet + .sheet { margin-top: 14px; }
+
+          .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .stat { padding: 16px 20px 18px; }
+          .stat + .stat { border-left: 1px solid var(--border); }
+          .stat-label { color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+          .stat-value {
+            margin-top: 6px;
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: -.02em;
+            font-variant-numeric: tabular-nums;
+            line-height: 1.1;
           }
-          .flow-step { position: relative; display: flex; align-items: center; gap: 12px; min-height: 48px; }
-          .flow-icon {
-            z-index: 1;
-            display: grid;
-            width: 34px;
-            height: 34px;
-            flex: 0 0 34px;
-            place-items: center;
-            border: 1px solid var(--tb-hairline-strong);
-            border-radius: 10px;
-            background: var(--bg-standard);
-            font-size: 14px;
-            font-weight: 700;
-          }
-          .flow-step:nth-child(1) .flow-icon { color: var(--tb-ai); }
-          .flow-step:nth-child(2) .flow-icon { color: var(--tb-running); }
-          .flow-step:nth-child(3) .flow-icon { color: var(--tb-primary-green); }
-          .flow-copy strong { display: block; font-size: 13px; }
-          .flow-copy span { display: block; margin-top: 2px; color: var(--text-subtle); font-size: 11.5px; }
-          .utilities {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
-            padding: 18px;
-            border-bottom: 1px solid var(--tb-hairline);
-          }
-          .utility {
-            display: flex;
+          .stat-value.is-zero { color: var(--muted-foreground); }
+          .stat-value.running:not(.is-zero) { color: var(--blue); }
+          .stat-value.failed:not(.is-zero) { color: var(--destructive); }
+          .stat-value.passed:not(.is-zero) { color: var(--green); }
+          .stat-value.when { font-size: 20px; padding-top: 4px; }
+
+          .devices { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--border); }
+          .devices-label { flex: 0 0 auto; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+          .device-list { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 6px; min-width: 0; }
+          .device {
+            display: inline-flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            min-height: 76px;
-            padding: 15px 17px;
-            border: 1px solid var(--tb-hairline);
-            border-radius: 12px;
-            background: var(--bg-subtle);
-            text-decoration: none;
-            transition: border-color .15s, background .15s;
+            gap: 7px;
+            max-width: 320px;
+            height: 26px;
+            padding: 0 9px 0 4px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: var(--muted);
+            font-size: 12px;
+            font-weight: 500;
           }
-          .utility:hover { border-color: var(--tb-hairline-strong); background: var(--bg-standard); }
-          .utility-copy strong { display: block; color: var(--text-standard); font-size: 13px; }
-          .utility-copy span { display: block; margin-top: 4px; color: var(--text-subtle); font-size: 11.5px; }
-          .utility-arrow { color: var(--text-subtle); font-size: 17px; }
-          .sessions { padding: 30px 36px 36px; }
-          .section-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 15px; }
-          h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
-          .session-count { color: var(--text-subtle); font-size: 12px; }
-          .table-shell { overflow: hidden; border: 1px solid var(--tb-hairline); border-radius: 12px; }
-          table { width: 100%; border-collapse: collapse; font-size: 13px; }
-          th,
-          td { padding: 13px 15px; border-bottom: 1px solid var(--tb-hairline); text-align: left; vertical-align: middle; }
-          th {
-            background: var(--bg-subtle);
-            color: var(--text-subtle);
+          .device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .platform {
+            flex: 0 0 auto;
+            padding: 2px 5px;
+            border-radius: 4px;
+            background: var(--accent);
+            color: var(--muted-foreground);
             font-size: 10px;
             font-weight: 700;
-            letter-spacing: .08em;
-            text-transform: uppercase;
           }
-          tbody tr:last-child td { border-bottom: 0; }
-          tbody tr { transition: background .12s; }
-          tbody tr:hover { background: var(--bg-subtle); }
-          td.empty { padding: 48px 20px; color: var(--text-subtle); text-align: center; }
-          .status {
+          .devices-none { color: var(--muted-foreground); font-size: 12px; }
+          .text-link { flex: 0 0 auto; color: var(--foreground); font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+          .text-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+          .section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+          .section-head-left { display: flex; align-items: center; gap: 16px; min-width: 0; flex-wrap: wrap; }
+          h2 { margin: 0; font-size: 14px; font-weight: 650; }
+          .filters { display: flex; flex-wrap: wrap; gap: 4px; }
+          .filter {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 4px 9px;
-            border-radius: 6px;
+            height: 26px;
+            padding: 0 9px;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            color: var(--muted-foreground);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+          }
+          .filter:hover { background: var(--muted); color: var(--foreground); }
+          .filter[aria-pressed="true"] { border-color: var(--input); background: var(--accent); color: var(--foreground); }
+          .filter-count { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+          col.c-status { width: 132px; }
+          col.c-when { width: 112px; }
+          col.c-duration { width: 84px; }
+          col.c-actions { width: 156px; }
+          th, td { padding: 10px 20px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+          td + td, th + th { padding-left: 0; }
+          th {
+            padding-top: 9px;
+            padding-bottom: 9px;
+            background: var(--muted);
+            color: var(--muted-foreground);
             font-size: 11px;
-            font-weight: 700;
+            font-weight: 600;
+          }
+          tbody td { height: 56px; }
+          tbody tr:last-child td { border-bottom: 0; }
+          tbody tr:not(.empty-row):hover { background: var(--muted); }
+          td.empty { padding: 44px 20px; color: var(--muted-foreground); text-align: center; }
+          table[data-filter="prog"] tr[data-kind]:not([data-kind="prog"]),
+          table[data-filter="fail"] tr[data-kind]:not([data-kind="fail"]),
+          table[data-filter="pass"] tr[data-kind]:not([data-kind="pass"]),
+          table[data-filter="other"] tr[data-kind]:not([data-kind="other"]) { display: none; }
+
+          .status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+          .status::before { width: 7px; height: 7px; flex: 0 0 7px; content: ""; border-radius: 99px; background: currentColor; }
+          .status-pass { color: var(--green); }
+          .status-fail { color: var(--destructive); }
+          .status-prog { color: var(--blue); }
+          .status-prog::before { animation: pulse 1.6s ease-in-out infinite; }
+          .status-other { color: var(--muted-foreground); }
+          @keyframes pulse { 50% { opacity: .35; } }
+
+          .title-link {
+            display: block;
+            overflow: hidden;
+            color: var(--foreground);
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            text-overflow: ellipsis;
             white-space: nowrap;
           }
-          .status::before { width: 6px; height: 6px; content: ""; border-radius: 99px; background: currentColor; }
-          .status-pass { background: rgba(0, 224, 19, .10); color: var(--tb-primary-green); }
-          .status-fail { background: rgba(248, 71, 82, .12); color: var(--tb-fail); }
-          .status-prog { background: rgba(94, 155, 255, .13); color: var(--tb-running); }
-          .status-other { background: var(--bg-prominent); color: var(--text-subtle-variant); }
-          html[data-theme="light"] .status-pass { color: #08660f; }
-          html[data-theme="light"] .status-fail { color: #c81e2b; }
-          html[data-theme="light"] .status-prog { color: #2358b8; }
-          .title-link { color: var(--text-standard); font-size: 13.5px; font-weight: 600; text-decoration: none; }
+          .title-link.is-id { font-family: var(--font-mono); font-size: 12px; font-weight: 500; }
           .title-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-          .meta { color: var(--text-subtle); font-size: 11.5px; }
-          .session-id { margin-top: 3px; font-family: var(--font-mono); font-size: 10.5px; }
-          .nowrap { white-space: nowrap; }
-          .extras { display: flex; gap: 12px; margin-top: 7px; font-size: 11.5px; }
-          .extras a { color: var(--tb-running); font-weight: 600; text-decoration: none; }
-          .extras a:hover { text-decoration: underline; text-underline-offset: 3px; }
+          .session-id {
+            overflow: hidden;
+            margin-top: 2px;
+            color: var(--muted-foreground);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .meta { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+          .row-actions { display: flex; justify-content: flex-end; gap: 4px; }
+          .row-actions a {
+            padding: 4px 8px;
+            border-radius: 6px;
+            color: var(--muted-foreground);
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+          }
+          tbody tr:hover .row-actions a { color: var(--muted-foreground); }
+          .row-actions a:hover { background: var(--accent); color: var(--foreground); }
+          th.right { text-align: right; padding-right: 28px; }
 
-          @media (max-width: 800px) {
-            .hero { grid-template-columns: 1fr; min-height: 0; padding: 42px 34px; }
-            .workflow { display: none; }
-            .utilities { grid-template-columns: 1fr; }
+          @media (max-width: 860px) {
+            .topbar { flex-wrap: wrap; }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .stat:nth-child(3) { border-left: 0; }
+            .stat:nth-child(n + 3) { border-top: 1px solid var(--border); }
+            .table-scroll { overflow-x: auto; }
+            table { min-width: 720px; }
           }
           @media (max-width: 620px) {
-            .page { width: min(calc(100% - 20px), 1120px); padding-top: 10px; }
-            .topbar { margin-bottom: 10px; }
-            .sheet { border-radius: 14px; }
-            .hero { padding: 34px 22px; }
-            h1 { font-size: 38px; }
-            .button { width: 100%; }
-            .sessions { padding: 26px 18px; }
-            .table-shell { overflow-x: auto; }
-            table { min-width: 650px; }
+            .page { width: calc(100% - 20px); padding-top: 12px; }
+            .actions { justify-content: flex-start; }
+            .devices { align-items: flex-start; flex-direction: column; gap: 8px; }
           }
           @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+            *, *::before, *::after { animation: none !important; transition: none !important; }
           }
         </style>
       </head>
       <body>
         <main class="page">
           <header class="topbar">
-            <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Trailblaze</div>
-            <a class="daemon-status" href="/ping">Daemon running</a>
-          </header>
-          <div class="sheet">
-            <section class="$heroClass">
-              <div>
-                <p class="eyebrow">Trailblaze daemon</p>
-                <h1>Your testing workspace is <span>ready.</span></h1>
-                <p class="lede">$heroDescription</p>
-                <div class="hero-actions">
-                  $trailRunnerButton
-                  <a class="$reportButtonClass" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_PATH}">Open the interactive report</a>
-                </div>
-              </div>
-              $trailRunnerWorkflow
-            </section>
-
-            <nav class="utilities" aria-label="Daemon utilities">
-              <a class="utility" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_PATH}">
-                <span class="utility-copy"><strong>Interactive report</strong><span>$reportScopeDescription</span></span>
-                <span class="utility-arrow" aria-hidden="true">&rarr;</span>
-              </a>
-              $allSessionsUtility
-              <a class="utility" href="/devices">
-                <span class="utility-copy"><strong>Connected devices</strong><span>Inspect the available test surfaces</span></span>
-                <span class="utility-arrow" aria-hidden="true">&rarr;</span>
-              </a>
-              <a class="utility" href="/ping">
-                <span class="utility-copy"><strong>Health check</strong><span>Verify that the daemon is responding</span></span>
-                <span class="utility-arrow" aria-hidden="true">&rarr;</span>
-              </a>
+            <div class="topbar-left">
+              <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Trailblaze</div>
+              <a class="daemon-status" href="/ping" title="Health check">Daemon running</a>
+            </div>
+            <nav class="actions" aria-label="Daemon utilities">
+              <a class="button" href="/devices">Devices</a>
+              <a class="$reportButtonClass" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_PATH}" title="$reportTitle">Interactive report</a>
+              $trailRunnerButton
             </nav>
+          </header>
 
-            <section class="sessions" aria-labelledby="sessions-title">
-              <div class="section-head">
-                <div>
-                  <p class="eyebrow">Run history</p>
-                  <h2 id="sessions-title">Recent sessions</h2>
-                </div>
-                <span class="session-count">${sessions.size} total</span>
+          <section class="sheet" aria-label="Daemon status">
+            <div class="stats">
+              ${statCell("Running", count("prog"), "running")}
+              ${statCell("Failed", count("fail"), "failed")}
+              ${statCell("Passed", count("pass"), "passed")}
+              <div class="stat"><div class="stat-label">Last run</div><div class="stat-value when">$lastRun</div></div>
+            </div>
+            <div class="devices" id="devices" hidden>
+              <span class="devices-label" id="devices-label">Devices</span>
+              <div class="device-list" id="device-list"></div>
+              <a class="text-link" href="/devices">Control a device <span aria-hidden="true">&rarr;</span></a>
+            </div>
+          </section>
+
+          <section class="sheet" aria-labelledby="sessions-title">
+            <div class="section-head">
+              <div class="section-head-left">
+                <h2 id="sessions-title">Sessions</h2>
+                <div class="filters" role="group" aria-label="Filter sessions by status">$filters</div>
               </div>
-              <div class="table-shell">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Session</th>
-                      <th class="nowrap">When</th>
-                      <th class="nowrap">Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    $rows
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
+              $allSessionsLink
+            </div>
+            <div class="table-scroll">
+              <table id="sessions" data-filter="all">
+                <colgroup><col class="c-status" /><col /><col class="c-when" /><col class="c-duration" /><col class="c-actions" /></colgroup>
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Session</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th class="right">Open</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  $rows
+                </tbody>
+              </table>
+            </div>
+          </section>
         </main>
+        <script>
+          (function () {
+            var table = document.getElementById('sessions');
+            var buttons = document.querySelectorAll('.filter');
+            var filteredEmpty = table.querySelector('.filtered-empty');
+            buttons.forEach(function (button) {
+              button.addEventListener('click', function () {
+                var key = button.getAttribute('data-filter');
+                table.setAttribute('data-filter', key);
+                buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b === button)); });
+                if (filteredEmpty) {
+                  var any = key === 'all' || table.querySelector('tr[data-kind="' + key + '"]');
+                  filteredEmpty.hidden = !!any;
+                }
+              });
+            });
+
+            // The console is often left open in a tab, so relative times are re-derived every minute.
+            function relabelTimes() {
+              var now = Date.now();
+              document.querySelectorAll('time[datetime]').forEach(function (el) {
+                var then = Date.parse(el.getAttribute('datetime'));
+                if (isNaN(then)) return;
+                var minutes = Math.round((now - then) / 60000);
+                var text;
+                if (minutes < 1) text = 'just now';
+                else if (minutes < 60) text = minutes + 'm ago';
+                else if (minutes < 60 * 24) text = Math.round(minutes / 60) + 'h ago';
+                else if (minutes < 60 * 24 * 7) text = Math.round(minutes / 1440) + 'd ago';
+                else text = new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                if (!el.title) el.title = el.textContent;
+                el.textContent = text;
+              });
+            }
+            relabelTimes();
+            setInterval(relabelTimes, 60000);
+
+            var platformLabels = { IOS: 'iOS', ANDROID: 'Android', WEB: 'Web' };
+            fetch('/rpc/GetConnectedDevicesRequest', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            })
+              .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+              .then(function (json) {
+                var devices = (json && json.devices) || [];
+                var list = document.getElementById('device-list');
+                document.getElementById('devices-label').textContent =
+                  devices.length === 1 ? '1 device' : devices.length + ' devices';
+                if (devices.length === 0) {
+                  var none = document.createElement('span');
+                  none.className = 'devices-none';
+                  none.textContent = 'None connected';
+                  list.appendChild(none);
+                }
+                devices.forEach(function (device) {
+                  var chip = document.createElement('span');
+                  chip.className = 'device';
+                  chip.title = device.instanceId || '';
+                  var platform = document.createElement('span');
+                  platform.className = 'platform';
+                  platform.textContent = platformLabels[device.platform] || device.platform || '?';
+                  var name = document.createElement('span');
+                  name.className = 'device-name';
+                  name.textContent = device.description || device.instanceId;
+                  chip.append(platform, name);
+                  list.appendChild(chip);
+                });
+                document.getElementById('devices').hidden = false;
+              })
+              .catch(function () {});
+          })();
+        </script>
       </body>
     </html>
     """
   }
 
+  private fun statCell(label: String, value: Int, modifier: String): String {
+    val zero = if (value == 0) " is-zero" else ""
+    return """<div class="stat"><div class="stat-label">$label</div><div class="stat-value $modifier$zero">$value</div></div>"""
+  }
+
   private fun sessionRow(info: SessionInfo): String {
     val sessionId = info.sessionId.value
-    val (statusLabel, statusClass) = statusLabelAndClass(info.latestStatus)
+    val (statusLabel, kind) = statusLabelAndKind(info.latestStatus)
+    val titleIsId = info.displayName == sessionId
     val title = htmlEscape(info.displayName)
-    val when_ = htmlEscape(formatTimestamp(info))
     val duration = formatDuration(info.durationMs)
     val href = GenerateReportEndpoint.sessionReportUrl(info.sessionId)
     // The storyboard HTML is generated on demand by StoryboardEndpoint, so this link is
     // always live — no dependency on a pre-generated `.storyboard.html` in the logs dir.
     val storyboardHref = "/storyboard?session=${urlEncode(sessionId)}"
-    val sessionIdEscaped = htmlEscape(sessionId)
+    val sessionIdLine = if (titleIsId) "" else """<div class="session-id">${htmlEscape(sessionId)}</div>"""
+    val titleClass = if (titleIsId) "title-link is-id" else "title-link"
     return """
-            <tr>
-              <td><span class="status $statusClass">$statusLabel</span></td>
+            <tr data-kind="$kind">
+              <td><span class="status status-$kind">$statusLabel</span></td>
               <td>
-                <a class="title-link" href="$href">$title</a>
-                <div class="meta session-id">$sessionIdEscaped</div>
-                <div class="extras">
-                  <a href="$href">Report</a>
-                  <a href="$storyboardHref">Storyboard</a>
-                </div>
+                <a class="$titleClass" href="$href" title="$title">$title</a>
+                $sessionIdLine
               </td>
-              <td class="meta nowrap">$when_</td>
-              <td class="meta nowrap">$duration</td>
+              <td class="meta">${timeElement(info)}</td>
+              <td class="meta">$duration</td>
+              <td><div class="row-actions"><a href="$href">Report</a><a href="$storyboardHref">Storyboard</a></div></td>
             </tr>
     """.trimEnd()
   }
 
-  private fun statusLabelAndClass(status: SessionStatus): Pair<String, String> = when (status) {
-    is SessionStatus.Ended.Succeeded -> "Passed" to "status-pass"
-    is SessionStatus.Ended.SucceededWithSelfHeal -> "Passed (self-heal)" to "status-pass"
-    is SessionStatus.Ended.Failed -> "Failed" to "status-fail"
-    is SessionStatus.Ended.FailedWithSelfHeal -> "Failed (self-heal)" to "status-fail"
-    is SessionStatus.Ended.Cancelled -> "Cancelled" to "status-other"
-    is SessionStatus.Ended.TimeoutReached -> "Timed out" to "status-fail"
-    is SessionStatus.Ended.MaxCallsLimitReached -> "Max calls" to "status-fail"
-    is SessionStatus.Started -> "Running" to "status-prog"
-    is SessionStatus.Unknown -> "Unknown" to "status-other"
+  /** Absolute local time, which the page's script rewrites to a relative one and keeps as a tooltip. */
+  private fun timeElement(info: SessionInfo): String =
+    """<time datetime="${info.timestamp}">${htmlEscape(formatTimestamp(info))}</time>"""
+
+  private fun statusLabelAndKind(status: SessionStatus): Pair<String, String> = when (status) {
+    is SessionStatus.Ended.Succeeded -> "Passed" to "pass"
+    is SessionStatus.Ended.SucceededWithSelfHeal -> "Passed (self-heal)" to "pass"
+    is SessionStatus.Ended.Failed -> "Failed" to "fail"
+    is SessionStatus.Ended.FailedWithSelfHeal -> "Failed (self-heal)" to "fail"
+    is SessionStatus.Ended.Cancelled -> "Cancelled" to "other"
+    is SessionStatus.Ended.TimeoutReached -> "Timed out" to "fail"
+    is SessionStatus.Ended.MaxCallsLimitReached -> "Max calls" to "fail"
+    is SessionStatus.Started -> "Running" to "prog"
+    is SessionStatus.Unknown -> "Unknown" to "other"
   }
 
   private fun formatTimestamp(info: SessionInfo): String {

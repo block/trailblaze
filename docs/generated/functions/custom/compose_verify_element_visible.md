@@ -4,9 +4,7 @@
 
 # `compose_verify_element_visible`
 
-Verify that a UI element is visible.
-Identify the element using its element ID from the view hierarchy.
-This is a test assertion — it will fail if the element is not found.
+Assert an element is on screen, identified by elementId or testTag.
 
 ## Source
 
@@ -24,11 +22,11 @@ This is a test assertion — it will fail if the element is not found.
 ### Optional parameters
 
 - `testTag` — `String`
-  Accessibility identifier of the element to verify.
+  Element testTag.
 - `elementId` — `String`
-  Element ID from the view hierarchy, e.g., 'e5'.
+  Element ID, e.g. 'e5'.
 - `element` — `String`
-  Human-readable description of the element being verified, for logging.
+  Short description of the element, for logs.
 
 ## Output
 

@@ -4,12 +4,15 @@ import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.waypoint.resolveFor
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
-import xyz.block.trailblaze.ui.tabs.waypoints.loadWaypoints
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -50,7 +53,7 @@ object WaypointGraphBuilder {
    *             generated note. The desktop endpoint passes "live"; the CLI passes a
    *             timestamp-based label so users opening a saved file know it's frozen.
    * @param fromPath cwd anchor used to discover the workspace `trails/config/`
-   *             directory for layered shortcut/trailhead loading. Defaults to the
+   *             directory for layered trailhead loading. Defaults to the
    *             JVM cwd, which works for the daemon (always run from the workspace);
    *             the CLI passes the caller's cwd via [CliCallerContext.callerCwd]
    *             so its server-served invocations resolve against the user's shell,
@@ -66,7 +69,7 @@ object WaypointGraphBuilder {
     targetFilter: String? = null,
     platformFilter: String? = null,
   ): WaypointGraphData {
-    val output = loadWaypoints(root)
+    val output = loadWaypoints(root, fromPath)
 
     val nodes = output.items.map { item ->
       val def = item.definition
@@ -122,7 +125,7 @@ object WaypointGraphBuilder {
     }
 
     val toolConfigs = try {
-      ToolYamlLoader.discoverShortcutsAndTrailheads(
+      ToolYamlLoader.discoverTrailheads(
         resourceSource = buildToolResourceSource(fromPath),
       )
     } catch (e: Exception) {
@@ -133,30 +136,18 @@ object WaypointGraphBuilder {
       emptyMap()
     }
 
-    val shortcuts = toolConfigs.mapNotNull { (toolName, config) ->
-      config.shortcut?.let { meta ->
-        WaypointGraphShortcut(
-          id = toolName.toolName,
-          description = config.description,
-          from = meta.from,
-          to = meta.to,
-          variant = meta.variant,
-          toolsList = config.toolsList,
-          toolClass = config.toolClass,
-        )
-      }
-    }
-
-    val trailheads = toolConfigs.mapNotNull { (toolName, config) ->
+    val yamlTrailheads = toolConfigs.mapNotNull { (toolName, config) ->
       config.trailhead?.let { meta ->
         WaypointGraphTrailhead(
           id = toolName.toolName,
-          description = config.description,
+          // A `*.trailhead.yaml` carries no description; the class or scripted tool behind it does.
+          description = null,
           to = meta.to,
-          dynamic = meta.dynamic,
+          dynamic = meta.to == null,
         )
       }
     }
+    val trailheads = disambiguateTrailheads(yamlTrailheads + scriptedTrailheads(output.resolvedConfig))
 
     val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
     val scopeSuffix = listOfNotNull(
@@ -165,24 +156,22 @@ object WaypointGraphBuilder {
     ).joinToString(", ").let { if (it.isEmpty()) "" else " · $it" }
     val generatedNote = "Generated $timestamp from ${root.absolutePath} ($liveSourceLabel)$scopeSuffix"
 
-    val filtered = applyScope(
+    val (scopedWaypoints, scopedTrailheads) = applyScope(
       waypoints = nodes,
-      shortcuts = shortcuts,
       trailheads = trailheads,
       targetFilter = targetFilter,
       platformFilter = platformFilter,
     )
 
     return WaypointGraphData(
-      waypoints = filtered.first,
-      shortcuts = filtered.second,
-      trailheads = filtered.third,
+      waypoints = scopedWaypoints,
+      trailheads = scopedTrailheads,
       generatedNote = generatedNote,
     )
   }
 
   /**
-   * Drop waypoints (and their incident edges) that fall outside the requested target
+   * Drop waypoints (and the trailheads landing on them) that fall outside the requested target
    * or platform scope. Mirrors the front-end filter pills in
    * `waypoint-graph-template.html` (target derived from `id.split('/')[0]`, platform
    * read off `WaypointGraphNode.platform`) so the CLI's `--target` / `--platform`
@@ -194,13 +183,12 @@ object WaypointGraphBuilder {
    */
   internal fun applyScope(
     waypoints: List<WaypointGraphNode>,
-    shortcuts: List<WaypointGraphShortcut>,
     trailheads: List<WaypointGraphTrailhead>,
     targetFilter: String?,
     platformFilter: String?,
-  ): Triple<List<WaypointGraphNode>, List<WaypointGraphShortcut>, List<WaypointGraphTrailhead>> {
+  ): Pair<List<WaypointGraphNode>, List<WaypointGraphTrailhead>> {
     if (targetFilter == null && platformFilter == null) {
-      return Triple(waypoints, shortcuts, trailheads)
+      return Pair(waypoints, trailheads)
     }
     val keptWaypoints = waypoints.filter { wp ->
       val targetOk = targetFilter == null || wp.id.substringBefore('/') == targetFilter
@@ -213,9 +201,55 @@ object WaypointGraphBuilder {
       targetOk && platformOk
     }
     val keptIds = keptWaypoints.mapTo(mutableSetOf()) { it.id }
-    val keptShortcuts = shortcuts.filter { it.from in keptIds && it.to in keptIds }
-    val keptTrailheads = trailheads.filter { it.to in keptIds }
-    return Triple(keptWaypoints, keptShortcuts, keptTrailheads)
+    // A trailhead whose tool can't run on the scoped platform draws no launch edge there, even
+    // when its destination waypoint is cross-platform. No declared platforms means any platform.
+    val keptTrailheads = trailheads.filter { th ->
+      th.to in keptIds && (platformFilter == null || th.platforms.isEmpty() || platformFilter in th.platforms)
+    }
+    return Pair(keptWaypoints, keptTrailheads)
+  }
+
+  /**
+   * Trailheads written as scripted (`.ts`) tools, which declare `trailhead:` in their spec rather
+   * than in a `*.trailhead.yaml`. Read off the targets of the same resolution that produced the
+   * graph's waypoints, so the workspace's own `targets:` selection applies and a failed analysis
+   * isn't re-run. Without the analyzer (no `bun` on the host), the spec isn't read and the list is
+   * empty; the graph still renders.
+   */
+  private fun scriptedTrailheads(resolved: TrailblazeResolvedConfig?): List<WaypointGraphTrailhead> =
+    resolved?.targets.orEmpty()
+      .flatMap { it.tools.orEmpty() }
+      .mapNotNull { tool ->
+        tool.trailhead?.let { meta ->
+          WaypointGraphTrailhead(
+            id = tool.name,
+            description = tool.description,
+            to = meta.to,
+            dynamic = meta.to == null,
+            platforms = (tool.meta?.get(META_SUPPORTED_PLATFORMS) as? JsonArray)
+              ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
+              .orEmpty(),
+          )
+        }
+      }
+
+  /** `_meta` key carrying a scripted tool's supported platforms (values are case-insensitive). */
+  private const val META_SUPPORTED_PLATFORMS = "trailblaze/supportedPlatforms"
+
+  /**
+   * One entry per distinct (name, destination). An exported trailhead appears on every consuming
+   * target, so identical copies collapse. A consumer can also override an exported tool with its
+   * own, so one name can land on different waypoints; those keep a suffixed id so each draws as its
+   * own node (the page keys nodes by id) and survives `--target` scoping, which filters on `to`.
+   *
+   * `internal` so the test suite can drive it with synthetic trailheads.
+   */
+  internal fun disambiguateTrailheads(trailheads: List<WaypointGraphTrailhead>): List<WaypointGraphTrailhead> {
+    val distinct = trailheads.distinctBy { listOf(it.id, it.to, it.dynamic, it.platforms) }
+    val sharedNames = distinct.groupingBy { it.id }.eachCount().filterValues { it > 1 }.keys
+    return distinct.map { th ->
+      if (th.id in sharedNames) th.copy(id = "${th.id} → ${th.to ?: "dynamic"}") else th
+    }
   }
 
   /**
@@ -223,12 +257,12 @@ object WaypointGraphBuilder {
    * otherwise classpath + workspace `trails/config/`. The workspace layer means
    * trailmap-bundled tools authored under `<workspace>/trails/config/trailmaps/<id>/tools/`
    * surface alongside framework-classpath ones — without it the standalone CLI
-   * export silently drops every workspace-trailmap shortcut/trailhead from the graph.
+   * export silently drops every workspace-trailmap trailhead from the graph.
    *
    * Composes via the same shape `AppTargetDiscovery.buildResourceSource` uses
    * (kept independent here so the graph path doesn't depend on the AppTarget
    * loader's heavier setup — companions, project tool overlays — both unnecessary
-   * for graph edges).
+   * for trailheads).
    */
   private fun buildToolResourceSource(fromPath: Path): ConfigResourceSource {
     val workspace = TrailblazeWorkspaceConfigResolver.resolve(fromPath)

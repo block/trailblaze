@@ -833,7 +833,7 @@ class TrailCommandSaveRecordingTest {
   }
 
   @Test
-  fun `a failed session's recording keeps the attempt that broke`() {
+  fun `a failed session's recording is not folded and drops the call that broke`() {
     val cmd = command()
     val logsDir = tempFolder.newFolder()
     val sessionId = writeHealedAppsSession(
@@ -845,10 +845,12 @@ class TrailCommandSaveRecordingTest {
 
     val unified = createTrailblazeYaml()
       .decodeUnifiedTrail(File(logsDir, "${sessionId.value}/recording.trail.yaml").readText())
+    // Both attempts keep their own step, but the failed call is never recorded: the broken
+    // attempt's step comes back unrecorded rather than replaying a known failure.
+    assertEquals(listOf("Open Apps", "Open Apps"), unified.trail.map { it.step })
     assertEquals(
-      listOf("tapAppzMissing"),
-      unified.trail.first().recordings["android-phone"]?.map { it.name },
-      "the failed attempt is still what the recording shows",
+      listOf(null, listOf("tapApps")),
+      unified.trail.map { step -> step.recordings["android-phone"]?.map { it.name } },
     )
   }
 

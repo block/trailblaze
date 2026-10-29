@@ -25,7 +25,6 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunAsyncEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliRunManager
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
-import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliShutdownEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
@@ -59,12 +58,6 @@ data class CliEndpointCallbacks(
   val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
   /** Called when CLI requests shutdown */
   val onShutdownRequest: () -> Unit,
-  /**
-   * Called when CLI requests to show the window. Returns `true` when a window handler ran,
-   * `false` when this daemon has no window to show (headless server, or the desktop UI hasn't
-   * installed its callback yet) — callers branch on the resulting `success` flag.
-   */
-  val onShowWindowRequest: () -> Boolean,
   /**
    * Provides current daemon status. Suspend so implementations can await (bounded) device
    * queries - a plain function here invited `runBlocking` inside the Ktor handler, which runs
@@ -176,7 +169,6 @@ object ServerEndpoints {
         }
         CliRunAsyncEndpoint.register(this, runManager)
         CliShutdownEndpoint.register(this, callbacks.onShutdownRequest, runManager::activeRunSummaries)
-        CliShowWindowEndpoint.register(this, callbacks.onShowWindowRequest)
         // activeRuns lives on the CliRunManager created here, so it's stamped onto the
         // status response server-side rather than by each app's statusProvider. Derive the
         // count from the same summaries snapshot so the two fields can't disagree if a run

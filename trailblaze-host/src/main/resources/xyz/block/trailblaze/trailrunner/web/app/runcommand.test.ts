@@ -34,4 +34,11 @@ describe('buildRunCommand', () => {
     expect(cmd(true)).not.toContain('--no-capture-memory');
     expect(cmd(null)).not.toContain('--no-capture-memory');
   });
+
+  test('video is on for a run unless the toggle turns it off', () => {
+    const cmd = (captureVideo) => window.buildRunCommand({ trailPath: 'demo.trail.yaml', captureVideo });
+    expect(cmd(false)).toContain('--no-capture-video');
+    expect(cmd(true)).not.toContain('capture-video');
+    expect(cmd(undefined)).not.toContain('capture-video');
+  });
 });

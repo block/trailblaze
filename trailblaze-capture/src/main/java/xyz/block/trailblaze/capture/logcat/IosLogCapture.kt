@@ -9,6 +9,8 @@ import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.IosAppProcess
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.isMacOs
 
 /**
@@ -26,12 +28,14 @@ import xyz.block.trailblaze.util.isMacOs
  * ### Which clock
  * Host, for both bookends — and unlike Android's logcat, that is also the clock the log lines
  * themselves are stamped with, so the two agree without conversion. A simulator runs on this Mac
- * and reads this Mac's clock, so there is no device-host skew on this platform at all. A recorder
- * for a physical iOS device would have to revisit that, the way `AndroidLogcatCapture` does.
+ * and reads this Mac's clock, so there is no device-host skew on this platform at all.
  */
 class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT
   override var isAppScoped: Boolean = false
+    private set
+
+  override var appProcessName: String? = null
     private set
 
   private var process: Process? = null
@@ -41,15 +45,27 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
     isAppScoped = false
+    appProcessName = null
     startTimestampMs = System.currentTimeMillis()
     outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
 
-    val (command, appScoped) = buildIosLogStreamCommand(deviceId, appId)
+    val installed = appId?.let { IosHostSimctlUtils.getInstalledAppProcess(deviceId, it) }
+    val (command, appScoped) = buildIosLogStreamCommand(deviceId, appId, installed)
     isAppScoped = appScoped
+    // The install's extensions log into the same device.log, and a crash of theirs is not the app's.
+    // Only appinfo's executable name can tell them apart: the bundle-id guess may not be the app's
+    // real name, and trusting it would discard the app's own crashes.
+    if (appScoped) appProcessName = installed?.executableName
     if (!appScoped && appId != null) {
       Console.log(
         "iOS log capture: appId '$appId' resolved to a blank process name; " +
           "capturing only errors and faults from all simulator processes.",
+      )
+    } else if (appId != null && installed == null) {
+      Console.log(
+        "iOS log capture: '$appId' is not installed yet, so its process name is guessed from the " +
+          "bundle id ('${appId.substringAfterLast(".")}'); lines from a differently named " +
+          "executable will be missing from device.log.",
       )
     }
 
@@ -113,7 +129,11 @@ internal const val IOS_UNSCOPED_LOG_PREDICATE = "messageType == error OR message
  * [appId] yields a predicate (see [buildIosLogStreamPredicate]); otherwise limited to
  * [IOS_UNSCOPED_LOG_PREDICATE] rather than capturing the whole simulator log.
  */
-internal fun buildIosLogStreamCommand(deviceId: String, appId: String?): IosLogStreamCommand {
+internal fun buildIosLogStreamCommand(
+  deviceId: String,
+  appId: String?,
+  installed: IosAppProcess? = null,
+): IosLogStreamCommand {
   val argv =
     mutableListOf(
       "xcrun",
@@ -130,7 +150,7 @@ internal fun buildIosLogStreamCommand(deviceId: String, appId: String?): IosLogS
       "--level",
       "info",
     )
-  val appPredicate = buildIosLogStreamPredicate(appId)
+  val appPredicate = buildIosLogStreamPredicate(appId, installed)
   argv.addAll(listOf("--predicate", appPredicate ?: IOS_UNSCOPED_LOG_PREDICATE))
   return IosLogStreamCommand(argv, isAppScoped = appPredicate != null)
 }
@@ -144,21 +164,66 @@ internal fun buildIosLogStreamCommand(deviceId: String, appId: String?): IosLogS
  * Matches the app three ways, because an app's logs don't all carry the same identity (matching
  * ONLY `process == <last-bundle-component>` missed apps whose process name differs from that
  * component, or that emit `os_log` under a subsystem — the near-empty capture in PR #3944):
- * - `process ==[c] "<name>"`         — NSLog / print from the main executable
+ * - `process ==[c] "<name>"`         — NSLog / print / os_log from the main executable
  * - `subsystem BEGINSWITH[c] "<id>"` — os_log via `Logger(subsystem: <bundleId>, …)`
  * - `processImagePath CONTAINS[c]`   — helper / XPC processes whose name differs
+ *
+ * Those three clauses are only the fallback, for an app whose install directory isn't known
+ * (usually: not installed yet). `<name>` is then the executable appinfo reported, or else the last
+ * bundle-id component. That guess is wrong for any app whose executable isn't named after its
+ * bundle id: `com.example.wallet.dogfood` running as `Wallet` matched none of the clauses, so an
+ * app-scoped `device.log` held none of its lines, crashes included.
+ *
+ * Once [installed] is known, the predicate is scoped to that one install instead:
+ * - `processImagePath CONTAINS[c] "/<container-id>/<Name>.app/"` — the main executable and its
+ *   extensions, all of which run from the install's own directory
+ * - `subsystem ==[c] "<id>" OR subsystem BEGINSWITH[c] "<id>."` — os_log under the bundle id
+ * Neither matches another build of the same app installed alongside it, which shares the
+ * executable and `.app` names but has its own container and bundle id. A bare `process ==` or
+ * bundle-id prefix clause would, and that build's crash would then fail this run.
  *
  * `[c]` = case-insensitive: a bundle id's last component is often lowercase (`sampleapp`,
  * `mobilesafari`) while the real process name / image path uses the app's actual casing
  * (`MobileSafari`), so exact-case matching can silently capture nothing.
  *
+ * Every form excludes [IOS_XCTEST_SUBSYSTEM]: XCTest's accessibility queries run inside the app's
+ * own process, so an app-scoped clause matches them, and they outnumber the app's lines 30 to 1.
+ * It also keeps only the errors and faults of [IOS_NETWORK_SUBSYSTEM], Apple's networking stack
+ * in the same process, whose connection bookkeeping was most of what was left.
+ *
  * Internal (not private) purely so it can be unit-tested without spawning a process.
  */
-internal fun buildIosLogStreamPredicate(appId: String?): String? {
+internal fun buildIosLogStreamPredicate(appId: String?, installed: IosAppProcess? = null): String? {
   if (appId == null) return null
-  val processName = appId.substringAfterLast(".")
-  if (processName.isBlank()) return null
-  return "process ==[c] \"$processName\" OR " +
-    "subsystem BEGINSWITH[c] \"$appId\" OR " +
-    "processImagePath CONTAINS[c] \"$processName\""
+  val appClauses = installed?.installDir?.let { installDir ->
+    "processImagePath CONTAINS[c] \"$installDir\" OR " +
+      "subsystem ==[c] \"$appId\" OR " +
+      "subsystem BEGINSWITH[c] \"$appId.\""
+  } ?: run {
+    val processName = iosAppProcessName(appId, installed)
+    if (processName.isBlank()) return null
+    "process ==[c] \"$processName\" OR " +
+      "subsystem BEGINSWITH[c] \"$appId\" OR " +
+      "processImagePath CONTAINS[c] \"$processName\""
+  }
+  return "($appClauses) AND NOT subsystem BEGINSWITH[c] \"$IOS_XCTEST_SUBSYSTEM\" AND " +
+    "NOT (subsystem BEGINSWITH[c] \"$IOS_NETWORK_SUBSYSTEM\" AND messageType != error AND messageType != fault)"
 }
+
+/**
+ * The subsystem XCTest logs under from inside the app it drives. Every element it reads logs a
+ * fetch, a reply, and the attributes it faulted in: one iPad trail wrote 2.7 million of these lines
+ * (300 MB) to `device.log`, beside 93,000 of the app's own.
+ */
+internal const val IOS_XCTEST_SUBSYSTEM = "com.apple.dt.xctest"
+
+/**
+ * Apple's networking stack, logging every connection's state changes from inside the app: 14.6 MB
+ * of the 18.5 MB that same session kept once XCTest was gone. The app's own requests are captured
+ * separately, so only this subsystem's errors and faults (a failed TLS handshake) are worth a line.
+ */
+internal const val IOS_NETWORK_SUBSYSTEM = "com.apple.network"
+
+/** The app's process name: the executable appinfo reported, or else the last bundle-id component. */
+internal fun iosAppProcessName(appId: String, installed: IosAppProcess?): String =
+  installed?.executableName ?: appId.substringAfterLast(".")

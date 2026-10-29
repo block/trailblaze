@@ -350,6 +350,7 @@ window.TB = {
   // so any new data-core function a screen uses MUST be listed in this object too.
   // TbNamespaceCoverageTest enforces this.
   resolveRunDevice, connectDevice, connectDeviceDetailed, disconnectDevice, fetchTrailYaml, dispatchRun, prepareRetry, launchRetry, withTimeout, setPendingRunSession, createTrailDir, extractTrace,
+  sendDeviceInteraction, fetchDriverToolCatalog, runTrailYamlOnDevice, navigateWebUrl,
   getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, fetchTrailGitBaseline, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   buildTrailTree, buildTrailBundleRows, countTrailBundles, trailMatchesPlatform, trailFormatMap, fileUrl, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
   recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, requestPendingRunStop, pendingRunLive, pendingRunWanted, PENDING_TTL_MS,

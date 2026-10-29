@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.cli
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import picocli.CommandLine
 
@@ -53,9 +53,22 @@ class TrailCommandCaptureFlagsTest {
   }
 
   @Test
-  fun `video stays tri-state so the env var and saved setting can still rank between the tiers`() {
-    assertNull(parse("trail.yaml").captureVideo, "no flag must stay null, not resolve to false")
-    assertEquals(true, parse("trail.yaml", "--capture-video").captureVideo)
-    assertEquals(false, parse("trail.yaml", "--no-capture-video").captureVideo)
+  fun `a trail run records video unless told not to`() {
+    assertEquals(true, sentCaptureVideo(parse("trail.yaml")))
+    assertEquals(true, sentCaptureVideo(parse("trail.yaml", "--capture-video")))
+    assertEquals(false, sentCaptureVideo(parse("trail.yaml", "--no-capture-video")))
+    assertEquals(true, sentCaptureVideo(parse("trail.yaml", "--no-capture-video", "--capture-all")))
   }
+
+  /** The `captureVideo` the daemon receives for a delegated run of [command]. */
+  private fun sentCaptureVideo(command: TrailCommand): Boolean? =
+    command.delegatedRunRequest(
+      file = File("trail.yaml"),
+      yamlContent = "- prompts:\n  - step: do the thing\n",
+      testName = "any",
+      deviceSpec = null,
+      useRecordedSteps = true,
+      initialArgs = emptyMap(),
+      envReader = { null },
+    ).captureVideo
 }

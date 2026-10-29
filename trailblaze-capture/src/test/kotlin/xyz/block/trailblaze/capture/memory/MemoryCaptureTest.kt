@@ -2,15 +2,18 @@ package xyz.block.trailblaze.capture.memory
 
 import java.io.File
 import java.nio.file.Files
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.capture.ToolCallPhase
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.events.SessionEvent
 import xyz.block.trailblaze.events.SessionEvents
 
@@ -22,6 +25,7 @@ class MemoryCaptureTest {
     /** Dalvik heap size in the dump; heap used = this − [MeminfoFixtures.DALVIK_HEAP_FREE_KB]. */
     var heapSizeKb: Long = 2_923
     var answering = true
+    var throwing = false
     /** How long each read takes — the real thing costs a few hundred milliseconds. */
     var readDelayMs: Long = 0
     val gcRequests = mutableListOf<Boolean>()
@@ -41,6 +45,7 @@ class MemoryCaptureTest {
       }
       try {
         if (readDelayMs > 0) Thread.sleep(readDelayMs)
+        if (throwing) error("the device went away")
         if (!answering) return null
         val app = if (pid != null && appId != null) DumpsysMeminfoParser.parseAppSample(MeminfoFixtures.dumpsysWith(36_940, heapSizeKb = heapSizeKb)) else null
         return MemorySnapshot(
@@ -58,8 +63,16 @@ class MemoryCaptureTest {
       }
     }
 
+    /** The closing reading comes back marked, so a test can tell which route served each row. */
+    override fun readFinal(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
+      read(deviceId, appId, forceGc)?.copy(source = FINAL_SOURCE)
+
     override fun close() {
       closed = true
+    }
+
+    companion object {
+      const val FINAL_SOURCE = "fake-final"
     }
   }
 
@@ -68,6 +81,7 @@ class MemoryCaptureTest {
     try {
       block(sessionDir)
     } finally {
+      SessionCaptureHealth.clear(sessionDir, MemoryCapture.STREAM_NAME)
       sessionDir.deleteRecursively()
     }
   }
@@ -120,6 +134,25 @@ class MemoryCaptureTest {
     assertEquals(
       setOf("reason", "appId", "pid", "heapUsedKb", "heapLimitKb", "deviceAvailableKb", "gcForced", "source", "readMs"),
       first.keys,
+    )
+  }
+
+  @Test
+  fun `only the closing reading is taken through the probe's final route`() = withSession { sessionDir ->
+    // The session's end waits on the final reading alone, so it is the one a probe may cut short.
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = capture(probe)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+    probe.heapSizeKb += 5_000
+    assertEquals("memory_changed", capture.sampleOnce())
+    capture.stop()
+
+    val written = events(sessionDir)
+    assertEquals(listOf("first", "memory_changed", "final"), written.map { it.reason() })
+    assertEquals(
+      listOf("fake", "fake", FakeProbe.FINAL_SOURCE),
+      written.map { it.data.jsonObject["source"]?.jsonPrimitive?.content },
     )
   }
 
@@ -315,6 +348,60 @@ class MemoryCaptureTest {
   }
 
   @Test
+  fun `a dropped boundary marks the session's capture incomplete`() = withSession { sessionDir ->
+    // A dropped request is a tool with no reading; a query mid-session must not see the memory
+    // stream as complete.
+    val probe = FakeProbe().apply { pid = 17220; readDelayMs = 60_000 }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 600_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+
+    repeat(MemoryCapture.MAX_PENDING_REQUESTS + 1) { capture.onToolCall(ToolCallPhase.BEFORE, "tool$it") }
+
+    val failure = assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+    assertTrue(failure.startsWith("memory-capture: "), failure)
+    capture.stop()
+  }
+
+  @Test
+  fun `a dropped boundary does not wait on the disk to record its loss`() = withSession { sessionDir ->
+    // A pipe where the marker goes: opening it to write blocks until something reads it, the way a
+    // stalled disk would. The drop happens on the tool's thread, which must not wait for it.
+    val marker = File(sessionDir, SessionCaptureHealth.markerFileName(MemoryCapture.STREAM_NAME))
+    assertEquals(0, ProcessBuilder("mkfifo", marker.path).start().waitFor())
+    val probe = FakeProbe().apply { pid = 17220; readDelayMs = 60_000 }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 600_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+
+    val toolThread = thread(isDaemon = true) {
+      repeat(MemoryCapture.MAX_PENDING_REQUESTS + 1) { capture.onToolCall(ToolCallPhase.BEFORE, "tool$it") }
+    }
+    toolThread.join(5_000)
+
+    try {
+      assertFalse(toolThread.isAlive, "the tool call returned without waiting on the marker write")
+      assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+      // The marker is still written, off that thread: reading the pipe receives it.
+      assertTrue(marker.readText().startsWith("memory-capture: "))
+    } finally {
+      // Unblock whichever thread is still waiting to write.
+      thread(isDaemon = true) { runCatching { marker.inputStream().close() } }
+    }
+    capture.stop()
+  }
+
+  @Test
+  fun `boundaries within the queue's bound leave the capture complete`() = withSession { sessionDir ->
+    val probe = FakeProbe().apply { pid = 17220; readDelayMs = 60_000 }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 600_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+
+    repeat(MemoryCapture.MAX_PENDING_REQUESTS) { capture.onToolCall(ToolCallPhase.BEFORE, "tool$it") }
+
+    assertNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+    capture.stop()
+  }
+
+  @Test
   fun `past the event ceiling only the final bookend is written`() = withSession { sessionDir ->
     // A pathological allocator must not fill the session directory. The bookend is the exception:
     // a run that hit the ceiling still needs its closing reading, or the report's last figure is
@@ -341,6 +428,8 @@ class MemoryCaptureTest {
     val written = events(sessionDir)
     assertEquals(3, written.count { it.reason() != "final" }, "writing stops at the ceiling")
     assertEquals("final", written.last().reason(), "and the closing bookend is written anyway")
+    val failure = assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME), "a live query must not call the stream complete")
+    assertTrue(failure.contains("ceiling"), failure)
   }
 
   @Test
@@ -416,6 +505,49 @@ class MemoryCaptureTest {
     assertNull(capture.sampleOnce())
     assertNull(capture.stop())
     assertTrue(events(sessionDir).isEmpty())
+  }
+
+  @Test
+  fun `a reading that comes back with nothing after one has landed marks the capture incomplete`() = withSession { sessionDir ->
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = capture(probe)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+    assertNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+
+    probe.answering = false
+    capture.onToolCall(ToolCallPhase.BEFORE, "tapOnElement")
+
+    val failure = assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+    assertTrue(failure.startsWith("memory-capture: "), failure)
+    capture.stop()
+  }
+
+  @Test
+  fun `a reading that fails after one has landed marks the capture incomplete`() = withSession { sessionDir ->
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = capture(probe)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+
+    probe.throwing = true
+    capture.onToolCall(ToolCallPhase.BEFORE, "tapOnElement")
+
+    assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+    capture.stop()
+  }
+
+  @Test
+  fun `readings that come back with nothing before any has landed leave the capture complete`() = withSession { sessionDir ->
+    // The app may simply not be running yet; an empty stream already says nothing was read.
+    val probe = FakeProbe().apply { answering = false }
+    val capture = capture(probe)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitUntil("the sampler asked the device") { synchronized(probe) { probe.gcRequests.isNotEmpty() } }
+    capture.onToolCall(ToolCallPhase.BEFORE, "tapOnElement")
+
+    assertNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+    capture.stop()
   }
 
   @Test

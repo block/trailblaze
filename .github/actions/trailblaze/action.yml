@@ -1,0 +1,330 @@
+name: Trailblaze
+description: Run Trailblaze trails on an Android emulator, iOS simulator or web browser, and post the results to the job summary and the PR.
+author: Block
+
+inputs:
+  command:
+    description: >-
+      `run` runs trails on one device. `plan` turns a request file into a job matrix, and `report`
+      merges every shard's results into one report. The trail-runner workflow uses all three.
+    default: run
+  device:
+    description: "`android` (an emulator, on ubuntu), `ios` (a simulator, on macOS) or `web` (Chromium, on ubuntu)."
+    default: android
+  trails:
+    description: Trail files, globs or directories to run, separated by spaces or newlines.
+    default: trails/
+  app:
+    description: >-
+      App to install before the run: an APK for Android, a simulator `.app` for iOS. Leave empty if
+      the app is already on the device or a trailhead installs it.
+    default: ""
+  test-apk:
+    description: >-
+      Android instrumentation test APK to run instead of trails, as a device farm would. Its tests
+      write their sessions on the device, and they join the same report.
+    default: ""
+  test-targets:
+    description: >-
+      Which of the test APK's tests to run, one per line, such as `class com.example.LoginTest` or
+      `package com.example`. Leave empty for all of them.
+    default: ""
+  test-args:
+    description: "Instrumentation arguments for the test APK, as a JSON object, such as `{\"key\": \"value\"}`."
+    default: "{}"
+  orchestrator:
+    description: Run the test APK under Android Test Orchestrator, which clears the app's data between tests.
+    default: "false"
+  shard-index:
+    description: This job's shard of the test APK, counting from 0.
+    default: "0"
+  shard-count:
+    description: How many jobs share the test APK; Android's test runner splits its tests between them.
+    default: "1"
+  config-dir:
+    description: The workspace's `trails/config` directory, when it isn't found from the trails.
+    default: ""
+  setup:
+    description: Shell command to run once the device is up, before the trails.
+    default: ""
+  request:
+    description: For `plan`, the request file (YAML or JSON) listing the runs.
+    default: ""
+  version:
+    description: >-
+      Trailblaze CLI version, such as 2026.10.06. Defaults to the version in this action's tag
+      (block/trailblaze/.github/actions/trailblaze@v2026.10.06 runs CLI 2026.10.06).
+    default: ""
+  cli-artifact:
+    description: >-
+      Name of an artifact from this workflow run that holds `trailblaze` and `trailblaze.jar`, to
+      run a CLI built from source instead of a release.
+    default: ""
+  args:
+    description: >-
+      Extra `trailblaze run` flags. The default replays recordings only, so no LLM key is needed
+      and fork PRs work.
+    default: --use-recorded-steps
+  android-api-level:
+    description: Emulator API level.
+    default: "34"
+  android-profile:
+    description: Emulator device profile. Use the device the trails were recorded on.
+    default: pixel_6
+  ios-simulator:
+    description: iPhone simulator model to boot. Use the device the trails were recorded on.
+    default: iPhone 17 Pro
+  capture-video:
+    description: Record the device screen into each session.
+    default: "true"
+  storyboards:
+    description: Show a screenshot-per-step image for each trail in the summary. Turn off for big suites.
+    default: "true"
+  artifact-suffix:
+    description: Added to this job's artifact names, so parallel jobs in one run don't collide.
+    default: ""
+  summary:
+    description: Write the job summary (and PR comment). Shards turn it off and leave it to `report`.
+    default: "true"
+  shards-passed:
+    description: >-
+      For `report`, whether every shard job succeeded. `false` fails the report even when every
+      session in it passed, since a shard that crashed leaves no session behind.
+    default: "true"
+  publish:
+    description: >-
+      `none` keeps results in this run's artifacts, which need repo access to open (right for private
+      repos). `branch` also pushes each session to a branch so the summary gets one-click viewer links
+      and inline storyboards that anyone can open (public repos only). Needs `contents: write`.
+      Fork PRs skip it.
+    default: none
+  publish-branch:
+    description: "Branch that `publish: branch` writes to."
+    default: trailblaze-sessions
+  keep-runs:
+    description: "How many runs `publish: branch` keeps. Older runs' links stop working."
+    default: "20"
+  comment:
+    description: "Post the summary as one PR comment, updated on every push. Needs `pull-requests: write`."
+    default: "true"
+  github-token:
+    description: Token for downloading the CLI, publishing and commenting.
+    default: ${{ github.token }}
+
+outputs:
+  matrix:
+    description: For `plan`, the job matrix, one entry per run per shard.
+    value: ${{ steps.plan.outputs.matrix }}
+  passed:
+    description: Number of trails that passed.
+    value: ${{ steps.summary.outputs.passed }}
+  total:
+    description: Number of trails run.
+    value: ${{ steps.summary.outputs.total }}
+  report-url:
+    description: Link to the HTML report artifact.
+    value: ${{ steps.report.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan
+      id: plan
+      if: ${{ inputs.command == 'plan' }}
+      shell: bash
+      env:
+        REQUEST: ${{ inputs.request }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/plan.sh"
+
+    - name: Resolve Trailblaze version
+      id: install
+      if: ${{ inputs.command != 'plan' }}
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        CLI_ARTIFACT: ${{ inputs.cli-artifact }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/resolve-version.sh"
+
+    - name: Cache Trailblaze
+      if: ${{ inputs.command != 'plan' && inputs.cli-artifact == '' }}
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.install.outputs.cli-dir }}
+        key: trailblaze-cli-${{ steps.install.outputs.version }}
+
+    - name: Download the Trailblaze build
+      if: ${{ inputs.command != 'plan' && inputs.cli-artifact != '' }}
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.cli-artifact }}
+        path: ${{ steps.install.outputs.cli-dir }}
+
+    - name: Install Trailblaze
+      if: ${{ inputs.command != 'plan' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CLI_DIR: ${{ steps.install.outputs.cli-dir }}
+        VERSION: ${{ steps.install.outputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/download.sh"
+
+    # The CLI builds its HTML report with bun.
+    - if: ${{ inputs.command != 'plan' }}
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+    - name: Install ffmpeg
+      if: ${{ inputs.command == 'run' && inputs.capture-video == 'true' }}
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/scripts/install-ffmpeg.sh"
+
+    - name: Prepare the runner
+      if: ${{ inputs.command == 'run' }}
+      shell: bash
+      env:
+        DEVICE: ${{ inputs.device }}
+        SIMULATOR: ${{ inputs.ios-simulator }}
+      run: |
+        case "$DEVICE" in
+          android | ios | web) bash "$GITHUB_ACTION_PATH/scripts/prepare-$DEVICE.sh" ;;
+          *) echo "::error title=Trailblaze::device must be android, ios or web, not $DEVICE."; exit 1 ;;
+        esac
+
+    - name: Cache the browser
+      if: ${{ inputs.command == 'run' && inputs.device == 'web' }}
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/trailblaze/playwright-driver
+        key: trailblaze-browser-${{ runner.os }}-${{ steps.install.outputs.version }}
+
+    - name: Run trails
+      if: ${{ inputs.command == 'run' && inputs.device != 'android' }}
+      shell: bash
+      env:
+        TRAILBLAZE_DISABLE_DAEMON_AUTOSTART: "1"
+        DEVICE: ${{ inputs.device }}
+        INPUT_TRAILS: ${{ inputs.trails }}
+        INPUT_APP: ${{ inputs.app }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_CONFIG_DIR: ${{ inputs.config-dir }}
+        INPUT_SETUP: ${{ inputs.setup }}
+        INPUT_TEST_APK: ${{ inputs.test-apk }}
+        INPUT_TEST_TARGETS: ${{ inputs.test-targets }}
+        INPUT_TEST_ARGS: ${{ inputs.test-args }}
+        ORCHESTRATOR: ${{ inputs.orchestrator }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        CAPTURE_VIDEO: ${{ inputs.capture-video }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/run.sh"
+
+    - name: Run trails on the emulator
+      if: ${{ inputs.command == 'run' && inputs.device == 'android' }}
+      uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
+      env:
+        TRAILBLAZE_DISABLE_DAEMON_AUTOSTART: "1"
+        DEVICE: android
+        INPUT_TRAILS: ${{ inputs.trails }}
+        INPUT_APP: ${{ inputs.app }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_CONFIG_DIR: ${{ inputs.config-dir }}
+        INPUT_SETUP: ${{ inputs.setup }}
+        INPUT_TEST_APK: ${{ inputs.test-apk }}
+        INPUT_TEST_TARGETS: ${{ inputs.test-targets }}
+        INPUT_TEST_ARGS: ${{ inputs.test-args }}
+        ORCHESTRATOR: ${{ inputs.orchestrator }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        CAPTURE_VIDEO: ${{ inputs.capture-video }}
+      with:
+        api-level: ${{ inputs.android-api-level }}
+        arch: x86_64
+        profile: ${{ inputs.android-profile }}
+        force-avd-creation: true
+        # Room for a large test APK and the sessions its tests write.
+        disk-size: 6000M
+        heap-size: 600M
+        emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+        disable-animations: true
+        script: bash "${{ github.action_path }}/scripts/run.sh"
+
+    - name: Export results
+      if: ${{ !cancelled() && inputs.command == 'run' }}
+      shell: bash
+      env:
+        STORYBOARDS: ${{ inputs.storyboards }}
+        SUFFIX: ${{ inputs.artifact-suffix }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/export.sh"
+
+    - name: Download every shard's sessions
+      if: ${{ !cancelled() && inputs.command == 'report' }}
+      uses: actions/download-artifact@v8
+      with:
+        pattern: trailblaze-sessions-*
+        merge-multiple: true
+        path: ${{ runner.temp }}/trailblaze-results
+
+    - name: Merge results
+      if: ${{ !cancelled() && inputs.command == 'report' }}
+      shell: bash
+      env:
+        SHARDS_PASSED: ${{ inputs.shards-passed }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/merge.sh"
+
+    - name: Upload report
+      id: report
+      if: ${{ !cancelled() && inputs.command != 'plan' }}
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ runner.temp }}/trailblaze-results/trailblaze-report${{ inputs.artifact-suffix }}.html
+        archive: false
+        if-no-files-found: ignore
+
+    - name: Upload sessions
+      id: sessions
+      if: ${{ !cancelled() && inputs.command == 'run' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: trailblaze-sessions${{ inputs.artifact-suffix }}
+        path: |
+          ${{ runner.temp }}/trailblaze-results/*.zip
+          ${{ runner.temp }}/trailblaze-results/*.webp
+        if-no-files-found: ignore
+
+    - name: Publish sessions
+      id: publish
+      # Fork PRs get a read-only token, so they keep only the artifacts.
+      if: >-
+        ${{ !cancelled() && inputs.command != 'plan' && inputs.summary == 'true'
+        && inputs.publish == 'branch' && (github.event_name != 'pull_request'
+        || github.event.pull_request.head.repo.full_name == github.repository) }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BRANCH: ${{ inputs.publish-branch }}
+        KEEP_RUNS: ${{ inputs.keep-runs }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/publish.sh"
+
+    - name: Summarize
+      id: summary
+      if: ${{ !cancelled() && inputs.command != 'plan' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        RAW: ${{ steps.publish.outputs.raw }}
+        REPORT_URL: ${{ steps.report.outputs.artifact-url }}
+        # A shard's own artifact, or for the merged report, the run page that lists every shard's.
+        SESSIONS_URL: >-
+          ${{ steps.sessions.outputs.artifact-url
+          || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+        STORYBOARDS: ${{ inputs.storyboards }}
+        WRITE_SUMMARY: ${{ inputs.summary }}
+        COMMENT: ${{ inputs.comment }}
+        PR: ${{ github.event.pull_request.number }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/summary.sh"
+
+    - name: Fail if a trail failed
+      if: ${{ !cancelled() && inputs.command != 'plan' }}
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/scripts/verdict.sh"

@@ -41,6 +41,8 @@ internal object PlaywrightTestProxies {
           "equals" -> return@InvocationHandler args[0] === Proxy.getInvocationHandler(args[0] as Any?)
           "hashCode" -> return@InvocationHandler System.identityHashCode(this)
           "toString" -> return@InvocationHandler "FakeBrowserContext"
+          // The capture's dispatch round trip; a fake holds no backlog to dispatch.
+          "cookies" -> return@InvocationHandler emptyList<Any>()
           else -> error("Unstubbed BrowserContext.${method.name}")
         }
         null

@@ -13,10 +13,12 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.resolveToolName
+import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.decision.NextMoveDecisionLlmClient
@@ -62,6 +64,8 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * @param decisionSettings where the decision engine's settings and key are read
  *   (`TRAILBLAZE_DECISION_MOVES` and friends). The process environment by default; an on-device run
  *   has none of the host's, so it passes its instrumentation arguments instead.
+ * @param alwaysShownTools tools the LLM is shown even on a turn where the decision engine hides
+ *   tools: the target's `always_shown_tools` for this driver.
  */
 suspend fun runPromptsWithKoogStrategyGraph(
   promptSteps: List<PromptStep>,
@@ -79,6 +83,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
   onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   instrumentation: KoogRunInstrumentation? = null,
   decisionSettings: (String) -> String? = System::getenv,
+  alwaysShownTools: Set<String> = emptySet(),
 ): TrailblazeToolResult {
   val objective = promptSteps.joinToString(separator = "\n") { it.prompt }
   onStepProgress?.invoke(1, 1, objective)
@@ -228,35 +233,24 @@ suspend fun runPromptsWithKoogStrategyGraph(
 
       else -> {
         val resultText = describeToolDispatch(
-          // The name the tool ANSWERS to, not its class: every `tools:`-authored tool shares the
-          // one YamlDefinedTrailblazeTool class, so a class name records all of them identically
-          // and a report can't say which one failed.
+          // The name the tool ANSWERS to, not its class: one implementation class can back many
+          // named tools, so a class name records all of them identically and a report can't say
+          // which one failed.
           toolName = tool.resolveToolName(),
           instrumentation = instrumentation,
         ) {
           agent.runTrailblazeTools(
             tools = listOf(tool),
             traceId = traceId,
-            screenState = sharedScreenProvider(),
+            screenState = dispatchScreenState(tool, sharedScreenProvider),
             elementComparator = elementComparator,
             screenStateProvider = screenStateProvider,
           ).result.also { if (countsAsAssertionEvidence(tool, it)) passedAssertions++ }
         }
-        val screen = sharedScreenCapture.captureFresh().viewHierarchyTextRepresentation
         // Observe this dispatch for loop detection; a non-null nudge is prepended so it's the first
         // thing the agent reads in the result.
         val loopNudge = progressTracker.observe(tool.toString())
-        buildString {
-          if (loopNudge != null) {
-            append(loopNudge)
-            append("\n\n")
-          }
-          append(resultText)
-          if (!screen.isNullOrBlank()) {
-            append("\n\nCurrent screen:\n")
-            append(screen)
-          }
-        }
+        composeToolDispatchResult(resultText, loopNudge, sharedScreenCapture)
       }
     }
   }
@@ -310,8 +304,8 @@ suspend fun runPromptsWithKoogStrategyGraph(
   val loggingLlmClient = LoggingLlmClient(
     // Opt-in (TRAILBLAZE_DECISION_MOVES): a decision engine makes the moves it is sure of. Inside the
     // logger so each of its decision requests, and each move it makes, lands in this session's log.
-    // Below the LLM-call budget on purpose: an engine move counts as a turn, so decisions never give
-    // an objective more turns than it gets without them, and the budget still stops a looping engine.
+    // Below the LLM-call budget, which gives an engine move's call back and counts it against the
+    // engine's own budget of the same size; see [LlmCallBudgetLlmClient].
     delegate = NextMoveDecisionLlmClient.wrapIfEnabled(
       // Innermost: a request that never reached the model (DNS miss, refused connect) is retried here,
       // so it is logged and budgeted once.
@@ -320,6 +314,8 @@ suspend fun runPromptsWithKoogStrategyGraph(
       verification = isVerificationBlock(promptSteps),
       screenText = { sharedScreenProvider().viewHierarchyTextRepresentation },
       env = decisionSettings,
+      alwaysShownTools = alwaysShownTools,
+      scrub = { scrubSensitiveValues(it, agent.memory) },
     ),
     logger = logger,
     session = session,
@@ -750,7 +746,7 @@ internal suspend fun tryVerifyFastPath(
     val result = try {
       agent.runTrailblazeTools(
         tools = listOf(
-          AssertVisibleTrailblazeTool(ref = match.ref, expectedText = match.phrase, reasoning = "verify fast path"),
+          AssertVisibleTrailblazeTool(ref = match.ref, reasoning = "verify fast path"),
         ),
         traceId = traceId,
         screenState = screenProvider(),
@@ -912,6 +908,31 @@ internal fun appendPostActionScreen(result: String, capture: SharedScreenStateCa
   }
   return if (screen.isNullOrBlank()) result else "$result\n\nCurrent screen:\n$screen"
 }
+
+/**
+ * The screen a dispatched [tool] starts from. A class-backed tool acts once, on the screen the
+ * agent just saw, so it reuses that snapshot. A host-local scripted tool gets none: it may change
+ * the screen itself before its first `ctx.tools` call, so its context captures lazily on first read.
+ */
+internal fun dispatchScreenState(tool: TrailblazeTool, sharedScreenProvider: () -> ScreenState): ScreenState? =
+  if (tool is HostLocalExecutableTrailblazeTool) null else sharedScreenProvider()
+
+/**
+ * Builds the text the agent reads after a dispatched tool: the optional loop [loopNudge] first,
+ * then the tool's [resultText], then the fresh post-action screen. The capture is best-effort
+ * (see [appendPostActionScreen]) because the tool has already run — every dispatched tool goes
+ * through here, including host-local scripted tools, so a capture failure must never turn a
+ * completed action into a failed call.
+ */
+internal fun composeToolDispatchResult(
+  resultText: String,
+  loopNudge: String?,
+  capture: SharedScreenStateCapture,
+): String {
+  val withScreen = appendPostActionScreen(resultText, capture)
+  return if (loopNudge == null) withScreen else "$loopNudge\n\n$withScreen"
+}
+
 /**
  * Rebuilds the Koog tool surface after a [ConfigTrailblazeTool] (e.g. `setActiveToolSets`) changed
  * which toolsets are active, and returns the descriptor list the LLM should now see.

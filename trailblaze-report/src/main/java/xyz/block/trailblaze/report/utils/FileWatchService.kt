@@ -123,7 +123,7 @@ class FileWatchService(
     // Note this only ever sees files directly in the watched directory — the registration below is
     // a single non-recursive `path.register`, so streams under `events/` produce no events here at
     // all and are not what this rule is for.
-    if (fileNameLower == CaptureFilenames.DEVICE_LOG ||
+    if (CaptureFilenames.isDeviceLog(fileNameLower) ||
       fileNameLower == CaptureFilenames.LEGACY_LOGCAT_TXT ||
       fileNameLower.endsWith(CaptureFilenames.VIDEO_EXTENSION) ||
       fileNameLower.endsWith(CaptureFilenames.VIDEO_WEBM_EXTENSION) ||

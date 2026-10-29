@@ -1,10 +1,15 @@
 package xyz.block.trailblaze.report.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.report.RunReportGenerator
 
 
 /**
  * Input parameters and execution context for the CI run.
+ *
+ * [fromEnvironment] is the one reading of the CI env contract (`CONFIG_ID`, `ANDROID_BUILD_*`,
+ * `TRAIL_SOURCE_*`, `TRAILBLAZE_*`, `BUILDKITE_*` / `CI_*`), shared by the Gradle results task and
+ * `trailblaze report` so the two producers agree on what a run's metadata means.
  */
 @Serializable
 data class CiRunMetadata(
@@ -210,4 +215,72 @@ data class CiRunMetadata(
 
   /** Git branch */
   val git_branch: String? = null,
-)
+
+  /** Repository web URL, without clone credentials, used to link [git_commit]. */
+  val git_repository_url: String? = null,
+) {
+  companion object {
+    /**
+     * Read a run's metadata from its CI [environment]. Blank values count as unset. Fields the
+     * env doesn't name keep their defaults, so an empty map yields a report with no provenance
+     * (every nullable field null, `target_app` / `build_type` empty) rather than placeholders.
+     */
+    fun fromEnvironment(environment: Map<String, String>): CiRunMetadata {
+      fun getEnv(name: String): String? = environment[name]?.takeIf { it.isNotBlank() }
+      fun getEnvList(name: String): List<String> = getEnv(name)?.split(",")?.map {
+        it.trim()
+      }?.filter {
+        it.isNotEmpty()
+      } ?: emptyList()
+
+      // Trail source: a git trail repo emits TRAIL_SOURCE_REPO/REF (the combined / deferred report
+      // steps re-emit them). When a repo is present we label the type "git"; otherwise the type is
+      // left to an explicit TRAIL_SOURCE_TYPE env (set by the CI pipeline) or null.
+      val trailSourceRepo = getEnv("TRAIL_SOURCE_REPO")
+      val trailSourceRef = getEnv("TRAIL_SOURCE_REF")
+      val trailSourceType =
+        getEnv("TRAIL_SOURCE_TYPE") ?: if (trailSourceRepo != null) "git" else null
+
+      return CiRunMetadata(
+        // Un-namespaced, like TRAIL_SOURCE_* above. Null off-CI rather than a placeholder, so a run
+        // with no config doesn't read as a config named "unknown".
+        config_id = getEnv("CONFIG_ID"),
+        target_app = getEnv("TRAILBLAZE_TARGET_APP") ?: "",
+        build_type = getEnv("TRAILBLAZE_BUILD_TYPE") ?: "",
+        devices = getEnvList("TRAILBLAZE_DEVICES"),
+        android_build_url = getEnv("ANDROID_BUILD_URL"),
+        ios_build_url = getEnv("IOS_BUILD_URL"),
+        android_build_version = getEnv("ANDROID_BUILD_VERSION"),
+        ios_build_version = getEnv("IOS_BUILD_VERSION"),
+        android_build_git_sha = getEnv("ANDROID_BUILD_GIT_SHA"),
+        ios_build_git_sha = getEnv("IOS_BUILD_GIT_SHA"),
+        android_build_source_repo = getEnv("ANDROID_BUILD_SOURCE_REPO"),
+        ios_build_source_repo = getEnv("IOS_BUILD_SOURCE_REPO"),
+        android_build_branch = getEnv("ANDROID_BUILD_BRANCH"),
+        ios_build_branch = getEnv("IOS_BUILD_BRANCH"),
+        android_build_pr_number = getEnv("ANDROID_BUILD_PR_NUMBER"),
+        ios_build_pr_number = getEnv("IOS_BUILD_PR_NUMBER"),
+        trail_source_type = trailSourceType,
+        trail_source_repo = trailSourceRepo,
+        trail_source_ref = trailSourceRef,
+        retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
+        ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
+        self_heal_enabled = selfHealConfigured(getEnv("TRAILBLAZE_SELF_HEAL_ENABLED")),
+        parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
+        ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
+        ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
+        ci_organization_slug = getEnv("BUILDKITE_ORGANIZATION_SLUG") ?: getEnv("CI_ORGANIZATION_SLUG"),
+        ci_pipeline_slug = getEnv("BUILDKITE_PIPELINE_SLUG") ?: getEnv("CI_PIPELINE_SLUG"),
+        // TRAILBLAZE_BUILD_SOURCE first: a parent pipeline that triggers this build from a schedule
+        // passes it, so the run is recorded as `schedule` rather than the CI's "triggered" source.
+        ci_build_source =
+          getEnv("TRAILBLAZE_BUILD_SOURCE")?.trim() ?: getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
+        ci_build_message = getEnv("BUILDKITE_MESSAGE") ?: getEnv("CI_BUILD_MESSAGE"),
+        ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
+        git_commit = getEnv("BUILDKITE_COMMIT") ?: getEnv("GIT_COMMIT"),
+        git_branch = getEnv("BUILDKITE_BRANCH") ?: getEnv("GIT_BRANCH"),
+        git_repository_url = RunReportGenerator.repositoryWebUrl(environment),
+      )
+    }
+  }
+}

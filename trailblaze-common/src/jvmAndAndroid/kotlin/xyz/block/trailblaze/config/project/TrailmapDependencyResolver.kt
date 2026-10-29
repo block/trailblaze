@@ -214,6 +214,7 @@ internal object TrailmapDependencyResolver {
     toolSets = overlay.toolSets ?: base.toolSets,
     tools = overlay.tools ?: base.tools,
     excludedTools = overlay.excludedTools ?: base.excludedTools,
+    alwaysShownTools = overlay.alwaysShownTools ?: base.alwaysShownTools,
     drivers = overlay.drivers ?: base.drivers,
     baseUrl = overlay.baseUrl ?: base.baseUrl,
     minBuildVersion = overlay.minBuildVersion ?: base.minBuildVersion,

@@ -643,6 +643,104 @@ class VisibleStringExtractorTest {
     )
   }
 
+  /** Shapes like a typical rewards screen: AXe labels every element, and only some of them draw it. */
+  @Test
+  fun `an axe label is text only where the element draws it`() {
+    val screen = axeRoot(
+      axe(label = "Add funds", type = "Button", bounds = TrailblazeNode.Bounds(16, 403, 197, 455)),
+      axe(
+        label = "Gold tier, \$499.00 away",
+        type = "Button",
+        bounds = TrailblazeNode.Bounds(16, 470, 386, 540),
+        children = listOf(
+          axe(label = "Gold tier", bounds = TrailblazeNode.Bounds(24, 480, 200, 500)),
+          axe(label = "\$499.00 away", bounds = TrailblazeNode.Bounds(24, 505, 200, 525)),
+        ),
+      ),
+      axe(label = "More for you", type = "Heading", bounds = TrailblazeNode.Bounds(16, 560, 200, 590)),
+      axe(label = "iconCard16", type = "Image", bounds = TrailblazeNode.Bounds(16, 600, 32, 616)),
+    )
+
+    assertEquals(
+      listOf(
+        "Add funds" to VisibleStringSource.TEXT,
+        "Gold tier, \$499.00 away" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "Gold tier" to VisibleStringSource.TEXT,
+        "\$499.00 away" to VisibleStringSource.TEXT,
+        "More for you" to VisibleStringSource.TEXT,
+        "iconCard16" to VisibleStringSource.CONTENT_DESCRIPTION,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  @Test
+  fun `an axe value is drawn in a multiline input and on text`() {
+    val screen = axeRoot(
+      node(
+        DriverNodeDetail.IosAxe(type = "StaticText", label = "home", value = "(555) 010-0000"),
+        bounds = TrailblazeNode.Bounds(16, 100, 386, 140),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "TextView", label = "Note", value = "For dinner"),
+        bounds = TrailblazeNode.Bounds(16, 200, 386, 300),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "TextEditor", label = "Message", value = "See you soon"),
+        bounds = TrailblazeNode.Bounds(16, 320, 386, 420),
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "home" to VisibleStringSource.TEXT,
+        "(555) 010-0000" to VisibleStringSource.VALUE,
+        "Note" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "For dinner" to VisibleStringSource.VALUE,
+        "Message" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "See you soon" to VisibleStringSource.VALUE,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  /** Newer AXe reports an empty field's placeholder as its label, with no value. */
+  @Test
+  fun `an empty axe input draws its label as the placeholder`() {
+    val screen = axeRoot(
+      node(DriverNodeDetail.IosAxe(type = "TextField", label = "Search"), bounds = TrailblazeNode.Bounds(16, 60, 386, 96)),
+    )
+
+    assertEquals(
+      listOf("Search" to VisibleStringSource.TEXT),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  @Test
+  fun `an axe value is drawn in a text input and is spoken state elsewhere`() {
+    val screen = axeRoot(
+      node(
+        DriverNodeDetail.IosAxe(type = "TextField", label = "CVV", value = "3-Digit CVV"),
+        bounds = TrailblazeNode.Bounds(16, 200, 386, 240),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "Slider", label = "Vertical scroll bar, 3 pages", value = "0%"),
+        bounds = TrailblazeNode.Bounds(390, 100, 402, 800),
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "Vertical scroll bar, 3 pages" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "0%" to VisibleStringSource.STATE,
+        "CVV" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "3-Digit CVV" to VisibleStringSource.VALUE,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
   @Test
   fun `an android role description is app-authored and is still reported`() {
     val screen = root(
@@ -727,5 +825,141 @@ class VisibleStringExtractorTest {
       setOf("Payment methods", "Visa 4242"),
       VisibleStringExtractor.extract(screen, 402, 874).texts().toSet(),
     )
+  }
+
+  // -- An iOS label counts as drawn only where the screenshot shows it --
+
+  /** What OCR recognized on a screenshot, by element box. A box it was never shown reads empty. */
+  private fun recognized(vararg lines: Pair<TrailblazeNode.Bounds, List<String>>) = ScreenTextReader { boxes ->
+    val byBox = lines.toMap()
+    boxes.map { byBox[it].orEmpty() }
+  }
+
+  /** The strings as a reader sees them: OCR's correction when a read ran, the type rule's otherwise. */
+  private fun confirmed(screen: TrailblazeNode, reader: ScreenTextReader): List<Pair<String, VisibleStringSource>> {
+    val extracted = VisibleStringExtractor.extract(screen, 402, 874)
+    return (VisibleStringExtractor.confirmDrawnLabels(extracted, screen, reader) ?: extracted).map { it.text to it.source }
+  }
+
+  /** Shapes from a typical home screen: a row of 44pt icon buttons above buttons that draw their copy. */
+  @Test
+  fun `an icon-only axe button reports its label as accessibility text, a button that draws it as text`() {
+    val payBox = TrailblazeNode.Bounds(205, 710, 386, 762)
+    val screen = axeRoot(
+      axe(label = "Search", type = "Button", bounds = TrailblazeNode.Bounds(286, 72, 330, 116)),
+      axe(label = "Account Settings for someone", type = "Button", bounds = TrailblazeNode.Bounds(342, 72, 386, 116)),
+      axe(label = "Pay", type = "Button", bounds = payBox),
+    )
+
+    assertEquals(
+      listOf(
+        "Search" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "Account Settings for someone" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "Pay" to VisibleStringSource.TEXT,
+      ),
+      confirmed(screen, recognized(payBox to listOf("Pay"))),
+    )
+  }
+
+  @Test
+  fun `a label is drawn when OCR reads it with a different case, spacing or one misread character`() {
+    val box = TrailblazeNode.Bounds(16, 710, 197, 762)
+    val screen = axeRoot(axe(label = "Get paid, now", type = "Button", bounds = box))
+
+    assertEquals(
+      listOf("Get paid, now" to VisibleStringSource.TEXT),
+      confirmed(screen, recognized(box to listOf("GET PAlD", "now"))),
+    )
+  }
+
+  @Test
+  fun `a label is not drawn when its box shows only part of it, like a badge count`() {
+    val box = TrailblazeNode.Bounds(281, 800, 316, 831)
+    val screen = axeRoot(axe(label = "Activity. 10 new notifications", type = "RadioButton", bounds = box))
+
+    assertEquals(
+      listOf("Activity. 10 new notifications" to VisibleStringSource.CONTENT_DESCRIPTION),
+      confirmed(screen, recognized(box to listOf("10"))),
+    )
+  }
+
+  @Test
+  fun `a label too short for OCR to read reliably keeps the type rule`() {
+    val screen = axeRoot(axe(label = "1", type = "Button", bounds = TrailblazeNode.Bounds(16, 386, 122, 459)))
+
+    assertEquals(listOf("1" to VisibleStringSource.TEXT), confirmed(screen, recognized()))
+  }
+
+  @Test
+  fun `labels keep the type rule when the screenshot or their box could not be read`() {
+    val screen = axeRoot(
+      axe(label = "Scan", type = "Button", bounds = TrailblazeNode.Bounds(230, 72, 274, 116)),
+      axe(label = "Search", type = "Button", bounds = TrailblazeNode.Bounds(286, 72, 330, 116)),
+    )
+    val unreadable = listOf("Scan" to VisibleStringSource.TEXT, "Search" to VisibleStringSource.TEXT)
+
+    assertEquals(unreadable, confirmed(screen) { null })
+    assertEquals(unreadable, confirmed(screen) { boxes -> boxes.map { null } })
+  }
+
+  @Test
+  fun `a capture says whether an OCR read checked it`() {
+    val screen = axeRoot(axe(label = "Scan", type = "Button", bounds = TrailblazeNode.Bounds(230, 72, 274, 116)))
+    val extracted = VisibleStringExtractor.extract(screen, 402, 874)
+
+    assertTrue(VisibleStringExtractor.confirmDrawnLabels(extracted, screen, recognized()) != null)
+    assertEquals(null, VisibleStringExtractor.confirmDrawnLabels(extracted, screen) { null })
+    assertEquals(null, VisibleStringExtractor.confirmDrawnLabels(extracted, screen) { boxes -> boxes.map { null } })
+    assertEquals(null, VisibleStringExtractor.confirmDrawnLabels(emptyList(), axeRoot(axe(label = "1", type = "Button")), recognized()))
+  }
+
+  @Test
+  fun `a label already filed as accessibility text is never promoted by what OCR reads`() {
+    val box = TrailblazeNode.Bounds(16, 600, 32, 616)
+    val screen = axeRoot(axe(label = "creditCardIcon16", type = "Image", bounds = box))
+
+    assertEquals(
+      listOf("creditCardIcon16" to VisibleStringSource.CONTENT_DESCRIPTION),
+      confirmed(screen, recognized(box to listOf("creditCardIcon16"))),
+    )
+  }
+
+  @Test
+  fun `a label is drawn when OCR reads a short label with one misread character`() {
+    val box = TrailblazeNode.Bounds(330, 60, 390, 100)
+    val screen = axeRoot(axe(label = "Done", type = "Button", bounds = box))
+
+    assertEquals(listOf("Done" to VisibleStringSource.TEXT), confirmed(screen, recognized(box to listOf("Dore"))))
+  }
+
+  @Test
+  fun `a label is drawn when its row cuts it short with an ellipsis`() {
+    val box = TrailblazeNode.Bounds(16, 300, 300, 340)
+    val screen = axeRoot(axe(label = "Payment to Joe's Coffee Shop", type = "StaticText", bounds = box))
+
+    assertEquals(
+      listOf("Payment to Joe's Coffee Shop" to VisibleStringSource.TEXT),
+      confirmed(screen, recognized(box to listOf("Payment to Joe's Coffee Sh…"))),
+    )
+  }
+
+  @Test
+  fun `a label several elements share is drawn when any of their boxes shows it`() {
+    val drawnBox = TrailblazeNode.Bounds(16, 400, 200, 440)
+    val screen = axeRoot(
+      axe(label = "Search", type = "Button", bounds = TrailblazeNode.Bounds(286, 72, 330, 116)),
+      axe(label = "Search", type = "Button", bounds = drawnBox),
+    )
+
+    assertEquals(listOf("Search" to VisibleStringSource.TEXT), confirmed(screen, recognized(drawnBox to listOf("Search"))))
+  }
+
+  @Test
+  fun `a label in a script the recognizer does not read keeps the type rule`() {
+    val screen = axeRoot(axe(label = "設定を開く", type = "Button", bounds = TrailblazeNode.Bounds(16, 300, 200, 340)))
+    val extracted = VisibleStringExtractor.extract(screen, 402, 874)
+
+    assertEquals(listOf("設定を開く" to VisibleStringSource.TEXT), confirmed(screen, recognized()))
+    assertEquals(null, VisibleStringExtractor.confirmDrawnLabels(extracted, screen, recognized()))
   }
 }

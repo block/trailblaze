@@ -148,6 +148,108 @@ class AndroidVideoCaptureTest {
   }
 
   @Test
+  fun `a stream that never carries a picture is recorded by the fallback instead`() {
+    // An emulator whose renderer cannot fill the encoder's surface starts the stream, sends codec
+    // config, and then no frames: without this the session ends with no recording at all.
+    val fallback = RecordingFallback(
+      artifact = CaptureArtifact(
+        file = File(tempDir, "video.webm").apply { writeBytes(ByteArray(8)) },
+        type = CaptureType.VIDEO_WEBM,
+        startTimestampMs = 1_700_000_000_000L,
+        endTimestampMs = 1_700_000_005_000L,
+      ),
+    )
+    val mux = FakeMux(result = null, pictureAfterPolls = null)
+    val capture = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> mux },
+      fallback = fallback,
+      screenrecordAvailable = { true },
+      firstPictureTimeoutMs = 50,
+      picturelessDevices = mutableSetOf(),
+    )
+
+    capture.start(tempDir, DEVICE_ID, appId = null)
+    val artifact = assertNotNull(capture.stop(CaptureOptions(captureVideo = true)))
+
+    assertTrue(fallback.started, "the fallback must record the session")
+    assertEquals(fallback.artifact, artifact, "the session's recording is the fallback's")
+    assertEquals(1, mux.stopCount, "the empty stream is stopped once, when the fallback takes over")
+  }
+
+  @Test
+  fun `a device found to stream no pictures skips the wait in its next session`() {
+    // On a pictureless device every session would otherwise sit out the full first-picture wait,
+    // and lose that much of its opening footage, before the fallback starts.
+    val pictureless = mutableSetOf<String>()
+    val first = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> FakeMux(result = null, pictureAfterPolls = null) },
+      fallback = RecordingFallback(artifact = null),
+      screenrecordAvailable = { true },
+      firstPictureTimeoutMs = 50,
+      picturelessDevices = pictureless,
+    )
+    first.start(tempDir, DEVICE_ID, appId = null)
+    first.stop(CaptureOptions(captureVideo = true))
+
+    val secondMux = FakeMux(result = null, pictureAfterPolls = null)
+    val secondFallback = RecordingFallback(artifact = null)
+    val second = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> secondMux },
+      fallback = secondFallback,
+      screenrecordAvailable = { true },
+      firstPictureTimeoutMs = 60_000,
+      picturelessDevices = pictureless,
+    )
+    second.start(tempDir, DEVICE_ID, appId = null)
+
+    assertTrue(secondFallback.started, "the next session goes straight to the fallback")
+    assertEquals(0, secondMux.startCount, "without starting a stream it already knows is empty")
+  }
+
+  @Test
+  fun `an interrupted first-picture wait stops the stream it started`() {
+    // The stream is stored only once the wait ends, so an interrupted start that left it running
+    // would leave ffmpeg and the tee subscription with nothing able to stop them.
+    val mux = FakeMux(result = null, pictureAfterPolls = null)
+    val capture = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> mux },
+      fallback = RecordingFallback(artifact = null),
+      screenrecordAvailable = { true },
+      firstPictureTimeoutMs = 60_000,
+      picturelessDevices = mutableSetOf(),
+    )
+    var thrown: Throwable? = null
+    val starter = Thread { thrown = runCatching { capture.start(tempDir, DEVICE_ID, appId = null) }.exceptionOrNull() }
+    starter.start()
+    while (mux.picturePolls == 0 && starter.isAlive) Thread.sleep(5)
+    starter.interrupt()
+    starter.join(5_000)
+
+    assertFalse(starter.isAlive, "the interrupt ends the wait")
+    assertTrue(thrown is InterruptedException, "and is rethrown to the caller, not swallowed: $thrown")
+    assertEquals(1, mux.stopCount, "the stream it started is stopped")
+  }
+
+  @Test
+  fun `a stream whose first picture is slow to arrive is still the recording`() {
+    val fallback = RecordingFallback(artifact = null)
+    val recording = File(tempDir, "video.webm").apply { writeBytes(ByteArray(64)) }
+    val mux = FakeMux(MuxResult(file = recording, 1_700_000_000_000L, 1_700_000_001_000L), pictureAfterPolls = 3)
+    val capture = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> mux },
+      fallback = fallback,
+      screenrecordAvailable = { true },
+      firstPictureTimeoutMs = 5_000,
+    )
+
+    capture.start(tempDir, DEVICE_ID, appId = null)
+    val artifact = assertNotNull(capture.stop(CaptureOptions(captureVideo = true)))
+
+    assertFalse(fallback.started, "a stream that delivers a picture keeps the session")
+    assertEquals(recording, artifact.file)
+  }
+
+  @Test
   fun `a device with no screenrecord still streams when scrcpy can`() {
     val fallback = RecordingFallback(artifact = null)
     val recording = File(tempDir, "video.webm").apply { writeBytes(ByteArray(64)) }
@@ -311,10 +413,14 @@ class AndroidVideoCaptureTest {
     private val result: MuxResult?,
     /** Thrown from [start], as a mux whose tee could not spawn a producer does. */
     private val startFailure: Exception? = null,
+    /** How many polls go by before the feed carries a picture; null for a feed that never does. */
+    private val pictureAfterPolls: Int? = 0,
   ) : WallClockVideoMux {
     var startCount = 0
       private set
     var stopCount = 0
+      private set
+    @Volatile var picturePolls = 0
       private set
 
     override fun start() {
@@ -323,6 +429,11 @@ class AndroidVideoCaptureTest {
     }
 
     override fun hasContent(): Boolean = startCount > 0
+
+    override fun hasPicture(): Boolean {
+      val polled = picturePolls++
+      return pictureAfterPolls != null && polled >= pictureAfterPolls
+    }
 
     override fun stop(): MuxResult? {
       stopCount++

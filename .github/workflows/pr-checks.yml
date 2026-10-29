@@ -185,283 +185,14 @@ jobs:
       - name: Run scripting-subprocess tests
         run: ./gradlew :trailblaze-scripting-subprocess:check
 
-  # PR-time web showcase validation shares the Linux uber JAR built above.
-  # The standalone Wikipedia workflow stays push-only so `main` still produces
-  # the docs gallery artifact that GitHub Pages publishes.
-  wikipedia-trails:
+  # The examples module's instrumentation test APK, for the trail runner's on-device run.
+  build-examples-test-apk:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: build-uber-jar
-    env:
-      OPENAI_API_KEY: no-key-set
-      # Record each session's screen so the report plays the recording (off by default).
-      TRAILBLAZE_CAPTURE_VIDEO: "true"
-
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Cache Playwright driver
-        # The uber JAR ships without Playwright's ~200 MB driver-bundle; the CLI
-        # downloads it from Maven Central at first use and caches it under
-        # ~/.cache/trailblaze/playwright-driver. Restore it across runs so the
-        # trail isn't exposed to that download (a stalled Maven Central
-        # connection here has burned a full 10-minute no-progress timeout).
-        # The main-seeded entry comes from wikipedia-trails.yml, since caches
-        # created inside a PR are only visible to that PR.
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/trailblaze/playwright-driver
-          key: playwright-driver-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
-
-      - name: Download prebuilt uber JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: trailblaze-uber-jar
-          path: trailblaze-uber-jar/
-
-      - name: Install trailblaze from prebuilt artifact
-        env:
-          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
-        run: ./scripts/install-trailblaze-from-artifact.sh
-
-      - name: Install Playwright system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            libasound2t64 \
-            libatk-bridge2.0-0 \
-            libatk1.0-0 \
-            libcups2 \
-            libdrm2 \
-            libgbm1 \
-            libgtk-3-0 \
-            libnss3 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxkbcommon0 \
-            libxrandr2
-
-      - name: Install ffmpeg
-        # Session video encodes through it; see the script for why it is a pinned build.
-        run: ./.github/install-ffmpeg.sh
-
-      - name: Create and run Wikipedia trail
-        id: run-trails
-        continue-on-error: true
-        run: ./.github/pr_run_wikipedia_trails.sh
-
-      - name: Generate Trailblaze report
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Generate docs report-gallery assets
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_report_assets.sh
-
-      - name: Create artifacts
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_create_artifacts.sh
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-artifacts-wikipedia
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
-
-      - name: Upload docs report-gallery assets
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-report-wikipedia
-          path: report-assets/
-          if-no-files-found: warn
-
-      - name: Fail if trails failed
-        if: steps.run-trails.outcome == 'failure'
-        run: |
-          echo "Wikipedia trails failed - failing the workflow"
-          exit 1
-
-  # PR-time iOS showcase validation shares the same uber JAR built above.
-  # The standalone iOS workflow stays push-only so `main` still produces the
-  # docs gallery artifact that GitHub Pages publishes.
-  #
-  # Runs on macos-26 (Xcode 26 / iOS 26 simulators, iPhone 17 Pro) to match the
-  # showcase recording in docs/showcase-trails.yml — the scripted Contacts tools
-  # drive the iOS 26 Contacts UI. Kept in sync with .github/workflows/ios-contacts-trails.yml.
-  ios-contacts-trails:
-    if: github.event_name == 'pull_request'
-    runs-on: macos-26
-    timeout-minutes: 60
-    needs: build-uber-jar
-    env:
-      OPENAI_API_KEY: no-key-set
-      # Record each session's screen so the report plays the recording (off by default).
-      TRAILBLAZE_CAPTURE_VIDEO: "true"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Download prebuilt uber JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: trailblaze-uber-jar
-          path: trailblaze-uber-jar/
-
-      - name: Install trailblaze from prebuilt artifact
-        env:
-          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
-        run: ./scripts/install-trailblaze-from-artifact.sh
-
-      - name: Boot iOS Simulator
-        run: |
-          echo "Available iPhone simulators:"
-          xcrun simctl list devices available | grep "iPhone"
-
-          # Prefer iPhone 17 Pro (iOS 26 runtime on macos-26 — the device the
-          # showcase recording was captured on); fall back to the first iPhone.
-          SIMULATOR_UDID=$(
-            xcrun simctl list devices available |
-            grep "iPhone 17 Pro " | grep -v "Max\|Plus" |
-            head -1 |
-            grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
-          )
-
-          if [ -z "$SIMULATOR_UDID" ]; then
-            echo "iPhone 17 Pro not found, falling back to first available iPhone..."
-            SIMULATOR_UDID=$(
-              xcrun simctl list devices available |
-              grep "iPhone" |
-              head -1 |
-              grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
-            )
-          fi
-
-          if [ -z "$SIMULATOR_UDID" ]; then
-            echo "ERROR: No iPhone simulator found"
-            exit 1
-          fi
-
-          echo "Booting simulator UDID: $SIMULATOR_UDID"
-          xcrun simctl boot "$SIMULATOR_UDID"
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-
-          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          echo "Simulator booted: $SIMULATOR_UDID"
-
-      - name: Install ffmpeg (session video + animated-timeline WebP)
-        continue-on-error: true
-        run: brew install ffmpeg
-
-      - name: Run iOS Contacts trail
-        id: run-trails
-        continue-on-error: true
-        run: ./.github/pr_run_ios_contacts_trails.sh
-
-      - name: Generate Trailblaze report
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Generate docs report-gallery assets
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_report_assets.sh
-
-      - name: Create artifacts
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_create_artifacts.sh
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-artifacts-ios-contacts
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
-
-      - name: Upload docs report-gallery assets
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-report-ios-contacts
-          path: report-assets/
-          if-no-files-found: warn
-
-      - name: Fail if trails failed
-        if: steps.run-trails.outcome == 'failure'
-        run: |
-          echo "iOS Contacts trails failed - failing the workflow"
-          exit 1
-
-  # Drives the trail through `connectedDebugAndroidTest` — the test logic runs on the
-  # emulator inside the JUnit instrumentation process and talks to the headless desktop
-  # server on the default HTTPS port (TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT) for agent orchestration.
-  android-tests-on-device:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      # These CI checks replay recorded trails, so LLM inference is never invoked.
-      # A non-empty sentinel value is required to satisfy the provider/client wiring
-      # (e.g., `examples/build.gradle.kts` forwards this to `trailblaze.llm.auth.token.openai`
-      # and the on-device client map is built from whichever tokens are present).
-      OPENAI_API_KEY: no-key-set
-
-    steps:
-      - name: Enable KVM group perms
-        if: runner.os == 'Linux'
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls /dev/kvm
-
-      - name: Keep the daemon's ports out of the ephemeral range
-        # 52525/52526 fall inside Linux's ephemeral range (32768-60999), and the emulator and its
-        # helpers bind random ports from it. One landing on 52525 first makes the daemon exit with
-        # "Address already in use". Reserving them keeps the kernel from handing them out.
-        if: runner.os == 'Linux'
-        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=52525-52526
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -470,176 +201,49 @@ jobs:
           java-version: 17
 
       - name: Setup Gradle
-        # Dependency + build cache reuse across runs (seeded on main pushes,
-        # restored read-only on PRs). This job runs Gradle twice — the
-        # instrumentation build below and the report fallback in
-        # pr_generate_trailblaze_report.sh — both benefit.
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Create and start emulator and run tests (Linux)
-        if: runner.os == 'Linux'
-        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
-        id: run-tests-linux
-        continue-on-error: true
-        with:
-          api-level: 34
-          arch: x86_64
-          disable-animations: true
-          disk-size: 6000M
-          heap-size: 600M
-          profile: Nexus 6
-          script: ./.github/pr_run_android_tests_on_device.sh
-
-      - name: Verify logs were pulled
-        if: always()
-        run: ./.github/pr_verify_logs_were_pulled.sh
-
-      - name: Generate Trailblaze report
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Create artifacts
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_create_artifacts.sh
-
-      - name: Upload artifacts
-        if: always()  # Ensures this runs even if the previous step failed
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-artifacts-on-device
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
-            logcat.log
-
-      - name: Fail if tests failed
-        if: steps.run-tests-linux.outcome == 'failure'
-        run: |
-          echo "Tests failed - failing the workflow"
-          exit 1
-
-  # Drives the trail from the host via the Trailblaze CLI (`trailblaze trail …`).
-  # Agent loop runs in-process on the host; tools dispatch over RPC to the bundled
-  # on-device APK that the CLI auto-installs over ADB.
-  android-tests-host-rpc:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: build-uber-jar
-    env:
-      # Recordings-only — LLM is never invoked. See android-tests-on-device above.
-      OPENAI_API_KEY: no-key-set
-      # Record each session's screen so the report plays the recording (off by default).
-      TRAILBLAZE_CAPTURE_VIDEO: "true"
-
-    steps:
-      - name: Enable KVM group perms
-        if: runner.os == 'Linux'
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls /dev/kvm
-
-      - name: Keep the daemon's ports out of the ephemeral range
-        # 52525/52526 fall inside Linux's ephemeral range (32768-60999), and the emulator and its
-        # helpers bind random ports from it. One landing on 52525 first makes the daemon exit with
-        # "Address already in use". Reserving them keeps the kernel from handing them out.
-        if: runner.os == 'Linux'
-        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=52525-52526
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
         with:
-          # Drop the action's default `tools` package. Google removed the obsolete SDK Tools
-          # package from the repository, so `sdkmanager tools` fails outright on runner images
-          # that no longer ship it preinstalled. `platform-tools` is what the build needs.
           packages: platform-tools
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - name: Download prebuilt uber JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: trailblaze-uber-jar
-          path: trailblaze-uber-jar/
+      - name: Build the test APK
+        run: ./gradlew --parallel :examples:assembleDebugAndroidTest
 
-      - name: Install trailblaze from prebuilt artifact
-        env:
-          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
-        run: ./scripts/install-trailblaze-from-artifact.sh
-
-      - name: Install ffmpeg
-        # Session video encodes through it; see the script for why it is a pinned build.
-        run: ./.github/install-ffmpeg.sh
-
-      - name: Create and start emulator and run tests (Linux)
-        if: runner.os == 'Linux'
-        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
-        id: run-tests-linux
-        continue-on-error: true
-        with:
-          api-level: 34
-          arch: x86_64
-          disable-animations: true
-          disk-size: 6000M
-          heap-size: 600M
-          profile: Nexus 6
-          script: ./.github/pr_run_android_tests_host_rpc.sh
-
-      - name: Verify logs were pulled
-        if: always()
-        run: ./.github/pr_verify_logs_were_pulled.sh
-
-      - name: Generate Trailblaze report
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Create artifacts
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_create_artifacts.sh
-
-      - name: Upload artifacts
-        if: always()  # Ensures this runs even if the previous step failed
+      - name: Upload the test APK
         uses: actions/upload-artifact@v4
         with:
-          name: trailblaze-artifacts-host-rpc
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
-            logcat.log
+          name: examples-test-apk
+          path: examples/build/outputs/apk/androidTest/debug/examples-debug-androidTest.apk
+          if-no-files-found: error
 
-      - name: Fail if tests failed
-        if: steps.run-tests-linux.outcome == 'failure'
-        run: |
-          echo "Tests failed - failing the workflow"
-          exit 1
+  # Every PR's showcase trails, plus the examples module's on-device Clock test, run through the
+  # public trail runner (trail-runner.yml + actions/trailblaze/) with the CLI this PR built. It
+  # dogfoods the runner that other repos call, so a change that breaks it fails here first. The
+  # main-only Clock, Wikipedia and iOS Contacts workflows still produce the docs gallery.
+  trail-runner:
+    if: github.event_name == 'pull_request'
+    needs: [build-uber-jar, build-examples-test-apk]
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/trail-runner.yml
+    with:
+      request: .github/trailblaze-runs.yaml
+      cli-artifact: trailblaze-uber-jar
+      app-artifact: examples-test-apk
 
   # Drives a first-class TrailblazeTool over the daemon's `POST /mcp` endpoint —
   # the surface an external MCP client (Claude Code, Codex, Goose) uses. This is
   # the only job that reaches `TrailblazeMcpBridgeImpl.executeToolViaRpc` with
-  # the interface's `blocking = false` default: android-tests-on-device is pure
-  # instrumentation, and android-tests-host-rpc goes through DesktopYamlRunner.
+  # the interface's `blocking = false` default: trail-runner's on-device run is pure
+  # instrumentation, and its `trailblaze run` runs go through DesktopYamlRunner.
   # Asserts an on-device failure surfaces as `isError` and a success returns the
   # tool's own output rather than an outcome-free placeholder.
   android-tests-mcp-dispatch:
@@ -648,7 +252,7 @@ jobs:
     needs: build-uber-jar
     env:
       # Tools are dispatched by name — the inner agent (and therefore the LLM) is
-      # never invoked. See android-tests-on-device above.
+      # never invoked.
       OPENAI_API_KEY: no-key-set
       # Record each session's screen so the report plays the recording (off by default).
       TRAILBLAZE_CAPTURE_VIDEO: "true"
@@ -740,3 +344,176 @@ jobs:
         run: |
           echo "MCP dispatch check failed - failing the workflow"
           exit 1
+
+  # Installs this PR's JAR on Windows with install.ps1 and replays a web trail through the installed
+  # trailblaze.cmd launcher, on x64 and on Arm.
+  # Windows on Arm runs the x64 JVM under emulation: two of Trailblaze's native libraries have no
+  # Windows Arm build, so the startup check refuses an Arm JVM.
+  windows-host:
+    name: windows-host (${{ matrix.runner }})
+    needs: build-uber-jar
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-11-arm]
+    env:
+      # The artifact holds the JAR and the bash launcher only, so installing from it also checks
+      # that install.ps1 extracts the Windows launcher from the JAR.
+      TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}\trailblaze-uber-jar
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Choose the install and state directories
+        # A `[` in the install directory checks that the installer treats its paths literally.
+        run: |
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_DIR=$env:RUNNER_TEMP\Trailblaze[ci]"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_HOME=$env:RUNNER_TEMP\trailblaze-home"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+          architecture: x64
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download uber JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar
+
+      - name: Install with install.ps1
+        run: ./install.ps1
+
+      - name: Reinstall from 32-bit Windows PowerShell
+        # Over the existing install, from the 32-bit PowerShell that Windows redirects away from
+        # System32, where install.ps1 finds tar.exe.
+        run: |
+          & "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./install.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Put the install on PATH
+        # install.ps1 adds it to the user PATH in the registry, which only processes started
+        # afterwards by Explorer see.
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $env:TRAILBLAZE_DIR 'bin')
+
+      - name: Install the TypeScript SDK's dependencies
+        # The Wikipedia trailmap's scripted tools need the SDK's esbuild in a source checkout.
+        working-directory: sdks/typescript
+        run: bun install --frozen-lockfile
+
+      - name: Replay the Wikipedia web trail
+        # `trailblaze` resolves to trailblaze.cmd on PATH, which PowerShell runs through cmd.exe.
+        env:
+          TRAILBLAZE_CONFIG_DIR: ${{ github.workspace }}\examples\wikipedia\trails\config
+          # The trail replays recorded steps, so no model is called; the provider still needs a key.
+          OPENAI_API_KEY: no-key-set
+        run: trailblaze run trails/wikipedia/test-article-shakespeare/trail.yaml -d web --use-recorded-steps
+
+      - name: Stop the daemon
+        if: always()
+        run: trailblaze app --stop
+
+      - name: Upload Trailblaze logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-logs-${{ matrix.runner }}
+          path: ${{ runner.temp }}/trailblaze-home/
+          if-no-files-found: ignore
+
+  # Installs this PR's JAR on Windows with install.ps1, boots an Android emulator on the runner and
+  # replays the Android showcase trail through the installed trailblaze.cmd: the CLI starts the
+  # daemon and installs the on-device APK over adb, as it does for a Windows user with Android
+  # Studio. x64 only: the emulator runs an x86_64 image under the runner's Windows Hypervisor
+  # Platform.
+  windows-android:
+    needs: build-uber-jar
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}\trailblaze-uber-jar
+      # The trail replays recorded steps, so no model is called; the provider still needs a key.
+      OPENAI_API_KEY: no-key-set
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Choose the install and state directories
+        run: |
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_DIR=$env:RUNNER_TEMP\Trailblaze"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_HOME=$env:RUNNER_TEMP\trailblaze-home"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+          architecture: x64
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download uber JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar
+
+      - name: Install with install.ps1
+        run: ./install.ps1
+
+      - name: Put the install on PATH
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $env:TRAILBLAZE_DIR 'bin')
+
+      - name: Install the TypeScript SDK's dependencies
+        # The Clock trailmap's scripted tools need the SDK's esbuild in a source checkout.
+        working-directory: sdks/typescript
+        run: bun install --frozen-lockfile
+
+      - name: Boot an Android emulator
+        timeout-minutes: 20
+        shell: bash
+        run: ./.github/windows_boot_android_emulator.sh
+
+      - name: Replay the Android trail and drive the device step by step
+        shell: bash
+        run: ./.github/pr_run_android_trail_windows.sh
+
+      - name: Stop the daemon
+        if: always()
+        run: trailblaze app --stop
+
+      - name: Collect device and emulator logs
+        if: always()
+        shell: bash
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb.exe"
+          mkdir -p "$TRAILBLAZE_HOME"
+          # `adb logcat` waits for a device, so only ask a device that is up.
+          if [ "$("$ADB" get-state 2>/dev/null | tr -d '\r')" = device ]; then
+            "$ADB" logcat -d > "$TRAILBLAZE_HOME/logcat.log" 2>&1 || true
+          fi
+          cp emulator.log sdkmanager.log "$TRAILBLAZE_HOME/" 2>/dev/null || true
+
+      - name: Upload Trailblaze logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-logs-windows-android
+          path: ${{ runner.temp }}/trailblaze-home/
+          if-no-files-found: ignore

@@ -1,0 +1,28 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze survey [-hV] [--format=<format>] [--logs-dir=<path>]
+                         [-o=<file>] [--survey=<name>]... [<session>...]
+Run surveys over finished sessions, store their findings and labels in each
+session, and print a report
+Surveys load from the workspace you run this in. Each survey's find phase reads
+every session, then label phases run over the batch. A survey that a selected
+survey lists in `dependsOn` runs too, reusing a session's stored findings while
+they are current.
+      [<session>...]      Session id or unambiguous prefix, or a path: a
+                            session directory, a directory of sessions, or a
+                            session zip. Defaults to every session in the logs
+                            directory.
+      --format=<format>   What to print: markdown (default), summary, json, or
+                            none.
+  -h, --help              Show this help message and exit.
+      --logs-dir=<path>   Directory session ids resolve in. Defaults to the
+                            configured logs directory.
+  -o, --out=<file>        Also write the JSON report to this file.
+      --survey=<name>     Only run the survey exported under this name
+                            (repeatable).
+  -V, --version           Print version information and exit.

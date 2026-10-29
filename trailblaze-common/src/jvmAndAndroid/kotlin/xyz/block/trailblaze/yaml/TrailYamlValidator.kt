@@ -35,7 +35,8 @@ object TrailYamlValidator {
   }
 
   /**
-   * Recursively finds all trail YAML files in the given directory.
+   * Recursively finds all trail YAML files in the given directory. A [directory] that is itself a
+   * symlink is followed, and the results keep its path.
    *
    * @param directory The directory to search
    * @return List of all trail YAML files found
@@ -44,7 +45,7 @@ object TrailYamlValidator {
     if (!directory.exists() || !directory.isDirectory) emptyList()
     else {
       TrailDiscovery
-        .discoverTrailFiles(directory.toPath())
+        .discoverTrailFilesFollowingRoot(directory.toPath())
         .filterNot(::isProjectConfigFile)
     }
 

@@ -85,13 +85,10 @@ class TrailblazeMcpServerTargetScopedToolsTest {
 
     val resolved = server.resolveTargetScopedToolClasses(newSessionContext())
 
-    // Both backings must move together here. A refactor once left the class path with its
-    // no-target fallback while the YAML path dropped to empty, so a target-less session kept
-    // `tap` but silently lost `eraseText` — a split nothing in `tools/list` describes.
     val expected = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList())
     assertTrue(
-      expected.toolClasses.isNotEmpty() && expected.yamlToolNames.isNotEmpty(),
-      "Catalog sanity: the always-enabled Android surface must carry both backings",
+      expected.toolClasses.isNotEmpty(),
+      "Catalog sanity: the always-enabled Android surface must carry class-backed tools",
     )
     assertEquals(
       expected.toolClasses,
@@ -311,9 +308,9 @@ class TrailblazeMcpServerTargetScopedToolsTest {
     /**
      * Device-control tools an MCP client expects to find in `tools/list` once a device is
      * connected. Named literally because that's the external contract — a client calls them
-     * by these exact names, and the Android MCP-dispatch CI check asserts the same two.
+     * by these exact names.
      */
-    val DEVICE_CONTROL_TOOL_NAMES = setOf("tap", "tapOnPoint")
+    val DEVICE_CONTROL_TOOL_NAMES = setOf("tap", "longPress")
   }
 
   private class FakeSignInTool : TrailblazeTool

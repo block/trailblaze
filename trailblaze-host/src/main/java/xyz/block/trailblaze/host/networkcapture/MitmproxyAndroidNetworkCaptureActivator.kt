@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.host.networkcapture
 
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
+import java.io.InputStream
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentHashMap
 
@@ -51,6 +54,42 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
    * store; the legacy `/system/etc/security/cacerts` remount for API 24–33 is a planned follow-up.
    */
   private const val MIN_SUPPORTED_SDK = 34
+
+  /** A line the proxy addon prints when it loses an event. Mirrors `mitmproxy_netcapture.py`. */
+  internal const val CAPTURE_INCOMPLETE_LINE_PREFIX = "[mitm-capture] capture-incomplete: "
+
+  /** The stream the proxy writes, `network.ndjson`; its losses are recorded against it. */
+  internal const val NETWORK_STREAM = "network"
+
+  /**
+   * Copies the proxy's output into [log] and records a loss it reports with
+   * [SessionCaptureHealth], in memory, so the loss counts even when the disk that failed the
+   * proxy's write can't take a marker or this log. Keeps draining after a log write fails: a
+   * full pipe would stall the proxy.
+   */
+  internal fun relayProxyOutput(output: InputStream, log: File, sessionDir: File) {
+    val writer = runCatching { log.bufferedWriter() }.getOrNull()
+    var writing = writer != null
+    try {
+      output.bufferedReader().useLines { lines ->
+        lines.forEach { line ->
+          if (line.startsWith(CAPTURE_INCOMPLETE_LINE_PREFIX)) {
+            SessionCaptureHealth.markIncomplete(
+              sessionDir,
+              line.removePrefix(CAPTURE_INCOMPLETE_LINE_PREFIX),
+              NETWORK_STREAM,
+            )
+          }
+          if (writing) {
+            writing = runCatching { writer!!.write(line); writer.newLine(); writer.flush() }.isSuccess
+          }
+        }
+      }
+    } finally {
+      // Also when the pipe read fails (the proxy killed at shutdown), or the log stays open.
+      runCatching { writer?.close() }
+    }
+  }
 
   private val cacheRoot: File = File(System.getProperty("user.home"), ".trailblaze/network-capture")
   private val confDir: File = File(cacheRoot, "mitmproxy")
@@ -126,12 +165,14 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       if (File(path).canExecute()) return path
       Console.error("[mitm-capture] $ENV_MITMDUMP=$path is not executable; falling back")
     }
-    val venvMitmdump = File(cacheRoot, "venv/bin/mitmdump")
+    // A Windows venv keeps its executables under Scripts\ and names them .exe.
+    val executable = if (isWindows()) "mitmdump.exe" else "mitmdump"
+    val venvMitmdump = File(cacheRoot, if (isWindows()) "venv/Scripts/$executable" else "venv/bin/$executable")
     if (venvMitmdump.canExecute()) return venvMitmdump.absolutePath
     // Search PATH for an executable `mitmdump`.
     val pathDirs = System.getenv("PATH")?.split(File.pathSeparator).orEmpty()
     return pathDirs.asSequence()
-      .map { File(it, "mitmdump") }
+      .map { File(it, executable) }
       .firstOrNull { it.canExecute() }
       ?.absolutePath
   }
@@ -211,8 +252,11 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       ).redirectErrorStream(true)
       pb.environment()["TRAILBLAZE_SESSION_ID"] = sessionId
       pb.environment()["TRAILBLAZE_SESSION_DIR"] = sessionDir.absolutePath
-      pb.redirectOutput(File(sessionDir, "mitmdump.log"))
-      process = pb.start()
+      process = pb.start().also { started ->
+        Thread({ relayProxyOutput(started.inputStream, File(sessionDir, "mitmdump.log"), sessionDir) }, "mitm-capture-$sessionId")
+          .apply { isDaemon = true }
+          .start()
+      }
       Console.log("[mitm-capture] $sessionId: mitmdump pid=${process?.pid()} on 127.0.0.1:$port")
 
       // mitmdump writes the CA to confdir on startup; wait for it AND confirm the process is still
@@ -233,7 +277,7 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       // dangling proxy / untrusted-cert state.
       try {
         val hash = computeAndroidCertHash(caCert)
-          ?: error("could not compute cert hash (is openssl on PATH?)")
+          ?: error("could not compute the CA cert hash")
         certHash = hash
         installCaOnDevice(hash)
         setProxy("$EMULATOR_HOST:$port")
@@ -361,20 +405,27 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
   }
 
   /**
-   * Android names system CA files `<subject_hash_old>.0`. Compute it via host `openssl`
-   * (`-subject_hash_old`), which every dev host has. Returns null if openssl is unavailable.
+   * Android names system CA files `<subject_hash_old>.0`, what `openssl x509 -subject_hash_old`
+   * prints. Computed here rather than by running `openssl`, which Windows hosts don't have.
+   * Returns null if the PEM can't be read.
    */
   private fun computeAndroidCertHash(cert: File): String? = try {
-    val proc = ProcessBuilder(
-      "openssl", "x509", "-inform", "PEM", "-subject_hash_old", "-noout", "-in", cert.absolutePath,
-    ).redirectErrorStream(true).start()
-    val out = proc.inputStream.bufferedReader().use { it.readText() }.trim()
-    proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-    // Only an 8-hex-char subject hash is accepted, so the value spliced into the device shell in
-    // installCaOnDevice can't carry shell metacharacters.
-    out.lineSequence().firstOrNull { it.matches(Regex("[0-9a-f]{8}")) }
+    val x509 = cert.inputStream().use {
+      java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(it)
+    } as java.security.cert.X509Certificate
+    androidSubjectHashOld(x509.subjectX500Principal.encoded)
   } catch (t: Throwable) {
-    Console.error("[mitm-capture] openssl hash failed: ${t.message}")
+    Console.error("[mitm-capture] CA subject hash failed: ${t.message}")
     null
+  }
+
+  /**
+   * OpenSSL's `X509_NAME_hash_old`: the first four bytes of the MD5 of the DER-encoded subject, read
+   * little-endian, as eight hex digits.
+   */
+  internal fun androidSubjectHashOld(derSubject: ByteArray): String {
+    val md5 = java.security.MessageDigest.getInstance("MD5").digest(derSubject)
+    val hash = (0 until 4).fold(0L) { acc, i -> acc or ((md5[i].toLong() and 0xff) shl (8 * i)) }
+    return "%08x".format(hash)
   }
 }

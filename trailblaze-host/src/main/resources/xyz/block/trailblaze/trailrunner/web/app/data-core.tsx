@@ -247,6 +247,27 @@ async function disconnectDevice(trailblazeDeviceId) {
   return await window.TbRpc.disconnectDevice(trailblazeDeviceId);
 }
 
+// Devices screen: drive a connected device directly. Each returns { ok, error } - nothing here
+// records a step (the Record screen's recordGesture does that).
+async function sendDeviceInteraction(trailblazeDeviceId, interaction) {
+  return await window.TbRpc.deviceInteraction(trailblazeDeviceId, interaction);
+}
+
+// The tools a driver can run, as [{ name, description, requiredParameters, optionalParameters }],
+// or null when the daemon can't answer. With the device, only the tools it can load.
+async function fetchDriverToolCatalog(trailblazeDriverType, trailblazeDeviceId) {
+  return await window.TbRpc.getToolCatalog(trailblazeDriverType, trailblazeDeviceId);
+}
+
+// Runs trail YAML in the device's existing connection (no new session on Android or web).
+async function runTrailYamlOnDevice(trailblazeDeviceId, yaml) {
+  return await window.TbRpc.runTrailYaml(trailblazeDeviceId, yaml);
+}
+
+async function navigateWebUrl(trailblazeDeviceId, url) {
+  return await window.TbRpc.navigateWebUrl(trailblazeDeviceId, url);
+}
+
 async function fetchTrailYaml(id) {
   // Trail detail comes from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
   const d = await window.TbRpc.getTrailDetail(id);
@@ -503,12 +524,12 @@ async function switchWorkspace(path) {
 
 // Single source of truth for the workspace UI copy + the persistent "restart for app targets" state,
 // so every switch surface (chip, trails sidebar, Settings) reads identical wording and signals.
-const WORKSPACE_BLURB = 'The folder Trail Runner works from. Your trails, trailmaps, tools, and recordings all come from here.';
+const WORKSPACE_BLURB = 'The folder Trailblaze App works from. Your trails, trailmaps, tools, and recordings all come from here.';
 const WORKSPACE_EMPTY_NOTICE = 'This folder has no trails yet, so the trails list will be empty until you add some.';
 function workspaceRestartNotice(added) {
   const ids = (added || []).filter(Boolean);
   const suffix = ids.length ? ` (${ids.join(', ')})` : '';
-  return `Restart Trail Runner to load this workspace's app targets${suffix}.`;
+  return `Restart Trailblaze App to load this workspace's app targets${suffix}.`;
 }
 // Persisted in sessionStorage so the badge survives SPA re-renders and shows regardless of which
 // surface triggered the switch; a daemon restart reloads the page and clears it. Pass null to clear.
@@ -1323,6 +1344,7 @@ Object.assign(window, {
   API, safeJson, safeText, useFetched, fileUrl,
   recordConnect, recordScreen, recordFrameStream, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
   resolveRunDevice, connectDevice, connectDeviceDetailed, disconnectDevice, fetchTrailYaml, dispatchRun, prepareRetry, launchRetry, withTimeout,
+  sendDeviceInteraction, fetchDriverToolCatalog, runTrailYamlOnDevice, navigateWebUrl,
   getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, fetchTrailGitBaseline, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   pickDirectoryViaShell, addTrailRoot, removeTrailRoot, updateSetting, runIntegrationAction,
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,

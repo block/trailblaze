@@ -15,8 +15,6 @@ import xyz.block.trailblaze.util.Console
  * and any future serializer that emits the same shape stay in sync — drift between them would
  * silently lose data on round-trip.
  */
-const val OTHER_TRAILBLAZE_TOOL_NAME_FIELD = "toolName"
-const val OTHER_TRAILBLAZE_TOOL_RAW_FIELD = "raw"
 
 /**
  * Encodes any [TrailblazeTool] into the persisted [OtherTrailblazeTool] `{toolName, raw}`
@@ -34,11 +32,6 @@ const val OTHER_TRAILBLAZE_TOOL_RAW_FIELD = "raw"
  *   identifier is the instance name, not `class.simpleName`.
  * - Everything else: encode via the tool's concrete `@Serializable` class serializer into
  *   `raw`, and look up `toolName` from the class's `@TrailblazeToolClass` annotation.
- *
- * **Does NOT handle [InstanceNamedTrailblazeTool] backed by a YAML-defined serializer** —
- * that path requires JVM-side reflection into `TrailblazeSerializationInitializer` (which
- * lives in JVM/Android source sets only) and is handled by
- * `trailblaze-common`'s `TrailblazeTool.toLogPayload()` extension before falling through here.
  *
  * Falls back gracefully on serialization failures: a non-`@Serializable` tool, a class
  * missing `@TrailblazeToolClass`, or a serializer that throws all produce a structurally

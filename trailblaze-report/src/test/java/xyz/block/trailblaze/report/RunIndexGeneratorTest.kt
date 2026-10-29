@@ -132,6 +132,13 @@ class RunIndexGeneratorTest {
   }
 
   @Test
+  fun `a row's authored context is searchable from the index`() {
+    val withContext = row().copy(context = "Choice must persist.")
+    assertEquals("Choice must persist.", string(RunIndexGenerator.stubMeta(withContext, report(withContext), null), "context"))
+    assertNull(RunIndexGenerator.stubMeta(row(), report(row()), null)["context"])
+  }
+
+  @Test
   fun `a failing row still states its reason as an error`() {
     val failed = row(outcome = Outcome.FAILED).copy(failure_reason = "element not found")
     val meta = RunIndexGenerator.stubMeta(failed, report(failed), null)
@@ -192,6 +199,44 @@ class RunIndexGeneratorTest {
     )
     // Same trail identity across both, which is what folds them into one row of two cells.
     assertEquals(setOf("checkout/pay"), sessions.map { string(metaOf(it.jsonObject), "trailId") }.toSet())
+  }
+
+  @Test
+  fun `attempt history keeps every session and includes skipped trails without duplicating the winner`() {
+    val failed = row(outcome = Outcome.FAILED).copy(
+      session_id = SessionId("first"),
+      superseded_by = SessionId("second"),
+      logs_zip_url = "https://cdn.example/first.zip",
+    )
+    val passed = row().copy(session_id = SessionId("second"), logs_zip_url = "https://cdn.example/second.zip")
+    val skipped = row(testKey = "checkout/refund", outcome = Outcome.SKIPPED, zipUrl = null)
+    val input = report(passed, skipped).copy(attempts = listOf(failed, passed))
+    val sessions = RunIndexGenerator.stubSessions(listOf(input), "https://cdn.example/viewer/index.html")
+    val metas = sessions.map { metaOf(it.jsonObject) }
+    assertEquals(listOf("failed", "passed", "skipped"), metas.map { string(it, "status") })
+    assertEquals(3, sessions.size)
+    assertTrue(string(metas[0], "reportUrl")!!.contains("first.zip"))
+    assertTrue(string(metas[1], "reportUrl")!!.contains("second.zip"))
+    assertNull(metas[0]["retainedResult"])
+    assertEquals(true, metas[1]["retainedResult"]?.jsonPrimitive?.boolean)
+    assertNull(metas[2]["reportUrl"])
+    assertTrue(sessions.all { it.jsonObject["logs"]!!.jsonArray.isEmpty() })
+  }
+
+  @Test
+  fun `a summary without attempts marks its rows as retained so it can sit beside one that retried`() {
+    val sessions = RunIndexGenerator.stubSessions(listOf(report(row())), "https://cdn.example/viewer/index.html")
+    assertEquals(true, metaOf(sessions.single().jsonObject)["retainedResult"]?.jsonPrimitive?.boolean)
+  }
+
+  @Test
+  fun `the commit links to the repository carried by the summary`() {
+    val input = report(row()).let {
+      it.copy(metadata = it.metadata.copy(git_repository_url = "https://github.com/example/mobile-tests"))
+    }
+    val meta = RunIndexGenerator.stubMeta(row(), input, null)
+    assertEquals("https://github.com/example/mobile-tests/commit/abc123", string(meta, "commitUrl"))
+    assertNull(RunIndexGenerator.stubMeta(row(), report(row()), null)["commitUrl"])
   }
 
   @Test

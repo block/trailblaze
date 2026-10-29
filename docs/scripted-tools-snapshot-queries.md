@@ -17,7 +17,7 @@ export interface SubmitIfVisibleResult {
 }
 
 export const submit_if_visible = trailblaze.tool<EmptyInput, SubmitIfVisibleResult>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     const [matches] = await ctx.tools.findSelectorMatches({
       selectors: [{ androidAccessibility: { textRegex: "Submit" } }],
@@ -159,7 +159,7 @@ await ctx.tools.tapOnPoint({ x: 100, y: 200 });   // invalidates
 const [after] = await ctx.tools.findSelectorMatches({ selectors: [submit] });
 ```
 
-Verification tools (`assertVisibleBySelector`, `assertVisibleWithText`, …) are
+Verification tools (`assertVisibleBySelector`, …) are
 read-only and don't invalidate.
 
 ## Waiting for a screen

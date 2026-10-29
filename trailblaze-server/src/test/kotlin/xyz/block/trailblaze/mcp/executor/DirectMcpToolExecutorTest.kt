@@ -54,8 +54,8 @@ class DirectMcpToolExecutorTest {
       "Should include tap from CORE_INTERACTION",
     )
     assertTrue(
-      tools.any { it.name == "tapOnPoint" },
-      "Should include tapOnPoint from CORE_INTERACTION",
+      tools.any { it.name == "longPress" },
+      "Should include longPress from CORE_INTERACTION",
     )
   }
 
@@ -73,12 +73,6 @@ class DirectMcpToolExecutorTest {
       tools.any { it.name == "openUrl" },
       "Should include openUrl from NAVIGATION",
     )
-    // pressBack is YAML-defined and part of the NAVIGATION catalog entry; it must appear in
-    // the advertised descriptor list or the LLM won't know it's available.
-    assertTrue(
-      tools.any { it.name == "pressBack" },
-      "Should include pressBack (YAML-defined) from NAVIGATION",
-    )
   }
 
   @Test
@@ -87,7 +81,7 @@ class DirectMcpToolExecutorTest {
     val names = executor.getAvailableToolNames()
 
     assertTrue("tap" in names, "Should include tap")
-    assertTrue("tapOnPoint" in names, "Should include tapOnPoint")
+    assertTrue("longPress" in names, "Should include longPress")
     assertTrue("swipe" in names, "Should include swipe")
   }
 
@@ -95,9 +89,8 @@ class DirectMcpToolExecutorTest {
   fun `isToolAvailable returns true for available tools`() {
     val executor = createExecutor()
 
-    assertTrue(executor.isToolAvailable("tapOnPoint"), "tapOnPoint should be available")
-    // YAML-defined tool must be reported as available the same way class-backed tools are.
-    assertTrue(executor.isToolAvailable("pressBack"), "pressBack (YAML-defined) should be available")
+    assertTrue(executor.isToolAvailable("tap"), "tap should be available")
+    assertTrue(executor.isToolAvailable("eraseText"), "eraseText should be available")
   }
 
   @Test
@@ -120,14 +113,14 @@ class DirectMcpToolExecutorTest {
   fun `VERIFICATION category is isolated from CORE_INTERACTION tools`() {
     // Progressive-disclosure clients (e.g. StepToolSet hint="VERIFY") request just
     // VERIFICATION + OBSERVATION and expect a read-only surface. Interaction tools
-    // like tap/inputText must not leak in via alwaysEnabled auto-inclusion.
+    // like tap/type must not leak in via alwaysEnabled auto-inclusion.
     val executor = createExecutor(setOf(ToolSetCategory.VERIFICATION, ToolSetCategory.OBSERVATION))
     val names = executor.getAvailableToolNames()
 
     assertTrue("assertNotVisibleWithText" in names, "Should include verify tool")
     assertTrue("takeSnapshot" in names, "Should include observation tool")
     assertFalse("tap" in names, "Should NOT include CORE_INTERACTION tools")
-    assertFalse("inputText" in names, "Should NOT include CORE_INTERACTION tools")
+    assertFalse("type" in names, "Should NOT include CORE_INTERACTION tools")
   }
 
   // endregion
@@ -144,27 +137,26 @@ class DirectMcpToolExecutorTest {
 
       assertIs<ToolExecutionResult.ToolNotFound>(result)
       assertEquals("unknownTool", result.requestedTool)
-      assertTrue(result.availableTools.contains("tapOnPoint"), "Should list available tools")
+      assertTrue(result.availableTools.contains("tap"), "Should list available tools")
     }
 
   @Test
-  fun `executeToolByName executes tapOnPoint successfully`() =
+  fun `executeToolByName executes tap successfully`() =
     runTest {
       val mockBridge =
         ConfigurableMockBridge().apply {
-          executeToolResult = "[OK] Tapped at (100, 200)"
+          executeToolResult = "[OK] Tapped e12"
         }
       val executor = createExecutor(mockBridge = mockBridge)
       val args =
         buildJsonObject {
-          put("x", 100)
-          put("y", 200)
+          put("ref", "e12")
         }
 
-      val result = executor.executeToolByName("tapOnPoint", args)
+      val result = executor.executeToolByName("tap", args)
 
       assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("tapOnPoint", result.toolName)
+      assertEquals("tap", result.toolName)
       assertTrue(result.output.contains("OK"), "Output should contain OK")
     }
 
@@ -178,11 +170,10 @@ class DirectMcpToolExecutorTest {
       val executor = createExecutor(mockBridge = mockBridge)
       val args =
         buildJsonObject {
-          put("x", 100)
-          put("y", 200)
+          put("ref", "e12")
         }
 
-      val result = executor.executeToolByName("tapOnPoint", args)
+      val result = executor.executeToolByName("tap", args)
 
       assertIs<ToolExecutionResult.Failure>(result)
       assertTrue(result.error.contains("Device not connected"), "Error should contain exception message")
@@ -211,7 +202,7 @@ class DirectMcpToolExecutorTest {
     }
 
   @Test
-  fun `executeToolByName handles inputText`() =
+  fun `executeToolByName handles type`() =
     runTest {
       val mockBridge =
         ConfigurableMockBridge().apply {
@@ -223,36 +214,10 @@ class DirectMcpToolExecutorTest {
           put("text", "hello@example.com")
         }
 
-      val result = executor.executeToolByName("inputText", args)
+      val result = executor.executeToolByName("type", args)
 
       assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("inputText", result.toolName)
-    }
-
-  @Test
-  fun `executeToolByName handles pressBack from NAVIGATION category`() =
-    runTest {
-      // pressBack is a YAML-defined tool (`trails/config/tools/pressBack.yaml` via
-      // `tools:` composition) that ships as part of the `navigation` catalog entry. This
-      // is the load-bearing regression guard for YAML-defined tool execution through
-      // DirectMcpToolExecutor: the executor must advertise `pressBack` in the NAVIGATION
-      // category and route its execution through the same polymorphic tool serializer
-      // that handles class-backed tools.
-      val mockBridge =
-        ConfigurableMockBridge().apply {
-          executeToolResult = "[OK] Pressed back"
-        }
-      val executor =
-        createExecutor(
-          categories = setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION),
-          mockBridge = mockBridge,
-        )
-      val args = buildJsonObject {}
-
-      val result = executor.executeToolByName("pressBack", args)
-
-      assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("pressBack", result.toolName)
+      assertEquals("type", result.toolName)
     }
 
   @Test

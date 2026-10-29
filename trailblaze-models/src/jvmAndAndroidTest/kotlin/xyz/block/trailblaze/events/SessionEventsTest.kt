@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /** Pins the [SessionEvents] filename contract and the [FileEventSink] write behavior. */
 class SessionEventsTest {
@@ -145,4 +146,20 @@ class SessionEventsTest {
       it.mkdirs()
       it
     }
+
+  @Test
+  fun `the clock marker is written only for device-clock records and round-trips`() {
+    val sessionDir = createTempDir()
+    FileEventSink(sessionDir).use { sink ->
+      sink.append("app-events", 1000L, buildJsonObject {}, clock = TrailblazeClockDomain.DEVICE)
+      sink.append("app-events", 2000L, buildJsonObject {})
+    }
+    val lines = File(sessionDir, "${SessionEvents.DIR_NAME}/app-events.ndjson").readLines().filter { it.isNotBlank() }
+    assertTrue(lines[0].contains("\"${SessionEvents.CLOCK_FIELD}\":\"device\""), lines[0])
+    assertFalse(lines[1].contains(SessionEvents.CLOCK_FIELD), "host is the unmarked default: ${lines[1]}")
+    assertEquals(
+      listOf(TrailblazeClockDomain.DEVICE, null),
+      lines.map { Json.decodeFromString(SessionEvent.serializer(), it).clock },
+    )
+  }
 }

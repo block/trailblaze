@@ -42,7 +42,8 @@ class TrailmapCatalogBuilderTest {
   // A loose ambient `trailblaze` so fixtures can declare the real `trailblaze.tool<I, O>(spec, handler)`
   // shape the analyzer extracts, without needing the actual SDK resolvable from a temp dir.
   private fun declareTypedToolStub(): String =
-    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown };"
+    "declare const trailblaze: { tool: <I, O>(spec: any, handler: (input: I) => Promise<O>) => unknown; " +
+      "trailhead: <I, O>(spec: any, handler?: (input: I) => Promise<O>) => unknown };"
 
   private fun withWorkspace(configDir: File, block: () -> Unit) {
     val previous = WorkspaceConfigDirHolder.resolver
@@ -94,6 +95,34 @@ class TrailmapCatalogBuilderTest {
         demo.trailheads.any { it.name == "demo_launchAppSignedIn" },
         "expected demo_launchAppSignedIn to also be unioned into trailheads, got ${demo.trailheads}",
       )
+    }
+  }
+
+  @Test
+  fun `a trailblaze trailhead with no to is a trailhead`() {
+    assumeAnalyzerRunnable()
+    val configDir = tempFolder.newFolder("config-trailhead-call")
+    val trailmapDir = File(configDir, "trailmaps/demo5").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: demo5
+      target:
+        display_name: Demo5
+        tools:
+          - demo5_launchApp
+      """.trimIndent(),
+    )
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "demo5_launchApp.ts").writeText(
+      """
+        |${declareTypedToolStub()}
+        |export const demo5_launchApp = trailblaze.trailhead(async () => "ok");
+      """.trimMargin(),
+    )
+
+    withWorkspace(configDir) {
+      val demo5 = TrailmapCatalogBuilder.build().single { it.id == "demo5" }
+      assertEquals(listOf("demo5_launchApp"), demo5.trailheads.map { it.name })
     }
   }
 
@@ -250,9 +279,7 @@ class TrailmapCatalogBuilderTest {
         |export const demo4_second = trailblaze.tool<I, O>({}, async () => ({ ok: true }));
       """.trimMargin(),
     )
-    // A multi-export .ts needs a sidecar descriptor naming each exported tool — the analyzer
-    // needs the file loaded once and each entry registered, it doesn't infer names from
-    // `export const` alone.
+    // A sidecar descriptor naming each exported tool: every entry points back at the one `.ts`.
     File(toolsDir, "demo4_shared.yaml").writeText(
       """
       script: ./demo4_shared.ts
@@ -279,8 +306,8 @@ class TrailmapCatalogBuilderTest {
   @Test
   fun `a nested operational YAML component keeps its real subdirectory in relPath`() {
     // Regression test: ToolYamlConfig carries no source-path field either, so a relPath
-    // reconstructed from just the component's id (e.g. "shortcuts/<id>.shortcut.yaml") loses any
-    // subdirectory nesting — a real, common shape (see trailmaps/square/shortcuts/web/*.yaml).
+    // reconstructed from just the component's id (e.g. "trailheads/<id>.trailhead.yaml") loses any
+    // subdirectory nesting, such as a per-platform `trailheads/web/` folder.
     val configDir = tempFolder.newFolder("config-nested")
     val trailmapDir = File(configDir, "trailmaps/demo5").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(
@@ -290,13 +317,12 @@ class TrailmapCatalogBuilderTest {
         display_name: Demo5
       """.trimIndent(),
     )
-    val nestedShortcutsDir = File(trailmapDir, "shortcuts/web").apply { mkdirs() }
-    File(nestedShortcutsDir, "demo5_webShortcut.shortcut.yaml").writeText(
+    val nestedTrailheadsDir = File(trailmapDir, "trailheads/web").apply { mkdirs() }
+    File(nestedTrailheadsDir, "demo5_webTrailhead.trailhead.yaml").writeText(
       """
-      id: demo5_webShortcut
-      shortcut:
-        from: demo5/a
-        to: demo5/b
+      id: demo5_webTrailhead
+      trailhead:
+        to: demo5/a
       tools: []
       """.trimIndent(),
     )
@@ -304,9 +330,9 @@ class TrailmapCatalogBuilderTest {
     withWorkspace(configDir) {
       val catalog = TrailmapCatalogBuilder.build()
       val demo5 = catalog.single { it.id == "demo5" }
-      val component = demo5.tools.singleOrNull { it.name == "demo5_webShortcut" }
-        ?: error("expected demo5_webShortcut in tools, got ${demo5.tools}")
-      assertEquals("trails/config/trailmaps/demo5/shortcuts/web/demo5_webShortcut.shortcut.yaml", component.relPath)
+      val component = demo5.tools.singleOrNull { it.name == "demo5_webTrailhead" }
+        ?: error("expected demo5_webTrailhead in tools, got ${demo5.tools}")
+      assertEquals("trails/config/trailmaps/demo5/trailheads/web/demo5_webTrailhead.trailhead.yaml", component.relPath)
     }
   }
 

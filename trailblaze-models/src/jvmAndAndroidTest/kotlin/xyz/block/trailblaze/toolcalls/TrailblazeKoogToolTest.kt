@@ -27,7 +27,7 @@ import kotlin.test.Test
 /**
  * Directly pins the strict-vs-lenient policy split of the shared
  * [TrailblazeKoogTool.Companion.parseKoogParameterType] — the single decision point every
- * tool source (class-backed, YAML-defined, subprocess MCP) now routes through. Without a
+ * tool source (class-backed, scripted, subprocess MCP) now routes through. Without a
  * test at this layer, an inverted `strict` argument at any call site would pass all indirect
  * tests silently.
  */

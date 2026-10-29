@@ -1,0 +1,58 @@
+plugins {
+    alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.binary.compatibility.validator)
+    alias(libs.plugins.spotless)
+    alias(libs.plugins.vanniktech.maven.publish)
+}
+
+// Full framework products retain Android's platform implementation. The independent planner
+// configures only its JVM graph, without resolving an Android build plugin or SDK.
+def withAndroid = findProperty('trailblaze.format.android')?.toString()?.toBoolean() != false
+if (withAndroid) {
+    apply plugin: 'com.android.library'
+    android {
+        namespace = 'xyz.block.trailblaze.format'
+        compileSdk = 36
+        defaultConfig { minSdk = 26 }
+        compileOptions {
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+        }
+    }
+}
+
+kotlin {
+    jvm { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+    if (withAndroid) {
+        androidTarget {
+            publishLibraryVariants('debug', 'release')
+            compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
+        }
+    }
+    if (findProperty('trailblaze.wasm')?.toString()?.toBoolean() != false) {
+        wasmJs { browser() }
+    }
+    if (findProperty('trailblaze.ios')?.toString()?.toBoolean() != false) {
+        iosSimulatorArm64()
+    }
+    sourceSets {
+        commonMain.dependencies {
+            api(libs.kaml)
+            api(libs.kotlinx.serialization.json)
+        }
+        commonTest.dependencies { implementation(kotlin('test')) }
+    }
+}
+
+spotless {
+    kotlin {
+        target('src/**/*.kt')
+        ktfmt().googleStyle()
+    }
+}
+
+// The Native target is a compile gate, not a published artifact.
+tasks.matching { it.name.startsWith("publish") && it.name.contains("IosSimulatorArm64") }.configureEach {
+    enabled = false
+}

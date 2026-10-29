@@ -337,13 +337,41 @@ class HostScriptedToolLauncherPrecompiledBundleTest {
   }
 
   @Test
+  fun `installed tools use their shipped bundle even when an SDK source is available`() = runBlocking {
+    val tool = inlineTool("runIf")
+    val shipped = extractRoot.newFile("runIf.bundle.js")
+    val route = HostScriptedToolLauncher.planInlineToolRoute(
+      listOf(tool), esbuildPresent = true, sdkSourcePresent = true,
+    )
+
+    val bundles = HostScriptedToolLauncher.liveBundleRoute(
+      assertIs<HostScriptedToolLauncher.InlineToolRoute.LiveBundle>(route),
+      shippedBundles = { tools ->
+        HostScriptedToolLauncher.shippedPrecompiledBundles(
+          tools,
+          resolveWorkspaceSource = { null },
+          resolvePrecompiled = { shipped },
+        )
+      },
+    ) { error("Installed source imports outside the extracted tools tree cannot be live-bundled") }
+
+    assertEquals(listOf(tool to shipped), bundles)
+  }
+
+  @Test
   fun `a source checkout live-bundles every tool, shipped bundle or not`() = runBlocking {
     val tool = inlineTool("edited")
     val route = HostScriptedToolLauncher.InlineToolRoute.LiveBundle(listOf(tool), allowPrecompiledFallback = false)
 
     val bundles = HostScriptedToolLauncher.liveBundleRoute(
       route,
-      shippedBundles = { error("a checkout must not look for shipped bundles, or a stale one could shadow an edit") },
+      shippedBundles = { tools ->
+        HostScriptedToolLauncher.shippedPrecompiledBundles(
+          tools,
+          resolveWorkspaceSource = { extractRoot.newFile("edited.ts") },
+          resolvePrecompiled = { error("an on-disk edit must not use a shipped bundle") },
+        )
+      },
     ) { tools -> tools.map { it to File("${it.name}.live.js") } }
 
     assertEquals(listOf(tool to File("edited.live.js")), bundles)

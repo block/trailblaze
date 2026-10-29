@@ -1,0 +1,41 @@
+# Test fixture for waypoints.test.ts: the contract on compiling YAML waypoints, held without any
+# trailmap. Not a survey input: the runner walks directories for `*.survey.ts` only.
+id: fixture/web/about
+description: "A company About page: a hero heading plus a link unique to that page."
+web:
+  required:
+    # No `headingLevel` here on purpose: the logged web hierarchy carries a node's ARIA role and
+    # name and nothing else, so naming a level would make this waypoint match no screen at all.
+    - description: "Hero heading"
+      selector:
+        web:
+          ariaRole: heading
+          ariaNameRegex: "Powering businesses.*"
+    - description: "Annual report link"
+      selector:
+        web:
+          ariaRole: link
+          ariaNameRegex: "2023 10-K Annual Report"
+  forbidden:
+    - description: "Sign-in form (that is a different page)"
+      selector:
+        web:
+          ariaRole: textbox
+          ariaNameRegex: "Email"
+android:
+  required:
+    - description: "Toolbar whose direct child carries the title"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.Toolbar"
+        containsChild:
+          androidAccessibility:
+            textRegex: "About"
+# Not a platform, and deliberately so: a block may be keyed by any device classifier, and a
+# dedicated device is its own classifier root rather than a kind of Android.
+acme-handheld:
+  required:
+    - description: "Handheld header, which the phone layout does not carry"
+      selector:
+        androidAccessibility:
+          textRegex: "About Acme"

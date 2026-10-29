@@ -4,7 +4,7 @@
 
 # `revyl_tap`
 
-Tap a UI element on the device screen. Describe the element in natural language (e.g. 'Sign In button', 'search icon', 'first product card'). Set longPress to true for a long-press gesture.
+Tap or long-press an element.
 
 ## Source
 
@@ -22,12 +22,12 @@ Tap a UI element on the device screen. Describe the element in natural language 
 ### Required parameters
 
 - `target` — `String`
-  Element to tap, described in natural language.
+  Element to tap, in natural language, e.g. 'Sign In button'.
 
 ### Optional parameters
 
 - `longPress` — `Boolean`
-  If true, perform a long-press instead of a tap.
+  Long-press instead of tap.
 - `reasoning` — `String`
 
 ## Output

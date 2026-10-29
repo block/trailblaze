@@ -11,6 +11,7 @@ import xyz.block.trailblaze.host.ios.IosDriverAction
 import xyz.block.trailblaze.host.ios.IosSimulatorPermissions
 import xyz.block.trailblaze.host.ios.SimctlCli
 import xyz.block.trailblaze.host.screenstate.AxeScreenState
+import xyz.block.trailblaze.host.screenstate.captureAxeScreenshot
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -30,8 +31,24 @@ class AxeDeviceManager(
   // constructed with a target (target-agnostic ad-hoc paths); selectors authored without
   // templates work either way.
   private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  /**
+   * Each app's springboard notification-alert answer, armed by a [IosDriverAction.LaunchApp]'s or
+   * [IosDriverAction.SetPermissions]' permissions plan. AXe-path equivalent of Maestro's XCUITest
+   * runner remembering `setPermissions` and tapping the alert during hierarchy capture —
+   * notifications have no TCC pre-grant (`simctl privacy` doesn't cover them), so runtime
+   * dismissal is how Maestro itself keeps them dialog-free. One per simulator; see
+   * [NotificationAlertAnswers.forSimulator].
+   */
+  private val notificationAlertAnswers: NotificationAlertAnswers = NotificationAlertAnswers(),
   // Injectable for tests only — production always shells out to the AXe CLI.
   private val describeUi: () -> AxeCli.Result = { AxeCli.describeUi(udid) },
+  private val tapNotificationAlert: (x: Int, y: Int) -> AxeCli.Result = { x, y -> AxeCli.tapXy(udid, x, y) },
+  private val appDisplayName: (bundleId: String) -> String? = { SimctlCli.appDisplayName(udid, it) },
+  private val captureScreenshot: () -> ByteArray? = { captureAxeScreenshot(udid) },
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val tapXy: (x: Int, y: Int) -> AxeCli.Result = { x, y -> AxeCli.tapXy(udid, x, y) },
+  private val multiTapXy: (x: Int, y: Int, count: Int) -> AxeCli.Result =
+    { x, y, count -> AxeCli.multiTapXy(udid, x, y, count) },
 ) : IosDeviceManager {
 
   companion object {
@@ -71,6 +88,27 @@ class AxeDeviceManager(
      * gate exists to wait out.
      */
     private const val READINESS_MIN_CONTENT_NODE_COUNT = 3
+
+    /** AX roles of the fields a key press types into. */
+    private val TEXT_INPUT_ROLES = setOf("AXTextField", "AXSecureTextField", "AXTextArea", "AXSearchField")
+
+    /**
+     * The first text input whose value differs between [before] and [after] a delete key, as its
+     * two values, or null when none moved. An empty field reports its placeholder and a delete
+     * leaves it be, so a moved value is text the clear left behind. Pure so it is unit-testable
+     * without stubbing `AxeCli`.
+     */
+    internal fun textInputsChangedByDelete(before: TrailblazeNode, after: TrailblazeNode): Pair<String?, String?>? {
+      fun values(tree: TrailblazeNode) = tree.aggregate()
+        .mapNotNull { it.driverDetail as? DriverNodeDetail.IosAxe }
+        .filter { it.role in TEXT_INPUT_ROLES }
+        .map { it.value }
+      val beforeValues = values(before)
+      val afterValues = values(after)
+      // A field appearing or going away is not a delete's doing; nothing to compare.
+      if (beforeValues.size != afterValues.size) return null
+      return beforeValues.zip(afterValues).firstOrNull { (b, a) -> b != a }
+    }
 
     /**
      * Pure coord math for a directional swipe — extracted so it's unit-testable without
@@ -171,26 +209,55 @@ class AxeDeviceManager(
       "It is not visible on screen; scroll it into view first."
   }
 
-  /**
-   * Springboard notification-alert auto-dismiss intent ("allow"/"deny"), armed by the last
-   * [IosDriverAction.LaunchApp]'s permissions plan. AXe-path equivalent of Maestro's XCUITest
-   * runner remembering `setPermissions` and tapping the alert during hierarchy capture —
-   * notifications have no TCC pre-grant (`simctl privacy` doesn't cover them), so runtime
-   * dismissal is how Maestro itself keeps them dialog-free. Null = leave alerts alone.
-   */
-  private var notificationsAutoDismiss: String? = null
-
   // --- Screen state ---
 
-  override fun getScreenState(): ScreenState = axeScreenState(::readTree)
+  override fun getScreenState(): ScreenState = answeringScreenState(::readTree)
 
-  override fun sharedScreenState(): ScreenState = axeScreenState(::sharedTree)
+  override fun sharedScreenState(): ScreenState = answeringScreenState(::sharedTree)
+
+  /**
+   * An action that changes an app's notifications answer is logged against the screen as it
+   * stands: answering the alert here would use the answer the action is about to replace, so a
+   * `deny` could tap Allow.
+   */
+  override fun sharedScreenStateBefore(action: IosDriverAction): ScreenState =
+    if (changesNotificationAnswer(action)) axeScreenState(::sharedTree) else sharedScreenState()
+
+  private fun changesNotificationAnswer(action: IosDriverAction): Boolean =
+    action is IosDriverAction.SetPermissions ||
+      action is IosDriverAction.AnswerNotificationsAlert ||
+      action is IosDriverAction.LaunchApp ||
+      action is IosDriverAction.ClearState
+
+  /**
+   * [read], with an armed notification alert answered first (see [maybeDismissNotificationAlert]):
+   * Maestro's runner does this on every hierarchy capture, so a plain screen read, like `openApp`'s
+   * readiness poll, sees the app behind the alert rather than the alert. After a tap the screen
+   * is read again, so the caller never gets a hierarchy that no longer exists.
+   */
+  private fun answeringAlert(read: () -> TrailblazeNode?): TrailblazeNode? {
+    val tree = read() ?: return null
+    if (!maybeDismissNotificationAlert(tree)) return tree
+    forgetKeptTree()
+    return readTree()
+  }
 
   private fun axeScreenState(readTree: () -> TrailblazeNode?) = AxeScreenState(
     udid = udid,
     deviceWidth = deviceWidth,
     deviceHeight = deviceHeight,
     readTree = readTree,
+    captureScreenshot = captureScreenshot,
+  )
+
+  /** Like [axeScreenState], for a [read] that answers alerts: its screenshot follows the read. */
+  private fun answeringScreenState(read: () -> TrailblazeNode?) = AxeScreenState(
+    udid = udid,
+    deviceWidth = deviceWidth,
+    deviceHeight = deviceHeight,
+    readTree = { answeringAlert(read) },
+    readTreeBeforeScreenshot = { !notificationAlertAnswers.isEmpty() },
+    captureScreenshot = captureScreenshot,
   )
 
   // --- Shared reads (see [IosDeviceManager.shareScreenReads]) ---
@@ -265,10 +332,27 @@ class AxeDeviceManager(
    * tapped or the tap failed (the alert is still up, so [tree] is still accurate).
    */
   private fun maybeDismissNotificationAlert(tree: TrailblazeNode): Boolean {
-    val value = notificationsAutoDismiss ?: return false
-    val (x, y) = IosSimulatorPermissions.findNotificationAlertTap(tree, value) ?: return false
+    if (notificationAlertAnswers.isEmpty() || alertTap(tree) == null) return false
+    return notificationAlertAnswers.dismissing {
+      // Another manager may have answered it since [tree] was read: re-read, and treat a gone
+      // alert as a changed screen too, since [tree] still shows it.
+      val current = readTree() ?: return@dismissing true
+      val (value, tap) = alertTap(current) ?: return@dismissing true
+      tapAlert(value, tap)
+    }
+  }
+
+  /** The answer and button centre for the armed alert [tree] shows, or null. */
+  private fun alertTap(tree: TrailblazeNode): Pair<String, Pair<Int, Int>>? {
+    val value = notificationAlertAnswers.answerFor(IosSimulatorPermissions.notificationAlertAppName(tree)) ?: return null
+    val tap = IosSimulatorPermissions.findNotificationAlertTap(tree, value) ?: return null
+    return value to tap
+  }
+
+  private fun tapAlert(value: String, tap: Pair<Int, Int>): Boolean {
+    val (x, y) = tap
     Console.log("[AxeDeviceManager] notification permission alert detected — auto-tapping '$value' at ($x, $y)")
-    val result = AxeCli.tapXy(udid, x, y)
+    val result = tapNotificationAlert(x, y)
     return if (result.success) {
       // Let the dismiss animation land so the next capture doesn't see (and re-tap) the alert.
       waitForReady()
@@ -306,13 +390,13 @@ class AxeDeviceManager(
   private fun dispatch(action: IosDriverAction): ExecutionResult {
     return when (action) {
       is IosDriverAction.Tap -> {
-        AxeCli.tapXy(udid, action.x, action.y).throwIfError("tap")
+        tapRepeated(action.x, action.y, action.repeat).throwIfError("tap")
         ExecutionResult(action.x, action.y)
       }
       is IosDriverAction.TapRelative -> {
         val x = pixelFromPercent(action.percentX, deviceWidth)
         val y = pixelFromPercent(action.percentY, deviceHeight)
-        AxeCli.tapXy(udid, x, y).throwIfError("tapRelative")
+        tapRepeated(x, y, action.repeat).throwIfError("tapRelative")
         ExecutionResult(x, y)
       }
       is IosDriverAction.LongPress -> {
@@ -354,6 +438,22 @@ class AxeDeviceManager(
         }
         ExecutionResult()
       }
+      IosDriverAction.ClearText -> {
+        AxeCli.selectAll(udid).throwIfError("clearText select all")
+        AxeCli.key(udid, IosDriverAction.PressKey.BACKSPACE.keycode).throwIfError("clearText delete")
+        // A field that ignored Cmd+A lost one character and still holds the rest. One more delete
+        // tells them apart: it changes nothing in an emptied field.
+        val beforeCheck = readTree() ?: readTree() ?: error("clearText: could not read the screen to check the clear")
+        AxeCli.key(udid, IosDriverAction.PressKey.BACKSPACE.keycode).throwIfError("clearText check")
+        val afterCheck = readTree() ?: readTree() ?: error("clearText: could not read the screen to check the clear")
+        textInputsChangedByDelete(beforeCheck, afterCheck)?.let { (before, after) ->
+          error(
+            "clearText: select all + delete left text in a field — one more delete changed it from " +
+              "'$before' to '$after'. The field may not take Cmd+A, or focus is not in it.",
+          )
+        }
+        ExecutionResult()
+      }
       IosDriverAction.PressHome -> { AxeCli.button(udid, "home").throwIfError("press home"); ExecutionResult() }
       IosDriverAction.PressLock -> { AxeCli.button(udid, "lock").throwIfError("press lock"); ExecutionResult() }
       IosDriverAction.PressSiri -> { AxeCli.button(udid, "siri").throwIfError("press siri"); ExecutionResult() }
@@ -383,7 +483,7 @@ class AxeDeviceManager(
         // the clearState reinstall wiped prior TCC grants, before the app starts. Hard-fail like
         // Orchestra's UnableToSetPermissions: a silently-missing grant resurfaces as a
         // permission dialog mid-trail.
-        applyLaunchPermissions(action)
+        applyPermissions(action.bundleId, action.permissions)
         // Baseline BEFORE the launch: the pre-launch screen's tree is already "ready", so the
         // readiness poll must additionally see the tree CHANGE — otherwise it returns
         // immediately and the first selector resolves against the stale screen.
@@ -428,11 +528,19 @@ class AxeDeviceManager(
               "failed (exit ${privacyReset.exitCode}): ${privacyReset.stderr.trim()}",
           )
         }
-        notificationsAutoDismiss = null
+        notificationAlertAnswers.disarm(action.bundleId, notificationAlertAnswers.generation()) { appDisplayName(action.bundleId) }
         ExecutionResult()
       }
       IosDriverAction.ClearKeychain -> {
         SimctlCli.keychainReset(udid).throwIfError("keychain reset")
+        ExecutionResult()
+      }
+      is IosDriverAction.SetPermissions -> {
+        applyPermissions(action.bundleId, action.permissions)
+        ExecutionResult()
+      }
+      is IosDriverAction.AnswerNotificationsAlert -> {
+        answerNotifications(action.bundleId, action.allow?.let { if (it) "allow" else "deny" })
         ExecutionResult()
       }
       is IosDriverAction.OpenLink -> {
@@ -448,12 +556,12 @@ class AxeDeviceManager(
   }
 
   /**
-   * Applies the launch's permissions map (see [IosSimulatorPermissions] for the Maestro
-   * semantics being matched): `simctl privacy` for every service it can pre-grant, plus arming
-   * [notificationsAutoDismiss] for the alert-tap the simulator offers no pre-grant for.
+   * Applies a launch's or a standalone `setPermissions`' map (see [IosSimulatorPermissions] for the
+   * Maestro semantics being matched): `simctl privacy` for every service it can pre-grant, plus
+   * arming [notificationAlertAnswers] for the alert-tap the simulator offers no pre-grant for.
    */
-  private fun applyLaunchPermissions(action: IosDriverAction.LaunchApp) {
-    val plan = IosSimulatorPermissions.plan(action.permissions)
+  private fun applyPermissions(bundleId: String, permissions: Map<String, String>?) {
+    val plan = IosSimulatorPermissions.plan(permissions)
     if (plan.skipped.isNotEmpty()) {
       Console.log(
         "[AxeDeviceManager] permissions with no simctl equivalent (Maestro services them via " +
@@ -461,10 +569,32 @@ class AxeDeviceManager(
       )
     }
     plan.privacyCommands.forEach { cmd ->
-      SimctlCli.privacy(udid, cmd.action, cmd.service, action.bundleId)
-        .throwIfError("privacy ${cmd.action} ${cmd.service} ${action.bundleId}")
+      SimctlCli.privacy(udid, cmd.action, cmd.service, bundleId)
+        .throwIfError("privacy ${cmd.action} ${cmd.service} ${bundleId}")
     }
-    notificationsAutoDismiss = plan.notificationsValue
+    answerNotifications(bundleId, plan.notificationsValue)
+  }
+
+  /**
+   * Arms [answer] ("allow"/"deny") for [bundleId]'s notifications alert, or disarms it when null.
+   * Fails when the simulator moved onto another session during the lookup: the answer was for the
+   * session that left, and must not reach the next one's alert.
+   */
+  private fun answerNotifications(bundleId: String, answer: String?) {
+    val since = notificationAlertAnswers.generation()
+    val applied = if (answer == null) {
+      notificationAlertAnswers.disarm(bundleId, since) { appDisplayName(bundleId) }
+    } else {
+      val displayName = appDisplayName(bundleId)
+      if (displayName == null) {
+        Console.log(
+          "[AxeDeviceManager] couldn't read $bundleId's display name (simctl appinfo); its notifications " +
+            "answer applies only while it is the one app with an answer",
+        )
+      }
+      notificationAlertAnswers.arm(bundleId, displayName, answer, since)
+    }
+    check(applied) { "$bundleId's notifications answer was not applied: the simulator moved onto another session meanwhile" }
   }
 
   /**
@@ -672,7 +802,7 @@ class AxeDeviceManager(
     if (longPress) {
       AxeCli.touchHold(udid, x, y, durationMs = 500L).throwIfError("longPress-element")
     } else {
-      AxeCli.tapXy(udid, x, y).throwIfError("tap-element")
+      tapXy(x, y).throwIfError("tap-element")
     }
   }
 
@@ -681,6 +811,9 @@ class AxeDeviceManager(
     width: Int,
     height: Int,
   ): IntArray = computeDirectionalSwipeCoords(direction, width, height)
+
+  private fun tapRepeated(x: Int, y: Int, repeat: Int): AxeCli.Result =
+    if (repeat > 1) multiTapXy(x, y, repeat) else tapXy(x, y)
 
   private fun AxeCli.Result.throwIfError(label: String) {
     if (!success) error("axe $label failed (exit=$exitCode): ${stderr.trim()}")

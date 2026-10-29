@@ -4,7 +4,7 @@
 
 # `dragTo`
 
-Drag an element to another element or to a point, in one continuous press-move-release gesture. Use the short hash refs from the snapshot (e.g. y778 from [y778]). Provide the source `ref`, then EITHER `toRef` (drag onto another element) OR `toX`/`toY` (drag to a screen point). Use for reordering list items, moving a card onto a target, dragging a slider/handle to a position, or repositioning a pin. Optional `durationMs` paces the drag (default 1000ms — slow and deliberate so it registers as a drag, not a flick).
+Drag an element by snapshot ref onto another element (`toRef`) or to a point (`toX`/`toY`), in one continuous press-move-release gesture. Use to reorder items, move a card, or drag a slider.
 
 ## Source
 
@@ -22,18 +22,18 @@ Drag an element to another element or to a point, in one continuous press-move-r
 ### Required parameters
 
 - `ref` — `String`
-  The source element ref to drag (e.g., 'y778')
+  Ref of the element to drag, e.g. 'y778'.
 
 ### Optional parameters
 
 - `toRef` — `String`
-  Target element ref to drag onto. Provide this OR toX/toY.
+  Ref of the element to drop onto.
 - `toX` — `Integer`
-  Target X coordinate to drag to. Provide toX and toY together, OR use toRef.
+  Target X coordinate; set with toY.
 - `toY` — `Integer`
-  Target Y coordinate to drag to. Provide toX and toY together, OR use toRef.
+  Target Y coordinate; set with toX.
 - `durationMs` — `Integer`
-  How long the drag takes end-to-end, in ms. Default 1000 (deliberate drag).
+  Drag duration in ms. Default 1000, slow enough to register as a drag, not a flick.
 - `reasoning` — `String`
 
 ## Output

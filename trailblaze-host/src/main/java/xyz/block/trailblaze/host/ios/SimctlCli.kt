@@ -55,6 +55,23 @@ object SimctlCli {
   fun getAppDataContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), timeoutSeconds)
 
+  /**
+   * The name iOS shows for [bundleId] (`CFBundleDisplayName`, else `CFBundleName`, from
+   * `simctl appinfo`), which is the name its notification alert quotes. Null when the app isn't
+   * installed or the lookup fails.
+   */
+  fun appDisplayName(udid: String, bundleId: String, timeoutSeconds: Long = 10): String? {
+    val info = run(SimctlCommand.argv("appinfo", udid, bundleId), timeoutSeconds)
+    return if (info.success) parseAppDisplayName(info.stdout) else null
+  }
+
+  /** Reads the display name out of `simctl appinfo`'s plist-style output. */
+  internal fun parseAppDisplayName(appinfo: String): String? {
+    fun field(key: String) = Regex("^\\s*$key = \"?(.*?)\"?;\\s*$", RegexOption.MULTILINE)
+      .find(appinfo)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+    return field("CFBundleDisplayName") ?: field("CFBundleName")
+  }
+
   fun openUrl(udid: String, url: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("openurl", udid, url), timeoutSeconds)
 
@@ -286,9 +303,27 @@ object SimctlCli {
     }
   }
 
+  /**
+   * [Process.waitFor] that kills the child when the wait is interrupted, as it does on a timeout,
+   * rather than leave it running: a cancelled run's language write or SpringBoard stop must not
+   * land under the run that replaced it. The interrupt still propagates.
+   */
+  internal fun waitForOrKill(proc: Process, timeoutSeconds: Long): Boolean =
+    try {
+      proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    } catch (e: InterruptedException) {
+      proc.destroyForcibly()
+      // The interrupt is consumed by the throw, so this short reap is not cut short again.
+      runCatching { proc.waitFor(KILL_REAP_SECONDS, TimeUnit.SECONDS) }
+      Thread.currentThread().interrupt()
+      throw e
+    }
+
+  private const val KILL_REAP_SECONDS = 2L
+
   private fun run(args: List<String>, timeoutSeconds: Long): Result {
     val proc = ProcessBuilder(args).redirectErrorStream(false).start()
-    val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    val finished = waitForOrKill(proc, timeoutSeconds)
     if (!finished) {
       proc.destroyForcibly()
       return Result(-1, "", "simctl timed out after ${timeoutSeconds}s")

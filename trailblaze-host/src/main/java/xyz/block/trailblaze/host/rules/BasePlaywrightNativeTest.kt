@@ -33,6 +33,8 @@ import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
 import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -48,6 +50,7 @@ import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import java.io.File
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 
 /**
  * Base test class for Playwright-native web testing.
@@ -59,10 +62,11 @@ import kotlin.reflect.KClass
 open class BasePlaywrightNativeTest(
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
-  val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
-    trailblazeLlmModel = trailblazeLlmModel,
-    trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
-  ),
+  /**
+   * The app's LLM client factory. Null falls back to the open-source default, which knows only the
+   * built-in providers; see [hasCallerLlmClient].
+   */
+  dynamicLlmClient: DynamicLlmClient? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   appTarget: TrailblazeHostAppTarget? = null,
   val trailblazeDeviceId: TrailblazeDeviceId,
@@ -145,6 +149,18 @@ open class BasePlaywrightNativeTest(
    */
   private val laneLocale: String? = System.getenv(WEB_LOCALE_ENV)?.takeIf { it.isNotBlank() },
 ) {
+
+  val dynamicLlmClient: DynamicLlmClient = dynamicLlmClient ?: TrailblazeHostDynamicLlmClientProvider(
+    trailblazeLlmModel = trailblazeLlmModel,
+    trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
+  )
+
+  /**
+   * Whether the caller supplied [dynamicLlmClient]. A test built without one (the device-connect
+   * path caches one for its browser) can't create clients for app-registered providers, so a run
+   * that brings the app's factory must not reuse it.
+   */
+  val hasCallerLlmClient: Boolean = dynamicLlmClient != null
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
   // shut it down. When we create the browser ourselves, we own it and close() will shut it down.
@@ -231,12 +247,17 @@ open class BasePlaywrightNativeTest(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "Playwright Native Tool Set",
       toolClasses = resolvedWebToolSet.toolClasses + customToolClasses,
-      yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
     // Bind the repo to the web driver so the KOOG verify-step surface is driver-aware: a verify
     // block scopes to `web_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors /
     // VERIFY_SCOPE_DRIVERS). Without this the repo's driverType is null and verify scoping no-ops.
     driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    // The catalog and scope tell a session that launches scripted tools (the CLI and daemon path,
+    // via `HostScriptedToolLauncher`) which framework scripted tools these toolsets deliver,
+    // always-enabled ones such as `runIf` included. Without them none register, and a recorded step
+    // naming a framework scripted tool fails as an unknown tool.
+    toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(),
+    toolSetIds = WebToolSetIds.ALL,
   )
 
   /**
@@ -255,25 +276,26 @@ open class BasePlaywrightNativeTest(
 
   // Stable lazy so trail `config.context` (appendToSystemPrompt) persists across steps. Rides the
   // [TrailblazeRunnerUtil.runPromptSuspend] loop, so recordings replay without the agent.
-  private val agentRunner: KoogTestAgentRunner by lazy {
+  internal val agentRunner: KoogTestAgentRunner by lazy {
     KoogTestAgentRunner(
       agent = playwrightAgent,
       toolRepo = toolRepo,
       screenStateProvider = webStreamScreenshots.screenStateProvider,
       elementComparator = elementComparator,
-      llmClient = dynamicLlmClient.createLlmClient(),
+      llmClient = this.dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       logger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       maxLlmCalls = maxLlmCalls,
       systemPromptTemplate = systemPromptTemplate,
+      alwaysShownTools = appTarget?.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_NATIVE).orEmpty(),
     )
   }
 
   private val elementComparator by lazy {
     TrailblazeElementComparator(
       screenStateProvider = browserManager::getScreenState,
-      llmClient = dynamicLlmClient.createLlmClient(),
+      llmClient = this.dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       toolRepo = toolRepo,
     )
@@ -283,7 +305,10 @@ open class BasePlaywrightNativeTest(
   private var currentToolTraceId: TraceId? = null
 
   // The runner-util: deterministic replay + tool dispatch around the agent.
-  private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
+  private fun runnerUtilFor(
+    runner: TestAgentRunner,
+    trailheadReuse: Boolean,
+  ): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
     trailblazeRunner = runner,
     // Only recorded tools and `tools:` blocks come through here — LLM steps dispatch through the
     // runner's own agent call — so they run as a Playwright test would (see runScripted). The
@@ -302,14 +327,13 @@ open class BasePlaywrightNativeTest(
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     sessionUpdater = { loggingRule.setSession(it) },
+    trailheadReuse = trailheadReuse,
     // Shares one execution context + snapshot frame across the recording, matching the
     // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
     // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than
     // a clipboard-style state-survival fix.
     sharedToolBatch = { block -> playwrightAgent.runInSharedToolBatch(block) },
   )
-
-  private val agentRunnerUtil by lazy { runnerUtilFor(agentRunner) }
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
@@ -319,30 +343,36 @@ open class BasePlaywrightNativeTest(
     // test would — see runnerUtilFor.
     useRecordedSteps: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailheadReuse: Boolean?,
   ) {
     val activeRunner: TestAgentRunner = agentRunner
-    val activeRunnerUtil = agentRunnerUtil
-    for (item in trailItems) {
-      val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = item.promptSteps,
-            useRecordedSteps = useRecordedSteps,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.TrailheadTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = listOf(item.trailhead.toPromptStep()),
-            useRecordedSteps = true,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
-      }
-      if (itemResult is TrailblazeToolResult.Error) {
-        throw TrailblazeException(itemResult.errorMessage)
+    // Built per trail: a cached test serves many requests, and each one says whether its
+    // trailhead may reuse the last hand-off.
+    val activeRunnerUtil = runnerUtilFor(activeRunner, TrailheadRuns.reuseEnabledFor(trailheadReuse))
+    // One trail: the trailhead's teardown runs after it, whatever the outcome.
+    activeRunnerUtil.runTrail {
+      for (item in trailItems) {
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = useRecordedSteps,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.TrailheadTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
       }
     }
   }
@@ -368,6 +398,9 @@ open class BasePlaywrightNativeTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailSourceUrl: String? = null,
+    /** This run's `TrailblazeConfig.trailheadReuse`; a cached test's [config] may be an earlier request's. */
+    trailheadReuse: Boolean? = config.trailheadReuse,
   ): SessionId = withContext(trailLoopDispatcher) {
     // Run the agent loop on its own stable thread (NOT the Playwright thread — see
     // [trailLoopDispatcher]). After callLlm() suspends and resumes, the coroutine resumes
@@ -452,6 +485,7 @@ open class BasePlaywrightNativeTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
@@ -476,7 +510,7 @@ open class BasePlaywrightNativeTest(
       )
     }
     try {
-      runTrail(trailItems, useRecordedSteps, onStepProgress)
+      runTrail(trailItems, useRecordedSteps, onStepProgress, trailheadReuse)
     } finally {
       currentToolTraceId = null
     }
@@ -552,6 +586,26 @@ open class BasePlaywrightNativeTest(
     }
   }
 
+  /** The session and pump [registerEventsWaitPump] registered, so [close] can remove it. */
+  private var eventsWaitPump: Pair<String, (Long) -> Unit>? = null
+
+  /** Set by [close] under the same lock, so a capture start still in flight cannot add a pump after it. */
+  private var closing = false
+
+  /**
+   * Lets a `ctx.events` wait keep this browser delivering requests to the capture: Playwright for
+   * Java dispatches events only while it is called, and the trail loop is off its thread. Also
+   * called by the host-local MCP path, which starts capture without a YAML run.
+   */
+  @Synchronized
+  internal fun registerEventsWaitPump(sessionId: String) {
+    if (closing || eventsWaitPump?.first == sessionId) return
+    eventsWaitPump?.let { (old, pump) -> SessionEventsWaitPump.unregister(old, pump) }
+    val pump: (Long) -> Unit = { ms -> browserManager.onPlaywrightThread { browserManager.currentPage.waitForTimeout(ms.toDouble()) } }
+    SessionEventsWaitPump.register(sessionId, pump)
+    eventsWaitPump = sessionId to pump
+  }
+
   private fun ensureWebNetworkCaptureStarted() {
     // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
     // directory themselves, bypassing the read-only repo that suppresses every other write.
@@ -570,6 +624,9 @@ open class BasePlaywrightNativeTest(
           sessionDir = sessionDir,
           tracker = playwrightAgent.inflightRequestTracker,
         )
+        // With the start, on the one thread: a dispatch for another session can't start its
+        // capture between the two and then lose its pump to this one.
+        registerEventsWaitPump(session.sessionId.value)
       }
     } catch (e: Exception) {
       // Don't let a capture-start failure tear down the trail — log and continue.
@@ -613,6 +670,11 @@ open class BasePlaywrightNativeTest(
     // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
     // capture was never started. Bridged like the matching starts: `currentPage.context()`
     // touches Page objects, and close() runs on the JUnit thread.
+    synchronized(this) {
+      closing = true
+      eventsWaitPump?.let { (sessionId, pump) -> SessionEventsWaitPump.unregister(sessionId, pump) }
+      eventsWaitPump = null
+    }
     runCatching { browserManager.onPlaywrightThread { WebNetworkCapture.stop(browserManager.currentPage.context()) } }
     runCatching { browserManager.onPlaywrightThread { WebConsoleCapture.stop(browserManager.currentPage.context()) } }
     // Stop the owned video capture (if any) BEFORE tearing the browser down — the
@@ -625,6 +687,8 @@ open class BasePlaywrightNativeTest(
     }
     // Closing the dispatcher shuts down the executor it wraps.
     trailLoopDispatcher.close()
+    // This browser identity is never used again, so no later trail could take its hand-offs.
+    TrailheadHandoffStore.dropDevice(trailblazeDeviceId)
   }
 
   companion object {
@@ -672,8 +736,8 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use web_snapshot to refresh your view of the page when needed.
-- After navigation or clicks that change the page, use web_snapshot to see the updated state.
+- The element list is refreshed after every action. After navigation or a click that changes the page,
+  target elements from the new list; earlier IDs may no longer exist.
     """.trimIndent()
   }
 }

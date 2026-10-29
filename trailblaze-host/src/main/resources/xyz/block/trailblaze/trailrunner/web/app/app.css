@@ -818,3 +818,12 @@ html[data-theme="light"] .cm-s-tb .CodeMirror-selected { background: rgba(31,111
   .tb-create-context { grid-template-columns: 1fr; }
   .tb-create-context-item + .tb-create-context-item { border-left: 0; border-top: 1px solid var(--tb-hairline); }
 }
+
+/* Devices screen: a brief ring where a tap/press landed on the mirror. */
+.tb-device-touch { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 2px solid var(--tb-running); background: rgba(255,255,255,.18); pointer-events: none;
+  animation: tb-device-touch .45s ease-out forwards; }
+@keyframes tb-device-touch { from { transform: scale(.6); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+
+/* A device card's name opens that device on its own. */
+.tb-device-name:hover { text-decoration: underline; text-underline-offset: 2px; }

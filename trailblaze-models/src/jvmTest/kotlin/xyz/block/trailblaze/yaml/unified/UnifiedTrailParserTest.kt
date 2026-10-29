@@ -189,8 +189,10 @@ class UnifiedTrailParserTest {
         - verify: The cart shows 2 items
           recording:
             android-phone:
-              - assertVisibleWithText:
-                  text: 2 items
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: 2 items
           maxRetries: 5
         - verify: The LLM checks the receipt banner
           recordable: false
@@ -786,6 +788,45 @@ class UnifiedTrailParserTest {
   }
 
   @Test
+  fun `requiresHost parses on a single-device entry`() {
+    val trail = yaml.decodeUnifiedTrail(
+      """
+      config:
+        devices:
+          android-phone: {}
+          lab-a:
+            requiresHost: true
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+    assertEquals(
+      mapOf("android-phone" to null, "lab-a" to true),
+      trail.config.devices?.mapValues { it.value.requiresHost },
+    )
+  }
+
+  @Test
+  fun `requiresHost is rejected on a configuration and on its named devices`() {
+    // A multi-device session always runs on the host, so the flag there could only mislead.
+    listOf(
+      "pos-pair:\n      requiresHost: true\n      devices:\n        seller: { classifier: lab-a }",
+      "pos-pair:\n      devices:\n        seller: { classifier: lab-a, requiresHost: true }",
+    ).forEach { entry ->
+      val failure = assertFailsWith<Exception> {
+        yaml.decodeUnifiedTrail(
+          "config:\n  devices:\n    $entry\ntrail:\n  - step: Do the thing\n    recordable: false\n",
+        )
+      }
+      assertTrue(
+        messageChain(failure).contains("always runs on the host"),
+        "expected the requiresHost level message for `$entry`, got: $failure",
+      )
+    }
+  }
+
+  @Test
   fun `a named device inside a configuration cannot declare locale`() {
     val failure = assertFailsWith<Exception> {
       yaml.decodeUnifiedTrail(
@@ -959,6 +1000,46 @@ class UnifiedTrailParserTest {
       """.trimIndent(),
     )
     assertEquals(UnifiedTrailConfig(), config)
+  }
+
+  /**
+   * `locale` is not a [UnifiedTrailConfig] field, so a lenient decode would drop a top-level
+   * `config.locale:` and the trail would run in the device's current language. Both decode entry
+   * points refuse it and name the fix.
+   */
+  @Test
+  fun `a top-level config locale is refused with the device-entry fix`() {
+    val doc =
+      """
+      config:
+        id: myapp/login
+        locale: es-ES
+        devices:
+          ios-iphone: {}
+      trail:
+        - step: Open the app
+      """.trimIndent()
+    for (decode in listOf(yaml::decodeUnifiedTrail, yaml::decodeUnifiedTrailConfig)) {
+      val message = messageChain(assertFailsWith<IllegalArgumentException> { decode(doc) })
+      assertTrue("Line 3" in message, message)
+      assertTrue("config.devices.<classifier>" in message, message)
+      assertTrue("locale: es-ES" in message, message)
+    }
+  }
+
+  @Test
+  fun `a locale on a device entry decodes`() {
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        devices:
+          ios-iphone:
+            locale: es-ES
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+    assertEquals("es-ES", parsed.config.devices?.get("ios-iphone")?.locale)
   }
 
   private fun messageChain(e: Throwable): String =

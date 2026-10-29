@@ -147,6 +147,34 @@ class AssertToolNodeSelectorTest {
   }
 
   @Test
+  fun `AssertVisible preserves text id state index and memory interpolation`() = runBlocking {
+    val agent = CapturingAgent()
+    val context = createContext(agent)
+    context.memory.remember("label", "Welcome")
+
+    val authored = AssertVisibleBySelectorTrailblazeTool(
+      nodeSelector = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+          textRegex = "\${label}",
+          resourceIdRegex = "com\\.example:id/title",
+          isEnabled = true,
+          isSelected = false,
+        ),
+        index = 2,
+      ),
+    )
+    interpolateMemoryInTool(authored, context.memory).execute(context)
+
+    val captured = assertNotNull(agent.capturedAssertVisible)
+    val match = assertIs<DriverNodeMatch.AndroidAccessibility>(captured.driverMatch)
+    assertEquals("Welcome", match.textRegex)
+    assertEquals("com\\.example:id/title", match.resourceIdRegex)
+    assertEquals(true, match.isEnabled)
+    assertEquals(false, match.isSelected)
+    assertEquals(2, captured.index)
+  }
+
+  @Test
   fun `AssertVisible in FORCE_LEGACY mode ignores nodeSelector and falls back to Maestro`() = runBlocking {
     val agent = CapturingAgent()
     val context = createContext(agent, nodeSelectorMode = NodeSelectorMode.FORCE_LEGACY)

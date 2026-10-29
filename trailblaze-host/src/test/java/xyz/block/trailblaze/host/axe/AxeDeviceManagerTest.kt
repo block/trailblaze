@@ -201,6 +201,46 @@ class AxeDeviceManagerTest {
 
   // IntArray destructuring — mirrors the private extensions in AxeDeviceManager so the
   // test reads naturally without reaching into internals.
+  // --- clearText's check: one more delete moves only a field that still holds text ---
+
+  private fun screen(vararg fields: Pair<String, String?>) = TrailblazeNode(
+    driverDetail = DriverNodeDetail.IosAxe(role = "AXApplication"),
+    children = listOf(TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe(role = "AXStaticText", label = "Sign in"))) +
+      fields.map { (role, value) -> TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe(role = role, value = value)) },
+  )
+
+  @Test
+  fun `a field that still held text is caught by the extra delete`() {
+    // Cmd+A was ignored: the first delete took one character, the check takes another.
+    val changed = AxeDeviceManager.textInputsChangedByDelete(
+      before = screen("AXTextField" to "Email", "AXTextField" to "old@example.co"),
+      after = screen("AXTextField" to "Email", "AXTextField" to "old@example.c"),
+    )
+    assertEquals("old@example.co" to "old@example.c", changed)
+  }
+
+  @Test
+  fun `an emptied field showing its placeholder passes the check`() {
+    val emptied = screen("AXTextField" to "Email", "AXSecureTextField" to "Password")
+    assertEquals(null, AxeDeviceManager.textInputsChangedByDelete(before = emptied, after = emptied))
+  }
+
+  @Test
+  fun `a secure field still holding text is caught too`() {
+    val changed = AxeDeviceManager.textInputsChangedByDelete(
+      before = screen("AXSecureTextField" to "•••"),
+      after = screen("AXSecureTextField" to "••"),
+    )
+    assertEquals("•••" to "••", changed)
+  }
+
+  @Test
+  fun `text that is not in a field is not the clear's concern`() {
+    val before = TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe(role = "AXStaticText", value = "12:01"))
+    val after = TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe(role = "AXStaticText", value = "12:02"))
+    assertEquals(null, AxeDeviceManager.textInputsChangedByDelete(before, after))
+  }
+
   private operator fun IntArray.component1() = this[0]
   private operator fun IntArray.component2() = this[1]
   private operator fun IntArray.component3() = this[2]

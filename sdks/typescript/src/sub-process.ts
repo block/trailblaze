@@ -9,18 +9,20 @@
 // (~1 MB) bundle — built ONLY for subprocess tools that actually need the MCP server.
 
 import { run } from "./run.js";
-import { tool } from "./tool.js";
+import { tool, trailhead } from "./tool.js";
 
 /**
  * Namespace bundle authors import as `trailblaze` on the subprocess path. `tool` is the full
- * dispatcher (typed + imperative forms, ajv-validated); `run` starts the MCP stdio server.
+ * dispatcher (typed + imperative forms, ajv-validated); `trailhead` is a typed tool that is also a
+ * trailhead; `run` starts the MCP stdio server.
  */
 export const trailblaze = {
   tool,
+  trailhead,
   run,
 };
 
-export { run, tool };
+export { run, tool, trailhead };
 
 // Re-export the runtime-relevant authoring + spec types so subprocess tool authors get the full
 // type surface from this entry directly.
@@ -29,6 +31,7 @@ export type {
   TrailblazeToolHandler,
   TrailblazeToolResult,
   TrailblazeToolSpec,
+  TrailblazeTrailheadSpec,
   TrailblazeTypedToolSpec,
   TrailheadSpec,
   ToolContext,
@@ -40,3 +43,16 @@ export type {
   TrailblazeSessionCleanupContext,
   TrailblazeSessionResources,
 } from "./session-resources.js";
+export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
+export type {
+  EventMatch,
+  EventMatchValue,
+  TeardownResult,
+  SessionEvent,
+  TrailEvents,
+  TrailEventsQueryOptions,
+  PreviousRun,
+  TrailOutcome,
+  TrailRun,
+} from "./trailhead.js";

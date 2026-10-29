@@ -168,9 +168,8 @@ stick with repo-relative `script:` paths.
 2. Copy this `config/` directory into that `trails/` directory.
 3. Rename `trailmaps/sampleapp/` to match your app and update the nested `target:` block in
    `trailmap.yaml`.
-4. Add or remove tool descriptors under `trailmaps/<your-trailmap>/tools/`, and list each tool's
-   `name:` under `target.tools:` in `trailmap.yaml`. Drop the `tools:` block entirely if you
-   don't need custom scripting.
+4. Add or remove tool descriptors under `trailmaps/<your-trailmap>/tools/`. Each one is on the
+   target without a `trailmap.yaml` entry.
 5. Run Trailblaze from somewhere inside that workspace so walk-up finds
    `trails/config/trailblaze.yaml`.
 

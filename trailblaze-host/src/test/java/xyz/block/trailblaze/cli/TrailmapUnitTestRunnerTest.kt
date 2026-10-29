@@ -108,6 +108,40 @@ class TrailmapUnitTestRunnerTest {
   }
 
   @Test
+  fun `a suite with more files than the worker cap runs on that many bun workers`() {
+    val cap = xyz.block.trailblaze.host.ParallelWork.MAX_PARALLELISM
+    assertEquals(listOf("--parallel=$cap"), TrailmapUnitTestRunner.bunTestFlags(cap + 1) { true })
+  }
+
+  @Test
+  fun `a small suite, or a bun without --parallel, runs in one process`() {
+    val cap = xyz.block.trailblaze.host.ParallelWork.MAX_PARALLELISM
+    assertEquals(emptyList(), TrailmapUnitTestRunner.bunTestFlags(cap) { true })
+    assertEquals(emptyList(), TrailmapUnitTestRunner.bunTestFlags(cap + 50) { false })
+  }
+
+  @Test
+  fun `a small suite never runs the bun capability probe`() {
+    val cap = xyz.block.trailblaze.host.ParallelWork.MAX_PARALLELISM
+    var probed = 0
+    TrailmapUnitTestRunner.bunTestFlags(cap) { probed++; true }
+    assertEquals(0, probed)
+    TrailmapUnitTestRunner.bunTestFlags(cap + 1) { probed++; true }
+    assertEquals(1, probed)
+  }
+
+  @Test
+  fun `supportsParallel reads the option from bun test help`() {
+    val bun13Help = """
+      --max-concurrency=<val>         Maximum number of concurrent tests to execute at once. Default is 20.
+      --parallel=<val>                Run test files in parallel using N worker processes. Implies --isolate.
+    """.trimIndent()
+    val olderBunHelp = "      --max-concurrency=<val>         Maximum number of concurrent tests to execute at once."
+    assertTrue(TrailmapUnitTestRunner.supportsParallel(bun13Help))
+    assertEquals(false, TrailmapUnitTestRunner.supportsParallel(olderBunHelp))
+  }
+
+  @Test
   fun `resolveTestTimeoutMs returns default when env var is unset`() {
     // Default path — the env var isn't set on most JVMs running this test.
     val resolved = TrailmapUnitTestRunner.resolveTestTimeoutMs()

@@ -25,6 +25,30 @@ class TrailArgTokensTest {
   }
 
   @Test
+  fun `a literal dollar sign before a double-brace token still scans the token`() {
+    val refs = TrailArgTokens.scanArgsTokens("pay \${{args.amount}} now")
+    assertEquals(listOf("args.amount"), refs.map { it.body })
+  }
+
+  @Test
+  fun `a brace later in a dollar-brace body is still scanned and rejected as malformed`() {
+    // Only a `{` right after `${` is excluded. A malformed body must still reach the dotted-path
+    // check, or validate passes a token that dispatch then throws on.
+    val errors = TrailArgTokens.validate("send \${args.foo{bar} now", declaredArgNames = setOf("foo"))
+    assertEquals(1, errors.size)
+    assertTrue(errors.single().contains("dotted paths only"), errors.single())
+  }
+
+  @Test
+  fun `spaced and triple-brace tokens are scanned with trimmed bodies`() {
+    val refs = TrailArgTokens.scanArgsTokens("{{ args.a }} {{{args.b}}} \${ args.c } {{ }}")
+    assertEquals(listOf("args.a", "args.b", "args.c"), refs.map { it.body })
+    val errors = TrailArgTokens.validate("send {{ args.missing }}", declaredArgNames = setOf("foo"))
+    assertEquals(1, errors.size)
+    assertTrue(errors.single().contains("Undeclared arg reference `{{args.missing}}`"), errors.single())
+  }
+
+  @Test
   fun `top-level name strips the prefix and the dotted path tail`() {
     assertEquals("reply_to", TrailArgTokens.topLevelArgName("args.reply_to.email"))
     assertEquals("recipient", TrailArgTokens.topLevelArgName("args.recipient"))

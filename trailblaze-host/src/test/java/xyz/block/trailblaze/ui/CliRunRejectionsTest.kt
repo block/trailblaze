@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,6 +9,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.cli.TrailblazeExitCode
 import xyz.block.trailblaze.cli.daemonRunFailureExitCode
+import xyz.block.trailblaze.config.AppTargetYamlConfig
+import xyz.block.trailblaze.config.ToolNameResolver
+import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.model.TrailExecutionResult
 
 /**
@@ -60,5 +64,52 @@ class CliRunRejectionsTest {
     assertNull(cliRunRunnerRejectionResponse(TrailExecutionResult.Failed("assertion failed")))
     assertNull(cliRunRunnerRejectionResponse(TrailExecutionResult.Success()))
     assertNull(cliRunRunnerRejectionResponse(TrailExecutionResult.Cancelled))
+  }
+
+  @Test
+  fun `a run from a workspace whose trailmap the daemon serves from a bundled copy fails`() {
+    val workspace = kotlin.io.path.createTempDirectory("shadowed-run").toFile()
+    try {
+      File(workspace, "trailblaze-config/trailmaps/app").apply { mkdirs() }
+        .resolve("trailmap.yaml").writeText("id: app\ntarget:\n  display_name: App\n")
+      File(workspace, "trailblaze-config/trailblaze.yaml").writeText("")
+      val bundledApp = YamlBackedHostAppTarget(
+        config = AppTargetYamlConfig(id = "app", displayName = "App"),
+        toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
+        trailmapDirs = mapOf("app" to null),
+      )
+      val ownApp = YamlBackedHostAppTarget(
+        config = AppTargetYamlConfig(id = "app", displayName = "App"),
+        toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
+        trailmapDirs = mapOf("app" to File(workspace, "trailblaze-config/trailmaps/app")),
+      )
+
+      val refused = cliRunShadowedTrailmapsResponse(workspace.absolutePath, bundledApp)
+
+      assertNotNull(refused)
+      assertFalse(refused.success)
+      assertTrue(refused.error.orEmpty().contains("app"), "${refused.error}")
+      // The trail never ran: an infra failure, not a failed assertion.
+      assertEquals(TrailblazeExitCode.INFRA_FAILED, daemonRunFailureExitCode(refused))
+      assertNull(cliRunShadowedTrailmapsResponse(workspace.absolutePath, ownApp))
+      // A submission with no caller directory (an MCP or HTTP client) has no workspace to protect.
+      assertNull(cliRunShadowedTrailmapsResponse(null, bundledApp))
+      // A caller whose TRAILBLAZE_CONFIG_DIR names the workspace is checked from anywhere.
+      val elsewhere = kotlin.io.path.createTempDirectory("not-a-workspace").toFile()
+      try {
+        assertNull(cliRunShadowedTrailmapsResponse(elsewhere.absolutePath, bundledApp))
+        assertNotNull(
+          cliRunShadowedTrailmapsResponse(
+            elsewhere.absolutePath,
+            bundledApp,
+            callerConfigDir = File(workspace, "trailblaze-config").absolutePath,
+          ),
+        )
+      } finally {
+        elsewhere.deleteRecursively()
+      }
+    } finally {
+      workspace.deleteRecursively()
+    }
   }
 }

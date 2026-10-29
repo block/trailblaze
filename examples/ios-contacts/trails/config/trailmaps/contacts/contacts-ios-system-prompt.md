@@ -84,7 +84,7 @@ For everything else — tapping into a contact's individual phone field,
 scrolling within a contact, asserting a specific element rendered — use
 the built-in interaction primitives surfaced through this target's
 toolsets: `tap` (by ref from a fresh snapshot), `assertVisible` (by ref),
-`assertNotVisibleWithText`, `inputText`, `scrollUntilTextIsVisible`,
+`assertNotVisibleWithText`, `type` (by ref), `scrollUntilTextIsVisible`,
 `swipe`, `hideKeyboard`, `pressKey`, `wait`. The scripted tools above are
 the **only** ones you should reach for when the task matches one of those
 patterns; they encode behavior the LLM would otherwise have to re-derive

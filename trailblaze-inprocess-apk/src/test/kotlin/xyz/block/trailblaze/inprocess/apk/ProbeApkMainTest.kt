@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.inprocess.apk
 
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -132,16 +131,18 @@ class ProbeApkMainTest {
     // Existence is not readability, and the two have different fixes: one is a wrong path, the other
     // is a permission on a CI agent. Without this check the run reaches the zip reader and dies as an
     // IOException with no path in it and the wrong exit code.
-    val unreadable = File.createTempFile("probe-unreadable", ".apk")
-    unreadable.deleteOnExit()
-    assumeTrue("this check is meaningless as a user that can read anything", unreadable.setReadable(false, false))
-    assumeTrue("running as a user that ignores the permission", !unreadable.canRead())
+    // A permission bit can't make a file unreadable to root, so the check reads through a seam.
+    val unreadable = apk("app.apk")
 
     val error = assertFailsWith<ApkReadException> {
-      ProbeApkRunner.run(ProbeApkOptions(appApk = unreadable))
+      ProbeApkRunner.run(
+        ProbeApkOptions(appApk = unreadable),
+        certificateDigest = { STUB_CERT_DIGEST },
+        canRead = { it != unreadable },
+      )
     }
     assertTrue(error.message!!.contains(unreadable.path), error.message!!)
-    assertTrue(error.message!!.contains("permissions"), error.message!!)
+    assertTrue(error.message!!.contains("not readable"), error.message!!)
   }
 
   @Test

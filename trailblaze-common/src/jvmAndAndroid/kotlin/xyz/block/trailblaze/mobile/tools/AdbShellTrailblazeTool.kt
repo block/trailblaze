@@ -2,7 +2,6 @@ package xyz.block.trailblaze.mobile.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
@@ -21,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Executes a shell command in the Android device's shell environment, regardless of how
@@ -361,7 +361,7 @@ data class AdbShellTrailblazeTool(
   ): TrailblazeToolResult {
     val transportCommand = buildShellTrampolineCommand(effectiveCommand)
     val rawOutput = withTimeoutOrNull(ON_DEVICE_SHELL_TIMEOUT_MS) {
-      runInterruptible(Dispatchers.IO) {
+      runInterruptible(TrailblazeDispatchers.IO) {
         if (runAs != null) {
           executor.executeShellCommandAs(runAs, transportCommand)
         } else {

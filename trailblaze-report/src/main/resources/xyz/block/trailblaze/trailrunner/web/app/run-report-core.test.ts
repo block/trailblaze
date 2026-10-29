@@ -17,7 +17,9 @@ import * as RUN_REPORT_CORE_MODULE from "./run-report-core";
 import { declaredTrailSteps, mergeWebHierarchyBounds, traceToolCallCount } from "./run-report-extract";
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from "./run-report-inspector";
 import { chunkJsonWithoutRuntimeAttachments } from "./run-report-payload";
+import { failureAnchorIndex } from "./run-report-trace-model";
 import { whenDocumentComplete } from "./run-report-viewer";
+import { trailSourceDetails } from "./report-format";
 // A real captured web hierarchy (405 nodes, both parallel trees), scrubbed of page content — see
 // its _source note. Excluded from the packaged JAR alongside the other test fixtures.
 import webMergeFixture from "./web-hierarchy-merge-fixtures.json";
@@ -40,6 +42,32 @@ const core = RUN_REPORT_CORE_MODULE as unknown as {
 };
 
 const T = "xyz.block.trailblaze.logs.client.TrailblazeLog";
+
+describe("trail source labels", () => {
+  test("reads the original path and full revision from a permalink", () => {
+    const sha = "a".repeat(40);
+    const url = `https://github.com/example/trails/blob/${sha}/cases/Case%20%231/trail.yaml`;
+    expect(trailSourceDetails(url)).toEqual({ url, repo: "trails", path: "cases/Case #1/trail.yaml", commit: sha });
+  });
+  test("does not display missing, mutable, or unsafe source links", () => {
+    for (const url of [undefined, "javascript:alert(1)", "https://github.com/example/trails/blob/main/trail.yaml", `https://github.com/example/trails/blob/${"a".repeat(40)}/bad%path`]) {
+      expect(trailSourceDetails(url)).toBeNull();
+    }
+  });
+  test("shows the pinned original file in the header and full permalink in details", () => {
+    const sha = "a".repeat(40);
+    const url = `https://github.com/example/trails/blob/${sha}/cases/trail.yaml`;
+    const payload = { sessions: [{ meta: { title: "Example", status: "passed", trailSourceUrl: url }, trace: [], llm: [], shots: {} }] };
+    const header = renderViewerState(payload).html;
+    expect(header).toContain(`href="${url}"`);
+    expect(header).toContain(`trails / cases/trail.yaml @ ${sha.slice(0, 12)}`);
+    const details = renderViewerState(payload, { tab: "info" }).html;
+    expect(details).toContain(`>${url}</a>`);
+    const legacy = { sessions: [{ ...payload.sessions[0], meta: { title: "Example", status: "passed" } }] };
+    expect(renderViewerState(legacy).html).not.toContain('Trail source:');
+    expect(renderViewerState(legacy, { tab: "info" }).html).not.toContain('Trail source');
+  });
+});
 
 describe("originalYamlFromLogs", () => {
   test("uses the source captured at session start instead of a later trail revision", () => {
@@ -213,7 +241,7 @@ describe("localRunAgentPrompt", () => {
     expect(prompt).toContain("Trail: sample/checkout");
     expect(prompt).toContain("Target: sample-ios");
     expect(prompt).toContain("`./trailblaze run trails/checkout.trail.yaml`");
-    expect(prompt).toContain("`./trailblaze app --v2`");
+    expect(prompt).toContain("`./trailblaze app`");
     expect(prompt).toContain("select the sample/checkout trail");
   });
 
@@ -311,9 +339,9 @@ afterAll(() => {
   realSetTimeoutBeforeGuard = null;
 });
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; clickNetPhase: (phase: string) => void; shownNetworkRows: () => string[]; firePopstate: (next?: string) => void } {
   retireEarlierViewers();
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; netPhase: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, netPhase: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -511,6 +539,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     set innerHTML(v: string) { this._h = v; devicePlayer.innerHTML = previewPaneSeed(v); timelineList.scrollTop = 0; renders++; progressText = null; tlEventEls.forEach((el) => { el.open = false; el.body = ""; delete el.dataset.lazyfilled; }); },
     get innerHTML() { return this._h; },
     querySelectorAll(sel: string) {
+      // Network phase chips: clicking one narrows the pane's rows (see networkPane below).
+      if (sel === "#nlbar [data-netphase]") return [...this._h.matchAll(/<button class="evchip" data-netphase="([a-z]+)">/g)].map((m: any) => {
+        const el: any = { dataset: { netphase: m[1] }, classes: new Set<string>(), classList: { toggle(c: string, on: boolean) { if (on) el.classes.add(c); else el.classes.delete(c); } } };
+        Object.defineProperty(el, "onclick", { configurable: true, set(fn: () => void) { handlers.netPhase[m[1]] = fn; } });
+        return el;
+      });
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-vdev]") return [...this._h.matchAll(/data-vdev="(\d+)"/g)].map((m: any) => ({ dataset: { vdev: m[1] }, set onclick(fn: () => void) { handlers.vdev[m[1]] = fn; } }));
@@ -1084,6 +1118,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   };
   // Hoisted so a test can read back the capture-framing marker autoplay stamps on it.
   const documentElement = { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument, cloneNode: (_deep: boolean) => cloneDocumentElement() };
+  // The Network tab's row container, as last wired: its rows carry the display the filter set, and
+  // each row's text is its request path (the row's last cell).
+  let networkPane: { children: Array<{ textContent: string; style: { display: string } }> } | null = null;
   (globalThis as Record<string, unknown>).document = {
     get activeElement() { return overlayFocus && !overlayFocus.detached ? overlayFocus : activeElement; },
     // While a held chunk is pending the document reads as still loading, so the viewer keeps
@@ -1105,6 +1142,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : id === "tlplay" ? { click: () => handlers.timelinePlay && handlers.timelinePlay(), set onclick(fn: () => void) { handlers.timelinePlay = fn; } }
       : id === "shot" && devicePlayer._h.includes('id="shot"') ? shotImg
       : id === "lightboxmode" && app._h.includes('id="lightboxmode"') ? { set onclick(fn: () => void) { handlers.gridMode = fn; } }
+      : id === "nlpane" && app._h.includes('id="nlpane"') ? (networkPane = { children: [...app._h.matchAll(/<div class="ln ([^"]*)"(?: data-netphase="([a-z]+)")?>([\s\S]*?)<\/div>/g)].map((m: any) => ({ dataset: m[2] ? { netphase: m[2] } : {}, textContent: (m[3].match(/<span>([^<]*)<\/span>$/) || ["", ""])[1], style: { display: "" }, classList: { contains: (c: string) => m[1].split(" ").includes(c) } })) })
       : id === "prev" ? prevBtn
       : id === "next" ? nextBtn
       : id === "copylocalprompt" && app._h.includes('id="copylocalprompt"') ? { textContent: "", set onclick(fn: () => void) { handlers.copyLocalPrompt = fn; } }
@@ -1179,6 +1217,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.rebootViewer) { (opts.viewer || core.RUN_REPORT_VIEWER)(); while (rafQueue.length) rafQueue.shift()!(); }
   if (opts.toggleCell && handlers.cellToggle[opts.toggleCell]) handlers.cellToggle[opts.toggleCell]({ stopPropagation() {} });
   if (opts.session != null && handlers.session[String(opts.session)]) handlers.session[String(opts.session)]();
+  // A finished run opens on its Theater. Most of this file describes the Timeline, so a test that
+  // names no tab and no route starts there, as a reader who clicked it would.
+  if (opts.query === undefined && opts.routeStep == null && !opts.legacyHash && app._h.includes('class="active" data-tab="theater"') && handlers.tab.timeline) handlers.tab.timeline();
   if (opts.timelineScrollTop != null) timelineList.scrollTop = opts.timelineScrollTop;
   if (opts.step != null) handlers.step.get(String(opts.step))?.();
   if (opts.clickGroup != null && handlers.group[String(opts.clickGroup)]) handlers.group[String(opts.clickGroup)]();
@@ -1341,7 +1382,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, clickNetPhase: (phase: string) => handlers.netPhase[phase]?.(), shownNetworkRows: () => (networkPane?.children || []).filter((r) => r.style.display !== "none").map((r) => r.textContent), firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -4122,6 +4163,8 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     state.releaseChunks();
     // The viewer polls for the chunk while the document is still streaming (its own 50ms timer).
     for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).not.toContain("Loading run");
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login");
   });
 
@@ -4137,6 +4180,8 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     expect(state.readHtml()).toContain("Loading run");
     state.releaseChunks();
     for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).not.toContain("Loading run");
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login");
   });
 
@@ -4171,6 +4216,7 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     const state = renderViewerState(null, { chunks: chunksOf(html) });
     state.live()!.update(1, { deviceLog: "late poll line" } as unknown as Record<string, unknown>);
     state.openSession(1);
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Tap login"); // trace content only the session chunk carries
   });
 
@@ -4193,6 +4239,7 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     pushed.trace = [{ i: 1, label: "Pushed step", objective: true, ok: true }];
     state.live()!.update(1, pushed);
     state.openSession(1);
+    state.clickTab("timeline");
     expect(state.readHtml()).toContain("Pushed step");
     expect(state.readHtml()).not.toContain("Tap login"); // the chunk did not overwrite the push
   });
@@ -5034,6 +5081,17 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain("Exported from Trailblaze");
   });
 
+  test("index search matches a trail's authored context", () => {
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [
+        { ...session("Push notification", "passed"), meta: { title: "Push notification", status: "passed", context: "Choice must persist" } },
+        { ...session("Sign-in flow", "passed"), meta: { title: "Sign-in flow", status: "passed" } },
+      ],
+    });
+    expect(out).toContain('data-search="push notification choice must persist passed"');
+  });
+
   test("multi-session index offers metadata search without a redundant result counter", () => {
     const out = renderViewer({
       generatedAt: "now",
@@ -5538,7 +5596,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     test("each matrix cell links out to its own run's report instead of opening in-document", () => {
       const out = renderViewer({ generatedAt: "now", sessions: [stub("android-phone", "passed"), stub("ios-iphone", "failed")] });
       // One row, a cell per classifier — the same matrix an embedded multi-device report renders.
-      expect(out.match(/<div class="nm">checkout\/pay<\/div>/g)).toHaveLength(1);
+      expect(out.match(/title="Compare this trail across its runs">checkout\/pay<\/a>/g)).toHaveLength(1);
       expect(out).toContain('<span class="pk">android-phone</span>');
       expect(out).toContain('<span class="pk">ios-iphone</span>');
       // The open control is an anchor to that run's report, opened in a new tab.
@@ -5550,6 +5608,39 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       // The cell still reads its outcome and duration off the stub.
       expect(out).toContain('<div class="idxcell failed">');
       expect(out).toContain('<span class="pvtxt">35.4s</span>');
+    });
+
+    test("index selection opens just the chosen runs in the shared comparison viewer", () => {
+      const sessions = [stub("android-phone", "passed"), stub("ios-iphone", "failed"), stub("android-tablet", "passed")];
+      const initial = renderViewer({ generatedAt: "now", sessions });
+      expect(initial).toContain('data-index-compare');
+      const selected = renderViewer({ generatedAt: "now", sessions }, { toggleCompare: true, pick: [1, 0] });
+      const href = selected.match(/<a class="btn pickopen ready" href="([^"]+)"/)![1].replaceAll('&amp;', '&');
+      const url = new URL(href);
+      expect(url.searchParams.getAll('zip')).toEqual([
+        'https://cdn.example/runs/android-phone.zip', 'https://cdn.example/runs/ios-iphone.zip',
+      ]);
+      expect(url.searchParams.get('view')).toBe('compare');
+      expect(url.searchParams.get('pick')).toBe('0,1');
+      expect(selected).toContain('data-pick="2"');
+      expect(selected).not.toContain('data-session');
+    });
+
+    test("unuploaded sessions are visible but have no comparison checkbox", () => {
+      const sessions = [stub("android-phone", "passed"), stub("ios-iphone", "failed"), stub("android-tablet", "failed", { reportUrl: undefined })];
+      const out = renderViewer({ generatedAt: "now", sessions }, { toggleCompare: true });
+      expect(out).toContain('data-pick="0"');
+      expect(out).toContain('data-pick="1"');
+      expect(out).not.toContain('data-pick="2"');
+    });
+
+    test("adding retry history preserves an earlier retained pass as the verdict", () => {
+      const first = stub("android-phone", "passed", { retainedResult: true, ranAt: "2026-08-24 01:00:00" });
+      const second = stub("android-phone", "failed", { ranAt: "2026-08-24 02:00:00" });
+      const out = renderViewer({ generatedAt: "now", sessions: [first, second] });
+      expect(out).toContain('data-index-section="passed"');
+      expect(out).not.toContain('data-index-section="failed"');
+      expect(out).toContain('2 attempts');
     });
 
     test("a single-device index links out from its flat rows too", () => {
@@ -7093,6 +7184,22 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(bare).not.toContain("App version");
   });
 
+  test("the Info tab leads with the trail's authored context", () => {
+    const meta = { title: "Push notification", status: "passed", context: "Setting must persist.\n\nSetup:\n<signed in>" };
+    const info = renderViewer({ generatedAt: "now", sessions: [{ meta, trace: slim, llm: [], shots: {}, recordingYaml: null }] }, { tab: "info" });
+    // Context is escaped and keeps its line breaks for the pre-wrap block.
+    expect(info).toContain('<div class="eyebrow">About this trail</div><div class="trailcontext">Setting must persist.\n\nSetup:\n&lt;signed in&gt;</div>');
+    expect(core.RUN_REPORT_CSS).toContain(".trailcontext {");
+    const bare = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null }] }, { tab: "info" });
+    expect(bare).not.toContain("About this trail");
+  });
+
+  test("the trail's context stays out of the run header", () => {
+    const meta = { title: "Push notification", status: "passed", context: "Setting must persist." };
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta, trace: slim, llm: [], shots: {}, recordingYaml: null }] });
+    expect(out).not.toContain("Setting must persist.");
+  });
+
   test("detail tabs share one page heading and content frame", () => {
     const payload = {
       generatedAt: "now",
@@ -7319,7 +7426,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('id="copylocalprompt" disabled');
     const copied = renderViewerState(payload, { copyLocalPrompt: true }).copiedText;
     expect(copied).toContain("`./trailblaze run trails/checkout.trail.yaml`");
-    expect(copied).toContain("`./trailblaze app --v2`");
+    expect(copied).toContain("`./trailblaze app`");
   });
 
   test("the timeline separates trailhead setup from numbered trail steps", () => {
@@ -7334,6 +7441,212 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain(">TRAILHEAD<");
     expect(out).toContain(">STEP 1<");
     expect(out.indexOf('id="trailhead-heading"')).toBeLessThan(out.indexOf('id="trail-heading"'));
+  });
+
+  test("the trailhead's teardown renders as its own Teardown phase after the trail, unnumbered", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open the demo app", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Complete checkout" }, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Teardown", isTeardown: true }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "teardown", traceId: "teardown", trailblazeTool: { raw: {} }, successful: true, timestamp: "2024-01-01T00:00:02.500Z" },
+    ]));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('<span class="name" id="teardown-heading">Teardown</span><span class="phasestatus pass">');
+    expect(out).toContain(">TEARDOWN<");
+    expect(out).toContain(">STEP 1<");
+    expect(out).not.toContain(">STEP 2<");
+    expect(out.indexOf('id="trail-heading"')).toBeLessThan(out.indexOf('id="teardown-heading"'));
+  });
+
+  test("a snapshot the teardown takes stays under the Teardown; the run's final state goes with the trail", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Complete checkout" }, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Teardown", isTeardown: true }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.TrailblazeSnapshotLog`, displayName: "signed_out", screenshotFile: "signed-out.png", timestamp: "2024-01-01T00:00:03Z" },
+      { class: `${T}.TrailblazeSnapshotLog`, displayName: "final_screenshot", screenshotFile: "final.png", timestamp: "2024-01-01T00:00:04Z" },
+    ]));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] });
+    const trail = out.slice(out.indexOf('id="trail-heading"'), out.indexOf('id="teardown-heading"'));
+    const teardown = out.slice(out.indexOf('id="teardown-heading"'));
+    expect(teardown).toContain("signed_out");
+    expect(trail).not.toContain("signed_out");
+    expect(trail).toContain("Final state");
+    expect(teardown).not.toContain("Final state");
+  });
+
+  test("a clean teardown collapses behind a check; a failed one opens with a warning", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const render = (teardownOk: boolean) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: [
+      row(1, "Complete checkout", true, { objective: true }),
+      row(2, "tapOnElement", true, {}),
+      row(3, "Teardown", teardownOk, { objective: true, teardown: true }),
+      row(4, "teardown", teardownOk, {}),
+    ], llm: [], shots: {} }] });
+    const phase = (out: string) => out.slice(out.indexOf('data-phase="teardown"'), out.indexOf('<div class="steps">', out.indexOf('data-phase="teardown"')));
+    const clean = phase(render(true));
+    expect(clean).toContain('aria-expanded="false"');
+    expect(clean).toContain('<div class="tlphasebody" hidden>');
+    expect(clean).toContain('<span class="phasestatus pass">');
+    expect(clean).toContain("Clean</span>");
+    const failed = phase(render(false));
+    expect(failed).toContain('aria-expanded="true"');
+    expect(failed).not.toContain(" hidden>");
+    expect(failed).toContain('<span class="phasestatus warn">');
+    expect(failed).toContain("Failed</span>");
+  });
+
+  test("a failed trail's end-of-run rows after a clean teardown leave the teardown clean", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    // The session logs its failure screenshot and error after the teardown objective.
+    const trace = [
+      row(1, "Complete checkout", false, { objective: true }),
+      row(2, "assertVisibleBySelector", false, {}),
+      row(3, "Teardown", true, { objective: true, teardown: true }),
+      row(4, "teardown", true, {}),
+      row(5, "Failure screenshot", false, { terminal: true, endOfRun: true, err: null }),
+      row(6, "Error", false, { terminal: true, endOfRun: true }),
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "failed" }, trace, llm: [], shots: {} }] });
+    const phase = out.slice(out.indexOf('data-phase="teardown"'), out.indexOf('<div class="steps">', out.indexOf('data-phase="teardown"')));
+    expect(phase).toContain('<span class="phasestatus pass">');
+    expect(phase).toContain('aria-expanded="false"');
+    // They render with the trail, not under the Teardown.
+    expect(out.slice(out.indexOf('id="teardown-heading"'))).not.toContain("Failure screenshot");
+    expect(out.slice(out.indexOf('id="trail-heading"'), out.indexOf('id="teardown-heading"'))).toContain("Failure screenshot");
+    // A run-level error, with no failed objective, still anchors on its end-of-run rows.
+    const runLevel = [row(1, "Complete checkout", true, { objective: true }), ...trace.slice(2)];
+    expect(failureAnchorIndex(runLevel as any)).toBe(3);
+  });
+
+  test("the trailhead states whether it reused the last trail's setup, and why not", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const render = (records: Record<string, unknown>[]) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {},
+      events: [{ name: "trailhead", total: records.length, truncated: false, events: records.map((d, t) => ({ t, d: JSON.stringify(d) })) }] }] });
+
+    const reused = render([
+      { type: "previousRun", tool: "signIn", previousRun: { sessionId: "run_prev", reason: "still signed in" } },
+      { type: "setup", tool: "signIn", setup: "reused", reason: "still on the home screen", previousRunSessionId: "run_prev" },
+    ]);
+    expect(reused).toContain('<span class="name" id="trailhead-heading">Trailhead</span><span class="phasestatus reused">Reused</span>');
+    expect(reused).toContain("Reused from <code>run_prev</code>");
+    expect(reused).toContain("still on the home screen");
+
+    const full = render([
+      { type: "previousRun", tool: "signIn", previousRun: null, reason: "reuse is off for this lane" },
+      { type: "setup", tool: "signIn", setup: "fullSetup" },
+    ]);
+    expect(full).toContain('<span class="phasestatus full">Full setup</span>');
+    expect(full).toContain('<span class="setupdecisionreason">reuse is off for this lane</span>');
+
+    // A reuse whose catch-up threw: the Trailhead section and the failure banner both say so.
+    const failedTrace = [row(1, "Sign in", { objective: true, trailhead: true, ok: false, err: "Error: cart would not clear" }), row(2, "signIn", { ok: false, err: "Error: cart would not clear" })];
+    const failedReuse = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "failed" }, trace: failedTrace, llm: [], shots: {},
+      events: [{ name: "trailhead", total: 2, truncated: false, events: [
+        { type: "previousRun", tool: "signIn", previousRun: { sessionId: "run_prev", reason: "still signed in" } },
+        { type: "setup", tool: "signIn", setup: "reuseFailed", reason: "on home", error: "cart would not clear", previousRunSessionId: "run_prev", failed: true },
+      ].map((d, t) => ({ t, d: JSON.stringify(d) })) }] }] });
+    expect(failedReuse).toContain('<span class="phasestatus fail">');
+    expect(failedReuse).toContain("Reuse failed</span>");
+    expect(failedReuse).toContain("Failed while reusing setup from <code>run_prev</code>");
+    expect(failedReuse).toContain('<span class="setupdecisionreason setupdecisionerror">cart would not clear</span>');
+    expect(failedReuse).toContain('<span class="failurecontext">While reusing setup from run_prev</span>');
+    expect(reused).not.toContain("failurecontext");
+
+    // A trailhead with no teardown logs no setup record, so there is no decision to state.
+    const none = render([{ type: "previousRun", tool: "signIn", previousRun: null, reason: "this trailhead defines no teardown" }]);
+    expect(none).not.toContain("phasestatus");
+    expect(none).not.toContain("setupdecision");
+  });
+
+  test("the Network tab tags each request with its start phase and says where reused setup traffic is", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const trailheadStream = (records: Record<string, unknown>[]) => [{ name: "trailhead", total: records.length, truncated: false, events: records.map((d, t) => ({ t, d: JSON.stringify(d) })) }];
+    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: null, durationMs: null, urlPath, phase: "REQUEST_START", trailPhase });
+    const render = (network: unknown[] | null, records: Record<string, unknown>[]) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network, events: trailheadStream(records) }] }, { tab: "network" });
+
+    const full = render([net("/sign-in", "trailhead"), net("/checkout", "trail")], [{ type: "setup", tool: "signIn", setup: "fullSetup" }]);
+    expect(full).toContain('data-netphase="trailhead"><span class="netphase trailhead">Trailhead</span>');
+    expect(full).toContain('<button class="evchip" data-netphase="trail">Trail</button>');
+    expect(full).not.toContain("netcoverage");
+    // Network rows must not look like the Timeline's phase disclosures.
+    expect(full).not.toContain('class="ln " data-phase=');
+
+    // A third trail in a chain names the session that ran the setup, and the one that handed it on.
+    const chained = [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b", trailheadSessionId: "run_a" }];
+    const reused = render([net("/checkout", "trail")], chained);
+    expect(reused).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran (handed on by <code>run_b</code>)");
+    // One phase present: no chips to filter by.
+    expect(reused).not.toContain("data-netphase=\"trail\">Trail</button>");
+
+    // A reused trail with no traffic of its own still gets the tab and the notice.
+    const quiet = render(null, chained);
+    expect(quiet).toContain('data-tab="network"');
+    expect(quiet).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran");
+    expect(quiet).toContain("This report has no network log for this session.");
+    expect(quiet).not.toContain("No network activity captured");
+
+    // A multi-device session keeps each device's traffic in its own stream: say so, never "none".
+    const perDevice = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network: null,
+      events: [...trailheadStream(chained), { name: "network.seller", total: 3, truncated: false, events: [] }, { name: "network.buyer", total: 0, truncated: false, events: [] }] }] }, { tab: "network" });
+    expect(perDevice).toContain("captured each device's traffic separately: <code>network.seller</code> (3 events). Those requests are on the Timeline.");
+    expect(perDevice).not.toContain("has no network log");
+    expect(perDevice).not.toContain("network.buyer</code>");
+
+    // Only the tools that reused are named.
+    const mixed = render([net("/x", "trail")], [
+      { type: "setup", tool: "signIn", setup: "fullSetup" },
+      { type: "setup", tool: "seedCatalog", setup: "reused", reason: "same catalog", previousRunSessionId: "run_a", trailheadSessionId: "run_a" },
+    ]);
+    expect(mixed).toContain("<code>seedCatalog</code> reused the setup <code>run_a</code> ran, so");
+    expect(mixed).not.toContain("<code>signIn</code> reused");
+
+    // A log from before the setup's own session was recorded: the hand-off session is not credited
+    // with running it, since in a chain it did not.
+    const legacy = render([net("/x", "trail")], [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b" }]);
+    expect(legacy).toContain("<code>signIn</code> reused a setup handed on by <code>run_b</code>. This log does not record which session ran that setup");
+    expect(legacy).not.toContain("reused the setup <code>run_b</code> ran");
+
+    // Successive trails in one session: the setup's requests are earlier in this same log.
+    const sameSession = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed", sessionId: "mcp_1" }, trace, llm: [], shots: {}, network: [net("/x", "trail")],
+      events: trailheadStream([{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "mcp_1", trailheadSessionId: "mcp_1" }]) }] }, { tab: "network" });
+    expect(sameSession).toContain("an earlier trail in this session ran, so the requests that setup made are earlier in this log");
+    expect(sameSession).not.toContain("not here");
+  });
+
+  test("clicking a Network phase chip shows only that phase's requests, and a second click shows them all again", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: 200, durationMs: 5, urlPath, phase: "REQUEST_END", trailPhase });
+    const state = renderViewerState({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, events: [],
+      network: [net("/sign-in", "trailhead"), net("/checkout", "trail"), net("/sign-out", "teardown"), net("/before-any-trail", null)] }] }, { tab: "network" });
+    const shown = () => state.shownNetworkRows();
+    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
+
+    state.clickNetPhase("trail");
+    expect(shown()).toEqual(["/checkout"]);
+    state.clickNetPhase("trailhead");
+    expect(shown()).toEqual(["/sign-in"]);
+    state.clickNetPhase("trailhead");
+    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
+
+    // Only the Timeline's phase disclosures carry data-phase, so its phase toggles never bind to a
+    // network row or chip.
+    const html = state.readHtml();
+    expect((html.match(/data-phase="/g) || []).length).toBe((html.match(/class="phasecontrol" data-phase="/g) || []).length);
+  });
+
+  test("a failed teardown never anchors the run's failure", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [
+      row(1, "Complete checkout", true, { objective: true }),
+      row(2, "assertVisibleBySelector", false, {}),
+      row(3, "Teardown", false, { objective: true, teardown: true }),
+      row(4, "teardown", false, {}),
+    ];
+    expect(failureAnchorIndex(trace as any)).toBe(1);
+    expect(failureAnchorIndex(trace.slice(2) as any)).toBe(-1);
   });
 
   test("a failed run opens on its failure and presents the parsed error inside the failed step", () => {
@@ -7437,6 +7750,36 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="failureprose">Error: Element not found</div>');
   });
 
+  test("a crash failure's cause is the crash, not the logcat banner it quotes", () => {
+    const error = "App crashed: FATAL EXCEPTION: main (device.log line 812, 2 crash events in total)";
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">App crashed</span>');
+    expect(out).toContain(`<div class="failuremessage">${error}</div>`);
+  });
+
+  test("a crash failure is the session's, not a recovered failed row's in the passing trace", () => {
+    const error = "App crashed: FATAL EXCEPTION: main (device.log line 812)";
+    const trace = [
+      { i: 1, label: "Open checkout", tool: "agent step", note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+      { i: 2, label: "assertVisible", tool: "text: Pay", note: null, ms: 10, ts: 2, ok: false, err: "Error: Element not found", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [] },
+      { i: 3, label: "assertVisible", tool: "text: Pay", note: null, ms: 20, ts: 3, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed", error, failureCode: "app_crashed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('<span class="failuretype" title="Derived from error message · reported type: Error">App crashed</span>');
+    expect(out).toContain(`<div class="failuremessage">${error}</div>`);
+    expect(out).not.toContain("Element not found");
+  });
+
+  test("an all-caps nested cause is still the cause", () => {
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error: "Failed to tap Next. ERROR: Element not found" }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">Element not found</span>');
+  });
+
+  test("a FATAL-prefixed cause that is not the crash banner is still the cause", () => {
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error: "Failed to tap Next. FATAL ERROR: Element not found" }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">Element not found</span>');
+  });
+
   test("the Config tab compares only the authored and recorded config blocks", () => {
     const out = renderViewer({
       generatedAt: "now",
@@ -7537,6 +7880,42 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="runidentity"><span class="idxstatus" role="img" aria-label="passed" title="passed"><span class="idxstatusdot passed" aria-hidden="true"></span></span><h1>Streams</h1></div>');
     const html = core.buildMultiReportHtml({ generatedAt: "now", sessions: [{ meta: { title: "Streams", status: "passed" }, trace, llmLogs: [], shots: {}, events }] });
     expect(html).toContain(".tlphasehead { position: sticky;");
+  });
+
+  test("a recorded crash is a main timeline event, not only an opt-in stream", () => {
+    const crash = { name: "crash", total: 1, truncated: false, events: [], rows: [{ t: 1704067200500, label: "FATAL EXCEPTION: main", tone: "error", badges: [{ text: "Java crash" }], raw: [{}] }] };
+    const network = { name: "network", total: 1, truncated: false, events: [{ t: 1704067200400, d: "{\"path\":\"/pay\"}" }] };
+    const trace = [
+      { i: 1, label: "Complete checkout", tool: null, note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const payload = (events: unknown[]) => ({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed" }, trace, llm: [], shots: {}, recordingYaml: null, events }] });
+
+    const out = renderViewer(payload([network, crash]));
+    // Offered as an event kind, counted from the crash stream, and on like every other kind.
+    expect(out).toContain('aria-label="Events, 5 of 5 selected"');
+    expect(out).toMatch(/data-tlkind="crash" checked><span class="streamoptiondot" aria-hidden="true"><\/span><span class="streamname">App crash<\/span><span class="streamcount">1<\/span>/);
+    // The crash row is in the timeline while every stream is still unselected; the network one is not.
+    expect(out).toContain('aria-label="Streams, 0 of 2 selected"');
+    expect(out).toContain("FATAL EXCEPTION: main");
+    expect(out).not.toContain("/pay");
+
+    // Deselecting the kind hides the crash again, back to an ordinary opt-in stream.
+    const hidden = renderViewerState(payload([network, crash]), { query: "?run=0&tab=timeline&types=tool,llm,assert,fail" });
+    expect(hidden.html).not.toContain("FATAL EXCEPTION: main");
+
+    // A run that recorded no crash keeps its four kinds.
+    expect(renderViewer(payload([network]))).toContain('aria-label="Events, 4 of 4 selected"');
+  });
+
+  test("a raw crash stream renders as the formatted crash row", () => {
+    // The shape Trail Runner's live run view and a browser-opened ZIP hand the viewer: no rows.
+    const crash = { name: "crash", total: 1, truncated: false, events: [{ t: 1704067200500, d: JSON.stringify({ kind: "fatal_exception", platform: "android", summary: "FATAL EXCEPTION: main", source: { path: "device.log", line: 812 } }) }] };
+    const trace = [
+      { i: 1, label: "Complete checkout", tool: null, note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed" }, trace, llm: [], shots: {}, recordingYaml: null, events: [crash] }] });
+
+    expect(out).toMatch(/<details class="timelineevent e"[^>]*>.*<span class="timelineeventlabel">FATAL EXCEPTION: main<\/span>.*Java crash/);
   });
 
   test("the scrubber centers its selected timeline row with reduced-motion support", () => {
@@ -8170,6 +8549,90 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     const net = renderViewer(payload, { tab: "network" });
     expect(net).toContain('id="nlq"');
     expect(net).toContain('data-lvl="e"');
+  });
+});
+
+describe("the tab a run opens on", () => {
+  const step = { i: 1, label: "Open app", tool: null, note: null, ms: 0, ts: 500, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] };
+  const run = (status: string, trace: unknown[] = [step]) => ({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Run", status }, trace, llm: [], shots: {}, recordingYaml: null, deviceLog: null, network: null, video: null }],
+  });
+  // `query: ""` names no route, so the harness leaves the run on whatever tab it chose.
+  const activeTab = (html: string) => (html.match(/class="active" data-tab="([^"]+)"/) || [])[1];
+
+  test("a finished run opens on its Theater, listed first", () => {
+    const state = renderViewerState(run("passed"), { query: "" });
+    expect(activeTab(state.html)).toBe("theater");
+    expect(state.html).toContain('data-tabmount="theater"');
+    expect(state.html.indexOf('data-tab="theater"')).toBeLessThan(state.html.indexOf('data-tab="timeline"'));
+  });
+
+  test("a failed run opens on its Theater too", () => {
+    expect(activeTab(renderViewerState(run("failed"), { query: "" }).html)).toBe("theater");
+  });
+
+  test("a run still in progress opens on the Timeline, which follows its newest row", () => {
+    expect(activeTab(renderViewerState(run("running"), { query: "" }).html)).toBe("timeline");
+  });
+
+  test("a run with no steps has no Theater and opens on the Timeline", () => {
+    const tool = { ...step, objective: false, label: "tap" };
+    const html = renderViewerState(run("passed", [tool]), { query: "" }).html;
+    expect(html).not.toContain('data-tab="theater"');
+    expect(activeTab(html)).toBe("timeline");
+  });
+
+  test("a link that names the Timeline still opens it", () => {
+    expect(activeTab(renderViewerState(run("passed"), { query: "?run=0&tab=timeline" }).html)).toBe("timeline");
+  });
+
+  test("the Theater's position rides the link's `at`", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=theater&at=1200" });
+    expect(activeTab(state.html)).toBe("theater");
+    expect(state.route).toContain("tab=theater");
+    expect(state.route).toContain("at=1200");
+  });
+
+  test("switching tabs does not carry one tab's position into the other", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=summary&at=1200" });
+    expect(state.readRoute()).toContain("at=1200");
+    state.clickTab("theater");
+    expect(activeTab(state.readHtml())).toBe("theater");
+    expect(state.readRoute()).not.toContain("at=1200");
+  });
+
+  test("a Theater link on a run without one opens the Timeline", () => {
+    const tool = { ...step, objective: false, label: "tap" };
+    const html = renderViewerState(run("passed", [tool]), { query: "?run=0&tab=theater" }).html;
+    expect(html).not.toContain('data-tabmount="theater"');
+    expect(activeTab(html)).toBe("timeline");
+  });
+
+  test("a Theater link on a run still in progress reopens the Theater its nav offers", () => {
+    const html = renderViewerState(run("running"), { query: "?run=0&tab=theater" }).html;
+    expect(html).toContain('data-tab="theater"');
+    expect(activeTab(html)).toBe("theater");
+  });
+
+  test("a moment before the first trace row keeps its signed offset", () => {
+    const state = renderViewerState(run("passed"), { query: "?run=0&tab=summary&at=-400" });
+    expect(activeTab(state.html)).toBe("summary");
+    expect(state.route).toContain("at=-400");
+  });
+
+  test("a moment keeps naming the same instant when an earlier row arrives and moves the origin", () => {
+    // Opened at 2000ms past the first row (ts 500), i.e. epoch 2500. A late row at ts 100 moves the
+    // origin back 400ms, so the same instant is now 2400ms in.
+    const state = renderViewerState(run("running"), { query: "?run=0&tab=summary&at=2000" });
+    expect(state.route).toContain("at=2000");
+    const earlier = { ...step, i: 1, ts: 100, label: "Earlier" };
+    state.live()!.update(0, run("running", [earlier, { ...step, i: 2 }]).sessions[0]);
+    expect(state.readRoute()).toContain("at=2400");
+  });
+
+  test("a link that picks a step but no tab opens the Timeline at that step", () => {
+    expect(activeTab(renderViewerState(run("passed"), { query: "?run=0&step=1" }).html)).toBe("timeline");
   });
 });
 
@@ -12506,8 +12969,8 @@ describe("Trail projections — Replay and Grid (the same trail across devices, 
     expect(out).toContain('<span class="traillanename">android-phone</span>');
     expect(out).toContain('<span class="traillanename">ios-ipad</span>');
     // One shared row per authored step: the trailhead row plus "Sign in".
-    expect(out).toContain('<div class="trailsteplabel">Trailhead</div>');
-    expect(out).toContain('<div class="trailsteplabel">Sign in</div>');
+    expect(out).toContain('<div class="trailsteplabel" title="Trailhead">Trailhead</div>');
+    expect(out).toContain('<div class="trailsteplabel" title="Sign in">Sign in</div>');
     // Lane B never got to "Sign in": an honest gap, not a fabricated cell.
     expect(out).toContain("not reached");
     // Each cell deep-links into its own run's timeline at that step (lane:headerId).
@@ -12515,6 +12978,62 @@ describe("Trail projections — Replay and Grid (the same trail across devices, 
     // Lane B's trailhead failure colors its cell without touching lane A's.
     expect(out).toContain('class="trailcell failed"');
     expect(out).toContain('class="trailcell passed"');
+  });
+
+  test("layout=strip draws the Grid as a gallery, a row per device, and survives the route write", () => {
+    // The columns layout is the default: no gallery, and the switch reads off.
+    const columns = renderViewer(payload, { query: "?run=0&tab=steps" });
+    expect(columns).toContain('<div class="trailgrid" style="--trail-lanes:2">');
+    expect(columns).not.toContain("trailgallery");
+    expect(columns).toContain('id="trailstrip" aria-checked="false"');
+    expect(columns).toContain('id="trailall"');
+    // The strip: a header per device, then that device's step screenshots on the row under it, one
+    // column per step, so a step sits in the same column on every device.
+    const strip = renderViewerState(payload, { query: "?run=0&tab=steps&layout=strip" });
+    expect(strip.html).toContain('<div class="trailgallery" style="--trail-lanes:2;--trail-steps:');
+    expect(strip.html).toContain('<header class="tglanehead" style="grid-row:2">');
+    expect(strip.html).toContain('<header class="tglanehead" style="grid-row:4">');
+    expect(strip.html).toContain('style="grid-row:3;grid-column:1"');
+    expect(strip.html).toContain('style="grid-row:5;grid-column:1"');
+    expect(strip.html).toContain('class="tgstatus ');
+    // Each step's text is written once, in the row above every device.
+    expect(strip.html).toContain('<div class="tgstep" style="grid-column:1"');
+    expect(strip.html).toContain('class="tgsteptext"');
+    expect(strip.html).toContain("not reached");
+    expect(strip.html).toContain('id="trailstrip" aria-checked="true"');
+    // It draws each step's last frame only, so the switch for every frame is not offered.
+    expect(strip.html).not.toContain('id="trailall"');
+    expect(strip.readRoute()).toContain("layout=strip");
+    // Embedded, the strip is the whole frame: no tabs, no toolbar, no run footer.
+    const embedded = renderViewer(payload, { query: "?run=0&tab=steps&layout=strip&chrome=none" });
+    expect(embedded).toContain("trailgallery");
+    expect(embedded).not.toContain("detailheader");
+    expect(embedded).not.toContain("detailfooter");
+    expect(renderViewer(payload, { query: "?run=0&tab=steps&chrome=none" })).toContain("detailfooter");
+    // It is the Grid's setting alone: Replay neither offers the switch nor writes the key.
+    const replay = renderViewerState(payload, { query: "?run=0&tab=replay&layout=strip" });
+    expect(replay.html).not.toContain('id="trailstrip"');
+    expect(replay.html).not.toContain("trailgallery");
+    expect(replay.readRoute()).not.toContain("layout=");
+    // One device reads as captioned screenshots: its header, its screenshots, each step's text under
+    // its own screenshot rather than pinned above.
+    const one = renderViewer({ generatedAt: "now", sessions: [run("android-phone", laneATrace)] }, { query: "?run=0&tab=steps&layout=strip" });
+    expect(one).toContain('<header class="tglanehead" style="grid-row:1">');
+    expect(one).toContain('style="grid-row:2;grid-column:1"');
+    expect(one).toContain('<div class="tgstep below" style="grid-row:3;grid-column:1"');
+    // Inline-size containment would give every screenshot box no width of its own, so a landscape
+    // frame would be cut to the box's min-width.
+    expect(core.RUN_REPORT_CSS).toContain(".tgcard .galshot[data-clip-run] { container-type: normal; }");
+    // A box stretched to its column (widened by a landscape lane, or by the lane header), or held
+    // above a short still by its min sizes, would leave the still in its top-left corner and the
+    // step's video, centred in the box, playing beside or below it. No layout engine runs here, so
+    // this reads the rules' declarations, in any order.
+    const declarations = (selector: string) => {
+      const rule = core.RUN_REPORT_CSS.split("\n").find((line: string) => line.startsWith(`${selector} {`));
+      return (rule ?? "").slice(selector.length + 2, -1).split(";").map((d: string) => d.trim()).filter(Boolean);
+    };
+    expect(declarations(".tgcard .galshot")).toContain("width: fit-content");
+    expect(declarations(".tgcard .galshot .shotclip")).toContain("object-position: left top");
   });
 
   test("a crashed lane's failure lands on the step it died in, not on a green lane", () => {

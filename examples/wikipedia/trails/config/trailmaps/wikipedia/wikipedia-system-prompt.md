@@ -65,9 +65,9 @@ selector knowledge and conditional UI handling. Pick them over generic
   No-op when no banner is showing; safe to call unconditionally.
 
 For everything else — clicking a link in an article, scrolling, filling
-a non-search form field, asserting visible text by snippet — use the
+a non-search form field, asserting an element is visible — use the
 built-in `web_*` tools (`web_click`, `web_scroll`, `web_type`,
-`web_verifyTextVisible`, etc.). The scripted tools above are the
+`web_verifyElementVisible`, etc.). The scripted tools above are the
 **only** ones you should reach for when the task matches one of those
 patterns; they encode behavior the LLM would otherwise have to
 re-derive from snapshot + heuristics on every run.

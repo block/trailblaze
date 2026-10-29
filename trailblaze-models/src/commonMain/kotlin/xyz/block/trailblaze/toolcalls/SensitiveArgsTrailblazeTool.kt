@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.TrailArgTokens
 
 /**
  * Marker for [TrailblazeTool]s whose args carry secret material — credentials, session tokens,
@@ -193,31 +194,77 @@ fun redactSensitiveValuesIn(text: String, values: Collection<String>): String {
 /**
  * Returns a copy of this payload with every occurrence of every value in [sensitiveValues] masked,
  * at any depth — inside arrays, nested objects, and the string primitives they hold. Keys are
- * never touched. Returns `this` unchanged when there is nothing to mask.
+ * never touched. Valid authored memory-reference names survive substring matches, but shell
+ * expressions with default values do not. Returns `this` unchanged when there is nothing to mask.
  */
-fun OtherTrailblazeTool.withSensitiveValuesRedacted(sensitiveValues: Collection<String>): OtherTrailblazeTool {
+fun OtherTrailblazeTool.withSensitiveValuesRedacted(sensitiveValues: Collection<String>): OtherTrailblazeTool =
+  withSensitiveValuesRedacted(sensitiveValues, executed = null)
+
+fun OtherTrailblazeTool.withSensitiveValuesRedacted(
+  sensitiveValues: Collection<String>,
+  executed: OtherTrailblazeTool?,
+): OtherTrailblazeTool {
   val values = sensitiveValues.filter { it.isNotBlank() }
   if (values.isEmpty()) return this
-  val scrubbed = (raw as JsonElement).withStringsScrubbed(values)
+  val scrubbed = (raw as JsonElement).withStringsScrubbed(values, executed?.raw)
   return if (scrubbed === raw) this else copy(raw = scrubbed as JsonObject)
 }
 
 /** Walks a JSON tree scrubbing string primitives; returns the same instance when nothing changed. */
-private fun JsonElement.withStringsScrubbed(values: List<String>): JsonElement = when (this) {
+private fun JsonElement.withStringsScrubbed(values: List<String>, executed: JsonElement?): JsonElement = when (this) {
   is JsonPrimitive -> {
     if (!isString) {
       this
     } else {
-      val scrubbed = redactSensitiveValuesIn(content, values)
+      val scrubbed = redactStructuredSensitiveValues(content, values, (executed as? JsonPrimitive)?.content)
       if (scrubbed == content) this else JsonPrimitive(scrubbed)
     }
   }
   is JsonArray -> {
-    val scrubbed = map { it.withStringsScrubbed(values) }
+    val scrubbed = mapIndexed { index, value -> value.withStringsScrubbed(values, (executed as? JsonArray)?.getOrNull(index)) }
     if (scrubbed.indices.all { scrubbed[it] === this[it] }) this else JsonArray(scrubbed)
   }
   is JsonObject -> {
-    val scrubbed = mapValues { (_, value) -> value.withStringsScrubbed(values) }
+    val scrubbed = mapValues { (key, value) -> value.withStringsScrubbed(values, (executed as? JsonObject)?.get(key)) }
     if (scrubbed.all { (key, value) -> value === this[key] }) this else JsonObject(scrubbed)
   }
 }
+
+// Only Trailblaze memory paths are protected. Shell parameter expansions such as
+// ${TOKEN:-secret} are opaque command text and must still have declared secrets masked.
+private fun redactStructuredSensitiveValues(text: String, values: List<String>, executed: String?): String {
+  val reference = if (executed == null) null else TrailArgTokens.TOKEN_REGEX.findAll(text)
+    .filter { match ->
+      TrailArgTokens.tokenBody(match)?.let { body ->
+        if (TrailArgTokens.isArgsToken(body)) TrailArgTokens.isValidDottedPath(body)
+        else LEGACY_MEMORY_PATH.matches(body)
+      } == true
+    }
+    .toList()
+    .singleOrNull()
+    ?.takeIf { match ->
+      // Multiple references in one primitive cannot be paired with resolved values without
+      // binding provenance. Fail closed instead of guessing where one replacement ended.
+      val prefix = text.substring(0, match.range.first)
+      val suffix = text.substring(match.range.last + 1)
+      val resolvedLength = executed.length - prefix.length - suffix.length
+      resolvedLength > 0 && executed.startsWith(prefix) && executed.endsWith(suffix) &&
+        !executed.contains(match.value) &&
+        executed.substring(prefix.length, prefix.length + resolvedLength) != match.value &&
+        values.none { value ->
+          Regex(Regex.escape(value)).findAll(text).any { occurrence ->
+            occurrence.range.first <= match.range.last && occurrence.range.last >= match.range.first &&
+              (occurrence.range.first < match.range.first || occurrence.range.last > match.range.last ||
+                occurrence.range == match.range)
+          }
+        }
+    }
+  if (reference == null) return redactSensitiveValuesIn(text, values)
+  // Split at the one proven reference once. Repeated secrets cannot shift its ranges, and a
+  // declared value equal to (or containing) the whole token is never exempted above.
+  return redactSensitiveValuesIn(text.substring(0, reference.range.first), values) +
+    reference.value +
+    redactSensitiveValuesIn(text.substring(reference.range.last + 1), values)
+}
+
+private val LEGACY_MEMORY_PATH = Regex("""[A-Za-z_][A-Za-z0-9_.-]*""")

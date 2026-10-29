@@ -15,7 +15,7 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("revyl_navigate")
 @LLMDescription("Open a URL or deep link on the device.")
 data class RevylNativeNavigateTool(
-  @param:LLMDescription("The URL or deep link to open.")
+  @param:LLMDescription("URL or deep link.")
   val url: String,
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {

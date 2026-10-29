@@ -1080,4 +1080,41 @@ class AndroidCompactElementListTest {
     assertFalse(result.text.contains("\"3\""), result.text)
     assertFalse(ghostText.nodeId in result.textNodeIds, "the ghost's text would count as visible")
   }
+
+  // -- Multi-line text --
+
+  private fun submissionResult(text: String): TrailblazeNode = node(
+    children = listOf(
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(
+          className = "android.widget.TextView",
+          resourceId = "result",
+          text = text,
+        ),
+      ),
+    ),
+  )
+
+  /** An agent copies a quoted label into a JSON tool argument, so `\n` there is the line break itself. */
+  @Test
+  fun `a multi-line text prints its line breaks as escapes on one line`() {
+    val result = AndroidCompactElementList.build(submissionResult("Name: Jane Doe\nEmail: "))
+
+    assertContains(result.text, "TextView \"Name: Jane Doe\\nEmail:\" [id=result]")
+  }
+
+  @Test
+  fun `a backslash in the text prints escaped so a following n is not read as a line break`() {
+    val result = AndroidCompactElementList.build(submissionResult("C:\\new"))
+
+    assertContains(result.text, "\"C:\\\\new\"")
+  }
+
+  /** Refs are hashed from the text with its whitespace collapsed, so printing line breaks does not move them. */
+  @Test
+  fun `a multi-line text keeps the ref its one-line form gets`() {
+    fun refOf(text: String) = AndroidCompactElementList.build(submissionResult(text)).refMapping.keys.single()
+
+    assertEquals(refOf("Name: Jane Doe Email:"), refOf("Name: Jane Doe\nEmail: "))
+  }
 }

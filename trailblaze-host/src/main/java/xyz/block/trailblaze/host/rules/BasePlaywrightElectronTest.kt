@@ -33,6 +33,8 @@ import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.PlaywrightDesktopLaunchGooseTool
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -49,6 +51,7 @@ import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import java.io.File
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 
 /**
  * Base test class for Playwright-based Electron desktop app testing.
@@ -161,12 +164,17 @@ class BasePlaywrightElectronTest(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "Playwright Electron Tool Set",
       toolClasses = resolvedWebToolSet.toolClasses + ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
-      yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
     // Bind the repo to the web driver so the KOOG verify-step surface scopes to `web_verification`
     // (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS). Without this the
     // repo's driverType is null and verify scoping no-ops.
     driverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+    // The catalog and scope tell a session that launches scripted tools (the CLI and daemon path,
+    // via `HostScriptedToolLauncher`) which framework scripted tools these toolsets deliver,
+    // always-enabled ones such as `runIf` included. Without them none register, and a recorded step
+    // naming a framework scripted tool fails as an unknown tool.
+    toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(),
+    toolSetIds = WebToolSetIds.ALL,
   )
 
   /**
@@ -198,6 +206,7 @@ class BasePlaywrightElectronTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       maxLlmCalls = maxLlmCalls,
       systemPromptTemplate = PLAYWRIGHT_ELECTRON_SYSTEM_PROMPT,
+      alwaysShownTools = appTarget?.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_ELECTRON).orEmpty(),
     )
   }
 
@@ -214,13 +223,18 @@ class BasePlaywrightElectronTest(
   private var currentToolTraceId: TraceId? = null
 
   // The runner-util: deterministic replay + tool dispatch around the agent.
-  private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
+  private fun runnerUtilFor(
+    runner: TestAgentRunner,
+    trailheadReuse: Boolean,
+  ): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
     trailblazeRunner = runner,
     runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
       playwrightAgent.runTrailblazeTools(
         tools = trailblazeTools,
         traceId = currentToolTraceId,
-        screenState = browserManager.getScreenState(),
+        // Null defers to the context's capture-on-read, so a tool that never reads the screen (the
+        // Teardown step among them) neither waits on a capture nor fails when one does.
+        screenState = null,
         elementComparator = elementComparator,
         screenStateProvider = browserManager::getScreenState,
       ).result
@@ -228,14 +242,13 @@ class BasePlaywrightElectronTest(
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     sessionUpdater = { loggingRule.setSession(it) },
+    trailheadReuse = trailheadReuse,
     // Shares one execution context + snapshot frame across the recording, matching the
     // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
     // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than
     // a clipboard-style state-survival fix.
     sharedToolBatch = { block -> playwrightAgent.runInSharedToolBatch(block) },
   )
-
-  private val agentRunnerUtil by lazy { runnerUtilFor(agentRunner) }
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
@@ -245,30 +258,36 @@ class BasePlaywrightElectronTest(
     // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailheadReuse: Boolean?,
   ) {
     val activeRunner: TestAgentRunner = agentRunner
-    val activeRunnerUtil = agentRunnerUtil
-    for (item in trailItems) {
-      val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = item.promptSteps,
-            useRecordedSteps = useRecordedSteps,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.TrailheadTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = listOf(item.trailhead.toPromptStep()),
-            useRecordedSteps = true,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
-      }
-      if (itemResult is TrailblazeToolResult.Error) {
-        throw TrailblazeException(itemResult.errorMessage)
+    // Built per trail: a cached test serves many requests, and each one says whether its
+    // trailhead may reuse the last hand-off.
+    val activeRunnerUtil = runnerUtilFor(activeRunner, TrailheadRuns.reuseEnabledFor(trailheadReuse))
+    // One trail: the trailhead's teardown runs after it, whatever the outcome.
+    activeRunnerUtil.runTrail {
+      for (item in trailItems) {
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = useRecordedSteps,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.TrailheadTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
       }
     }
   }
@@ -307,6 +326,9 @@ class BasePlaywrightElectronTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailSourceUrl: String? = null,
+    /** This run's `TrailblazeConfig.trailheadReuse`; a cached test's [config] may be an earlier request's. */
+    trailheadReuse: Boolean? = config.trailheadReuse,
   ): SessionId = withContext(trailLoopDispatcher) {
     // Stable loop thread, NOT the Playwright thread — see [trailLoopDispatcher]. Playwright
     // API calls bridge onto the Playwright thread per-call.
@@ -365,6 +387,7 @@ class BasePlaywrightElectronTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
@@ -386,7 +409,7 @@ class BasePlaywrightElectronTest(
     ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
     try {
-      runTrail(trailItems, useRecordedSteps, onStepProgress)
+      runTrail(trailItems, useRecordedSteps, onStepProgress, trailheadReuse)
     } finally {
       currentToolTraceId = null
     }
@@ -437,6 +460,25 @@ class BasePlaywrightElectronTest(
     }
   }
 
+  /** The session and pump [registerEventsWaitPump] registered, so [close] can remove it. */
+  private var eventsWaitPump: Pair<String, (Long) -> Unit>? = null
+
+  /** Set by [close] under the same lock, so a capture start still in flight cannot add a pump after it. */
+  private var closing = false
+
+  /**
+   * Lets a `ctx.events` wait keep this browser delivering requests to the capture: Playwright for
+   * Java dispatches events only while it is called, and the trail loop is off its thread.
+   */
+  @Synchronized
+  private fun registerEventsWaitPump(sessionId: String) {
+    if (closing || eventsWaitPump?.first == sessionId) return
+    eventsWaitPump?.let { (old, pump) -> SessionEventsWaitPump.unregister(old, pump) }
+    val pump: (Long) -> Unit = { ms -> browserManager.onPlaywrightThread { browserManager.currentPage.waitForTimeout(ms.toDouble()) } }
+    SessionEventsWaitPump.register(sessionId, pump)
+    eventsWaitPump = sessionId to pump
+  }
+
   /**
    * See [BasePlaywrightNativeTest.ensureWebNetworkCaptureStarted] — same
    * contract, applied to the Electron CDP-managed BrowserContext so trails
@@ -459,6 +501,9 @@ class BasePlaywrightElectronTest(
           sessionDir = sessionDir,
           tracker = playwrightAgent.inflightRequestTracker,
         )
+        // With the start, on the one thread: a dispatch for another session can't start its
+        // capture between the two and then lose its pump to this one.
+        registerEventsWaitPump(session.sessionId.value)
       }
     } catch (e: Exception) {
       Console.log("Auto-start of web network capture failed: ${e.message}")
@@ -496,6 +541,11 @@ class BasePlaywrightElectronTest(
     runCatching { webStreamScreenshots.close() }
     // Bridged like the matching starts: `currentPage.context()` touches Page objects, and
     // close() runs on the JUnit thread.
+    synchronized(this) {
+      closing = true
+      eventsWaitPump?.let { (sessionId, pump) -> SessionEventsWaitPump.unregister(sessionId, pump) }
+      eventsWaitPump = null
+    }
     runCatching { browserManager.onPlaywrightThread { WebNetworkCapture.stop(browserManager.currentPage.context()) } }
     runCatching { browserManager.onPlaywrightThread { WebConsoleCapture.stop(browserManager.currentPage.context()) } }
     // Stop + mux the session video before the browser (and its screencast feed) tears down.
@@ -504,6 +554,8 @@ class BasePlaywrightElectronTest(
     electronAppManager.close()
     // Closing the dispatcher shuts down the executor it wraps.
     trailLoopDispatcher.close()
+    // This browser identity is never used again, so no later trail could take its hand-offs.
+    TrailheadHandoffStore.dropDevice(trailblazeDeviceId)
   }
 
   companion object {
@@ -546,8 +598,8 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use web_snapshot to refresh your view of the application when needed.
-- After clicks that change the view, use web_snapshot to see the updated state.
+- The element list is refreshed after every action. After a click that changes the view, target
+  elements from the new list; earlier IDs may no longer exist.
     """.trimIndent()
   }
 }

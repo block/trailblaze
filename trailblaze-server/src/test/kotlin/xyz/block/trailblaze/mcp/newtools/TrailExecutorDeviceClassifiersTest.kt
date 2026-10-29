@@ -36,4 +36,5 @@ class TrailExecutorDeviceClassifiersTest {
       deviceClassifiersFor(TrailblazeDeviceId("SIM-UUID", TrailblazeDevicePlatform.IOS)),
     )
   }
+
 }

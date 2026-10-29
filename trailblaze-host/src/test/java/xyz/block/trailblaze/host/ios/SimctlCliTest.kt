@@ -180,4 +180,16 @@ class SimctlCliTest {
       ),
     )
   }
+
+  @Test
+  fun `the display name comes from appinfo, quoted or not, before the bundle name`() {
+    // Shapes captured from `xcrun simctl appinfo`.
+    val safari = "{\n    CFBundleDisplayName = Safari;\n    CFBundleIdentifier = \"com.apple.mobilesafari\";\n    CFBundleName = MobileSafari;\n}"
+    val spaced = "{\n    CFBundleDisplayName = \"Point of Sale\";\n    CFBundleName = POS;\n}"
+    val nameOnly = "{\n    CFBundleIdentifier = \"com.example.app\";\n    CFBundleName = Shop;\n}"
+
+    assertEquals("Safari", SimctlCli.parseAppDisplayName(safari))
+    assertEquals("Point of Sale", SimctlCli.parseAppDisplayName(spaced))
+    assertEquals("Shop", SimctlCli.parseAppDisplayName(nameOnly))
+  }
 }

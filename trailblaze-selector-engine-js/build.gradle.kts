@@ -51,6 +51,7 @@ kotlin {
     commonMain {
       // Compile the selector engine's source files straight out of :trailblaze-models.
       kotlin.srcDir("../trailblaze-models/src/commonMain/kotlin")
+      kotlin.srcDir("../trailblaze-trail-format/src/commonMain/kotlin")
       // Explicit allow-list: the transitive closure of TrailblazeNodeSelectorGenerator +
       // TrailblazeNodeSelectorResolver + TrailblazeSelectorAnalyzer. Everything here imports
       // only kotlinx.serialization and xyz.block.trailblaze.util.SelectorEscape.

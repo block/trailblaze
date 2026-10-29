@@ -7,8 +7,8 @@
 // body read as `undefined` is a request that "returned nothing". Both are wrong answers that look
 // like right ones, so both are errors instead.
 
-import { Records, matchAnalytics, matchDeviceLog, matchEvent, matchLog, matchNetwork, matchObjective, matchScreenText, matchTool, matchTrace } from "../match.js";
-import type { AnalyticsQuery, DeviceLogQuery, EventQuery, LogQuery, NetworkQuery, ObjectiveQuery, ScreenTextQuery, ToolQuery, TraceQuery } from "../match.js";
+import { LogRecords, Records, matchAnalytics, matchDeviceLog, matchEvent, matchNetwork, matchObjective, matchScreenText, matchTool, matchTrace } from "../match.js";
+import type { AnalyticsQuery, DeviceLogQuery, EventQuery, NetworkQuery, ObjectiveQuery, ScreenTextQuery, ToolQuery, TraceQuery } from "../match.js";
 import type { SurveySession } from "../session.js";
 import type { AnalyticsEvent, LogRecord, NetworkRequest, StreamEvent, ToolCall } from "../types.js";
 import { REQUEST_BODY_LIMIT, SNAPSHOT_FORMAT, type SessionSnapshot } from "./format.js";
@@ -92,13 +92,16 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot): SurveySession {
   const noFiles = (what: string): never => {
     throw new NotInSnapshotError("file", `${what} needs the session directory, and this session came from a snapshot instead. Its records are here; its files are not.`);
   };
+  const trailblazeLogs = new LogRecords(logs);
   const session: SurveySession = {
     dir: summary.path,
+    final: true,
     summary,
     get id(): string {
       return summary.id;
     },
-    logs: new Records<LogRecord, LogQuery>(logs, matchLog),
+    trailblazeLogs,
+    logs: trailblazeLogs,
     tools: new Records<ToolCall, ToolQuery>(tools, matchTool),
     objectives: new Records<SessionSnapshot["objectives"][number], ObjectiveQuery>(snapshot.objectives, matchObjective),
     network: new Records<NetworkRequest, NetworkQuery>(network, matchNetwork),
@@ -107,7 +110,7 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot): SurveySession {
     screenText: new Records<SessionSnapshot["screenText"][number], ScreenTextQuery>(snapshot.screenText, matchScreenText),
     deviceLog: new Records<SessionSnapshot["deviceLog"][number], DeviceLogQuery>(snapshot.deviceLog, matchDeviceLog),
     trace: new Records<SessionSnapshot["trace"][number], TraceQuery>(snapshot.trace, matchTrace),
-    stream: (name: string) => session.events.filter({ stream: name }),
+    stream: <T = unknown>(name: string) => session.events.filter({ stream: name }) as StreamEvent<T>[],
     hasFile: () => noFiles("Asking whether a session file exists"),
     readText: () => noFiles("Reading a session file"),
     readJson: () => noFiles("Reading a session file"),

@@ -26,12 +26,15 @@ sealed interface AccessibilityAction {
 
   // --- Gestures ---
 
-  data class Tap(val x: Int, val y: Int) : AccessibilityAction {
-    override val description get() = "Tap on ($x, $y)"
+  /** [repeat] > 1 taps that many times in one gesture (2 = double-tap). */
+  data class Tap(val x: Int, val y: Int, val repeat: Int = 1) : AccessibilityAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($x, $y)"
   }
 
-  data class TapRelative(val percentX: Int, val percentY: Int) : AccessibilityAction {
-    override val description get() = "Tap on ($percentX%, $percentY%)"
+  /** [repeat] > 1 taps that many times in one gesture (2 = double-tap). */
+  data class TapRelative(val percentX: Double, val percentY: Double, val repeat: Int = 1) :
+    AccessibilityAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($percentX%, $percentY%)"
   }
 
   data class LongPress(val x: Int, val y: Int, val durationMs: Long = 500L) :
@@ -82,19 +85,32 @@ sealed interface AccessibilityAction {
    *
    * With [hideKeyboardAfter] set, the keyboard is closed in the same action, once typing has
    * settled. See [MaestroCommandConverter.foldKeyboardHideIntoInputText].
+   *
+   * With [clearFirst] set, the field the text is about to land in is emptied first (see
+   * [ClearText]), so it ends up holding only [text].
    */
   data class InputText(
     val text: String,
     val nodeSelector: TrailblazeNodeSelector? = null,
     val timeoutMs: Long = DEFAULT_ELEMENT_TIMEOUT_MS,
     val hideKeyboardAfter: Boolean = false,
+    val clearFirst: Boolean = false,
   ) : AccessibilityAction {
     override val description
       get() = buildString {
-        append("Input text \"$text\"")
+        if (clearFirst) append("Clear and input text \"$text\"") else append("Input text \"$text\"")
         if (nodeSelector != null) append(" into ${nodeSelector.description()}")
         if (hideKeyboardAfter) append(" and hide keyboard")
       }
+  }
+
+  /**
+   * Empties the focused editable field. Sets its text to nothing rather than erasing a counted
+   * number of characters, so it works on a field whose content can't be read back (a password
+   * field in a WebView reads as empty whatever it holds).
+   */
+  data object ClearText : AccessibilityAction {
+    override val description get() = "Clear the focused text field"
   }
 
   data class EraseText(val characters: Int) : AccessibilityAction {
@@ -279,3 +295,5 @@ sealed interface AccessibilityAction {
     RIGHT,
   }
 }
+
+private fun repeatSuffix(repeat: Int) = if (repeat > 1) " x$repeat" else ""

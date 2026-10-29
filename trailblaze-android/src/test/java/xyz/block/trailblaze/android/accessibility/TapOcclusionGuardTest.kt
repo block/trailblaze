@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.filterImportantForAccessibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull

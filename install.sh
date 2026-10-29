@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Trailblaze installer
 #
-# Downloads the latest Trailblaze release (JAR + launcher) from GitHub.
+# Downloads the latest Trailblaze release JAR from GitHub and extracts the launcher
+# script the JAR carries (its `trailblaze-launcher` entry), so the two always match.
 #
 # Install:
 #   curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh -o /tmp/trailblaze-install.sh && bash /tmp/trailblaze-install.sh
@@ -22,6 +23,25 @@ BIN_DIR="$INSTALL_DIR/bin"
 
 info()  { echo "  $*"; }
 error() { echo "ERROR: $*" >&2; exit 1; }
+
+# Writes one entry of a JAR to <out>. A JAR is a zip, so this needs no Java: unzip where
+# it exists, else bsdtar or python3, which minimal Linux images often carry instead.
+extract_jar_entry() {
+  local jar="$1" entry="$2" out="$3" rc=0
+  if command -v unzip > /dev/null 2>&1; then
+    # Status 1 is only a warning (bytes prepended to the archive, say); the entry was still written.
+    unzip -p "$jar" "$entry" > "$out" 2> /dev/null || rc=$?
+    [ "$rc" -le 1 ] || return 1
+  elif command -v bsdtar > /dev/null 2>&1; then
+    bsdtar -xOf "$jar" "$entry" > "$out" 2> /dev/null || return 1
+  elif command -v python3 > /dev/null 2>&1; then
+    python3 -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' \
+      "$jar" "$entry" > "$out" 2> /dev/null || return 1
+  else
+    return 1
+  fi
+  [ -s "$out" ]
+}
 
 check_dependency() {
   command -v "$1" > /dev/null 2>&1 || error "'$1' is required but not found. Please install it first."
@@ -124,12 +144,31 @@ RELEASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
 mkdir -p "$BIN_DIR"
 
-info "Downloading trailblaze.jar..."
-curl -fSL --progress-bar "$RELEASE_URL/trailblaze.jar" -o "$BIN_DIR/trailblaze.jar"
+# Both files are staged under names private to this run, and only promoted once both are in
+# hand: a failure part way leaves the existing install as it was, never a new JAR beside an old
+# launcher. Renaming into place also lets a launcher that is running right now keep reading the
+# file it opened.
+JAR_STAGE="$BIN_DIR/.trailblaze.jar.$$"
+LAUNCHER_STAGE="$BIN_DIR/.trailblaze.$$"
+trap 'rm -f "$JAR_STAGE" "$LAUNCHER_STAGE"' EXIT
 
-info "Downloading launcher script..."
-curl -fsSL "$RELEASE_URL/trailblaze" -o "$BIN_DIR/trailblaze"
-chmod +x "$BIN_DIR/trailblaze"
+info "Downloading trailblaze.jar..."
+curl -fSL --progress-bar "$RELEASE_URL/trailblaze.jar" -o "$JAR_STAGE"
+
+# Zip entries carry no exec bit, hence the chmod.
+if extract_jar_entry "$JAR_STAGE" trailblaze-launcher "$LAUNCHER_STAGE"; then
+  info "Extracted the launcher from trailblaze.jar"
+else
+  # Releases from before the launcher was embedded in the JAR publish it as its own asset.
+  info "Downloading launcher script..."
+  curl -fsSL "$RELEASE_URL/trailblaze" -o "$LAUNCHER_STAGE" ||
+    error "Could not extract 'trailblaze-launcher' from trailblaze.jar (that needs unzip, bsdtar, or python3), and $TAG publishes no separate launcher."
+fi
+chmod +x "$LAUNCHER_STAGE"
+# The launcher first: a new launcher can still start the old JAR, but an old one may not know
+# how to start the new JAR.
+mv -f "$LAUNCHER_STAGE" "$BIN_DIR/trailblaze"
+mv -f "$JAR_STAGE" "$BIN_DIR/trailblaze.jar"
 
 # ---------------------------------------------------------------------------
 # PATH setup

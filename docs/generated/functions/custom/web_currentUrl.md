@@ -4,9 +4,7 @@
 
 # `web_currentUrl`
 
-Returns the current page's URL as a plain string. Useful for asserting where a navigation
-ended up after redirects (e.g. detecting a bounce to `/login` when replaying an expired
-session).
+Return the current page URL, e.g. to see where a redirect landed.
 
 ## Source
 

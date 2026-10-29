@@ -8,10 +8,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
  * its own behavior onto the (otherwise open-source) Trail Runner web UI backend, without the Trail
  * Runner route code referencing anything downstream-internal.
  *
- * This mirrors how [xyz.block.trailblaze.ui.models.AppIconProvider] /
- * [xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider] are done: an open-source
- * interface with an open-source [DefaultTrailRunnerExtension] default, overridable by a downstream
- * build. It's exposed on [xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig.trailRunnerExtension] and consumed by
+ * It is an open-source interface with an open-source [DefaultTrailRunnerExtension] default,
+ * overridable by a downstream build. It's exposed on [xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig.trailRunnerExtension] and consumed by
  * `TrailRunnerEndpoint.register(...)`.
  *
  * Every member is optional (defaults to a no-op / `null`); the open-source build supplies none of

@@ -2,18 +2,17 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.device.androidPackageNameViolation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.ios.tools.IosOpenAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.util.IosHostSimctlUtils
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Opens an app the way tapping its launcher icon does, and returns once it is on screen.
@@ -22,18 +21,19 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  * is already running, its existing task comes to the front as-is. Anything that should reset or
  * prepare the app belongs in a trailhead that composes the explicit primitives first
  * (`mobile_clearAppData`, `android_forceStop`, `android_grantPermissions`, `ios_terminate`,
- * `ios_grantPrivacy`) and ends with this tool — so what a trail's launch does is written down, not
- * implied by a mode.
+ * `ios_setPermissions`) and ends with this
+ * tool — so what a trail's launch does is written down, not implied by a mode.
  *
  * "On screen" means different things per platform because the platforms expose different signals:
- * - **Android:** `am start -W` blocks in system_server until the app draws its first frame without
- *   touching the app, and the app must then be in the foreground — both hard requirements. The
+ * - **Android:** `am start -W` waits for the app's first frame. If Android's launch wait expires,
+ *   the app's activity must report a drawn, visible window before proceeding. The app must then be
+ *   in the foreground — both hard requirements. The
  *   app's activity record is then polled for `idle=true` (its main thread first drained after
  *   resume), for up to [AndroidOpenAppReadiness.IDLE_TIMEOUT_MS]. See [AndroidOpenAppReadiness].
- * - **iOS:** `simctl launch` has no drawn signal, so the screen is captured before the launch and
+ * - **iOS:** runs `ios_openApp` ([IosOpenAppTrailblazeTool]), which also takes launch arguments.
+ *   `simctl launch` has no drawn signal, so the screen is captured before the launch and
  *   polled after it until it has changed and then held still, for up to a few seconds. See
- *   [awaitIosScreenReady]. On a physical iPhone, which simctl does not reach, the driver launches
- *   the app instead, with no data clear, restart or permission change.
+ *   [awaitIosScreenReady].
  *
  * The settle waits are bounded and do not fail the tool: an app whose main thread never goes idle
  * (a constant animation) or whose screen never holds still (a spinner, a clock) is still open and
@@ -43,13 +43,12 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
 @Serializable
 @TrailblazeToolClass("openApp")
 @LLMDescription(
-  "Open an app, or bring it to the front if it is already running, and wait for it to come up on " +
-    "screen (the result says if it was still busy when the wait ran out). Never clears data, restarts the app or changes permissions — it opens the app in whatever " +
-    "state it was left in. To start a test from a known state, use the target's trailhead tool " +
-    "instead.",
+  "Open an app, or bring it to the front if running, and wait for it to appear. Never clears " +
+    "data, restarts the app or changes permissions. To start from a known state, use the " +
+    "target's trailhead tool instead.",
 )
 data class OpenAppTrailblazeTool(
-  @param:LLMDescription("The app id: Android package name or iOS bundle id, e.g. 'com.android.settings'.")
+  @param:LLMDescription("Android package name or iOS bundle id, e.g. 'com.android.settings'.")
   val appId: String,
 ) : ExecutableTrailblazeTool {
 
@@ -58,10 +57,10 @@ data class OpenAppTrailblazeTool(
   ): TrailblazeToolResult = try {
     // Every step below blocks (adb / simctl round trips, polling sleeps), so none of it may run on
     // the caller's bounded dispatcher.
-    withContext(Dispatchers.IO) {
+    withContext(TrailblazeDispatchers.IO) {
       when (val platform = toolExecutionContext.trailblazeDeviceInfo.platform) {
         TrailblazeDevicePlatform.ANDROID -> openOnAndroid(toolExecutionContext)
-        TrailblazeDevicePlatform.IOS -> openOnIos(toolExecutionContext)
+        TrailblazeDevicePlatform.IOS -> IosOpenAppTrailblazeTool(appId = appId).execute(toolExecutionContext)
         TrailblazeDevicePlatform.WEB,
         TrailblazeDevicePlatform.DESKTOP,
         -> TrailblazeToolResult.Error.ExceptionThrown(
@@ -105,6 +104,17 @@ data class OpenAppTrailblazeTool(
         command = this,
       )
     }
+    // Android's launch wait can expire after accepting the start. That is not proof of readiness:
+    // nowVisible is set after a real app window draws, so require it before continuing.
+    if (start.readinessTimedOut && !AndroidOpenAppReadiness.awaitActivityDrawn(appId) {
+        executor.executeShellCommand("dumpsys activity activities")
+      }) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "Android accepted the launch of $component, but its window did not become " +
+          "drawn and visible after the launch wait expired.",
+        command = this,
+      )
+    }
     val idle = AndroidOpenAppReadiness.awaitActivityIdle(appId) {
       executor.executeShellCommand("dumpsys activity activities")
     }
@@ -135,38 +145,6 @@ data class OpenAppTrailblazeTool(
       appId,
     )
 
-  private suspend fun openOnIos(context: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val deviceId = context.trailblazeDeviceInfo.trailblazeDeviceId.instanceId
-    val capture = context.screenStateProvider?.let { provider -> { provider().viewHierarchy } }
-    val baseline = capture?.invoke()
-    if (deviceId in IosHostSimctlUtils.listBootedDeviceIds()) {
-      IosHostSimctlUtils.launchApp(deviceId = deviceId, appId = appId)
-    } else {
-      // Not a booted simulator, so a physical iPhone that simctl cannot reach; the driver can.
-      // An empty permissions map changes none — Maestro grants every permission when it is null.
-      val agent = context.maestroTrailblazeAgent
-        ?: return TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "$deviceId is not a booted simulator and this session has no driver to " +
-            "launch through, so openApp cannot open '$appId' here.",
-          command = this,
-        )
-      val launched = agent.runMaestroCommands(
-        maestroCommands = listOf(
-          LaunchAppCommand(appId = appId, clearState = false, stopApp = false, permissions = emptyMap()),
-        ),
-        traceId = context.traceId,
-      )
-      if (launched !is TrailblazeToolResult.Success) return launched
-    }
-    if (capture == null) {
-      return TrailblazeToolResult.Success(
-        message = "Opened $appId. This session has no screen capture, so readiness was not checked.",
-      )
-    }
-    val readiness = awaitIosScreenReady(baseline = baseline, capture = capture)
-    return TrailblazeToolResult.Success(message = "Opened $appId: ${readiness.description}")
-  }
-
   internal companion object {
     /** `am start` already waited for the first frame, so this only has to see a settled answer. */
     const val FOREGROUND_CONFIRM_MS = 5_000L
@@ -181,6 +159,12 @@ internal object AndroidOpenAppReadiness {
 
   /** How long to wait for `idle=true` after the first frame. Idle normally follows within ~1s. */
   const val IDLE_TIMEOUT_MS = 10_000L
+
+  /**
+   * How long to wait for a drawn window once `am start -W` has given up (it stops at 10s). Large
+   * apps on slow CI emulators can take 16-25s to cold start.
+   */
+  const val DRAWN_TIMEOUT_MS = 60_000L
   private const val IDLE_POLL_MS = 250L
 
   /**
@@ -212,6 +196,7 @@ internal object AndroidOpenAppReadiness {
 
   data class AmStartResult(
     val succeeded: Boolean,
+    val readinessTimedOut: Boolean,
     /** `COLD`, `WARM` or `HOT`, when the platform reports it. */
     val launchState: String?,
     /** Time to the first frame, in ms, when the platform reports it. */
@@ -226,7 +211,8 @@ internal object AndroidOpenAppReadiness {
       .mapNotNull { line -> line.split(':', limit = 2).takeIf { it.size == 2 } }
       .associate { (key, value) -> key.trim() to value.trim() }
     return AmStartResult(
-      succeeded = fields["Status"] == "ok" && !output.contains("Error:"),
+      succeeded = fields["Status"] in setOf("ok", "timeout") && !output.contains("Error:"),
+      readinessTimedOut = fields["Status"] == "timeout",
       launchState = fields["LaunchState"]?.substringBefore(' ')?.takeIf { it.isNotEmpty() },
       totalTimeMs = fields["TotalTime"]?.toLongOrNull(),
       broughtToFront = output.contains("brought to the front") ||
@@ -242,19 +228,45 @@ internal object AndroidOpenAppReadiness {
    * front.
    */
   fun activityIdleState(dumpsys: String, appId: String): Boolean? {
+    val body = activityRecordBody(dumpsys, appId) ?: return null
+    return body.any { it.contains("idle=true") }
+  }
+
+  fun activityDrawnState(dumpsys: String, appId: String): Boolean? {
+    val body = activityRecordBody(dumpsys, appId) ?: return null
+    return body.firstNotNullOfOrNull { line ->
+      Regex("""(?:^|\s)nowVisible=(true|false)(?:\s|$)""").find(line)?.groupValues?.get(1)?.toBoolean()
+    }
+  }
+
+  private fun activityRecordBody(dumpsys: String, appId: String): List<String>? {
     val lines = dumpsys.lines()
     val header = HIST_RECORD.let { regex ->
       lines.indexOfFirst { regex.containsMatchIn(it) && it.contains(" $appId/") }
     }
     if (header < 0) return null
-    val body = lines.drop(header + 1).takeWhile { !HIST_RECORD.containsMatchIn(it) && !TASK_RECORD.containsMatchIn(it) }
-    return body.any { it.contains("idle=true") }
+    return lines.drop(header + 1).takeWhile { !HIST_RECORD.containsMatchIn(it) && !TASK_RECORD.containsMatchIn(it) }
   }
 
   private val HIST_RECORD = Regex("""Hist +#\d+: ActivityRecord\{""")
   private val TASK_RECORD = Regex("""^\s*\* Task\{""")
 
   data class IdleWait(val idle: Boolean, val waitedMs: Long)
+
+  fun awaitActivityDrawn(
+    appId: String,
+    timeoutMs: Long = DRAWN_TIMEOUT_MS,
+    nowMs: () -> Long = System::currentTimeMillis,
+    sleep: (Long) -> Unit = Thread::sleep,
+    dumpActivities: () -> String,
+  ): Boolean {
+    val start = nowMs()
+    while (true) {
+      if (activityDrawnState(dumpActivities(), appId) == true) return true
+      if (nowMs() - start >= timeoutMs) return false
+      sleep(IDLE_POLL_MS)
+    }
+  }
 
   /**
    * Polls [dumpActivities] until [appId]'s activity is idle, capped at [timeoutMs]. A dump this
@@ -279,6 +291,7 @@ internal object AndroidOpenAppReadiness {
 
   fun describe(appId: String, start: AmStartResult, idle: IdleWait): String = buildString {
     append("Opened $appId")
+    if (start.readinessTimedOut) append(" (platform launch wait expired; app window confirmed drawn and visible)")
     if (start.broughtToFront) append(" (already running; brought to the front)")
     start.launchState?.let { append(" [$it start]") }
     start.totalTimeMs?.let { append(": first frame ${it}ms") }

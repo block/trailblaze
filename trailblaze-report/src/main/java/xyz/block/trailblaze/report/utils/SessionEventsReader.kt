@@ -6,8 +6,13 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.logs.model.DeviceClockSync
+import xyz.block.trailblaze.logs.model.DeviceClockTrack
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
  * Reads the generic, pluggable session-events artifacts written under `<sessionDir>/events/` (see
@@ -21,6 +26,10 @@ import xyz.block.trailblaze.events.SessionEvents
  * Records are returned in **file arrival order**; each carries an epoch-millis order key
  * ([EventEntry.timeMs], extracted from `timeMs` or, for rich schemas, `timestampMs`) so the caller
  * (route/UI) can interleave streams on a single clock. The reader does not itself sort.
+ *
+ * A record marked `clock: "device"` is moved onto the host timeline with the session's measured
+ * `session_device_clock.json` readings ([DeviceClockSync]) when there are any; otherwise it keeps its raw
+ * stamp and its [EventEntry.clock] says so. Mirrors the TS `buildEventStream`.
  *
  * Because the route polls these producer-owned files repeatedly, every read is bounded so a buggy or
  * hostile producer can't exhaust the daemon:
@@ -36,8 +45,16 @@ class SessionEventsReader(
   private val maxStreams: Int = DEFAULT_MAX_STREAMS,
 ) {
 
-  /** One decoded record: the order key plus the producer-specific payload. */
-  data class EventEntry(val timeMs: Long, val data: JsonElement)
+  /**
+   * One decoded record: the order key plus the producer-specific payload. [clock] is
+   * [TrailblazeClockDomain.DEVICE] only when [timeMs] is still on the device's clock — a
+   * device-stamped record the session measured no offset to convert with.
+   */
+  data class EventEntry(
+    val timeMs: Long,
+    val data: JsonElement,
+    val clock: TrailblazeClockDomain? = null,
+  )
 
   /** All records for one named stream, in arrival order. */
   data class EventStream(
@@ -51,6 +68,7 @@ class SessionEventsReader(
   fun read(sessionDir: File): List<EventStream> {
     val eventsDir = File(sessionDir, SessionEvents.DIR_NAME)
     if (!eventsDir.isDirectory) return emptyList()
+    val clockSync = DeviceClockSyncFile.read(sessionDir)
     return (eventsDir.listFiles() ?: emptyArray())
       .asSequence()
       .filter { it.isFile }
@@ -62,16 +80,19 @@ class SessionEventsReader(
       // arbitrarily many event files, and the route reads them on every poll.
       .take(maxStreams)
       .toList()
-      .mapNotNull { (file, name) -> readStream(file, name) }
+      .mapNotNull { (file, name) -> readStream(file, name, clockSync) }
   }
 
   /**
    * Read one NDJSON file as a named stream, under the same per-line and per-stream bounds [read]
    * applies. Null when the file yielded no well-formed records. Public so callers holding a single
    * file — a root-level capture such as `network.ndjson`, which lives outside `events/` — decode it
-   * through this reader rather than re-implementing the line contract.
+   * through this reader rather than re-implementing the line contract. [clockSync] converts
+   * device-clock records on the clock of the device that wrote [name] (see
+   * [DeviceClockSync.trackForStream]); pass the session's [DeviceClockSyncFile.read].
    */
-  fun readStream(file: File, name: String): EventStream? {
+  fun readStream(file: File, name: String, clockSync: DeviceClockSync? = null): EventStream? {
+    val clockTrack = clockSync?.trackForStream(name)
     val events = ArrayList<EventEntry>()
     var truncated = false
     file.bufferedReader(Charsets.UTF_8).use { reader ->
@@ -100,7 +121,7 @@ class SessionEventsReader(
           break
         }
         scannedBytes += read.byteLen
-        parseLine(trimmed)?.let { events.add(it) }
+        parseLine(trimmed, clockTrack)?.let { events.add(it) }
       }
     }
     if (events.isEmpty()) return null
@@ -122,15 +143,22 @@ class SessionEventsReader(
    * Locked against the TS `decodeEventLine` (run-report-events.ts) by
    * `session-events-parity-fixtures.json` — see `SessionEventsParityFixturesTest`.
    */
-  private fun parseLine(line: String): EventEntry? {
+  private fun parseLine(line: String, clockTrack: DeviceClockTrack?): EventEntry? {
     val obj = runCatching { JSON.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: return null
     val envelopeTime = obj[SessionEvents.TIME_FIELD]?.tryToLong()
-    val timeMs = envelopeTime ?: obj[SessionEvents.LEGACY_TIME_FIELD]?.tryToLong() ?: 0L
+    val orderTime = envelopeTime ?: obj[SessionEvents.LEGACY_TIME_FIELD]?.tryToLong()
     // Only unwrap `data` for an actual envelope (has `timeMs`); a bare rich-schema line is its own
     // payload. Fall back to the whole object if an envelope is missing its `data` field.
     val data = if (envelopeTime != null) (obj[ENVELOPE_DATA_FIELD] ?: obj) else obj
-    return EventEntry(timeMs = timeMs, data = data)
+    val deviceStamped = obj[SessionEvents.CLOCK_FIELD]?.tryToString() == DEVICE_CLOCK
+    if (!deviceStamped || orderTime == null) return EventEntry(timeMs = orderTime ?: 0L, data = data)
+    val hostMs = clockTrack?.toHostMs(orderTime)
+      ?: return EventEntry(timeMs = orderTime, data = data, clock = TrailblazeClockDomain.DEVICE)
+    return EventEntry(timeMs = hostMs, data = data)
   }
+
+  private fun JsonElement.tryToString(): String? =
+    runCatching { jsonPrimitive.contentOrNull }.getOrNull()
 
   private fun JsonElement.tryToLong(): Long? = runCatching { jsonPrimitive.longOrNull }.getOrNull()
 
@@ -176,6 +204,7 @@ class SessionEventsReader(
 
   companion object {
     private const val ENVELOPE_DATA_FIELD = "data"
+    private val DEVICE_CLOCK = TrailblazeClockDomain.DEVICE.wireName
     const val DEFAULT_MAX_EVENTS_PER_STREAM: Int = 2_000
     const val DEFAULT_MAX_BYTES_PER_STREAM: Long = 2_000_000L
     const val DEFAULT_MAX_STREAMS: Int = 256

@@ -10,8 +10,8 @@
 const TM_COMP_TYPES = {
   tools: { ico: 'wrench', color: 'var(--text-subtle-variant)', label: 'Tools', singular: 'tool',
     def: 'Named actions a trail can call - tap, seed data, clear state.',
-    help: { title: 'Actions the agent can take', tag: '3 flavors',
-      body: 'A tool is one named action a trail can invoke - tap, seed an account, clear app state. Authored as typed TypeScript (.ts), a declarative .tool.yaml, or a Kotlin-backed class. The Tools page lists, edits, and tests them.' } },
+    help: { title: 'Actions the agent can take', tag: '2 flavors',
+      body: 'A tool is one named action a trail can invoke - tap, seed an account, clear app state. Authored as typed TypeScript (.ts) or a Kotlin-backed class. The Tools page lists, edits, and tests them.' } },
   trailheads: { ico: 'flag', color: 'var(--tb-pass)', label: 'Trailheads', singular: 'trailhead',
     def: 'A specialized tool that runs before a trail’s steps, bootstrapping the app from any state to a known starting screen (→ to).',
     help: { title: 'Entry points', foot: '*.trailhead.yaml',
@@ -19,7 +19,7 @@ const TM_COMP_TYPES = {
   systemPrompts: { ico: 'file-text', color: 'var(--text-subtle)', label: 'System prompt', singular: 'system prompt',
     def: 'Markdown template that frames this target for the model - prepended when the agent runs.' },
 };
-const TM_FLAVOR_TINT = { scripted: 'var(--tb-pass)', yaml: 'var(--tb-running)', kotlin: 'var(--tb-amber)', unknown: 'var(--text-subtle)' };
+const TM_FLAVOR_TINT = { scripted: 'var(--tb-pass)', kotlin: 'var(--tb-amber)', unknown: 'var(--text-subtle)' };
 const TM_DIR = { tools: 'tools', trailheads: 'trailheads' };
 const TM_SUFFIX = { tools: '.ts', trailheads: '.trailhead.yaml' };
 

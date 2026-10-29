@@ -540,14 +540,14 @@ class ToolboxFormatterTest {
   @Test
   fun `renderRoleSection falls back to bare name when description is missing`() {
     val out = ToolboxFormatter.renderRoleSection(
-      header = "Shortcuts (jump between waypoints):",
-      toolNames = listOf("sample_navigate_more_to_addons"),
+      header = "Trailheads (start your trail here):",
+      toolNames = listOf("sample_launch_signed_in"),
       descriptionsByName = emptyMap(),
     )
     assertEquals(
       listOf(
-        "Shortcuts (jump between waypoints):",
-        "  - sample_navigate_more_to_addons",
+        "Trailheads (start your trail here):",
+        "  - sample_launch_signed_in",
       ),
       out,
       "tools without descriptions render as bare `- name` (no orphan trailing colon)",
@@ -590,10 +590,10 @@ class ToolboxFormatterTest {
     // Used by `toolbox trailheads` invoked without --target/--device — the empty hint
     // should still read coherently rather than emit "for null on null".
     val out = ToolboxFormatter.renderRoleEmptyMessage(
-      role = "shortcuts",
+      role = "trailheads",
       target = null,
       platform = null,
-      suffix = "*.shortcut.yaml",
+      suffix = "*.trailhead.yaml",
     )
     assertTrue(out.first().contains("for this target on this platform"))
     assertTrue(out.last().contains("waypoints"))

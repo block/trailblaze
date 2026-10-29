@@ -355,6 +355,7 @@ export interface DirectionStep {
   recording?: ToolRecording | null;
   maxRetries?: number | null;
   isTrailhead?: boolean;
+  isTeardown?: boolean;
   prompt?: string;
 }
 
@@ -1225,6 +1226,7 @@ export interface SessionInfo {
   selectedDeviceConfiguration?: string | null;
   deviceClockOffsetMs?: number | null;
   endTimestamp?: string | null;
+  trailSourceUrl?: string | null;
 }
 
 export type SessionStatus = Cancelled | Failed | FailedWithSelfHeal | SessionStatusEndedMaxCallsLimitReached | Started | Succeeded | SucceededWithSelfHeal | TimeoutReached | Unknown;
@@ -1234,6 +1236,7 @@ export interface SessionStatusEndedMaxCallsLimitReached {
   durationMs: number;
   maxCalls: number;
   objectivePrompt: string;
+  message?: string | null;
 }
 
 export interface SessionSummary {
@@ -1255,6 +1258,8 @@ export interface SessionSummary {
   trailId?: string | null;
   imported?: boolean;
   metadata?: Record<string, TrailMetadataValue> | null;
+  trailSourceUrl?: string | null;
+  context?: string | null;
 }
 
 export interface SessionsResponse {
@@ -1279,7 +1284,6 @@ export interface SettingsDto {
   serverHttpsPort: number;
   showTrailsTab: boolean;
   showDevicesTab: boolean;
-  showWaypointsTab: boolean;
   preferHostAgent?: boolean;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
@@ -1307,7 +1311,6 @@ export interface SettingsPatchRequest {
   serverHttpsPort?: number | null;
   showTrailsTab?: boolean | null;
   showDevicesTab?: boolean | null;
-  showWaypointsTab?: boolean | null;
   preferHostAgent?: boolean | null;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
@@ -1345,6 +1348,7 @@ export interface Started {
   sensitiveMemoryKeys?: string[];
   targetAppInfo?: TrailblazeTargetAppInfo | null;
   selectedDeviceConfiguration?: string | null;
+  trailSourceUrl?: string | null;
 }
 
 export interface StopApp {
@@ -1432,7 +1436,7 @@ export interface ToolChoice {
   class: "ai.koog.prompt.llm.LLMCapability.ToolChoice";
 }
 
-export type ToolFlavor = "kotlin" | "yaml" | "scripted";
+export type ToolFlavor = "kotlin" | "scripted";
 
 export interface ToolParamDto {
   name: string;

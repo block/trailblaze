@@ -222,17 +222,44 @@ object InlineScriptToolServerSynthesizer {
           base = unionFromJsonSchemaBranches(key, schema.anyOf);
         } else if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
           base = unionFromJsonSchemaBranches(key, schema.oneOf);
+        } else if (Array.isArray(schema.type)) {
+          // A TS `T | null` (e.g. `planToken?: string | null`) serializes to
+          // `type: ["string", "null"]`. Map one concrete type plus "null" to that type made
+          // nullable; any wider type array stays unsupported.
+          const concreteTypes = schema.type.filter((type) => type !== "null");
+          if (concreteTypes.length !== 1) {
+            throw new Error(
+              `Inline tool inputSchema property "${'$'}{key}" uses unsupported JSON Schema type "${'$'}{schema.type}".`,
+            );
+          }
+          // A nullable literal union (`"free" | null`) also lists null in `enum`; strip it so
+          // the concrete branch sees a pure string enum, and allow null only when both permit it.
+          const concreteSchema = { ...schema, type: concreteTypes[0] };
+          let enumAllowsNull = true;
+          if (Array.isArray(schema.enum)) {
+            enumAllowsNull = schema.enum.includes(null);
+            concreteSchema.enum = schema.enum.filter((value) => value !== null);
+          }
+          base = jsonSchemaPropertyToZod(key, concreteSchema, true);
+          if (concreteTypes.length < schema.type.length && enumAllowsNull) {
+            base = base.nullable();
+          }
         } else if (Array.isArray(schema.enum) && schema.enum.length > 0) {
           if (!schema.enum.every((value) => typeof value === "string")) {
             throw new Error(`Inline tool inputSchema property "${'$'}{key}" only supports string enums.`);
           }
           base = z.enum(schema.enum);
-        } else if (schema.type === undefined && Object.keys(schema).length === 0) {
-          // An empty `{}` schema is an unconstrained value (e.g. a union branch's
-          // `selector: {}`); z.any() is the faithful mapping. Kept deliberately narrow: a
-          // non-empty typeless schema (a bare ref, etc.) still hits the throw below so
+        } else if (schema.type === undefined && isAnnotationOnly(schema)) {
+          // An empty `{}` schema, or one carrying only annotations (`{ description }`: the
+          // analyzer emits this for a field whose type it could not resolve, with the field's
+          // TSDoc on top), constrains nothing, so z.any() is the faithful mapping (e.g. a
+          // union branch's `selector: {}`). Kept deliberately narrow: a typeless schema with a
+          // structural keyword (a bare ref, `not`, `const`, etc.) still hits the throw below so
           // unsupported shapes stay loud.
           base = z.any();
+          if (typeof schema.description === "string") {
+            base = base.describe(schema.description);
+          }
         } else {
           switch (schema.type) {
             case "string":
@@ -246,6 +273,11 @@ object InlineScriptToolServerSynthesizer {
               break;
             case "boolean":
               base = z.boolean();
+              break;
+            case "null":
+              // The null branch of a nullable union (`string[] | null`, `Obj | null`), which
+              // serializes as `anyOf: [..., {type: "null"}]`.
+              base = z.null();
               break;
             case "array":
               base = z.array(
@@ -269,6 +301,11 @@ object InlineScriptToolServerSynthesizer {
           jsonSchemaPropertyToZod(`${'$'}{key}|${'$'}{index}`, branch, true),
         );
         return variants.length === 1 ? variants[0] : z.union(variants);
+      }
+
+      function isAnnotationOnly(schema) {
+        const annotations = ["description", "title", "default", "examples", "${'$'}comment", "deprecated", "readOnly", "writeOnly"];
+        return Object.keys(schema).every((key) => annotations.includes(key));
       }
 
       function isPlainObject(value) {

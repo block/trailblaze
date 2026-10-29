@@ -18,7 +18,8 @@ import kotlin.test.assertTrue
  * otherwise.
  *
  * The certificate reader is injected. Signing a fixture would mean generating a key per test run to
- * assert something no case here is about — `RealApkProbeTest` reads a real signature off a real APK.
+ * assert something no case here is about — the CI pre-flight that probes every real APK pair before
+ * installing it reads real signatures.
  */
 class ApkProbeTest {
 

@@ -10,7 +10,6 @@ import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
 import xyz.block.trailblaze.config.KnownTargetWorkspace
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
 import xyz.block.trailblaze.util.GitUtils
@@ -32,12 +31,6 @@ class CompileCommandTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
-    // `CompileCommand` registers this workspace's `*.tool.yaml` files on the process-global
-    // YAML-tool registry (the resolver snapshots it at construction, so there's no scoped
-    // alternative). Clear it so a later test in the same JVM doesn't resolve names against this
-    // test's temp workspace. The toolset catalog needs no reset — compile passes its catalog to
-    // the emitter explicitly instead of installing the global overlay.
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
   }
 
   @Test
@@ -256,13 +249,11 @@ class CompileCommandTest {
     //      dispatch always resolved it through the global registry; only the emitted `.d.ts`
     //      disagreed.
     //
-    // Picking the asserted tool is the whole trick, because `tool_sets:` is only ONE of the three
+    // Picking the asserted tool is the whole trick, because `tool_sets:` is only ONE of the two
     // sources `resolveKotlinToolDescriptorsForTrailmap` unions: it also adds every recordable
-    // framework class tool and every YAML-defined tool that isn't `isRecordable: false`, both
-    // regardless of `tool_sets:`. So a recordable tool, an `always_enabled` toolset member
-    // (`mobile_setClipboard`), or any YAML-defined tool (`dumpMemory`, or one this workspace
-    // authored) all land in the surface whether or not the workspace catalog reached the emitter —
-    // each would be a vacuous assertion.
+    // framework class tool regardless of `tool_sets:`. So a recordable tool or an
+    // `always_enabled` toolset member (`mobile_setClipboard`) lands in the surface whether or not
+    // the workspace catalog reached the emitter — each would be a vacuous assertion.
     //
     // `web_requestDetails` is the discriminating case: class-backed, not recordable, and its only
     // classpath home is `web/toolsets/web_core.yaml`, which is not `always_enabled` (its sibling

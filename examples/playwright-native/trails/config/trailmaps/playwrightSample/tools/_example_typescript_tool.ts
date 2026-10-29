@@ -15,14 +15,8 @@
 //        async (input, ctx) => "ok",
 //      );
 //
-// 2. Add the export name to the trailmap manifest at `../trailmap.yaml` under
-//    `target.tools:`:
-//
-//      target:
-//        tools:
-//          - playwrightSample_web_openFixtureAndVerifyText
-//          - ...
-//          - myTool      # ← add this line
+// 2. That's it — no `trailmap.yaml` entry is needed. Every `.ts` in this
+//    folder with a `trailblaze.tool` export is on the target.
 //
 // No sibling YAML descriptor is required — the loader auto-discovers any
 // `.ts` with a `trailblaze.tool` export and the analyzer fills in name +
@@ -47,7 +41,7 @@ import type { TrailblazeContext, TrailblazeClient } from "@trailblaze/scripting"
  *
  * Hover over `client.tools.` — autocomplete shows both:
  *   1. Vendored built-ins from `@trailblaze/scripting` (e.g. `inputText`,
- *      `tapOnElementWithText`).
+ *      `tapOnElementBySelector`).
  *   2. This trailmap's scripted tools plus the Kotlin tools resolved through its
  *      `tool_sets:`, written to `.trailblaze/client.d.ts` by `trailblaze
  *      compile`. (`./gradlew bundleTrailblazeTrailmap` writes the sibling
@@ -124,7 +118,7 @@ export async function exampleHello(
   //   // — `tsc` errors immediately.
   //   const verified = await client.tools.playwrightSample_web_openFixtureAndVerifyText({
   //     relativePath: "fixtures/text-snippet.html",
-  //     text: args.greeting,
+  //     heading: args.greeting,
   //   });
   //   console.error("[exampleHello] verified:", verified.textContent);
 

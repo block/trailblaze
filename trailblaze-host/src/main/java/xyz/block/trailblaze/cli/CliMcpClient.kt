@@ -855,9 +855,9 @@ class CliMcpClient(
         // polling here (e.g. iOS driver prep) if it becomes necessary.
       }
       TrailblazeDevicePlatform.DESKTOP -> {
-        // No post-connect setup required — the desktop app already runs the
-        // ComposeRpcServer when `enableSelfTestServer = true` (default), so the
-        // device is ready as soon as the daemon accepts the claim.
+        // No post-connect setup required — the Compose app under test already runs
+        // its ComposeRpcServer, so the device is ready as soon as the daemon accepts
+        // the claim.
       }
     }
 

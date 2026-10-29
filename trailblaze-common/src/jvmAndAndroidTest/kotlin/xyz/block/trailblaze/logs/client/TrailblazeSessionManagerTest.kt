@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.logs.client
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager.Companion.generateSessionId
 import xyz.block.trailblaze.logs.model.SessionId
+import java.io.File
+import kotlin.io.path.createTempDirectory
 
 class TrailblazeSessionManagerTest {
 
@@ -19,6 +22,18 @@ class TrailblazeSessionManagerTest {
     }
     assert(sessionId.value.length > 200) {
       "Expected un-truncated session id; got length ${sessionId.value.length}"
+    }
+
+    assertTrue(
+      "Session suffix must remain compatible with farm retry matching",
+      sessionId.value.matches(Regex(""".*_\d{1,4}""")),
+    )
+
+    val root = createTempDirectory("session-id-test").toFile()
+    try {
+      assertTrue("Long session IDs must remain valid directory names", File(root, sessionId.value).mkdir())
+    } finally {
+      root.deleteRecursively()
     }
   }
 

@@ -12,8 +12,8 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 
 /**
- * Pins the shared selector-YAML emitter that both `ShortcutYamlEmitter` and
- * `WaypointSuggestSelectorCommand` route through. Three forcing functions are load-bearing:
+ * Pins the selector-YAML emitter that `WaypointSuggestSelectorCommand` routes through. Three
+ * forcing functions are load-bearing:
  *
  *  1. [`emit covers every field of every supported driver matcher`] — for each driver
  *     matcher in [SUPPORTED_DIALECTS], a maximal instance (every field set) must show up

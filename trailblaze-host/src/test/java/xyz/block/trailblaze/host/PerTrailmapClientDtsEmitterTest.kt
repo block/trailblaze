@@ -23,6 +23,11 @@ import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunction
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionClass
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import kotlinx.serialization.json.buildJsonArray
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
@@ -515,13 +520,13 @@ class PerTrailmapClientDtsEmitterTest {
   }
 
   @Test
-  fun `isRecordable-derived surface injects selector + YAML tools into every binding`() {
+  fun `isRecordable-derived surface injects selector tools into every binding`() {
     // The durable fix: the surface is derived from `isRecordable`, so recordable tools that live in
     // NO tool_sets (the selector-migration pipeline's `assertVisibleBySelector` /
-    // `assertNotVisibleBySelector`, which the LLM never picks) and YAML-defined recordable tools
-    // (`eraseText` / `pressBack`) land in EVERY binding — even a trailmap with no tool_sets and no
-    // scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
-    // HAND_CURATED_RECORDABLE tools are left to built-in-tools.ts so the two surfaces don't collide.
+    // `assertNotVisibleBySelector`, which the LLM never picks) land in EVERY binding — even a
+    // trailmap with no tool_sets and no scripted tools of its own. Selector-typed args the
+    // descriptor path strips are re-injected, and HAND_CURATED_RECORDABLE tools are left to
+    // built-in-tools.ts so the two surfaces don't collide.
     val trailmapDir = newTrailmapDir("recordable_surface_pack")
     val trailmap = ResolvedTrailmap(
       manifest = TrailblazeTrailmapManifest(
@@ -561,9 +566,6 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected a re-injected required selector arg on tapOn: $rendered") {
       toolEntryBlock(rendered, "tapOn").contains("selector: TrailblazeNodeSelector;")
     }
-    // YAML-defined recordable tools flow in from their config params.
-    assertTrue("expected YAML-defined eraseText: $rendered") { rendered.contains("eraseText:") }
-    assertTrue("expected YAML-defined pressBack: $rendered") { rendered.contains("pressBack:") }
     // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
     assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {
       rendered.contains("mobile_maestro:")
@@ -1340,7 +1342,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected toolset-delivered openUrl in the typed surface: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
     assertTrue("expected openUrl's url arg from the classpath descriptor's inputSchema: $rendered") {
       toolEntryBlock(rendered, "openUrl").contains("url: string;")
@@ -1385,7 +1387,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected driver-delivered openUrl in the typed surface despite no tool_sets: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1431,7 +1433,7 @@ class PerTrailmapClientDtsEmitterTest {
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected mobile-only openUrl to be absent from the web-only surface: $rendered") {
-      !rendered.contains("openUrl:")
+      !hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1514,7 +1516,7 @@ class PerTrailmapClientDtsEmitterTest {
       File(outputBase, "bundled_scripted_app/tools/trailblaze-client.d.ts").toPath(),
     )
     assertTrue("expected toolset-delivered openUrl in the classpath validation surface: $rendered") {
-      rendered.contains("openUrl:")
+      hasToolEntry(rendered, "openUrl")
     }
   }
 
@@ -1562,6 +1564,102 @@ class PerTrailmapClientDtsEmitterTest {
     assertFalse(File(otherWorkspaceTrailmap, "tools").exists(), "files were generated into the other workspace")
   }
 
+  @Test
+  fun `host functions surface in the declaring trailmap and its dependents only`() {
+    fun trailmap(id: String, dir: File, dependencies: List<String> = emptyList()) = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = id,
+        target = TrailmapTargetConfig(displayName = id),
+        dependencies = dependencies,
+      ),
+      source = TrailmapSource.Filesystem(dir),
+      target = AppTargetYamlConfig(id = id, displayName = id, tools = emptyList()),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val libDir = newTrailmapDir("accounts")
+    val appDir = newTrailmapDir("storefront")
+    val otherDir = newTrailmapDir("other")
+    val registry = TrailblazeHostFunctionRegistry(
+      object : ConfigResourceSource {
+        override fun discoverAndLoad(directoryPath: String, suffix: String) = emptyMap<String, String>()
+        override fun discoverAndLoadRecursive(directoryPath: String, suffix: String) = mapOf(
+          "accounts/host/emitterTest_lookup.host.yaml" to
+            "id: emitterTest_lookup\nclass: ${EmitterTestLookup::class.java.name}\n",
+          "accounts/host/emitter-test-dashed.host.yaml" to
+            "id: emitter-test-dashed\nclass: ${EmitterTestDashed::class.java.name}\n",
+        )
+      },
+    )
+
+    PerTrailmapClientDtsEmitter.emit(
+      listOf(trailmap("accounts", libDir), trailmap("storefront", appDir, listOf("accounts")), trailmap("other", otherDir)),
+      workspaceRoot = null,
+      hostFunctions = registry,
+    )
+
+    val app = Files.readString(File(appDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue(app) {
+      app.contains("  interface TrailblazeHostFunctionMap {\n") &&
+        app.contains("    /** Look up an account. */\n") &&
+        app.contains(
+          "    emitterTest_lookup: { args: TrailblazeHostTypes.EmitterTestLookup; " +
+            "result: TrailblazeHostTypes.EmitterTestAccount };\n",
+        ) &&
+        // A name that isn't a valid identifier is quoted, so the declaration still parses.
+        app.contains("    \"emitter-test-dashed\": { args: TrailblazeHostTypes.EmitterTestDashed; ") &&
+        app.contains("declare namespace TrailblazeHostTypes {\n") &&
+        app.contains("  export interface EmitterTestAccount {\n    email: string;\n  }\n")
+    }
+    assertTrue(Files.readString(File(libDir, "tools/trailblaze-client.d.ts").toPath()).contains("emitterTest_lookup:"))
+    val other = Files.readString(File(otherDir, "tools/trailblaze-client.d.ts").toPath())
+    assertFalse(other.contains("TrailblazeHostFunctionMap"), other)
+  }
+
+  @Test
+  fun `a host function two trailmaps declare surfaces in the dependents of either`() {
+    fun trailmap(id: String, dir: File, dependencies: List<String> = emptyList()) = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = id,
+        target = TrailmapTargetConfig(displayName = id),
+        dependencies = dependencies,
+      ),
+      source = TrailmapSource.Filesystem(dir),
+      target = AppTargetYamlConfig(id = id, displayName = id, tools = emptyList()),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val accountsDir = newTrailmapDir("accounts")
+    val billingDir = newTrailmapDir("billing")
+    val appDir = newTrailmapDir("storefront")
+    val lookup = "id: emitterTest_lookup\nclass: ${EmitterTestLookup::class.java.name}\n"
+    val registry = TrailblazeHostFunctionRegistry(
+      object : ConfigResourceSource {
+        override fun discoverAndLoad(directoryPath: String, suffix: String) = emptyMap<String, String>()
+        override fun discoverAndLoadRecursive(directoryPath: String, suffix: String) = mapOf(
+          "accounts/host/emitterTest_lookup.host.yaml" to lookup,
+          "billing/host/emitterTest_lookup.host.yaml" to lookup,
+        )
+      },
+    )
+
+    // storefront reaches the function only through billing, the declarer discovery meets second.
+    PerTrailmapClientDtsEmitter.emit(
+      listOf(
+        trailmap("accounts", accountsDir),
+        trailmap("billing", billingDir),
+        trailmap("storefront", appDir, listOf("billing")),
+      ),
+      workspaceRoot = null,
+      hostFunctions = registry,
+    )
+
+    val app = Files.readString(File(appDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue(app) { app.contains("    emitterTest_lookup: { args: TrailblazeHostTypes.EmitterTestLookup; ") }
+  }
+
   private fun newTrailmapDir(id: String): File {
     val parent = createTempDirectory("per-trailmap-client-dts-test").toFile()
     tempDirs += parent
@@ -1583,4 +1681,27 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected a closing `};` for the `$toolName` entry") { end >= 0 }
     return rendered.substring(start, end)
   }
+
+  /** Whether [rendered] declares a top-level entry for exactly [toolName], not one it suffixes. */
+  private fun hasToolEntry(rendered: String, toolName: String): Boolean =
+    Regex("""^    ${Regex.escape(toolName)}: \{""", RegexOption.MULTILINE).containsMatchIn(rendered)
+}
+
+@Serializable
+internal data class EmitterTestAccount(val email: String)
+
+@Serializable
+@TrailblazeHostFunctionClass(
+  name = "emitterTest_lookup",
+  result = EmitterTestAccount::class,
+  description = "Look up an account.",
+)
+internal data class EmitterTestLookup(val key: String) : TrailblazeHostFunction<EmitterTestAccount> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext) = EmitterTestAccount("$key@example.com")
+}
+
+@Serializable
+@TrailblazeHostFunctionClass(name = "emitter-test-dashed", result = EmitterTestAccount::class)
+internal class EmitterTestDashed : TrailblazeHostFunction<EmitterTestAccount> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext) = EmitterTestAccount("dashed@example.com")
 }

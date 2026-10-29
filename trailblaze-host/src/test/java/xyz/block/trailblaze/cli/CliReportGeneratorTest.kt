@@ -149,6 +149,8 @@ class CliReportGeneratorTest {
             trailblazeDeviceInfo = deviceInfo,
             trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
             rawYaml = null,
+            trailSourceUrl =
+              "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
           ),
           session = sessionId,
           timestamp = started,
@@ -239,6 +241,8 @@ class CliReportGeneratorTest {
             trailblazeDeviceInfo = deviceInfo,
             trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
             rawYaml = null,
+            trailSourceUrl =
+              "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
           ),
           session = sessionId,
           timestamp = started,
@@ -282,6 +286,10 @@ class CliReportGeneratorTest {
         report.results.single { it.session_id == sessionId }.trail_file_path,
       )
       val trailResult = report.results.single { it.session_id == sessionId }
+      assertEquals(
+        "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
+        trailResult.trail_source_url,
+      )
       assertEquals("estate/checkout", trailResult.trail_id)
       assertEquals(nestedMetadata, trailResult.metadata)
       assertNull(report.results.single { it.session_id == harnessId }.trail_file_path)
@@ -396,6 +404,76 @@ class CliReportGeneratorTest {
       tempDir.deleteRecursively()
     }
   }
+
+  @Test
+  fun `generateJsonReport reads run metadata from the env in CI`() {
+    // A CI job that drives `trailblaze report` itself (a device-lab runner, where no Gradle results
+    // task runs) exports the same CONFIG_ID / ANDROID_BUILD_* / TRAIL_SOURCE_* contract the Gradle
+    // task reads. The report it writes must carry that provenance, or the cell's summary.json says
+    // nothing about which build and trails it ran.
+    val tempDir = Files.createTempDirectory("cli-report-gen-metadata-test").toFile()
+    try {
+      val sessionId = SessionId("2026_10_21_android_ci_session")
+      writeEndedSession(tempDir, sessionId)
+      val logsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
+
+      val output = CliReportGenerator(environment = ciEnvironment + ("BUILDKITE" to "true"))
+        .generateJsonReport(logsRepo, sessionIds = listOf(sessionId))
+      assertNotNull(output, "generateJsonReport should have written a file")
+
+      val metadata = Json { ignoreUnknownKeys = true }
+        .decodeFromString<CiSummaryReport>(output.readText()).metadata
+      assertEquals("checkout-phone", metadata.config_id)
+      assertEquals("myapp", metadata.target_app)
+      assertEquals(listOf("android-phone-lab"), metadata.devices)
+      assertEquals("https://builds.example.com/myapp/main/debug/46e2483.apk", metadata.android_build_url)
+      assertEquals("46e24837a455453d9c9d23df72a50b559bb3e7d2", metadata.android_build_git_sha)
+      assertEquals("https://github.com/example/trails.git", metadata.trail_source_repo)
+      assertEquals("git", metadata.trail_source_type)
+      assertEquals("https://buildkite.com/example/device-lab/builds/518", metadata.ci_build_url)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `generateJsonReport leaves metadata empty off CI even when the env names a build`() {
+    // A developer's shell may still hold CONFIG_ID / ANDROID_BUILD_URL from an earlier CI
+    // reproduction. Only a CI marker (BUILDKITE / CI) makes the report trust those values;
+    // without one the report must not claim that provenance for a local run.
+    val tempDir = Files.createTempDirectory("cli-report-gen-local-metadata-test").toFile()
+    try {
+      val sessionId = SessionId("2026_10_21_android_local_session")
+      writeEndedSession(tempDir, sessionId)
+      val logsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
+
+      val output = CliReportGenerator(environment = ciEnvironment)
+        .generateJsonReport(logsRepo, sessionIds = listOf(sessionId))
+      assertNotNull(output, "generateJsonReport should have written a file")
+
+      val metadata = Json { ignoreUnknownKeys = true }
+        .decodeFromString<CiSummaryReport>(output.readText()).metadata
+      assertNull(metadata.config_id)
+      assertNull(metadata.android_build_url)
+      assertNull(metadata.ci_build_url)
+      assertEquals("", metadata.target_app)
+      assertEquals(emptyList(), metadata.devices)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  /** The env a device-lab CI job exports for `trailblaze report`, minus any CI marker. */
+  private val ciEnvironment = mapOf(
+    "CONFIG_ID" to "checkout-phone",
+    "TRAILBLAZE_TARGET_APP" to "myapp",
+    "TRAILBLAZE_DEVICES" to "android-phone-lab",
+    "ANDROID_BUILD_URL" to "https://builds.example.com/myapp/main/debug/46e2483.apk",
+    "ANDROID_BUILD_GIT_SHA" to "46e24837a455453d9c9d23df72a50b559bb3e7d2",
+    "TRAIL_SOURCE_REPO" to "https://github.com/example/trails.git",
+    "TRAIL_SOURCE_REF" to "e09debc4ee20cb185fa99b17f9b9a8eae95ad513",
+    "BUILDKITE_BUILD_URL" to "https://buildkite.com/example/device-lab/builds/518",
+  )
 
   /** A minimal session that reaches a terminal status, so `buildSessionResult` produces a row. */
   private fun writeEndedSession(logsDir: File, sessionId: SessionId) {

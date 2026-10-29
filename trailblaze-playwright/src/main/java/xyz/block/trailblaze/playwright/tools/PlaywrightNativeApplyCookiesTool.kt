@@ -17,25 +17,21 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
+/**
+ * Typically used to replay a session saved with web_getStorageState so a trail can skip a full
+ * UI login, then web_navigate to the authenticated landing page.
+ */
 @Serializable
 @TrailblazeToolClass("web_applyCookies")
 @LLMDescription(
   """
-Injects a set of cookies into the current browser context. Pass [cookiesJson] as a JSON
-string in Playwright's storage-state cookie array shape, e.g.:
-
-  [{"name":"sid","value":"abc","domain":".example.com","path":"/","httpOnly":true,"secure":true,"sameSite":"Lax"}]
-
-Typically used to replay a previously-saved authenticated session so a trail can skip a full
-UI login. Pair with web_getStorageState (for capture) and web_navigate (to drive to the
-authenticated landing page after applying).
+Add cookies to the current browser context, e.g. to restore a session saved with web_getStorageState. Navigate afterwards to use them.
 """,
 )
 data class PlaywrightNativeApplyCookiesTool(
   @param:LLMDescription(
-    "JSON array of cookies in Playwright's storage-state cookie shape. May be the full " +
-      "storageState JSON object (in which case the `cookies` field is read), or the bare " +
-      "cookies array.",
+    "JSON string: a Playwright storageState object (its `cookies` field is read) or a bare cookie array, " +
+      "e.g. [{\"name\":\"sid\",\"value\":\"abc\",\"domain\":\".example.com\",\"path\":\"/\"}].",
   )
   val cookiesJson: String = "",
 ) : PlaywrightExecutableTool {

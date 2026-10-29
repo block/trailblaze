@@ -22,6 +22,10 @@ import xyz.block.trailblaze.util.SimctlCommand
  * waiting for the UI to settle. The POC uses a fixed post-action delay instead of
  * polling. Tree-hash settling is a natural follow-up once this path graduates from
  * POC status.
+ *
+ * Each `axe` process that opens a render-server connection leaks it (see [screenshot]). `tap`,
+ * `swipe` and `touch` each read the UI orientation through a connection of their own, so each call
+ * leaks about three ports.
  */
 object AxeCli {
 
@@ -73,6 +77,7 @@ object AxeCli {
 
   private const val LEFT_COMMAND_KEYCODE = 227
   private const val V_KEYCODE = 25
+  private const val A_KEYCODE = 4
   private const val PROCESS_CLEANUP_MAX_MS = 250L
   private val keypadDigitHidCodes = mapOf(
     '0' to 98,
@@ -155,14 +160,22 @@ object AxeCli {
     return supported
   }
 
-  /** Captures a screenshot. Returns the PNG path (either [outputPath] or AXe's auto-name on stdout). */
-  fun screenshot(udid: String, outputPath: String? = null, timeoutSeconds: Long = 10): Result {
-    val args = mutableListOf(axeBin, "screenshot", "--udid", udid)
-    if (outputPath != null) {
-      args += listOf("--output", outputPath)
-    }
-    return run(args, timeoutSeconds)
-  }
+  /**
+   * Captures a PNG of the Simulator's screen to [outputPath] with `simctl io screenshot`.
+   *
+   * `axe screenshot` is avoided: every `axe` process that captures a frame attaches a framebuffer
+   * consumer to Apple's SimRenderServer that the server never frees, about two Mach ports per
+   * capture until the simulator reboots, enough over a long run to pin a CPU core in the render
+   * server. `simctl` takes the same frame without that cost.
+   *
+   * [outputPath] is written by CoreSimulator, so it must be somewhere CoreSimulator can write
+   * (see `CoreSimulatorTempFiles`).
+   */
+  fun screenshot(udid: String, outputPath: String, timeoutSeconds: Long = 10): Result =
+    run(screenshotArgs(udid, outputPath), timeoutSeconds, timeoutDescription = "simctl screenshot")
+
+  internal fun screenshotArgs(udid: String, outputPath: String): List<String> =
+    SimctlCommand.argv("io", udid, "screenshot", "--type=png", outputPath)
 
   /** Tap at screen coordinates. POC uses a fixed-delay settle after dispatch. */
   fun tapXy(
@@ -182,6 +195,36 @@ object AxeCli {
       "--udid", udid,
     )
     return run(args, timeoutSeconds)
+  }
+
+  /**
+   * Taps ([x], [y]) [count] times in one `axe batch` HID session, so the taps land back-to-back
+   * (a double-tap when [count] is 2) rather than a process-spawn apart, which is slower than the
+   * system's double-tap window.
+   */
+  fun multiTapXy(
+    udid: String,
+    x: Int,
+    y: Int,
+    count: Int,
+    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
+    timeoutSeconds: Long = 10,
+  ): Result = run(multiTapArgs(udid, x, y, count, postDelaySeconds), timeoutSeconds)
+
+  internal fun multiTapArgs(
+    udid: String,
+    x: Int,
+    y: Int,
+    count: Int,
+    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
+  ): List<String> {
+    require(count >= 2) { "multiTapXy needs count >= 2, got $count" }
+    // Only the last tap carries the settle delay; the earlier ones fire immediately.
+    val steps = (1..count).flatMap { i ->
+      val delay = if (i == count) postDelaySeconds else 0.0
+      listOf("--step", "tap -x $x -y $y --post-delay $delay")
+    }
+    return listOf(axeBin, "batch") + steps + listOf("--udid", udid)
   }
 
   /**
@@ -269,11 +312,8 @@ object AxeCli {
         udid = udid,
         text = text,
         writePasteboard = { deviceId, value ->
-          // Built before the budget hands out what is left, so a process's one-time simctl lookup is
-          // charged to this call's timeout instead of running on top of it.
-          val args = writePasteboardArgs(deviceId)
           budget.run("simctl pbcopy", safetyReserveMillis) { remaining ->
-            writePasteboard(args, value, remaining)
+            stagePasteboard(deviceId, value, remaining)
           }
         },
         paste = { deviceId ->
@@ -369,16 +409,20 @@ object AxeCli {
     return pasteAttempt.getOrThrow()
   }
 
-  private fun writePasteboard(args: List<String>, text: String, timeoutMillis: Long): Result =
-    runWithTimeoutMillis(
-      args,
-      timeoutMillis,
-      stdin = text,
-      timeoutDescription = "simctl pbcopy",
-    )
-
-  internal fun writePasteboardArgs(udid: String): List<String> =
-    SimctlCommand.argv("pbcopy", udid)
+  /**
+   * Stages [text] with [IosHostSimctlUtils.writePasteboardVerified], which confirms the simulator
+   * reads it back: a bare `simctl pbcopy` is silently dropped while Xcode's DeviceHub.app mirrors
+   * the Mac pasteboard, and Cmd+V would then paste whatever was already there.
+   */
+  private fun stagePasteboard(udid: String, text: String, timeoutMillis: Long): Result =
+    try {
+      IosHostSimctlUtils.setPasteboard(udid, text, timeoutMillis)
+      Result(0, "", "")
+    } catch (e: InterruptedException) {
+      throw e
+    } catch (e: Exception) {
+      Result(-1, "", "simctl pbcopy: ${e.message}")
+    }
 
   private fun pasteFromPasteboard(udid: String, timeoutMillis: Long): Result = runWithTimeoutMillis(
     pasteFromPasteboardArgs(udid),
@@ -426,6 +470,21 @@ object AxeCli {
   fun button(udid: String, button: String, timeoutSeconds: Long = 10): Result =
     run(listOf(axeBin, "button", button, "--udid", udid), timeoutSeconds)
 
+  /**
+   * Selects all of the focused field's text with Cmd+A — AXe's HID events arrive as a hardware
+   * keyboard, which UIKit answers with the standard select-all, secure fields included.
+   */
+  fun selectAll(udid: String, timeoutSeconds: Long = 10): Result = run(selectAllArgs(udid), timeoutSeconds)
+
+  internal fun selectAllArgs(udid: String): List<String> =
+    listOf(
+      axeBin,
+      "key-combo",
+      "--modifiers", LEFT_COMMAND_KEYCODE.toString(),
+      "--key", A_KEYCODE.toString(),
+      "--udid", udid,
+    )
+
   /** Presses a single HID keycode (e.g. 40 = Enter, 42 = Backspace). */
   fun key(udid: String, keycode: Int, timeoutSeconds: Long = 10): Result =
     run(listOf(axeBin, "key", keycode.toString(), "--udid", udid), timeoutSeconds)
@@ -435,29 +494,69 @@ object AxeCli {
    * checks executability directly; for bare names (e.g. `AXE_BIN=axe`) relies on PATH. Either
    * way, an executable binary below [MIN_VERSION] still reports unavailable (see
    * [computeAvailability]) since it drives off incomplete accessibility trees.
-   *
-   * Result is memoized for the JVM lifetime — AXe isn't going to be installed/uninstalled or
-   * upgraded mid-session, and this is called on every device-list refresh + every connect. A
-   * user who installs or upgrades AXe mid-daemon can restart the daemon to pick it up.
    */
-  fun isAvailable(): Boolean = cachedAvailability ?: computeAvailability().also { cachedAvailability = it }
+  fun isAvailable(): Boolean = availability() == Availability.AVAILABLE
 
-  @Volatile private var cachedAvailability: Boolean? = null
+  /**
+   * What [isAvailable] decided, and whether the answer can change. [Availability.MISSING] and
+   * [Availability.TOO_OLD] are memoized for the JVM lifetime — AXe isn't going to be installed or
+   * upgraded mid-session, and this is called on every device-list refresh + every connect. A user
+   * who installs or upgrades AXe mid-daemon can restart the daemon to pick it up.
+   *
+   * [Availability.UNKNOWN] is never memoized: a `--version` probe that timed out, exited non-zero
+   * or threw on a binary that IS there says nothing about the next probe, and caching it would
+   * report a working axe as missing for the rest of the daemon's life.
+   */
+  fun availability(): Availability = availabilityCache.get()
 
-  private fun computeAvailability(): Boolean {
-    if (File(axeBin).isAbsolute && !File(axeBin).canExecute()) {
-      return false
-    }
-    val versionOutput = probeVersionOutput() ?: return false
+  enum class Availability {
+    AVAILABLE,
+
+    /** No executable at [axeBin] (absolute) or on `PATH` (bare name). */
+    MISSING,
+
+    /** Present, but below [MIN_VERSION] or reporting no recognizable version. */
+    TOO_OLD,
+
+    /** Present, but the `--version` probe timed out, exited non-zero or threw. */
+    UNKNOWN,
+  }
+
+  private val availabilityCache = AvailabilityCache(::computeAvailability)
+
+  /** Memoizes [compute]'s answer once it is definitive; [Availability.UNKNOWN] is asked again. */
+  internal class AvailabilityCache(private val compute: () -> Availability) {
+    @Volatile private var cached: Availability? = null
+
+    fun get(): Availability = cached ?: compute().also { if (it != Availability.UNKNOWN) cached = it }
+  }
+
+  private fun computeAvailability(): Availability {
+    if (!binaryExists()) return Availability.MISSING
+    val versionOutput = probeVersionOutput() ?: return Availability.UNKNOWN
     val found = parseAxeVersion(versionOutput)
     if (found == null || compareVersions(found, MIN_VERSION) < 0) {
       Console.log(
         "[AxeCli] axe version too old (found ${found ?: "unrecognized"}, requires >= $MIN_VERSION) " +
           "— older versions return incomplete accessibility trees. Run: brew upgrade axe",
       )
-      return false
+      return Availability.TOO_OLD
     }
-    return true
+    return Availability.AVAILABLE
+  }
+
+  /**
+   * Whether an executable exists where the probe would run it. Resolved here rather than read off a
+   * failed `ProcessBuilder.start`, because a start can also fail transiently (fd or process-table
+   * pressure), and only a binary that isn't there may be memoized as missing.
+   */
+  private fun binaryExists(): Boolean {
+    val bin = File(axeBin)
+    if (bin.isAbsolute || axeBin.contains(File.separatorChar)) return bin.canExecute()
+    return System.getenv("PATH").orEmpty()
+      .split(File.pathSeparatorChar)
+      .filter { it.isNotEmpty() }
+      .any { File(it, axeBin).canExecute() }
   }
 
   private fun probeVersionOutput(): String? = try {

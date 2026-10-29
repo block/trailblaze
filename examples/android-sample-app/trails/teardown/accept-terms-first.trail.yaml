@@ -1,0 +1,34 @@
+# One of a pair with accept-terms-second: run both back to back on one device with trailhead
+# reuse on (instrumentation argument `trailblaze.trailheadReuse=true`). The first does a full
+# setup; its teardown hands the Settings screen on, and the second trailhead reuses it, unchecking
+# Accept Terms instead of relaunching the app. With reuse off, each does a full setup.
+config:
+  id: sample-app/teardown/accept-terms-first
+  target: sampleapp
+  devices:
+    android-phone:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: Open Settings with Accept Terms unchecked
+  recording:
+    android-phone:
+      sampleapp_openSettings: {}
+
+trail:
+  - step: Check "Accept Terms" and verify it is checked
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: Check Accept Terms.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Accept Terms
+        - assertVisibleBySelector:
+            reason: Accept Terms is checked.
+            nodeSelector:
+              androidAccessibility:
+                isChecked: true
+              containsChild:
+                androidAccessibility:
+                  textRegex: Accept Terms

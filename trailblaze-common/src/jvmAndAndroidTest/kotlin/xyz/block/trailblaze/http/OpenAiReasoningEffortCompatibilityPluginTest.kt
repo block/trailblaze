@@ -55,8 +55,23 @@ class OpenAiReasoningEffortCompatibilityPluginTest {
   }
 
   @Test
+  fun `a gpt-6 body with function tools is pinned to none`() {
+    assertThat(reasoningEffortOf(pin(body("gpt-6-luna"))!!)).isEqualTo("none")
+    assertThat(reasoningEffortOf(pin(body("gpt-6.1-sol"))!!)).isEqualTo("none")
+    assertThat(reasoningEffortOf(pin(body("prod-gpt-6-luna"))!!)).isEqualTo("none")
+  }
+
+  @Test
+  fun `a Responses API body passes through untouched`() {
+    val responsesBody =
+      """{"model": "gpt-6-luna", "input": [], "reasoning": {"effort": "low"}, "tools": [{"type": "function", "name": "tap"}]}"""
+    assertThat(pin(responsesBody)).isNull()
+  }
+
+  @Test
   fun `a non gpt-5_6 body passes through untouched`() {
     assertThat(pin(body("gpt-4.1"))).isNull()
+    assertThat(pin(body("gpt-5.4-mini"))).isNull()
     assertThat(pin(body("claude-haiku-4-5"))).isNull()
     assertThat(pin(body("gemini-3-5-flash"))).isNull()
   }

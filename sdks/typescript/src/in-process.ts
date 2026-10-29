@@ -21,9 +21,12 @@ import {
   defineTypedTool,
   type EmptyInput,
   type ToolContext,
+  type TrailblazeHost,
+  type TrailblazeTrailheadSpec,
   type TrailblazeTypedToolSpec,
   type TrailheadSpec,
   type TypedToolDefinition,
+  trailheadToolSpec,
 } from "./tool-core.js";
 
 // Full lightweight authoring surface — re-exported so this slim entry is a drop-in for
@@ -42,20 +45,45 @@ export { z } from "zod";
 export { ToolError } from "./tool-error.js";
 export {
   fromMeta,
+  TRAILBLAZE_HOST_ARCH,
+  TRAILBLAZE_HOST_OS,
   type TrailblazeContext,
   type TrailblazeDevice,
+  type TrailblazeHostArch,
+  type TrailblazeHostOs,
+  type TrailblazeHostPlatform,
   type TrailblazeLogger,
   type TrailblazeLogLevel,
   type TrailblazeMemory,
   type TrailblazeTarget,
 } from "./context.js";
 export type { TrailblazeSessionCleanup, TrailblazeSessionResources } from "./session-resources.js";
+export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
+export { formatToolCalls } from "./history.js";
+export type {
+  EventMatch,
+  EventMatchValue,
+  TeardownResult,
+  SessionEvent,
+  TrailEvents,
+  TrailEventsQueryOptions,
+  PreviousRun,
+  TrailOutcome,
+  TrailRun,
+} from "./trailhead.js";
 export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
   TrailblazeToolEntry,
   TrailblazeToolMap,
 } from "./client.js";
+export type {
+  SurveyRunFinding,
+  SurveyRunOptions,
+  SurveyRunResult,
+  TrailblazeSurveyMap,
+  TrailblazeSurveys,
+} from "./session-surveys.js";
 export {
   captureViewHierarchy,
   ConditionalActionFailedError,
@@ -96,7 +124,7 @@ export function tool<TInput = Record<string, never>, TResult = string>(
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool<TInput = Record<string, never>, TResult = string>(
-  spec: TrailblazeTypedToolSpec,
+  spec: TrailblazeTypedToolSpec<TInput>,
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool(
@@ -117,7 +145,7 @@ export function tool(
     !Array.isArray(arg0) &&
     typeof arg1 === "function"
   ) {
-    const specObj = arg0 as TrailblazeTypedToolSpec;
+    const specObj = arg0 as TrailblazeTypedToolSpec<unknown>;
     const inlineSchema =
       specObj.inputSchema &&
       typeof specObj.inputSchema === "object" &&
@@ -127,6 +155,8 @@ export function tool(
     return defineTypedTool(
       arg1 as (input: unknown, ctx: ToolContext) => Promise<unknown>,
       inlineSchema,
+      undefined,
+      specObj.trailhead?.teardown,
     );
   }
   // Imperative `tool(name, spec, handler)` — unavailable in the slim runtime.
@@ -134,6 +164,28 @@ export function tool(
     "imperative trailblaze.tool(name, spec, handler) is unavailable in the in-process runtime; " +
       "author tools as `export const x = trailblaze.tool<I>(...)`, or declare `runtime: subprocess` " +
       "for tools that need the full MCP runtime.",
+  );
+}
+
+/**
+ * `trailblaze.trailhead()` for the in-process profile: a typed tool that is also a trailhead.
+ * Same overloads as the full profile; see `tool.ts`.
+ */
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead<TInput = Record<string, never>, TResult = string>(
+  spec: TrailblazeTrailheadSpec<TInput>,
+  handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
+): TypedToolDefinition<TInput, TResult>;
+export function trailhead(arg0: unknown, arg1?: unknown): TypedToolDefinition<unknown, unknown> {
+  const [spec, handler] = typeof arg0 === "function" ? [undefined, arg0] : [arg0, arg1];
+  if (typeof handler !== "function") {
+    throw new TypeError("trailblaze.trailhead(spec, handler): handler must be a function.");
+  }
+  return tool(
+    trailheadToolSpec(spec as TrailblazeTrailheadSpec<unknown> | undefined),
+    handler as (input: unknown, ctx: ToolContext) => Promise<unknown>,
   );
 }
 
@@ -152,11 +204,12 @@ export async function run(): Promise<void> {
 
 /**
  * Namespace bundle authors import as `trailblaze` on the in-process path. Same shape as the full
- * profile (`{ tool, run }`) so author code is profile-agnostic; the slim members just throw for
+ * profile (`{ tool, trailhead, run }`) so author code is profile-agnostic; the slim members just throw for
  * the subprocess-only forms.
  */
 export const trailblaze = {
   tool,
+  trailhead,
   run,
 };
 
@@ -167,8 +220,10 @@ export const trailblaze = {
 // surface (`ToolContext`, `EmptyInput`, `TypedToolDefinition`, `TrailblazeTypedToolSpec`).
 export type {
   ToolContext,
+  TrailblazeHost,
   EmptyInput,
   TypedToolDefinition,
   TrailblazeTypedToolSpec,
+  TrailblazeTrailheadSpec,
   TrailheadSpec,
 };

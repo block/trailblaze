@@ -442,6 +442,21 @@ describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
     expect(stream.groupPath).toBe("urlPath");
   });
 
+  test("the trail phase on a network record is not part of its identity", () => {
+    const hit = (extra: Record<string, unknown>) => ({ method: "GET", statusCode: 200, durationMs: 10, urlPath: "/v1/items", phase: "end", ...extra });
+    // A capture from before phases were stamped against one that has them, and a request that
+    // moved from the trailhead to the trail: the traffic is the same.
+    const legacy = eventObjectsOf({ network: [hit({})] as any[] }).get("network");
+    expect(eventObjectsOf({ network: [hit({ trailPhase: null })] as any[] }).get("network")).toEqual(legacy);
+    expect(eventObjectsOf({ network: [hit({ trailPhase: "trailhead" })] as any[] }).get("network")).toEqual(legacy);
+    expect(eventObjectsOf({ network: [hit({ trailPhase: "trail" })] as any[] }).get("network")).toEqual(legacy);
+
+    // Same for a device's own stream in a multi-device session.
+    const device = (extra: Record<string, unknown>) => eventObjectsOf({ events: [{ name: "network.seller", total: 1, truncated: false, events: [{ t: 1, d: JSON.stringify(hit(extra)) }] }] as any[] }).get("network.seller");
+    expect(device({ trailPhase: "trailhead" })).toEqual(device({}));
+    expect(device({ trailPhase: "trailhead" })).toEqual([hit({})]);
+  });
+
   test("one canonical network stream represents aliases across any number of runs", () => {
     const raw = (count: number) => ({
       name: "com.example.plugin.network",
@@ -722,6 +737,17 @@ describe("event content diff", () => {
     expect((diff.hunks[1] as any).rows.map((r: any) => r.summary)).toEqual(['tag="C"', 'tag="D"']);
     expect((diff.hunks[1] as any).rows[0].detail).toEqual(["t: ‹…›", 'tag: "C"']);
     expect(diff.addedCount).toBe(2);
+  });
+
+  test("an event that is itself a list is summarized by its items", () => {
+    // Some producers write each event as a list of {key, value} entries; stringified whole, every
+    // summary read "[object Object],[object Object]" and no two rows could be told apart.
+    const appinfo = (token: string) => [{ key: "App Token", value: token }, { key: "Device", value: "Pixel" }];
+    const diff = diffEventContent([appinfo("a")], [appinfo("b")]);
+    const pair = (diff.hunks[0] as any).pairs[0];
+    expect(pair.before.summary).toBe('key="App Token" value="a" · key="Device" value="Pixel"');
+    expect(pair.after.summary).toBe('key="App Token" value="b" · key="Device" value="Pixel"');
+    expect((diffEventContent([], [["x", 1]]).hunks[0] as any).rows[0].summary).toBe('"x" · 1');
   });
 
   test("a removed event shows whole between the matching runs around it", () => {

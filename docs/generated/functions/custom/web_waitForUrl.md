@@ -4,9 +4,7 @@
 
 # `web_waitForUrl`
 
-Wait until the current page's URL matches the given regex pattern. Returns the matched URL.
-Use after web_navigate or web_click when the navigation is async and the next step depends
-on the final URL (e.g. waiting for a post-login redirect to settle).
+Wait until the page URL matches a regex, e.g. for a post-login redirect to settle. Returns the URL.
 
 ## Source
 
@@ -24,12 +22,12 @@ on the final URL (e.g. waiting for a post-login redirect to settle).
 ### Required parameters
 
 - `pattern` — `String`
-  Java regex pattern the URL must match (e.g. ".*(dashboard|home|orders).*").
+  Java regex found anywhere in the URL, e.g. "/(dashboard|home)".
 
 ### Optional parameters
 
 - `timeoutMs` — `Integer`
-  Maximum time to wait in milliseconds. Defaults to 30000ms.
+  Max milliseconds to wait (default 30000).
 
 ## Output
 

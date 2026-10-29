@@ -2,6 +2,7 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import maestro.TapRepeat
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
@@ -15,23 +16,32 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("tapOnPoint")
-@LLMDescription("""Tap or long press on the UI at the provided coordinates.""")
+@LLMDescription(
+  "Tap, double-tap or long press at device screen coordinates, in the units of element bounds " +
+    "(not screenshot pixels).",
+)
 data class TapOnPointTrailblazeTool(
-  @param:LLMDescription("The center X coordinate for the clickable element")
-  override val x: Int,
-  @param:LLMDescription("The center Y coordinate for the clickable element")
-  override val y: Int,
-  @param:LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
+  @param:LLMDescription("X coordinate (element center).")
+  val x: Int,
+  @param:LLMDescription("Y coordinate (element center).")
+  val y: Int,
+  @param:LLMDescription("Long press instead of tap.")
   val longPress: Boolean = false,
+  @param:LLMDescription("Tap twice in quick succession (a double-tap). Cannot combine with longPress.")
+  val doubleTap: Boolean = false,
   override val reasoning: String? = null,
 ) : MapsToMaestroCommands(),
-  ReasoningTrailblazeTool,
-  xyz.block.trailblaze.toolcalls.RawCoordinateTapTool {
+  ReasoningTrailblazeTool {
+
+  init {
+    require(!(longPress && doubleTap)) { "tapOnPoint: longPress and doubleTap are mutually exclusive." }
+  }
 
   override fun toMaestroCommands(): List<Command> = listOf(
     TapOnPointV2Command(
       point = "$x,$y",
       longPress = longPress,
+      repeat = if (doubleTap) DOUBLE_TAP_REPEAT else null,
     ),
   )
 
@@ -91,6 +101,7 @@ data class TapOnPointTrailblazeTool(
             selector = res.selector,
             relativePoint = relativePoint,
             longPress = longPress,
+            doubleTap = doubleTap,
           )
           upgraded = true
         }
@@ -100,13 +111,26 @@ data class TapOnPointTrailblazeTool(
 
     val result = super.execute(toolExecutionContext)
     if (result.isSuccess()) {
-      val action = if (longPress) "Long pressed" else "Tapped"
+      val action = when {
+        longPress -> "Long pressed"
+        doubleTap -> "Double-tapped"
+        else -> "Tapped"
+      }
       return TrailblazeToolResult.Success(message = "$action at ($x, $y)")
     }
     return result
   }
 
   companion object {
+    /**
+     * The Maestro repeat that makes a point tap a double-tap: two taps [DOUBLE_TAP_GAP_MS] apart,
+     * well inside the platform double-tap timeout (~300ms). Shared with [TapOnTrailblazeTool] and
+     * [TapOnPercentTrailblazeTool] so every typed double-tap lowers to the same command.
+     */
+    internal val DOUBLE_TAP_REPEAT = TapRepeat(repeat = 2, delay = DOUBLE_TAP_GAP_MS)
+
+    private const val DOUBLE_TAP_GAP_MS = 50L
+
     /**
      * Maximum deviation from an element's center (in pixels, each axis) that still counts as
      * a center tap for record-time relativePoint elision. Two pixels is sub-perceptual on any

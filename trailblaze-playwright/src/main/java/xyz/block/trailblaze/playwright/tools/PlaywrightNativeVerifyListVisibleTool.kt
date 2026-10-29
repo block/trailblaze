@@ -15,19 +15,13 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_verifyListVisible", isVerification = true)
-@LLMDescription(
-  """
-Verify that a list or group of elements contains the expected items.
-Checks that each expected item text is visible within the container element.
-""",
-)
+@LLMDescription("Assert each expected item's text is visible inside a container element, e.g. a list.")
 data class PlaywrightNativeVerifyListVisibleTool(
   @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#my-list').",
+    "Container: element ID ('e5'), ARIA descriptor ('list \"Results\"'), or 'css=<selector>'.",
   )
   val ref: String? = null,
-  @param:LLMDescription("The expected item texts that should be visible in the list.")
+  @param:LLMDescription("Item texts expected in the container; case-insensitive substring match.")
   val items: List<String>,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

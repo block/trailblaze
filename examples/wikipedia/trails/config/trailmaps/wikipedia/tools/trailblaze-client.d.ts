@@ -2,6 +2,8 @@
 // Re-runs on daemon restart. Idempotent — content-stable across restarts of the same toolset.
 // Safe to commit (treat as API contract) OR gitignore (treat as derived output).
 
+import type { TrailblazeNodeSelector } from "@trailblaze/scripting";
+
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
     /**
@@ -12,14 +14,28 @@ declare module "@trailblaze/scripting" {
      */
     android_adbShell: {
       args: {
-        command: unknown[];
+        command: readonly unknown[];
         runAs?: string;
+        secrets?: readonly unknown[];
       };
       result: string;
     };
 
     /**
-     * Grants an Android AppOps permission to the specified app via `appops set <appId> <op> allow`. Use for the privileged-operation class — MANAGE_EXTERNAL_STORAGE, SYSTEM_ALERT_WINDOW, REQUEST_INSTALL_PACKAGES, WRITE_SETTINGS, ACCESS_NOTIFICATIONS, PICTURE_IN_PICTURE. For standard `dangerous` runtime permissions (CAMERA, BLUETOOTH_CONNECT, etc.) use `android_grantPermission` instead — the two mechanisms aren't interchangeable.
+     * Force-stops an Android app (`am force-stop`), leaving its data and permissions as they are. Follow with `openApp` for a cold start.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    android_forceStop: {
+      args: {
+        /** The Android package id of the app to stop (e.g. `com.example.app`). */
+        appId: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Grants an Android AppOps permission to the specified app via `appops set <appId> <op> allow`. Use for the privileged-operation class — MANAGE_EXTERNAL_STORAGE, SYSTEM_ALERT_WINDOW, REQUEST_INSTALL_PACKAGES, WRITE_SETTINGS, ACCESS_NOTIFICATIONS, PICTURE_IN_PICTURE. For standard `dangerous` runtime permissions (CAMERA, BLUETOOTH_CONNECT, etc.) use `android_grantPermissions` instead — the two mechanisms aren't interchangeable.
      *
      * @trailblazeHiddenFromLlm
      */
@@ -34,16 +50,16 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Grants a standard Android runtime (dangerous) permission to the specified app via `pm grant`. Use BEFORE launching the app to suppress the OS permission dialog. For AppOps-class permissions (MANAGE_EXTERNAL_STORAGE, SYSTEM_ALERT_WINDOW, etc.) use `android_grantAppOpsPermission` instead.
+     * Grants one or more standard Android runtime (dangerous) permissions to an app via `pm grant`, in a single call. Use BEFORE launching the app to suppress OS permission dialogs. For AppOps-class permissions use `android_grantAppOpsPermission` instead.
      *
      * @trailblazeHiddenFromLlm
      */
-    android_grantPermission: {
+    android_grantPermissions: {
       args: {
         /** The Android package id of the target app (e.g. `com.example.app`). */
         appId: string;
-        /** The fully-qualified Android permission to grant (e.g. `android.permission.CAMERA`, `android.permission.BLUETOOTH_CONNECT`). Must be a `protectionLevel="dangerous"` runtime permission declared in the target's manifest — otherwise `pm grant` no-ops and the tool still returns success (matches the executor's permissive-superset contract). */
-        permission: string;
+        /** The fully-qualified Android runtime permissions to grant (e.g. `android.permission.CAMERA`, `android.permission.BLUETOOTH_CONNECT`). Each must be a `protectionLevel="dangerous"` permission declared in the target's manifest — an entry the target doesn't declare is a tolerated no-op (matches the permissive-superset contract). An empty list is a no-op. */
+        permissions: readonly unknown[];
       };
       result: string;
     };
@@ -59,7 +75,7 @@ declare module "@trailblaze/scripting" {
         action: string;
         componentPackage: string;
         componentClass: string;
-        extras?: unknown[];
+        extras?: readonly unknown[];
       };
       result: string;
     };
@@ -78,6 +94,39 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Writes raw bytes (supplied as a base64 string) to an absolute path on the Android device, creating parent directories and overwriting any existing file. The byte-transfer primitive — use it to seed any file (text or binary) the device shell can't move reliably. Filesystem only: it does not register MediaStore or set a MIME type (compose `android_adbShell` for that).
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    android_writeBytesToFile: {
+      args: {
+        /** Absolute destination path on the device (must start with `/`), e.g. `/storage/emulated/0/Download/setup.json` or `/sdcard/Pictures/logo.png`. */
+        devicePath: string;
+        /** The file content as a base64-encoded byte string. It is decoded to raw bytes before writing, so any binary payload is supported. */
+        base64Content: string;
+        runAs?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Writes a UTF-8 text file into the Android device's public Downloads directory.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    android_writeFileToDownloads: {
+      args: {
+        /** File name to create in the Downloads directory, e.g. 'setup.json'. */
+        fileName: string;
+        /** UTF-8 text content to write to the file. */
+        content: string;
+      };
+      result: string;
+    };
+
+    /**
      * Calculate the actual and expected values from the current screen state and assert they are equivalent.
      */
     assertEquals: {
@@ -89,12 +138,30 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Asserts that the NUMBER of elements matching a selector satisfies a cardinality bound (at least `min`, exactly `exact`, and/or at most `max`).
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    assertMatchCount: {
+      args: {
+        reason?: string;
+        min?: number;
+        exact?: number;
+        max?: number;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
      * Calculate the result of an expression and compare it to the expected output value.
      */
     assertMath: {
       args: {
         expression: string;
         expected: string;
+        timeoutMs?: number;
+        pollIntervalMs?: number;
       };
       result: string;
     };
@@ -111,6 +178,119 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Asserts that an element with the provided selector is NOT visible on the screen.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    assertNotVisibleBySelector: {
+      args: {
+        reason?: string;
+        timeoutMs?: number;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert no element with this text is on screen. Waits for a matching element to disappear (e.g. a
+     * loading spinner) before failing. Text must match an element's whole text, case-insensitively, so
+     * use 'Loading.*' for "Loading...". Only for elements that display text.
+     */
+    assertNotVisibleWithText: {
+      args: {
+        /** Text to match; may be a regex. If several elements match, set the other fields to disambiguate. */
+        text: string;
+        /** 0-based index among the elements matching the other fields. */
+        index?: number;
+        /** Resource id regex, to disambiguate elements with the same text. */
+        id?: string;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Asserts that an element with the provided selector is visible on the screen. Also matches state (checked/enabled/selected/stateDescription).
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    assertVisibleBySelector: {
+      args: {
+        reason?: string;
+        timeoutMs?: number;
+        expectedText?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert that an element with the provided accessibility text is visible on the screen. The accessibilityText argument is required. Only provide additional fields if the accessibility text matches elsewhere on the screen — the additional fields disambiguate the specific view.
+     * 
+     * NOTE:
+     * - Waits for the item to appear if it is not visible yet.
+     * - You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
+     * - Reach for this tool when an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    assertVisibleWithAccessibilityText: {
+      args: {
+        /** Accessibility text to match; may be a regex. If several elements match, set the other fields to disambiguate. */
+        accessibilityText: string;
+        /** Regex for selecting the view by id. This is helpful to disambiguate when multiple views have the same accessibility text. */
+        id?: string;
+        /** 0-based index of the view to select among those that match all other criteria. */
+        index?: number;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Asserts that an element with the provided resource ID is visible on the screen. The resourceId argument is required. Only provide additional fields if the resource ID provided exactly matches elsewhere on the screen. In this case, the additional fields will be used to identify the specific view to assert visibility for.
+     * 
+     * NOTE:
+     * - This will wait for the item to appear if it is not visible yet.
+     * - You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
+     * - Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    assertVisibleWithResourceId: {
+      args: {
+        /** Resource ID of the view to assert visibility for. This should be the full resource ID string. */
+        resourceId: string;
+        /** Regex for selecting the view by accessibility text. This is helpful to disambiguate when multiple views have the same resource ID. */
+        accessibilityText?: string;
+        /** 0-based index of the view to select among those that match all other criteria. */
+        index?: number;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert the screen has reached a named waypoint (a known place in the app): all its required selectors present and none of its forbidden ones. Waits up to `timeoutMs`; on failure reports what is missing or present.
+     *
+     * @trailblazeHostOnly
+     */
+    assertWaypoint: {
+      args: {
+        /** Waypoint id, e.g. `myapp/ios/settings`. */
+        waypoint: string;
+        /** Max wait in ms for the waypoint to match. Default 5000. */
+        timeoutMs?: number;
+        /** Ms between checks while waiting. Default 250. */
+        pollIntervalMs?: number;
+      };
+      result: string;
+    };
+
+    /**
      * Interpolate the natural-language prompt with any included variables, then use the result to verify
      * the current state of the screen with AI.
      */
@@ -122,8 +302,145 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Dump any of the remembered values from the agent's memory. Useful for debugging tests that
-     * remember data from one screen state and compare it to a later screen state.
+     * Empty the focused text field, whatever its length, without typing anything. To replace a field's text, use `type` with clearFirst: true instead; use `eraseText` only to remove a specific number of characters.
+     */
+    clearText: {
+      args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * Click an element, identified by elementId (preferred), testTag, or text.
+     */
+    compose_click: {
+      args: {
+        /** Element ID, e.g. 'e5'. */
+        elementId?: string;
+        /** Element testTag. */
+        testTag?: string;
+        /** Element text, exact whole-text match. */
+        text?: string;
+        /** Short description of the element, for logs. */
+        element?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Scroll a container to an item index. Identify the container by elementId, testTag, or text; omit all to use the first scrollable container.
+     */
+    compose_scroll: {
+      args: {
+        /** Container element ID, e.g. 'e2'. */
+        elementId?: string;
+        /** Container testTag. */
+        testTag?: string;
+        /** Container text, exact whole-text match. */
+        text?: string;
+        /** Item index to scroll to (default 0). */
+        index?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Type into an input, identified by elementId (preferred), testTag, or existingText. Clears the field first unless clearFirst is false.
+     */
+    compose_type: {
+      args: {
+        /** Text to type. */
+        text: string;
+        /** Element ID, e.g. 'e3'. */
+        elementId?: string;
+        /** Input testTag. */
+        testTag?: string;
+        /** Input's current text, exact whole-text match. */
+        existingText?: string;
+        /** Short description of the element, for logs. */
+        element?: string;
+        /** Clear the field before typing (default true); false appends. */
+        clearFirst?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert an element is on screen, identified by elementId or testTag.
+     */
+    compose_verify_element_visible: {
+      args: {
+        /** Element testTag. */
+        testTag?: string;
+        /** Element ID, e.g. 'e5'. */
+        elementId?: string;
+        /** Short description of the element, for logs. */
+        element?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert an element with this exact text is on screen.
+     */
+    compose_verify_text_visible: {
+      args: {
+        /** Expected text, exact whole-text match. */
+        text: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Wait for the UI to go idle, pause the given seconds, then wait for idle again.
+     */
+    compose_wait: {
+      args: {
+        /** Seconds to pause, 1 to 30 (default 1). */
+        seconds?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Drags between absolute device coordinates. Internal tool only.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    dragByPoints: {
+      args: {
+        startX: number;
+        startY: number;
+        endX: number;
+        endY: number;
+        durationMs?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Drag an element by snapshot ref onto another element (`toRef`) or to a point (`toX`/`toY`), in one continuous press-move-release gesture. Use to reorder items, move a card, or drag a slider.
+     *
+     * @trailblazeNotRecordable
+     */
+    dragTo: {
+      args: {
+        /** Ref of the element to drag, e.g. 'y778'. */
+        ref: string;
+        /** Ref of the element to drop onto. */
+        toRef?: string;
+        /** Target X coordinate; set with toY. */
+        toX?: number;
+        /** Target Y coordinate; set with toX. */
+        toY?: number;
+        /** Drag duration in ms. Default 1000, slow enough to register as a drag, not a flick. */
+        durationMs?: number;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Log remembered values to the console for debugging. Returns nothing.
      */
     dumpMemory: {
       args: Record<string, never>;
@@ -131,7 +448,18 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Hide the keyboard on the screen. Use after entering text into an input field.
+     * Erase characters from the end of the focused text field. To clear the whole field, use clearText instead.
+     */
+    eraseText: {
+      args: {
+        /** Number of characters to erase, counted from the field's text in the view hierarchy. */
+        charactersToErase?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Hide the on-screen keyboard.
      */
     hideKeyboard: {
       args: Record<string, never>;
@@ -139,26 +467,127 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Type characters into the currently focused text field.
-     * - NOTE: If the text field is not focused, tap on it first.
-     * - NOTE: If the field already contains text you want to replace, use eraseText first.
-     * - NOTE: After typing, consider closing the soft keyboard to avoid issues with the app.
+     * Type text into the focused text field, or tap `selector` first and type into that field. To replace existing text, pass clearFirst: true.
+     *
+     * @trailblazeHiddenFromLlm
      */
     inputText: {
       args: {
-        /** The text to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate. */
+        /** Text to type. */
         text: string;
         reasoning?: string;
+        /** Close the soft keyboard after typing. Default true. */
+        hideKeyboardAfter?: boolean;
+        /** Empty the field before typing, replacing what it holds. Default false. */
+        clearFirst?: boolean;
+        /** Tap this field first, then type into it. Omit to type into the focused field. */
+        selector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Type a unique random value (prefix + random digits + suffix, e.g. "TBZ-481732") into the focused
+     * text field; does nothing if no field is focused. Optionally remembers it as {{variable}} /
+     * ${variable} for later steps. Use when each run needs a distinct value. For a unique email, set
+     * hex=true and suffix="@example.com".
+     */
+    inputTextRandom: {
+      args: {
+        /** Text before the digits. Default "TBZ-". */
+        prefix?: string;
+        /** Number of random digits. Default 6. */
+        digitCount?: number;
+        /** Text after the digits, e.g. "@example.com". Default empty. */
+        suffix?: string;
+        /** Use hex digits (0-9a-f) instead of decimal. Default false. */
+        hex?: boolean;
+        /** Memory variable to store the value under. Omit to not remember it. */
+        variable?: string;
+        /** Close the soft keyboard after typing. Default true. */
         hideKeyboardAfter?: boolean;
       };
       result: string;
     };
 
     /**
-     * Open an app on the device as if a user tapped on its icon in the launcher.
+     * Opens an iOS simulator app (`simctl launch`), or brings it to the front if running, and waits for it to appear. Launch arguments need a cold start: `ios_terminate` first.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    ios_openApp: {
+      args: {
+        /** The iOS bundle id of the app to open (e.g. `com.example.app`). */
+        appId: string;
+        /** Launch arguments for an app that is not running, e.g. {"AppleLanguages": "(es-US)"}. */
+        arguments?: Record<string, unknown>;
+      };
+      result: string;
+    };
+
+    /**
+     * Opens a URL or deep link on an iOS simulator. Agents use `openUrl`.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    ios_openUrl: {
+      args: {
+        /** The URL or deep link to open (e.g. `https://example.com`, `myapp://route`). */
+        url: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Empties the iOS simulator's keychain for every app (`simctl keychain reset`). Pair with `mobile_clearAppData` for a signed-out start.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    ios_resetKeychain: {
+      args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * Sets an app's iOS simulator permissions: optionally grants all through the driver, then resets, revokes, and grants `simctl privacy` services, and has the driver answer the notifications alert whenever it appears. Only what is listed changes. The `camera` service requires `IOS_HOST` and an explicit `notifications` policy unless `grantAll` is true. Call BEFORE `openApp` — simctl terminates a running app when a grant changes.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    ios_setPermissions: {
+      args: {
+        /** The iOS bundle id of the target app (e.g. `com.example.app`). */
+        appId: string;
+        /** simctl privacy services to reset to undecided, so the app asks again (`xcrun simctl privacy` lists them), or `camera` via the driver. `all` drops every grant an earlier trail left. Applied after `grantAll`. */
+        reset?: readonly unknown[];
+        /** simctl privacy services to revoke, so the app sees them denied and shows no dialog, e.g. `microphone`, `location`, `photos`, or `camera` via the driver. Applied after `reset`. */
+        revoke?: readonly unknown[];
+        /** simctl privacy services to grant, so their dialogs never appear, e.g. `location`, `photos`, `contacts`, or `camera` via the driver. Applied after `revoke`. */
+        grant?: readonly unknown[];
+        /** How the driver answers the app's notifications alert whenever it appears: `allow` or `deny`. `unset` stops answering it. Omit to keep the current answer unchanged. */
+        notifications?: string;
+        /** Grant all permissions through the driver using Maestro's `all: allow` behavior, including the notifications alert answer and applesimutils services on `ios-host`. Applied before `reset`, `revoke`, `grant` and `notifications`, so explicit changes override it. Defaults to false. Unlike this option, `grant: [all]` only covers simctl privacy services. */
+        grantAll?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Terminates an iOS simulator app (`simctl terminate`), leaving its data and permissions as they are. Follow with `openApp` for a cold start.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    ios_terminate: {
+      args: {
+        /** The iOS bundle id of the app to terminate (e.g. `com.example.app`). */
+        appId: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Deprecated: use `openApp` to open an app as-is, or the target's trailhead tool to start from a known state. Launches an app with a launch mode (default REINSTALL clears the app's data first).
+     *
+     * @trailblazeHiddenFromLlm
      */
     launchApp: {
       args: {
@@ -170,6 +599,68 @@ NOTE:
 - "FORCE_RESTART" will force stop the application and then launch the app like you would from the app launcher. */
         launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
         reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Press and hold an element by its snapshot ref (e.g. y778 from [y778] "Profile photo"). Use instead of `tap` when the interaction needs a hold, e.g. a context menu, drag handles, or multi-select.
+     *
+     * @trailblazeNotRecordable
+     */
+    longPress: {
+      args: {
+        /** Element ref from the snapshot, e.g. 'y778'. */
+        ref: string;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Invoking this function will trigger a long press on a view with the provided accessibility
+     * text. This will commonly be used when long pressing on visual elements on the screen that do
+     * not have text to identify it. This includes images or avatars with text, prefer to use the
+     * accessibility text for these views because the text for an image or avatar will not resolve.
+     * Ensure that you provide the entire accessibilityText string to this function to streamline 
+     * finding the corresponding view.
+     * 
+     * The text argument is required. Only provide additional fields if the accessibility text
+     * provided exactly matches elsewhere on the screen. In this case the additional fields will be
+     * used to identify the specific view to long press on.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    longPressElementWithAccessibilityText: {
+      args: {
+        /** Accessibility text to match; may be a regex. If several elements match, set the other fields to disambiguate. */
+        accessibilityText: string;
+        id?: string;
+        index?: string;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Invoking this function will trigger a long press on the provided text. Ensure that you 
+     * provide the entire string to this function to streamline finding the corresponding view.
+     * 
+     * The text argument is required. Only provide additional fields if the text provided exactly
+     * matches elsewhere on the screen. In this case the additional fields will be used to identify
+     * the specific view to long press on.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    longPressOnElementWithText: {
+      args: {
+        /** Text to match; may be a regex. If several elements match, set the other fields to disambiguate. */
+        text: string;
+        id?: string;
+        index?: string;
+        enabled?: boolean;
+        selected?: boolean;
       };
       result: string;
     };
@@ -188,12 +679,24 @@ NOTE:
     };
 
     /**
-     * Returns a JSON object with the list of installed app ids on the current mobile device.
-     *
-     * @trailblazeHiddenFromLlm
+     * Set the device's network radios and airplane mode; unset fields are left unchanged. To go offline,
+     * set wifi, cellular and bluetooth all false; set them true to go back online. Neither implies the
+     * other: airplaneMode alone may not take the device offline, and radios off do not turn airplane
+     * mode on, so set whichever the trail tests, or both. airplaneMode true with a radio true is refused
+     * unless the device lets users re-enable that radio in airplane mode (usually wifi and bluetooth,
+     * not mobile data).
      */
-    mobile_listInstalledApps: {
-      args: Record<string, never>;
+    mobile_networkConnection: {
+      args: {
+        /** Wifi on or off. Android only. */
+        wifi?: boolean;
+        /** Mobile data on or off. Android only. */
+        cellular?: boolean;
+        /** Bluetooth on or off. Android only. */
+        bluetooth?: boolean;
+        /** Airplane mode on or off. */
+        airplaneMode?: boolean;
+      };
       result: string;
     };
 
@@ -217,58 +720,78 @@ NOTE:
     };
 
     /**
-     * Toggles the device to be offline (airplane mode) or online (connected).
-     * Use this tool to control network connectivity for the device.
+     * Deprecated: renamed to mobile_networkConnection, which takes the same fields.
+     *
+     * @trailblazeHiddenFromLlm
      */
     networkConnection: {
       args: {
-        /** Whether the device should be connected or disconnected to the network. */
-        connected: boolean;
+        wifi?: boolean;
+        cellular?: boolean;
+        bluetooth?: boolean;
+        airplaneMode?: boolean;
       };
       result: string;
     };
 
     /**
-     * Use this tool to report the status of the current objective.
-     * First determine if all of the objective's goals have been met, and if they have not return an 'in_progress' status.
-     * If all of the goals have been met successfully, return a 'completed' status.
-     * If you have tried multiple options to complete the objective and are still unsuccessful, then return a 'failed' status.
-     * Returning 'failed' should be a last resort once all options have been tested.
+     * Report the current objective's status: 'in_progress' until all its goals are met, 'completed' once
+     * they are, 'failed' only as a last resort after trying multiple options.
+     *
+     * @trailblazeNotRecordable
      */
     objectiveStatus: {
       args: {
-        /** A message explaining what was accomplished or the current progress for this objective */
+        /** What was accomplished or the progress so far. */
         explanation: string;
-        /** Status of this objective: 'IN_PROGRESS' (still working on it), 'COMPLETED' (fully done), or 'FAILED' */
+        /** IN_PROGRESS, COMPLETED, or FAILED. */
         status: "IN_PROGRESS" | "COMPLETED" | "FAILED";
       };
       result: string;
     };
 
     /**
-     * Opens the browser to the provided url.
+     * Open an app, or bring it to the front if running, and wait for it to appear. Never clears data, restarts the app or changes permissions. To start from a known state, use the target's trailhead tool instead.
      */
-    openUrl: {
+    openApp: {
       args: {
-        /** The URL to open that starts with https */
-        url: string;
+        /** Android package name or iOS bundle id, e.g. 'com.android.settings'. */
+        appId: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Confirm the Goose desktop app is running and connected; returns its page URL and title. Call first when testing Goose.
+     */
+    playwright_desktop_launchGoose: {
+      args: {
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Press a special key that isn't used for regular text input. Examples:
-     * - BACK: navigate to the previous page or state (Android only).
-     * - ENTER: submit the current form or text input.
-     * - HOME: go to the device's home screen / send the current app to the background.
-     * - BACKSPACE: delete the character before the caret in the currently focused field.
-     * - TAB: move focus to the next field.
-     * - ESCAPE: dismiss the keyboard or current modal.
+     * Press a special key: BACK (previous screen, Android only; on iOS tap the app's own back
+     * control), ENTER (submit), HOME (home screen, backgrounding the app), BACKSPACE (delete before the
+     * caret), TAB (next field), ESCAPE (dismiss keyboard or modal).
      */
     pressKey: {
       args: {
         keyCode: "BACK" | "ENTER" | "HOME" | "BACKSPACE" | "TAB" | "ESCAPE";
+      };
+      result: string;
+    };
+
+    /**
+     * Decode a QR, Data Matrix, Aztec or PDF417 code on screen and store its text in memory under `variable`. Fails if no readable code is shown, so it also works as an assertion.
+     */
+    readBarcodeFromScreen: {
+      args: {
+        /** Memory variable to store the decoded text under, e.g. "barcodeValue". */
+        variable: string;
+        /** Also read striped barcodes (UPC, EAN, Code 128/39/93, ITF, Codabar). Off by default because ordinary UI can cause false reads; enable only when one is on screen. */
+        includeLinearFormats?: boolean;
       };
       result: string;
     };
@@ -286,6 +809,46 @@ NOTE:
     };
 
     /**
+     * Captures the number in the text of the element matching a selector into a memory variable, with no LLM call.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    rememberNumberBySelector: {
+      args: {
+        variable: string;
+        reason?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Generate a randomized value — an optional prefix, then random digits, then an optional suffix
+     * (e.g. "TeamUploadDoc-481732") — and remember it under a variable name, WITHOUT typing it anywhere.
+     * Recall it in later steps as {{variable}} / ${variable}. Unlike inputTextRandom this needs no
+     * focused field, so use it to name a staged fixture (a file written before the app UI exists), then
+     * pin the file-write and every assertion to the same variable. Randomized names reduce collisions
+     * between concurrent replays; they do not guarantee global uniqueness.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    rememberRandomValue: {
+      args: {
+        /** Memory variable to store the generated value under (recall via {{variable}} / ${variable}). */
+        variable: string;
+        /** Text placed before the random digits. Defaults to empty. */
+        prefix?: string;
+        /** How many random digits to generate after the prefix. Defaults to 6. */
+        digitCount?: number;
+        /** Text placed after the random digits (e.g. an email domain like "@example.com"). Defaults to empty. */
+        suffix?: string;
+        /** Generate hexadecimal digits (0-9a-f) instead of decimal digits. Defaults to false. */
+        hex?: boolean;
+      };
+      result: string;
+    };
+
+    /**
      * Find text on the current screen using the natural-language prompt, then save it under the
      * variable name for future test operations.
      */
@@ -293,6 +856,20 @@ NOTE:
       args: {
         prompt: string;
         variable: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Captures the text of the element matching a selector into a memory variable, with no LLM call.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    rememberTextBySelector: {
+      args: {
+        variable: string;
+        reason?: string;
+        nodeSelector?: TrailblazeNodeSelector;
       };
       result: string;
     };
@@ -310,278 +887,57 @@ NOTE:
     };
 
     /**
-     * Scrolls the screen in the specified direction until an element containing the provided text becomes visible
-     * in the view hierarchy. The text does not need to be an exact match - it will find elements where the 
-     * provided text appears anywhere within the element's text.
-     * 
-     * The text argument is required. Only provide additional fields if multiple elements contain the same text.
-     * In this case the additional fields will be used to identify the specific view to expect to be visible while scrolling.
+     * Assert a visual condition on the screen.
      */
-    scrollUntilTextIsVisible: {
+    revyl_assert: {
       args: {
-        /** Text to search for while scrolling. */
-        text: string;
-        /** The element id to scroll until. REQUIRED: 'text' and/or 'id' parameter. */
-        id?: string;
-        /** A 0-based index to disambiguate multiple views with the same text. Default is '0'. */
-        index?: number;
-        /** Direction to scroll. Default is 'DOWN'. */
-        direction?: "UP" | "DOWN" | "RIGHT" | "LEFT";
-        /** Percentage of element visible in viewport. Default is '100'. */
-        visibilityPercentage?: number;
-        /** If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'. */
-        centerElement?: boolean;
-        /** Which part of the screen to scroll from. Default is 'CENTER'. */
-        scrollStartPosition?: "CENTER" | "TOP" | "BOTTOM";
+        /** Condition that should be true, in natural language, e.g. 'the Sign In button is disabled'. */
+        assertion: string;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Enable additional tool sets for device interaction. By default, only core tools (tap, input text) are available.
-     * Use this to enable more tools when needed. You can enable multiple tool sets at once.
-     * Call with an empty list to reset to only the core tools.
-     * The available toolset IDs are listed in your system prompt.
-     *
-     * @trailblazeNotRecordable
+     * Go back to the previous screen: system back on Android, the app's back navigation on iOS.
      */
-    setActiveToolSets: {
+    revyl_back: {
       args: {
-        /** The list of toolset IDs to enable (e.g. ['navigation', 'text-editing']). Core tools are always included. */
-        toolSetIds: unknown[];
-      };
-      result: string;
-    };
-
-    /**
-     * Swipe the screen in the specified direction to navigate long lists or pages. Start and end points
-     * are calculated automatically from the direction and screen dimensions.
-     */
-    swipe: {
-      args: {
-        /** The direction of the finger swipe gesture (not the scroll direction).
-To see more content BELOW (scroll down), use 'UP' (finger swipes upward).
-To see more content ABOVE (scroll up), use 'DOWN' (finger swipes downward).
-Default is 'DOWN'. */
-        direction?: "UP" | "DOWN" | "RIGHT" | "LEFT";
-        /** The text value to swipe on. If not provided, the swipe will be performed on the center of the screen. */
-        swipeOnElementText?: string;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Take a snapshot of the current page and save it under the provided screen name.
+     * Double-tap an element, e.g. to zoom a map or image.
      */
-    takeSnapshot: {
+    revyl_doubleTap: {
       args: {
-        /** Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation'). */
-        screenName: string;
-        /** Optional description of what this snapshot captures or why it was taken. */
-        description?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Tap an element by its ref ID from the snapshot. Use the short hash ref shown in square brackets (e.g., y778 from [y778] "Network & internet"). These refs are stable across captures of the same screen.
-     *
-     * @trailblazeNotRecordable
-     */
-    tap: {
-      args: {
-        /** The element ref from the snapshot (e.g., 'y778') */
-        ref: string;
-        /** Set to true for a long press instead of a tap. */
-        longPress?: boolean;
+        /** Element to double-tap, described in natural language. */
+        target: string;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Tap or long press on the UI at the provided coordinates.
+     * Open a URL or deep link on the device.
      */
-    tapOnPoint: {
+    revyl_navigate: {
       args: {
-        /** The center X coordinate for the clickable element */
-        x: number;
-        /** The center Y coordinate for the clickable element */
-        y: number;
-        /** A standard tap is default, but return 'true' to perform a long press instead. */
-        longPress?: boolean;
+        /** URL or deep link. */
+        url: string;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Wait for a specified amount of time. Use when you see a loading screen — prefer this over
-     * pressing the back button.
+     * Press a key on the device keyboard (ENTER, BACKSPACE, or ANDROID_BACK).
      */
-    wait: {
+    revyl_pressKey: {
       args: {
-        /** Unit: seconds. Default Value: 5 seconds. */
-        timeToWaitInSeconds?: number;
-      };
-      result: string;
-    };
-
-    /**
-     * Injects a set of cookies into the current browser context. Pass [cookiesJson] as a JSON
-     * string in Playwright's storage-state cookie array shape, e.g.:
-     * 
-     *   [{"name":"sid","value":"abc","domain":".example.com","path":"/","httpOnly":true,"secure":true,"sameSite":"Lax"}]
-     * 
-     * Typically used to replay a previously-saved authenticated session so a trail can skip a full
-     * UI login. Pair with web_getStorageState (for capture) and web_navigate (to drive to the
-     * authenticated landing page after applying).
-     */
-    web_applyCookies: {
-      args: {
-        /** JSON array of cookies in Playwright's storage-state cookie shape. May be the full storageState JSON object (in which case the `cookies` field is read), or the bare cookies array. */
-        cookiesJson?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Assert that a specific event name appeared in the network traffic captured during this session.
-     * 
-     * Use this to verify that instrumentation signals, analytics events, or user-journey tracking
-     * calls actually fired when a flow was completed. The check scans request URLs and request bodies
-     * (both inlined text and on-disk blobs) for the given event name string.
-     * 
-     * Only outgoing requests (REQUEST_START phase) are checked so each network exchange is counted
-     * once regardless of how many response events accompany it.
-     * 
-     * The tool polls up to the configured timeout so it is safe to call immediately after a UI action
-     * without waiting for the browser to flush the analytics beacon. At least one scan always runs
-     * regardless of timeoutMs so passing timeoutMs=0 performs a single immediate check.
-     * 
-     * This is a test assertion — it will fail the trail if the event is not found in the network log.
-     * 
-     * Example uses:
-     * - Verify a user-journey signal fired: eventName="adjust-stock"
-     * - Verify an analytics call was made: eventName="checkout-started"
-     */
-    web_assertNetworkEvent: {
-      args: {
-        /** The event name to search for in captured network traffic. Matched against request URLs and request body text (case-insensitive). Must not be blank. */
-        eventName: string;
-        /** Maximum milliseconds to wait for the event to appear in captured traffic. Defaults to 5000. Increase for slow analytics pipelines. One complete scan always runs before the timeout is enforced. */
-        timeoutMs?: number;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Click on a web element identified by its element ID, ARIA descriptor, or CSS selector.
-     * Use the element ID from the page elements list (e.g., 'e5'), an ARIA descriptor (e.g., 'button "Submit"'),
-     * or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testid="submit"]').
-     */
-    web_click: {
-      args: {
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-id', 'css=[data-testid="btn"]'). */
-        ref?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Returns the current page's URL as a plain string. Useful for asserting where a navigation
-     * ended up after redirects (e.g. detecting a bounce to `/login` when replaying an expired
-     * session).
-     */
-    web_currentUrl: {
-      args: Record<string, never>;
-      result: string;
-    };
-
-    /**
-     * Executes a JavaScript expression in the current page context and returns the result as a
-     * string. Internal framework utility — not exposed to the LLM and not captured in trail
-     * recordings; available for host-side composition only.
-     *
-     * @trailblazeHiddenFromLlm
-     * @trailblazeNotRecordable
-     */
-    web_evaluate: {
-      args: {
-        /** JavaScript expression or IIFE. Use `(() => { ... })()` shape if you need statements. */
-        script: string;
-      };
-      result: string;
-    };
-
-    /**
-     * INTERNAL — fills a form field with a value that must NOT be logged (passwords, tokens, OTPs).
-     * Prefer plain web_type for any value that isn't sensitive, since the LLM-facing recording is
-     * more useful when the value is visible. Use only from scripted tools where the value is loaded
-     * from a trusted source (secrets store, fixture file, etc.).
-     */
-    web_fillSecret: {
-      args: {
-        /** Element ID, ARIA descriptor (e.g., 'textbox "Password"'), or CSS selector with css= prefix. */
-        ref: string;
-        /** The secret value to fill. Never logged anywhere on the host side. */
-        value: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Returns the current browser context's storage state (cookies + per-origin localStorage) as a
-     * JSON string in Playwright's standard format. Callers typically persist this to disk so a
-     * later session can be replayed via web_applyCookies instead of running a full login flow.
-     */
-    web_getStorageState: {
-      args: Record<string, never>;
-      result: string;
-    };
-
-    /**
-     * Hover over a web element identified by its element ID, ARIA descriptor, or CSS selector.
-     * Useful for triggering hover states, tooltips, or dropdown menus.
-     */
-    web_hover: {
-      args: {
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'link "About"'), or CSS selector with css= prefix (e.g., 'css=#my-id'). */
-        ref?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Navigate the browser to a URL, or go back/forward in browser history.
-     * Use action GOTO (default) with a url to navigate to a new page.
-     * Use action BACK or FORWARD to move through browser history.
-     * Relative file paths (e.g., 'sample-app/index.html') are resolved from the working directory.
-     */
-    web_navigate: {
-      args: {
-        /** GOTO navigates to a URL, BACK/FORWARD moves through browser history. */
-        action?: "GOTO" | "BACK" | "FORWARD";
-        /** The URL to navigate to. Required when action is GOTO. Supports full URLs (https://..., file://...) or relative file paths. */
-        url?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Press a keyboard key or key combination.
-     * Supports keys like 'Enter', 'Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp',
-     * and combinations like 'Control+A', 'Meta+C', 'Shift+Tab'.
-     */
-    web_pressKey: {
-      args: {
-        /** The key or key combination to press (e.g., 'Enter', 'Tab', 'Control+A', 'Meta+C'). */
+        /** Key to press: 'ENTER', 'BACKSPACE', or 'ANDROID_BACK'. */
         key: string;
         reasoning?: string;
       };
@@ -589,118 +945,43 @@ Default is 'DOWN'. */
     };
 
     /**
-     * Request additional detail in the next view hierarchy snapshot.
-     * Call this when you need more information than the default compact element list provides.
-     * The next turn's view hierarchy will include the requested details for ALL elements,
-     * then automatically revert to the compact format on subsequent turns.
-     * 
-     * Available detail types:
-     * - BOUNDS: Include bounding box coordinates {x,y,w,h} for each element.
-     *   Useful for spatial reasoning, determining element positions, checking viewport visibility,
-     *   or disambiguating visually similar elements by location.
-     * - CSS_SELECTORS: Include CSS selectors for elements and surface hidden elements.
-     *   Adds [css=...] annotations to existing elements that have an HTML id or data-testid.
-     *   Also discovers elements that are invisible in the default compact list (e.g., unnamed
-     *   divs with id or data-testid attributes) and lists them with their CSS selectors.
-     *   Use the css= prefix in ref fields to target these elements (e.g., ref: 'css=#my-panel').
-     * - OFFSCREEN_ELEMENTS: Include all elements regardless of viewport position.
-     *   By default, elements outside the viewport are filtered out to save tokens. Request this
-     *   to see all elements with offscreen ones annotated as (offscreen). Useful when you need
-     *   to find elements that require scrolling to reach.
-     * - OCCLUDED_ELEMENTS: Include elements visually covered by something on top (modal,
-     *   popup, toast, autocomplete dropdown). By default these are filtered out because clicks
-     *   on them time out — Playwright's actionability check refuses to fire on a non-topmost
-     *   element. Request this when you suspect a popup/modal is hiding the elements you need
-     *   and you want to see what's underneath before deciding whether to dismiss the overlay.
-     *
-     * @trailblazeNotRecordable
+     * Swipe in a direction, optionally starting from an element.
      */
-    web_requestDetails: {
+    revyl_swipe: {
       args: {
-        /** List of detail types to include in the next view hierarchy. Supported: BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS, OCCLUDED_ELEMENTS (or any combination). Example: ["OFFSCREEN_ELEMENTS"] to see all elements including those outside the viewport. */
-        include: unknown[];
+        /** 'up', 'down', 'left', or 'right'. */
+        direction: string;
+        /** Element to start from, in natural language. */
+        target?: string;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Resize the browser viewport to the given dimensions.
-     * 
-     * Use to test responsive CSS at different breakpoints (e.g., 375x812 for phone,
-     * 768x1024 for tablet). Does NOT change User-Agent or device emulation flags —
-     * pages that UA-sniff still see desktop Chrome. For full mobile emulation set
-     * the device's profile at creation time, not via this tool.
+     * Tap or long-press an element.
      */
-    web_resize: {
+    revyl_tap: {
       args: {
-        /** Width of the viewport in CSS pixels. Must be positive. */
-        width: number;
-        /** Height of the viewport in CSS pixels. Must be positive. */
-        height: number;
+        /** Element to tap, in natural language, e.g. 'Sign In button'. */
+        target: string;
+        /** Long-press instead of tap. */
+        longPress?: boolean;
         reasoning?: string;
       };
       result: string;
     };
 
     /**
-     * Scroll the page or a specific container in the specified direction.
-     * When ref is provided, scrolls within that container (e.g., a sidebar or panel) by moving the
-     * mouse to its center first. When ref is omitted, scrolls the full page.
+     * Type text into the focused field, or into a target field.
      */
-    web_scroll: {
+    revyl_type: {
       args: {
-        /** Direction to scroll. UP/DOWN for vertical, LEFT/RIGHT for horizontal. */
-        direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
-        /** Number of pixels to scroll. Defaults to 500. */
-        amount?: number;
-        /** Element reference for the container to scroll within: ARIA descriptor (e.g., 'navigation "Sidebar"'), element ID (e.g., 'e5'), or CSS selector with css= prefix (e.g., 'css=#scrollable-panel'). When omitted, scrolls the full page. */
-        ref?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Select one or more options from a <select> dropdown element identified by its element ID, ARIA descriptor, or CSS selector.
-     * Provide the option values or labels to select.
-     */
-    web_selectOption: {
-      args: {
-        /** The option values or visible text labels to select. */
-        values: unknown[];
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'combobox "Category"'), or CSS selector with css= prefix (e.g., 'css=#my-select'). */
-        ref?: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Take a snapshot of the current page state and save it with the provided screen name.
-     * This captures a screenshot and the page's accessibility tree for logging and debugging.
-     */
-    web_snapshot: {
-      args: {
-        /** Name for the screen being captured (e.g., 'login_page', 'dashboard'). */
-        screenName: string;
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Type text into a web input element identified by its element ID, ARIA descriptor, or CSS selector.
-     * By default this clears the field first and fills in the new text.
-     * Set clearFirst to false to append text instead.
-     */
-    web_type: {
-      args: {
-        /** The text to type into the element. */
+        /** Text to type. */
         text: string;
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input'). */
-        ref?: string;
-        /** If true (default), clear the field before typing. If false, append to existing text. */
+        /** Target field in natural language, e.g. 'email field'. */
+        target?: string;
+        /** Clear the field before typing. */
         clearFirst?: boolean;
         reasoning?: string;
       };
@@ -708,74 +989,664 @@ Default is 'DOWN'. */
     };
 
     /**
-     * Verify that an element identified by its element ID, ARIA descriptor, or CSS selector is visible on the page.
-     * This is a test assertion — it will fail the test if the element is not visible.
+     * Runs `then` when the condition holds and `else` otherwise, re-evaluating on every replay. Use it
+     * when an action only makes sense in one screen state (e.g. dismiss a popup only if it is showing).
+     * `condition` is `{ selector: <TrailblazeNodeSelector> }` (true when it matches a node) or
+     * `{ tool: { <toolName>: <args> } }` (true when that call succeeds, false when it fails). `then`/`else`
+     * entries use the `recording.tools` shape `{ <toolName>: <args> }` and may nest `runIf` two deep.
+     */
+    runIf: {
+      args: {
+        /** The condition to evaluate. `{ selector }` is true when the selector matches at least one node; `{ tool }` is true when the single-key tool-call succeeds and false when it runs and fails; a call that cannot run (unknown tool or argument) fails the step. */
+        condition: unknown;
+        /** Flip the resolved condition (true becomes false and vice versa). */
+        negate?: boolean;
+        /** Tool-calls to run, in order, when the (possibly negated) condition is true. */
+        then: unknown[];
+        /** Tool-calls to run, in order, when the condition is false. Omit for a no-op on the false branch. */
+        else?: unknown[];
+      };
+      result: string;
+    };
+
+    /**
+     * Scroll until the target element is visible. Give one target: 'text' (substring), 'textRegex' (whole-text regex), or 'id'.
+     */
+    scrollUntilTextIsVisible: {
+      args: {
+        /** Text to scroll to (substring match). */
+        text?: string;
+        /** Regex that must match the element's whole text, e.g. 'Loyalty' won't match 'Loyalty Enroll'. Overrides 'text'. */
+        textRegex?: string;
+        /** Element id to scroll to. */
+        id?: string;
+        /** 0-based index when several elements match. Default 0. */
+        index?: number;
+        /** Scroll direction. Default DOWN. */
+        direction?: "UP" | "DOWN" | "RIGHT" | "LEFT";
+        /** Percent of the element that must be visible. Default 100. */
+        visibilityPercentage?: number;
+        /** Keep scrolling until the element is near screen center, so bars or banners can't intercept a tap. Omit for the driver default. */
+        centerElement?: boolean;
+        /** Screen region each swipe starts from. Default CENTER. */
+        scrollStartPosition?: "CENTER" | "TOP" | "BOTTOM";
+        /** Duration of each swipe in ms; lower is faster. Omit for the driver default; lower it (e.g. 200) if swipes register as taps. */
+        scrollDurationMs?: number;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Block for a fixed amount of wall-clock time, always consuming the full duration regardless of
+     * what the UI is doing. Use only to let something happen off-screen (e.g. a server-side value
+     * propagating) before navigating to the screen that reads it. To wait for something visible,
+     * assert on that element instead — and to wait for the UI to settle, use waitForChange.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    sleep: {
+      args: {
+        /** How long to sleep, in milliseconds. Must be between 100 and 300000 (5 minutes). Default 5000. */
+        durationMs?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Swipe the screen in a direction, e.g. to move through long lists or pages.
+     */
+    swipe: {
+      args: {
+        /** Finger direction, not scroll direction: UP reveals content below, DOWN reveals content above. Default DOWN. */
+        direction?: "UP" | "DOWN" | "RIGHT" | "LEFT";
+        /** Text of the element to swipe on. Omit to swipe from the screen center. */
+        swipeOnElementText?: string;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Swipes using relative coordinates. Internal tool only.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    swipeWithRelativeCoordinates: {
+      args: {
+        startRelative: string;
+        endRelative: string;
+        swipeOnElementText?: string;
+        durationMs?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Hand the session to another device in this multi-device session; later observations and tool calls act on it until the next switchDevice. Call it as its own step.
+     *
+     * @trailblazeHostOnly
+     */
+    switchDevice: {
+      args: {
+        /** Device name from the trail's multi-device configuration, e.g. 'buyer'. */
+        name: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Save a screenshot of the current screen to the session log under a screen name.
+     */
+    takeSnapshot: {
+      args: {
+        /** Screen name, e.g. 'login_screen'. */
+        screenName: string;
+        /** What the snapshot captures or why it was taken. */
+        description?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap an element by its snapshot ref (e.g. y778 from [y778] "Network & internet"). On a number pad, PIN pad or keypad, tap each digit.
+     *
+     * @trailblazeNotRecordable
+     */
+    tap: {
+      args: {
+        /** Element ref from the snapshot, e.g. 'y778'. */
+        ref: string;
+        /** Long press instead of tap. */
+        longPress?: boolean;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap, double-tap or long-press the element resolved by a node selector, optionally at a percent-offset within its bounds.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    tapOn: {
+      args: {
+        relativePoint?: string;
+        longPress?: boolean;
+        doubleTap?: boolean;
+        selector: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap an Android accessibility node identified by its content description. Use for canvas widgets / ExploreByTouchHelper virtual views whose buttons don't expose text (e.g., PIN pads, drawing palettes). Optional classNameRegex / resourceIdRegex tiebreakers disambiguate merged-semantics or wrapper trees.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    tapOnAccessibilityNode: {
+      args: {
+        /** Regex matched against the node's content description. Provide at least one of contentDescriptionRegex or textRegex. */
+        contentDescriptionRegex?: string;
+        /** Regex matched against the node's text. Provide at least one of contentDescriptionRegex or textRegex. */
+        textRegex?: string;
+        /** Optional regex matched against the node's className. */
+        classNameRegex?: string;
+        /** Optional regex matched against the node's resourceId. */
+        resourceIdRegex?: string;
+        /** Set to true for a long press instead of a tap. */
+        longPress?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Taps on an element by its selector.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    tapOnElementBySelector: {
+      args: {
+        reason?: string;
+        longPress?: boolean;
+        tapRoute?: "ACTION_CLICK" | "GESTURE";
+        timeoutMs?: number;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Invoking this function will trigger a tap on a view with the provided accessibility text.
+     * This will commonly be used when tapping on visual elements on the screen that do not have
+     * text to identify it. This includes images or avatars with text, prefer to use the
+     * accessibility text for these views because the text for an image or avatar will not resolve.
+     * Ensure that you provide the entire accessibilityText string to this function to streamline
+     * finding the corresponding view.
+     * 
+     * The text argument is required. Only provide additional fields if the accessibility text
+     * provided exactly matches elsewhere on the screen. In this case the additional fields will be
+     * used to identify the specific view to tap on.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    tapOnElementWithAccessibilityText: {
+      args: {
+        /** Accessibility text to match; may be a regex. If several elements match, set the other fields to disambiguate. */
+        accessibilityText: string;
+        id?: string;
+        index?: string;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap a point given as a percentage of the screen, e.g. x=50, y=26 is horizontally centered, 26% down from the top. Decimals are allowed; whole numbers are usually precise enough. Prefer tapping an element by ref; use this only where no element exists.
+     */
+    tapOnPercent: {
+      args: {
+        /** Horizontal position, 0 (left edge) to 100 (right edge). */
+        x: number;
+        /** Vertical position, 0 (top edge) to 100 (bottom edge). */
+        y: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap, double-tap or long press at device screen coordinates, in the units of element bounds (not screenshot pixels).
+     */
+    tapOnPoint: {
+      args: {
+        /** X coordinate (element center). */
+        x: number;
+        /** Y coordinate (element center). */
+        y: number;
+        /** Long press instead of tap. */
+        longPress?: boolean;
+        /** Tap twice in quick succession (a double-tap). Cannot combine with longPress. */
+        doubleTap?: boolean;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Type text into a text field. Pass the field's snapshot ref (e.g. y778 from [y778] "Email") to tap it first; omit ref to type into the focused field. To replace existing text, pass clearFirst: true. On a number pad, PIN pad or button grid there is no field: tap each digit instead.
+     *
+     * @trailblazeNotRecordable
+     */
+    type: {
+      args: {
+        /** Text to type. */
+        text: string;
+        /** Text field ref from the snapshot, e.g. 'y778'. Omit to type into the focused field. */
+        ref?: string;
+        reasoning?: string;
+        /** Close the soft keyboard after typing. Default true. */
+        hideKeyboardAfter?: boolean;
+        /** Empty the field before typing, replacing what it holds. Default false. */
+        clearFirst?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Wait on a loading screen until the UI goes idle, up to a ceiling; returns as soon as it is idle. Prefer this over pressing back while something loads. To wait out a spinner, use assertNotVisibleWithText.
+     */
+    wait: {
+      args: {
+        /** Max seconds to wait (a ceiling, not a fixed pause). Default 5. */
+        timeToWaitInSeconds?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Wait for the UI to settle after an action (a screen loads, content updates, a list scrolls). Returns as soon as the UI is quiet, so it cannot wait out a change that has not started yet. To wait out a spinner, use assertNotVisibleWithText.
+     */
+    waitForChange: {
+      args: {
+        /** Max wait in ms. Default 8000. */
+        timeoutMs?: number;
+        /** Time with no UI events that counts as settled, in ms. Default 300. */
+        quietWindowMs?: number;
+        /** If true, timing out before the UI changes and settles fails; if false, it succeeds. Default true. */
+        requireChange?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Add cookies to the current browser context, e.g. to restore a session saved with web_getStorageState. Navigate afterwards to use them.
+     */
+    web_applyCookies: {
+      args: {
+        /** JSON string: a Playwright storageState object (its `cookies` field is read) or a bare cookie array, e.g. [{"name":"sid","value":"abc","domain":".example.com","path":"/"}]. */
+        cookiesJson?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert an event name appears in this session's captured outgoing network requests (URL or body, case-insensitive), e.g. an analytics or user-journey event.
+     */
+    web_assertNetworkEvent: {
+      args: {
+        /** Event name to search for, e.g. "checkout-started". */
+        eventName: string;
+        /** Max milliseconds to wait (default 5000). 0 checks once. */
+        timeoutMs?: number;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Consumes a previously armed metadata-only response observation.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    web_assertResponseObserved: {
+      args: {
+        observationId: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Arms a bounded metadata-only response observation for scripted-tool composition.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    web_beginResponseObservation: {
+      args: {
+        observationId: string;
+        origin: string;
+        path: string;
+        method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
+        statusMin?: number;
+        statusMax?: number;
+        timeoutMs?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Idempotently cancels a previously armed metadata-only response observation.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    web_cancelResponseObservation: {
+      args: {
+        observationId: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Click a web element.
+     */
+    web_click: {
+      args: {
+        /** Element ID ('e5'), ARIA descriptor ('button "Submit"'), or 'css=<selector>'. */
+        ref?: string;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Return the current page URL, e.g. to see where a redirect landed.
+     */
+    web_currentUrl: {
+      args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * Drag a web element and drop it somewhere else. The source is identified like web_click
+     * (element ID such as 'e5', an ARIA descriptor such as 'button "Table 1"', or 'css=...').
+     * Drop either on another element (dropRef, with optional dropOffsetX/dropOffsetY measured
+     * from that element's top-left corner) or on an absolute viewport point (x, y). Use this for
+     * canvas editors, sortable lists, sliders, and anything else that needs a real press-move-release.
+     */
+    web_drag: {
+      args: {
+        /** Source element to drag: element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Table 1"'), or CSS selector with css= prefix. */
+        ref?: string;
+        /** Element to drop onto: ARIA descriptor (e.g., 'button "Table 1"') or CSS selector with css= prefix. Snapshot element IDs such as 'e5' are NOT accepted here — they are positional and would not replay. Omit to drop at the viewport point (x, y). */
+        dropRef?: string;
+        /** Horizontal drop offset in pixels from the target element's left edge. Defaults to its center. */
+        dropOffsetX?: number;
+        /** Vertical drop offset in pixels from the target element's top edge. Defaults to its center. */
+        dropOffsetY?: number;
+        /** Absolute viewport x to drop at, when no dropRef is given. */
+        x?: number;
+        /** Absolute viewport y to drop at, when no dropRef is given. */
+        y?: number;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Run a JavaScript expression in the page and return the result as a string. Framework-only: not shown to the LLM or recorded. Must not navigate.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    web_evaluate: {
+      args: {
+        /** JavaScript expression; wrap statements as `(() => { ... })()`. */
+        script: string;
+      };
+      result: string;
+    };
+
+    /**
+     * For scripted tools: fill a field with a value that must not be logged (password, token, OTP). Use web_type for anything else.
+     */
+    web_fillSecret: {
+      args: {
+        /** Element ID ('e5'), ARIA descriptor ('textbox "Password"'), or 'css=<selector>'. */
+        ref: string;
+        /** Secret value to fill; never logged. */
+        value: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Return the browser's storage state (cookies + localStorage) as Playwright storageState JSON. web_applyCookies restores only its cookies.
+     */
+    web_getStorageState: {
+      args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * Hover over a web element, e.g. to open a tooltip or hover menu.
+     */
+    web_hover: {
+      args: {
+        /** Element ID ('e5'), ARIA descriptor ('link "About"'), or 'css=<selector>'. */
+        ref?: string;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Go to a URL (GOTO), or move BACK/FORWARD in browser history.
+     */
+    web_navigate: {
+      args: {
+        /** GOTO (default), BACK, or FORWARD. */
+        action?: "GOTO" | "BACK" | "FORWARD";
+        /** URL for GOTO: a full URL (https://, file://) or a file path relative to the trail file. */
+        url?: string;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Press a key or key combination.
+     */
+    web_pressKey: {
+      args: {
+        /** Playwright key name, e.g. 'Enter', 'Escape', 'ArrowDown', 'Control+A', 'Shift+Tab'. */
+        key: string;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Add detail to the NEXT snapshot only (all elements), then revert to the compact list.
+     * - BOUNDS: {x,y,w,h} per element, for spatial reasoning or telling similar elements apart.
+     * - CSS_SELECTORS: [css=...] for elements with an id or data-testid, including ones hidden from the compact list; target them with ref 'css=#id'.
+     * - OFFSCREEN_ELEMENTS: include elements outside the viewport, marked (offscreen).
+     * - OCCLUDED_ELEMENTS: include elements covered by a modal/popup/toast (clicks on them time out).
+     *
+     * @trailblazeNotRecordable
+     */
+    web_requestDetails: {
+      args: {
+        /** Detail types to include. */
+        include: readonly unknown[];
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Requires exact visible text to be scrolled into and intersect the viewport.
+     *
+     * @trailblazeHiddenFromLlm
+     * @trailblazeNotRecordable
+     */
+    web_requireTextInViewport: {
+      args: {
+        text: string;
+        exact?: boolean;
+        timeoutMs?: number;
+      };
+      result: string;
+    };
+
+    /**
+     * Resize the browser viewport, e.g. to test responsive breakpoints. Does not change the User-Agent or enable mobile emulation.
+     */
+    web_resize: {
+      args: {
+        /** Viewport width in CSS pixels. */
+        width: number;
+        /** Viewport height in CSS pixels. */
+        height: number;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Scroll the page, or the container given by ref (e.g. a sidebar).
+     */
+    web_scroll: {
+      args: {
+        /** UP, DOWN, LEFT, or RIGHT. */
+        direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
+        /** Pixels to scroll (default 500). */
+        amount?: number;
+        /** Container to scroll: element ID ('e5'), ARIA descriptor ('navigation "Sidebar"'), or 'css=<selector>'. */
+        ref?: string;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Select one or more options in a <select> dropdown.
+     */
+    web_selectOption: {
+      args: {
+        /** Option values or visible labels to select. */
+        values: readonly unknown[];
+        /** Element ID ('e5'), ARIA descriptor ('combobox "Category"'), or 'css=<selector>'. */
+        ref?: string;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Save a named screenshot and accessibility tree of the current page to the logs.
+     */
+    web_snapshot: {
+      args: {
+        /** Screen name, e.g. 'login_page'. */
+        screenName: string;
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Type text into a web input. Clears the field first unless clearFirst is false.
+     */
+    web_type: {
+      args: {
+        /** Text to type. */
+        text: string;
+        /** Element ID ('e5'), ARIA descriptor ('textbox "Email"'), or 'css=<selector>'. */
+        ref?: string;
+        /** Clear the field before typing (default true); false appends. */
+        clearFirst?: boolean;
+        reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert an element is visible on the page.
      */
     web_verifyElementVisible: {
       args: {
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-element'). */
+        /** Element ID ('e5'), ARIA descriptor ('button "Submit"'), or 'css=<selector>'. */
         ref?: string;
         reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
       };
       result: string;
     };
 
     /**
-     * Verify that a list or group of elements contains the expected items.
-     * Checks that each expected item text is visible within the container element.
+     * Assert each expected item's text is visible inside a container element, e.g. a list.
      */
     web_verifyListVisible: {
       args: {
-        /** The expected item texts that should be visible in the list. */
-        items: unknown[];
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), or CSS selector with css= prefix (e.g., 'css=#my-list'). */
+        /** Item texts expected in the container; case-insensitive substring match. */
+        items: readonly unknown[];
+        /** Container: element ID ('e5'), ARIA descriptor ('list "Results"'), or 'css=<selector>'. */
         ref?: string;
         reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
       };
       result: string;
     };
 
     /**
-     * Verify that specific text is visible on the current page.
-     * This is a test assertion — it will fail the test if the text is not found.
+     * Assert exact text stays absent for durationMs (1 to 30000) while the ref element stays visible. Fails if the page navigates.
      */
-    web_verifyTextVisible: {
+    web_verifyTextAbsentForDuration: {
       args: {
-        /** The text content to verify is visible on the page. */
         text: string;
-        reasoning?: string;
+        durationMs: number;
+        exact?: boolean;
+        /** Element that must stay visible: ID ('e5'), ARIA descriptor ('heading "Orders"'), or 'css=<selector>'. */
+        ref?: string;
+        requiredVisibleNodeSelector?: TrailblazeNodeSelector;
       };
       result: string;
     };
 
     /**
-     * Verify the value of an element on the page. Supports checking:
-     * - TEXT: the text content of any element
-     * - VALUE: the input value of a form field (input, textarea, select)
-     * - ATTRIBUTE: the value of an HTML attribute
+     * Assert an element's text, form-field value, or HTML attribute value.
      */
     web_verifyValue: {
       args: {
-        /** The expected value to verify against. */
+        /** Expected value. */
         expected: string;
-        /** Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input'). */
+        /** Element ID ('e5'), ARIA descriptor ('textbox "Email"'), or 'css=<selector>'. */
         ref?: string;
-        /** What property of the element to verify. TEXT checks visible text content, VALUE checks form field input values, ATTRIBUTE checks a specific HTML attribute. */
+        /** TEXT: element text contains expected (falls back to the field value). VALUE: input/textarea/select value equals it. ATTRIBUTE: the named attribute equals it. */
         type?: "TEXT" | "VALUE" | "ATTRIBUTE";
-        /** The attribute name to check (required when type is ATTRIBUTE). */
+        /** Attribute name, when type is ATTRIBUTE. */
         attribute?: string;
         reasoning?: string;
+        nodeSelector?: TrailblazeNodeSelector;
       };
       result: string;
     };
 
     /**
-     * Wait for a specified number of seconds before continuing.
-     * Use this when you need to wait for animations, network requests, or page transitions to complete.
+     * Pause for a fixed number of seconds, e.g. for an animation or page load to finish.
      */
     web_wait: {
       args: {
-        /** Number of seconds to wait (e.g., 1, 2, 5). Maximum 30 seconds. */
+        /** Seconds to wait, 1 to 30 (default 1). */
         seconds?: number;
         reasoning?: string;
       };
@@ -783,27 +1654,60 @@ Default is 'DOWN'. */
     };
 
     /**
-     * Wait until the current page's URL matches the given regex pattern. Returns the matched URL.
-     * Use after web_navigate or web_click when the navigation is async and the next step depends
-     * on the final URL (e.g. waiting for a post-login redirect to settle).
+     * Wait until the page URL matches a regex, e.g. for a post-login redirect to settle. Returns the URL.
      */
     web_waitForUrl: {
       args: {
-        /** Java regex pattern the URL must match (e.g. ".*(dashboard|home|orders).*"). */
+        /** Java regex found anywhere in the URL, e.g. "/(dashboard|home)". */
         pattern: string;
-        /** Maximum time to wait in milliseconds. Defaults to 30000ms. */
+        /** Max milliseconds to wait (default 30000). */
         timeoutMs?: number;
       };
       result: string;
     };
 
     /**
-     * Dismiss any visible Wikipedia fundraising / fundraiser banner. Use this
-     * whenever the task is to close a banner, dismiss a popup, or clear out
-     * Wikipedia's donate prompt. If no banner is currently visible the tool is
-     * a no-op that returns successfully, so it's safe to call unconditionally
-     * at the start of a flow. Probes with a sub-second visibility check before
-     * attempting the click so the no-banner path is near-instant.
+     * Demonstrates the `runConditionalActions` primitive against the Wikipedia main page's
+     * optional fundraising banner. Builds a single-entry catalog with a `condition`
+     * (banner visible), `action` (click the close button), and `postcondition`
+     * (banner no longer visible — also doubles as the skip-fast check when the
+     * banner was never there).
+     * 
+     * Idempotent — if the banner isn't present, the tool no-ops without dispatching
+     * the click action (snapshot-bulk-evaluate's no-match fast path).
+     */
+    wikipedia_conditional_action_demo: {
+      args: Record<string, never>;
+      result: {
+        /** IDs of the catalog entries whose `action` was dispatched. Empty when nothing matched. */
+        handled: string[];
+      };
+    };
+
+    /**
+     * Typed-authoring demo: formats the input message with an optional prefix and returns a
+     * small structured result. Intentionally trivial — exists to exercise the
+     * `trailblaze.tool<I, O>(handler)` pattern end-to-end (TSDoc → IDE hover → handler
+     * types → result shape).
+     */
+    wikipedia_typed_demo: {
+      args: {
+        /** The message to format. */
+        message: string;
+        /** Optional prefix prepended to the formatted message. Defaults to none. */
+        prefix?: string;
+      };
+      result: {
+        /** The formatted message, with the optional prefix already applied. */
+        formatted: string;
+        /** Length of the original input message in code units. */
+        inputLength: number;
+      };
+    };
+
+    /**
+     * Close Wikipedia's fundraising banner if one is showing; does nothing
+     * otherwise, so it is safe to call at the start of a flow.
      */
     wikipedia_web_dismissBannerIfPresent: {
       args: Record<string, never>;
@@ -811,84 +1715,60 @@ Default is 'DOWN'. */
     };
 
     /**
-     * Open a specific Wikipedia article by its title. Use this whenever the task
-     * is to read, open, navigate to, or view a particular Wikipedia article —
-     * e.g. "open the Albert Einstein article", "go to the Python (programming
-     * language) page", "navigate to the Shakespeare article". Spaces in the
-     * title are normalized to underscores (Wikipedia's URL convention) so you
-     * can pass the title verbatim. Verifies the article rendered by checking
-     * the #firstHeading element is visible.
+     * Open an English Wikipedia article by title and verify its heading matches.
      */
     wikipedia_web_openArticle: {
       args: {
-        /** Article title to open (spaces → underscores in URL). */
+        /** Article title, as written; spaces are fine. */
         title?: string;
         /** Visible heading text to assert. Defaults to `title`. */
         expectedHeading?: string;
-        /** When true (default), tries to close any visible fundraising banner. */
+        /** Close the fundraising banner if showing. Default true. */
         dismissBanner?: boolean;
       };
       result: string;
     };
 
     /**
-     * Open Wikipedia's Main_Page. Use this when the task asks to navigate to
-     * Wikipedia, open Wikipedia, go to the Wikipedia home page, or start from
-     * the main Wikipedia page. Loads en.wikipedia.org/wiki/Main_Page and waits
-     * for it to render. Optionally dismisses any fundraising banner that's
-     * currently showing so subsequent steps don't have to reason about it.
+     * Open the English Wikipedia home page (Main_Page) and wait for it to render.
      */
     wikipedia_web_openMainPage: {
       args: {
-        /** When true (default), tries to close any visible fundraising banner. */
+        /** Close the fundraising banner if showing. Default true. */
         dismissBanner?: boolean;
       };
       result: string;
     };
 
     /**
-     * Verify one of Wikipedia's four Main_Page sections is present and visible.
-     * Use this whenever the task is to verify a main-page section: "Did you
-     * know", "In the news", "On this day", or "From today's featured article"
-     * (also known as DYK, ITN, OTD, TFA). Pass the section short code to pick
-     * which one. The tool anchors verification on the section's stable wrapper
-     * element id (`#mp-dyk` etc.) — which survives Wikipedia's day-to-day copy
-     * drift — rather than the visible heading text (which rotates daily).
+     * Verify one of Wikipedia's Main_Page sections is visible.
      */
     wikipedia_web_openMainPageSection: {
       args: {
-        /** Section short code: tfa | itn | dyk | otd. */
+        /** `tfa` (featured article), `itn` (in the news), `dyk` (did you know), or `otd` (on this day). */
         section?: string;
-        /** Open Main_Page first if not there (default true). */
+        /** Open Main_Page first if not already there. Default true. */
         ensureOnMainPage?: boolean;
       };
       result: string;
     };
 
     /**
-     * Open a random Wikipedia article via the sidebar's "Random article" link.
-     * Use this whenever the task is to navigate to a random article, click
-     * Random article, jump to a random page, or surf to an unpredictable
-     * article. Verifies that a new article page rendered (its #firstHeading
-     * is visible) — the resulting title is non-deterministic so don't try to
-     * assert specific heading text afterwards.
+     * Open a random Wikipedia article via the "Random article" link and verify an
+     * article heading is visible. The title is unpredictable, so don't assert
+     * specific heading text afterwards.
      */
     wikipedia_web_openRandomArticle: {
       args: {
-        /** Open the main page first if not on Wikipedia. */
+        /** Open the main page first if not on Wikipedia. Default true. */
         ensureOnWikipedia?: boolean;
       };
       result: string;
     };
 
     /**
-     * Search Wikipedia from the header search box. Use this whenever the task
-     * is to search Wikipedia for something — e.g. "search for Albert Einstein",
-     * "look up Python on Wikipedia", "find articles about Mount Everest". Types
-     * the query into the header search input, submits the form, and verifies
-     * the resulting article's first heading. Pass `openFirstResult=false` to
-     * only type the query without submitting (useful for autocomplete-suggestion
-     * tests).
+     * Search Wikipedia from the header search box, submit, and verify the
+     * resulting article's heading.
      */
     wikipedia_web_searchAndOpenFirstResult: {
       args: {
@@ -896,70 +1776,53 @@ Default is 'DOWN'. */
         query?: string;
         /** Heading text to assert on the opened article. Defaults to `query`. */
         expectedHeading?: string;
-        /** Submit the search form (default true). */
+        /** Submit the search and verify the article. Default true; false only types the query, e.g. to check suggestions. */
         openFirstResult?: boolean;
       };
       result: string;
     };
 
     /**
-     * Search Wikipedia for a topic AND verify the resulting article is
-     * well-formed — heading + body, optionally References — in a single tool
-     * call. Use this whenever the task combines "search for X" with "verify
-     * the article rendered correctly", e.g. "search Wikipedia for Python and
-     * confirm the article loaded with a body and References section". Composes
-     * the existing `wikipedia_web_searchAndOpenFirstResult` and
-     * `wikipedia_web_verifyArticleStructure` tools so callers get both behaviors
-     * with one round-trip.
+     * Search Wikipedia, open the result, and verify it is a well-formed article
+     * (heading, body, optionally References) in one call.
      */
     wikipedia_web_searchAndVerify: {
       args: {
         /** Query to type into the header search box. */
         query?: string;
-        /** Heading text to assert on the opened article. Defaults to `query`, which works for exact-match articles like "Python (programming language)". */
+        /** Heading text to assert on the opened article. Defaults to `query`. */
         expectedHeading?: string;
-        /** Whether to also scroll-and-assert the References section is present. Defaults to false because not every article has one. */
+        /** Also assert a References section. Default false; not every article has one. */
         requireReferences?: boolean;
       };
       result: string;
     };
 
     /**
-     * Open the same Wikipedia article in a different language. Use this
-     * whenever the task is to switch language, view in another language, or
-     * read the Spanish/French/German/Japanese/etc. version of a Wikipedia
-     * article. Routes directly to the matching language subdomain
-     * (`es.wikipedia.org`, `fr.wikipedia.org`, …) rather than driving through
-     * the in-page language picker (which varies a lot across skins). Verifies
-     * the destination article's first heading is visible.
+     * Open a Wikipedia article in another language by going straight to that
+     * language's site, and verify its heading.
      */
     wikipedia_web_switchArticleLanguage: {
       args: {
-        /** English article title. */
+        /** Article title as used on the target-language site, e.g. "Albert Einstein". */
         title?: string;
         /** Wikipedia language code (`es`, `fr`, `zh-min-nan`, …). */
         languageCode?: string;
-        /** Visible heading text in the localized article. */
+        /** Heading text of the localized article. Defaults to `title`. */
         expectedHeading?: string;
       };
       result: string;
     };
 
     /**
-     * Verify the currently loaded page is a well-formed Wikipedia article. Use
-     * this whenever the task is to verify an article's structure or layout —
-     * confirm a Wikipedia article rendered, check that an article has body
-     * content, confirm it has a References section, or sanity-check that
-     * navigation actually landed on an article (not a search-results or
-     * disambiguation page). Asserts #firstHeading is visible, the body wrapper
-     * is visible, and optionally scrolls to confirm the "References" section
-     * is present.
+     * Verify the current page is a rendered Wikipedia article: heading and body
+     * visible, and optionally a References section.
      */
     wikipedia_web_verifyArticleStructure: {
       args: {
-        /** Visible text to assert in #firstHeading. */
+        /** Heading text to assert; omit to skip. */
         expectedHeading?: string;
-        /** Scroll-to-bottom + assert References heading (default true). */
+        /** Scroll down and assert a References section. Default true. */
         requireReferences?: boolean;
       };
       result: string;

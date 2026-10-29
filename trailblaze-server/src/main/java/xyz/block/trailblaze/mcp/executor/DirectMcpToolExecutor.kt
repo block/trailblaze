@@ -13,7 +13,6 @@ import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -45,14 +44,13 @@ class DirectMcpToolExecutor(
 ) : McpToolExecutor, AutoCloseable {
 
   /**
-   * Combined class-backed + YAML-defined + scripted tool surface for the configured categories.
+   * Combined class-backed + scripted tool surface for the configured categories.
    * Routed through [ToolSetCategoryMapping.resolve] so we can't accidentally advertise only one
-   * slice — catalog entries like `navigation` include YAML-only tools (e.g. `pressBack`) and
-   * scripted tools (e.g. `openUrl`) that MCP must handle alongside class-backed tools.
+   * slice — catalog entries like `navigation` include scripted tools (e.g. `openUrl`) that MCP
+   * must handle alongside class-backed tools.
    */
   private val availableTools by lazy { ToolSetCategoryMapping.resolve(categories) }
   private val availableToolClasses: Set<KClass<out TrailblazeTool>> get() = availableTools.toolClasses
-  private val availableYamlToolNames: Set<ToolName> get() = availableTools.yamlToolNames
   private val availableScriptedToolNames: Set<ToolName> get() = availableTools.scriptedToolNames
   private val availableScriptedToolNameStrings: Set<String> by lazy {
     availableScriptedToolNames.map { it.toolName }.toSet()
@@ -74,29 +72,25 @@ class DirectMcpToolExecutor(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "DirectMcpToolExecutor",
         toolClasses = availableToolClasses,
-        yamlToolNames = availableYamlToolNames,
       ),
     )
   }
 
-  /** Cached tool descriptors (class-backed + YAML-defined + scripted). */
+  /** Cached tool descriptors (class-backed + scripted). */
   private val toolDescriptors: List<TrailblazeToolDescriptor> by lazy {
     val classDescriptors = availableToolClasses.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(availableYamlToolNames)
-      .map { it.toTrailblazeToolDescriptor() }
     // Catalog/framework scripted tools (e.g. openUrl). Advertised from YAML without launching a
     // QuickJS engine; the engine is connected lazily on first dispatch (ensureScriptedToolsLaunched).
     val scriptedDescriptors = InProcessScriptedToolLauncher.describe(availableScriptedToolNames)
-    classDescriptors + yamlDescriptors + scriptedDescriptors
+    classDescriptors + scriptedDescriptors
   }
 
   /**
    * All tool names the executor will accept. Derived from [toolDescriptors] so the
-   * advertised surface and the acceptance gate are guaranteed to match — if
-   * [KoogToolExt.buildDescriptorsForYamlDefined] skips a malformed YAML config (it logs a
-   * warning and returns null), that name will also not pass the `ToolNotFound` check.
+   * advertised surface and the acceptance gate are guaranteed to match — a tool whose
+   * descriptor can't be built is also rejected by the `ToolNotFound` check.
    */
   private val knownToolNames: Set<String> by lazy {
     toolDescriptors.map { it.name }.toSet()
@@ -184,8 +178,7 @@ class DirectMcpToolExecutor(
 
   /**
    * Deserializes a tool from (name, args) by routing through [toolRepo]. The repo
-   * dispatches on toolName to the matching class-backed, YAML-defined, or (once launched)
-   * scripted serializer, decoding the flat args object directly — no `toolName`/`raw` wrapping.
+   * dispatches on toolName to the matching class-backed or (once launched) scripted serializer, decoding the flat args object directly — no `toolName`/`raw` wrapping.
    */
   private fun deserializeTool(toolName: String, args: JsonObject): TrailblazeTool =
     toolRepo.toolCallToTrailblazeTool(toolName, args.toString())

@@ -4,27 +4,22 @@ import {
   articleUrl,
   nonEmptyString,
   tryOrFalse,
+  articleHeadingRef,
 } from "./wikipedia_shared";
 
 const DEFAULT_TITLE = "Wikipedia";
 
 export interface OpenArticleArgs {
-  /** Article title to open (spaces → underscores in URL). */
+  /** Article title, as written; spaces are fine. */
   title?: string;
   /** Visible heading text to assert. Defaults to `title`. */
   expectedHeading?: string;
-  /** When true (default), tries to close any visible fundraising banner. */
+  /** Close the fundraising banner if showing. Default true. */
   dismissBanner?: boolean;
 }
 
 /**
- * Open a specific Wikipedia article by its title. Use this whenever the task
- * is to read, open, navigate to, or view a particular Wikipedia article —
- * e.g. "open the Albert Einstein article", "go to the Python (programming
- * language) page", "navigate to the Shakespeare article". Spaces in the
- * title are normalized to underscores (Wikipedia's URL convention) so you
- * can pass the title verbatim. Verifies the article rendered by checking
- * the #firstHeading element is visible.
+ * Open an English Wikipedia article by title and verify its heading matches.
  */
 // Verification asserts both that `#firstHeading` is visible AND that its text
 // matches `expectedHeading`. The element-visible check pins the assertion to
@@ -32,7 +27,7 @@ export interface OpenArticleArgs {
 // on a search-results snippet or sidebar listing that happens to repeat the
 // title elsewhere on the page.
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
-  { supportedPlatforms: ["web"], requiresContext: true },
+  { supportedPlatforms: ["web"] },
   async (input, ctx) => {
     const title = nonEmptyString(input.title, DEFAULT_TITLE);
     const expectedHeading = nonEmptyString(input.expectedHeading, title);
@@ -45,8 +40,8 @@ export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
     await ctx.tools.web_verifyElementVisible({
       ref: SELECTORS.firstHeading,
     });
-    await ctx.tools.web_verifyTextVisible({
-      text: expectedHeading,
+    await ctx.tools.web_verifyElementVisible({
+      ref: articleHeadingRef(expectedHeading),
     });
 
     if (dismissBanner) {

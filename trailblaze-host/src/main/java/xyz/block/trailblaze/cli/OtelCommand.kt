@@ -9,6 +9,7 @@ import xyz.block.trailblaze.report.otel.OtelTraceExport
 import xyz.block.trailblaze.report.otel.TraceEventSpans
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Convert a session's recorded spans to OpenTelemetry, so they can be opened in an OTel trace viewer
@@ -130,7 +131,7 @@ class OtelCommand : Callable<Int> {
         }
         val otelFile = File(sessionDir, OTEL_FILE)
         OtelTraceExport.writeOtlpJson(spans, otelFile)
-        Console.info("${sessionDir.name}: ${spans.size} spans -> file://${otelFile.absolutePath}")
+        Console.info("${sessionDir.name}: ${spans.size} spans -> ${otelFile.fileUrl()}")
         // Stops after the first failure. Every remaining session would fail the same way and take
         // the same timeout doing it, and the files are written regardless.
         if (shipper != null && target != null && !failedToPost) {

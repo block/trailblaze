@@ -68,14 +68,72 @@ export interface ReportTraceModel {
  * would name one of them. Callers gate on the run's own outcome.
  */
 export function failureAnchorIndex(trace: TraceStep[]): number {
-  const objIdx = trace.findIndex((t) => t.objective && !t.ok);
+  // The Teardown objective runs after the verdict and never decides it, so neither it nor the
+  // rows under it can anchor the run's failure.
+  const teardown = teardownRows(trace);
+  const objIdx = trace.findIndex((t, i) => t.objective && !t.ok && !teardown[i]);
   // No failed objective means no failed row is an objective, so the first failed row of any kind is
   // the first failed tool row — and -1 when the trace has no failed row at all.
-  if (objIdx < 0) return trace.findIndex((t) => !t.objective && !t.ok);
+  if (objIdx < 0) return trace.findIndex((t, i) => !t.objective && !t.ok && !teardown[i]);
   for (let k = objIdx + 1; k < trace.length && !trace[k].objective; k++) {
     if (!trace[k].ok) return k;
   }
   return objIdx;
+}
+
+/**
+ * Per row: whether it is a Teardown objective or sits under one. The session's end-of-run rows
+ * (`endOfRun`) follow the teardown objective but belong to the run, so they can still anchor it.
+ */
+function teardownRows(trace: TraceStep[]): boolean[] {
+  let inside = false;
+  return trace.map((t) => {
+    if (t.objective) inside = t.teardown === true;
+    return inside && !t.endOfRun;
+  });
+}
+
+/**
+ * The phase whose section renders the row at [index]: the phase of its step group, so an
+ * end-of-run row logged after the teardown is the trail's. A row outside any step falls back to
+ * where it sits in the trace. Null when the run has no trailhead and the row precedes the trail.
+ */
+export function rowPhase(trace: TraceStep[], model: ReportTraceModel, index: number): 'trailhead' | 'trail' | 'teardown' | null {
+  const header = model.groupByRow.get(trace[index])?.header;
+  if (header) return header.teardown ? 'teardown' : header.trailhead ? 'trailhead' : 'trail';
+  const trailStart = trace.findIndex((t) => t.objective && !t.trailhead);
+  const teardownStart = trace.findIndex((t) => t.objective && t.teardown);
+  if (teardownStart >= 0 && index >= teardownStart) return 'teardown';
+  if (trailStart >= 0 && index >= trailStart) return 'trail';
+  return trace.some((t) => t.objective && t.trailhead) ? 'trailhead' : null;
+}
+
+/**
+ * Each dispatch's instant under its row: its own `ts`, else one spread inside the row's span.
+ *
+ * A dispatch whose log carried no timestamp (payloads predating TraceChild.ts) still needs its OWN
+ * instant: sharing the row's would collapse the whole fold onto one moment. They ran back to back
+ * INSIDE the row, so their instants are spread across the row's span, weighted by each dispatch's
+ * duration. That span is a ceiling, not a starting point: the row's ms comes from the delegating
+ * wrapper log, whose duration already covers the executors it waited on, so walking past it lets a
+ * fold overtake the NEXT row's real ts. Midpoints keep each synthetic instant strictly inside the
+ * span, clear of the row's own entry and of the next row alike. With no span to divide (a row that
+ * recorded no duration), the dispatches' own cumulative durations stand in.
+ */
+export function childInstants(row: {
+  ts?: number | null;
+  ms?: number | null;
+  children?: ReadonlyArray<{ ts?: number | null; ms?: number | null }> | null;
+}): Array<number | null> {
+  const kids = row.children || [];
+  const span = row.ms ?? 0;
+  const kidsMs = kids.reduce((total, child) => total + (child.ms ?? 0), 0);
+  let elapsed = 0;
+  return kids.map((child, kid) => {
+    elapsed += child.ms ?? 0;
+    const frac = kidsMs > 0 ? (elapsed - (child.ms ?? 0) / 2) / kidsMs : (kid + 1) / (kids.length + 1);
+    return child.ts ?? (row.ts == null ? null : row.ts + Math.round(span > 0 ? span * frac : elapsed));
+  });
 }
 
 /** Build the authored-step, retry, row-id, and exact LLM-call indexes in one trace pass. */
@@ -85,6 +143,8 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
   const indexById = new Map<number, number>();
   let traceT0: number | null = null;
   let current: ReportTraceGroup | null = null;
+  // The last group that isn't the Teardown: the session's end-of-run rows belong to it.
+  let beforeTeardown: ReportTraceGroup | null = null;
   let authoredStepNumber = 0;
 
   trace.forEach((row, index) => {
@@ -93,22 +153,31 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
 
     if (row.objective) {
       const retry = current && current.header && current.header.selfHeal && !current.header.ok
-        && !row.trailhead && current.header.label === row.label;
+        && !row.trailhead && !row.teardown && current.header.label === row.label;
       if (retry && current) {
         current.retryAt.push(current.items.length);
         current.retryHeaders.push(row);
         groupByRow.set(row, current);
         return;
       }
+      if (current && !(current.header && current.header.teardown)) beforeTeardown = current;
       current = {
         header: row,
-        num: row.trailhead ? 0 : ++authoredStepNumber,
+        num: row.trailhead || row.teardown ? 0 : ++authoredStepNumber,
         items: [],
         retryAt: [],
         retryHeaders: [],
       };
       groups.push(current);
       groupByRow.set(row, current);
+      return;
+    }
+
+    // The failure screenshot and the run's error are logged after teardown, but they are the
+    // trail's: keep them with the trail's last step rather than under the Teardown.
+    if (row.endOfRun && current && current.header && current.header.teardown && beforeTeardown) {
+      beforeTeardown.items.push(row);
+      groupByRow.set(row, beforeTeardown);
       return;
     }
 
@@ -153,23 +222,9 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
     entryIndexById.set(row.i, entries.length);
     entries.push({ row, kid: null, child: null, ts: row.ts ?? null, ms: row.ms ?? null });
     let shownShot: string | null = row.screenshotFile || null;
-    // A dispatch whose log carried no timestamp (payloads predating TraceChild.ts) still needs its
-    // OWN instant: sharing the row's would collapse the whole fold onto its last dispatch, which is
-    // the frame-skipping this list exists to fix. They ran back to back INSIDE the row, so their
-    // instants are spread across the row's span, weighted by each dispatch's duration. That span is
-    // a ceiling, not a starting point: the row's ms comes from the delegating wrapper log, whose
-    // duration already covers the executors it waited on, so walking past it lets a fold overtake
-    // the NEXT row's real ts and drags every offset after it forward. Midpoints keep each synthetic
-    // instant strictly inside the span, clear of the row's own entry and of the next row alike.
-    const span = row.ms ?? 0;
-    const kidsMs = kids.reduce((total, child) => total + (child.ms ?? 0), 0);
-    let elapsed = 0;
+    const instants = childInstants(row);
     kids.forEach((child, kid) => {
-      elapsed += child.ms ?? 0;
-      const frac = kidsMs > 0 ? (elapsed - (child.ms ?? 0) / 2) / kidsMs : (kid + 1) / (kids.length + 1);
-      // With no span to divide (a row that recorded no duration), fall back to the dispatches' own
-      // cumulative durations — nothing to overrun, and the fold still gets distinct instants.
-      const ts = child.ts ?? (row.ts == null ? null : row.ts + Math.round(span > 0 ? span * frac : elapsed));
+      const ts = instants[kid];
       if (child.screenshotFile && child.screenshotFile !== shownShot) {
         entries.push({ row, kid, child, ts, ms: child.ms ?? null });
         shownShot = child.screenshotFile;

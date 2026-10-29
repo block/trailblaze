@@ -43,13 +43,13 @@ class MultiDeviceHandoverGuardTest {
   )
 
   /**
-   * A recorded conditional wrapper in the verbatim shape `block_runIf` records: its branch actions
+   * A recorded conditional wrapper in the verbatim shape `runIf` records: its branch actions
    * ride inside its own args as `{ <toolName>: <args> }` entries under `then:`.
    */
   private fun runIf(then: List<TrailblazeToolYamlWrapper>) = TrailblazeToolYamlWrapper(
-    name = "block_runIf",
+    name = "runIf",
     trailblazeTool = OtherTrailblazeTool(
-      toolName = "block_runIf",
+      toolName = "runIf",
       raw = buildJsonObject {
         put(
           "then",
@@ -63,9 +63,9 @@ class MultiDeviceHandoverGuardTest {
 
   /** The same wrapper carrying its `switchDevice` as the `condition: { tool: ... }` PREDICATE. */
   private fun runIfPredicate(name: String) = TrailblazeToolYamlWrapper(
-    name = "block_runIf",
+    name = "runIf",
     trailblazeTool = OtherTrailblazeTool(
-      toolName = "block_runIf",
+      toolName = "runIf",
       raw = buildJsonObject {
         put(
           "condition",
@@ -201,7 +201,7 @@ class MultiDeviceHandoverGuardTest {
 
   @Test
   fun `a handover nested in a conditional's branch is reported`() {
-    // `block_runIf` records verbatim: the inner calls live in its own args as
+    // `runIf` records verbatim: the inner calls live in its own args as
     // `{ <toolName>: <args> }`. The branch dispatches for real, so an unbound name there fails the
     // run exactly like a top-level one — mid-run, after the pair has already done work.
     val unbound = MultiDeviceHandoverGuard.unboundTargets(
@@ -269,9 +269,9 @@ class MultiDeviceHandoverGuardTest {
   @Test
   fun `a nested handover with no args at all still counts structurally`() {
     val argless = TrailblazeToolYamlWrapper(
-      name = "block_runIf",
+      name = "runIf",
       trailblazeTool = OtherTrailblazeTool(
-        toolName = "block_runIf",
+        toolName = "runIf",
         raw = buildJsonObject {
           put("then", buildJsonArray { add(buildJsonObject { put("switchDevice", JsonNull) }) })
         },
@@ -287,7 +287,7 @@ class MultiDeviceHandoverGuardTest {
 
   @Test
   fun `a handover in a conditional's predicate is NOT reported, but does count as a handover`() {
-    // `block_runIf` dispatches its predicate inside a try/catch — "a throw is a `false` verdict,
+    // `runIf` dispatches its predicate inside a try/catch — "a throw is a `false` verdict,
     // not an error" — so an unbound name here does not fail the trail: the condition is false and
     // the else branch runs. Reporting it would fail `trailblaze check` on a trail that runs, which
     // is the one failure mode a fatal gate cannot have.

@@ -4,6 +4,7 @@ import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -50,5 +51,21 @@ class DesktopLogFileWriterTest {
       assertTrue(logDir.logText().contains(marker), "flag=$flag")
       logDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `an oversized log replaces the previous generation and starts fresh`() {
+    val logDir = File(tempFolder.root, "desktop-logs").apply { mkdirs() }
+    val oversized = "x".repeat(10 * 1024 * 1024 + 1)
+    File(logDir, "trailblaze.log").writeText(oversized)
+    File(logDir, "trailblaze.log.old").writeText("previous generation")
+
+    installAndPrint(disableFlag = null)
+
+    assertEquals(oversized, File(logDir, "trailblaze.log.old").readText())
+    val live = File(logDir, "trailblaze.log").readText()
+    assertTrue(live.contains(marker))
+    assertFalse(live.contains("x".repeat(100)))
+    assertEquals(setOf("trailblaze.log", "trailblaze.log.old"), logDir.list().orEmpty().toSet())
   }
 }

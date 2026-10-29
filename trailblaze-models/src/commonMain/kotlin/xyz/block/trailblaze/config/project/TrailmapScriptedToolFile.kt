@@ -553,8 +553,8 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
  * far from the descriptor file. We'd rather throw here with the descriptor name in the message.
  *
  * Only validates keys we know about (`trailblaze/requiresHost`, `trailblaze/supportedPlatforms`,
- * `trailblaze/surfaceToLlm`, `trailblaze/isRecordable`, `trailblaze/sensitiveArgNames`); arbitrary
- * author keys flow through unchecked.
+ * `trailblaze/requiredClassifiers`, `trailblaze/surfaceToLlm`, `trailblaze/isRecordable`,
+ * `trailblaze/sensitiveArgNames`); arbitrary author keys flow through unchecked.
  */
 private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
   if (meta == null) return
@@ -581,6 +581,15 @@ private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
       "Tool '$toolName' `_meta.trailblaze/supportedPlatforms`: expected a YAML list of strings " +
         "(e.g. `[android, web]`), got ${v::class.simpleName}. Prefer the top-level " +
         "`supportedPlatforms: [...]` shortcut instead of authoring this key directly."
+    }
+  }
+  // A wrong shape here reads downstream as an empty list — i.e. "any device" — so a tool meant only
+  // for specially equipped devices would register everywhere.
+  meta["trailblaze/requiredClassifiers"]?.let { v ->
+    require(v is JsonArray && v.all { it is JsonPrimitive && it.isString }) {
+      "Tool '$toolName' `_meta.trailblaze/requiredClassifiers`: expected a YAML list of classifier " +
+        "segments (e.g. `[rig]`), got ${v::class.simpleName}. A malformed value restricts NOTHING, " +
+        "so the tool would register on every device."
     }
   }
   // A wrong shape here reads downstream as an empty list — i.e. "mask nothing" — so the author's

@@ -1,8 +1,6 @@
 package xyz.block.trailblaze.report.strings
 
 import kotlinx.datetime.Instant
-import org.jetbrains.skia.Bitmap
-import org.jetbrains.skia.Image
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -10,8 +8,10 @@ import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.TimeUnit
+import javax.imageio.ImageIO
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -72,11 +72,11 @@ class CaptureVideoFramesTest {
     return dir
   }
 
-  private fun decode(file: File): Bitmap = Bitmap.makeFromImage(Image.makeFromEncoded(file.readBytes()))
+  private fun decode(file: File): BufferedImage = ImageIO.read(file) ?: error("${file.name} is not a readable image")
 
   private fun colorOf(file: File): String {
     val image = decode(file)
-    val rgb = image.getColor(image.width / 2, image.height / 2)
+    val rgb = image.getRGB(image.width / 2, image.height / 2)
     val channels = mapOf("red" to (rgb shr 16 and 0xFF), "green" to (rgb shr 8 and 0xFF), "blue" to (rgb and 0xFF))
     return channels.maxBy { it.value }.key
   }

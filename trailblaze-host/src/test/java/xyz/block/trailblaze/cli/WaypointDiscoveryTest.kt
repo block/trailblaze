@@ -408,7 +408,7 @@ class WaypointDiscoveryTest {
       """
       script: ./sampleTool.ts
       _meta:
-        trailblaze/requiresContext: true
+        trailblaze/surfaceToLlm: true
       """.trimIndent(),
     )
     File(toolsDir, "sampleTool.ts").writeText(

@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.codegen
 
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceRequest
+import xyz.block.trailblaze.host.rpc.DeviceInteractionRequest
 import xyz.block.trailblaze.host.rpc.DisconnectDeviceRequest
 import xyz.block.trailblaze.host.rpc.GetConnectedDevicesRequest
 import xyz.block.trailblaze.host.rpc.GetTargetAppsRequest
+import xyz.block.trailblaze.host.rpc.GetToolCatalogRequest
 import xyz.block.trailblaze.host.rpc.NavigateWebUrlRequest
+import xyz.block.trailblaze.host.rpc.RunTrailYamlRequest
 import xyz.block.trailblaze.host.rpc.SetCurrentTargetAppRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import java.io.File
@@ -28,11 +31,10 @@ internal object HostRpcDtoTsBindings {
    * and `/rpc/<Name>` path are DERIVED (reflection), not hand-paired. Adding an endpoint is a
    * one-line edit here.
    *
-   * This list tracks the endpoints the TypeScript UI actually consumes today (device + target-app
-   * flows); it is deliberately not the full registered RPC surface. Every other endpoint the daemon
-   * registers is absent for one reason — **scope**: no TypeScript consumer needs it yet, and callers
-   * can use the untyped `rpcCall` until one does. That covers the flat `GetToolCatalogRequest` /
-   * `RunTrailYamlRequest` and the sealed-carrying `DeviceInteractionRequest` alike.
+   * This list tracks the endpoints the TypeScript UI actually consumes today (device, target-app,
+   * and the Devices screen's input + tool-run flows); it is deliberately not the full registered
+   * RPC surface. Every other endpoint the daemon registers is absent for one reason — **scope**: no
+   * TypeScript consumer needs it yet, and callers can use the untyped `rpcCall` until one does.
    *
    * Sealed types are not a codegen limitation. [SerialDescriptorTsCodegen] renders a sealed
    * hierarchy as a TypeScript discriminated union (`renderSealedUnion`, covered by
@@ -47,9 +49,6 @@ internal object HostRpcDtoTsBindings {
    *    frames), so a generated POST binding for either would 404 even though the daemon "routes"
    *    them.
    *
-   * `DeviceInteractionRequest` is neither: `DeviceApiEndpoint` registers it on both transports, so
-   * it stays a genuine one-line add whenever a TypeScript consumer wants it.
-   *
    * Typed as `KClass<out RpcRequest<*>>` so the allowlist is self-validating: a non-`RpcRequest`
    * entry fails to compile rather than throwing at reflection time.
    */
@@ -60,6 +59,9 @@ internal object HostRpcDtoTsBindings {
     GetTargetAppsRequest::class,
     SetCurrentTargetAppRequest::class,
     NavigateWebUrlRequest::class,
+    GetToolCatalogRequest::class,
+    RunTrailYamlRequest::class,
+    DeviceInteractionRequest::class,
   )
 
   fun generate(): String = RpcClientTsCodegen.generate(
@@ -68,6 +70,8 @@ internal object HostRpcDtoTsBindings {
     requests = REQUESTS,
     clientFunctionName = "createRpcClient",
     surfaceLabel = "daemon's",
+    // `/rpc` decodes with Ktor's default `Json`, so sealed types (DeviceInteraction) key on `type`.
+    classDiscriminator = "type",
   )
 
   private const val HEADER: String =

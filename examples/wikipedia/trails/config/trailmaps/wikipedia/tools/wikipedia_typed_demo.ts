@@ -5,11 +5,10 @@
 // `<TypedDemoInput, TypedDemoOutput>` and see the typed surface the analyzer
 // extracts.
 //
-// The trailmap loader auto-discovers every `.ts` with a `trailblaze.tool` export
-// under `tools/`, so this file IS added to the candidate pool — but it's NOT
-// listed in `trailmap.yaml`'s `target.tools:`, which is the gate for what the
-// agent actually sees. To make this dispatchable from a trail, add
-// `wikipedia_typed_demo` to that list. No YAML descriptor is required.
+// The trailmap loader puts every `.ts` with a `trailblaze.tool` export under
+// `tools/` on the target, but `trailmap.yaml` opts this one out with
+// `excluded_tools:`. To make it dispatchable from a trail, remove
+// `wikipedia_typed_demo` from that list. No YAML descriptor is required.
 
 import { trailblaze } from "@trailblaze/scripting";
 

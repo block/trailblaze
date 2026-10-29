@@ -8,14 +8,13 @@ import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailbl
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
 import kotlin.reflect.KClass
@@ -26,7 +25,6 @@ abstract class TrailblazeToolSet(
     .filterIsInstance<TrailblazeToolSetClass>()
     .firstOrNull()?.description ?: this::class.simpleName ?: error("Add a @TrailblazeToolSetClass annotation"),
   override val toolClasses: Set<KClass<out TrailblazeTool>>,
-  override val yamlToolNames: Set<ToolName> = emptySet(),
   override val scriptedToolNames: Set<ToolName> = emptySet(),
   val supportedDriverTypes: Set<TrailblazeDriverType>? = null,
 ) : TrailblazeToolSurface {
@@ -35,13 +33,10 @@ abstract class TrailblazeToolSet(
   operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet =
     DynamicToolSet(
       toolClasses = this.toolClasses + otherToolSet.toolClasses,
-      yamlToolNames = this.yamlToolNames + otherToolSet.yamlToolNames,
       scriptedToolNames = this.scriptedToolNames + otherToolSet.scriptedToolNames,
     )
 
   fun asTools(): Set<KClass<out TrailblazeTool>> = toolClasses
-
-  fun asYamlToolNames(): Set<ToolName> = yamlToolNames
 
   fun asScriptedToolNames(): Set<ToolName> = scriptedToolNames
 
@@ -58,6 +53,8 @@ abstract class TrailblazeToolSet(
       RememberTextBySelectorTrailblazeTool::class,
       RememberNumberBySelectorTrailblazeTool::class,
       TapOnByElementSelector::class,
+      // Raw x/y tap: recorded and scripted, but not offered to the LLM unless a target opts in
+      TapOnPointTrailblazeTool::class,
       SwipeWithRelativeCoordinatesTool::class,
       AndroidSystemUiDemoModeTrailblazeTool::class,
       ClearAppDataTrailblazeTool::class,
@@ -65,11 +62,9 @@ abstract class TrailblazeToolSet(
       // Deprecated Tools - Tap On by Property
       LongPressOnElementWithTextTrailblazeTool::class,
       LongPressElementWithAccessibilityTextTrailblazeTool::class,
-      TapOnElementWithTextTrailblazeTool::class,
       TapOnElementWithAccessiblityTextTrailblazeTool::class,
 
       // Deprecated Tools - Assert Visible by Property
-      AssertVisibleWithTextTrailblazeTool::class,
       AssertVisibleWithAccessibilityTextTrailblazeTool::class,
       AssertVisibleWithResourceIdTrailblazeTool::class,
     )
@@ -89,12 +84,10 @@ abstract class TrailblazeToolSet(
   class DynamicTrailblazeToolSet(
     override val name: String,
     toolClasses: Set<KClass<out TrailblazeTool>>,
-    yamlToolNames: Set<ToolName> = emptySet(),
     scriptedToolNames: Set<ToolName> = emptySet(),
   ) : TrailblazeToolSet(
     name = name,
     toolClasses = toolClasses,
-    yamlToolNames = yamlToolNames,
     scriptedToolNames = scriptedToolNames,
   )
 
@@ -102,12 +95,10 @@ abstract class TrailblazeToolSet(
   class DynamicToolSet(
     toolClasses: Set<KClass<out TrailblazeTool>>,
     name: String = "Dynamic Toolset",
-    yamlToolNames: Set<ToolName> = emptySet(),
     scriptedToolNames: Set<ToolName> = emptySet(),
   ) : TrailblazeToolSet(
     name = name,
     toolClasses = toolClasses,
-    yamlToolNames = yamlToolNames,
     scriptedToolNames = scriptedToolNames,
   )
 }

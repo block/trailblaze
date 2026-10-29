@@ -48,8 +48,7 @@ paid once by a subprocess runtime, not on every call.
 To reproduce:
 
 ```bash
-./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
-  -Dtrailblaze.benchmark=true -i
+./gradlew :trailblaze-quickjs-tools:dispatchBenchmark
 ```
 
 It measures the JVM host. On-device QuickJS wasn't measured.

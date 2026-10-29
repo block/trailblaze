@@ -12,8 +12,7 @@ import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.axe.AxeViewportClamp
 import xyz.block.trailblaze.util.Console
-import java.nio.file.Files
-import java.nio.file.Paths
+import xyz.block.trailblaze.util.CoreSimulatorTempFiles
 
 /**
  * [ScreenState] for iOS Simulators driven by the AXe CLI.
@@ -21,7 +20,7 @@ import java.nio.file.Paths
  * Parallel to [HostMaestroDriverScreenState] for the Maestro/XCUITest path. Captures the
  * accessibility tree via `axe describe-ui` (JSON is AXe's default output), parses it into
  * a [TrailblazeNode] tree with [xyz.block.trailblaze.api.DriverNodeDetail.IosAxe] detail,
- * and (lazily) captures a PNG screenshot via `axe screenshot`. Everything is lazy so CLI
+ * and (lazily) captures a PNG screenshot via `simctl io screenshot`. Everything is lazy so CLI
  * flows that only need the tree (snapshot / `fast` mode) never pay for the screenshot.
  */
 class AxeScreenState(
@@ -35,6 +34,13 @@ class AxeScreenState(
    * read or its shared one (see [xyz.block.trailblaze.host.ios.IosDeviceManager.sharedScreenState]).
    */
   private val readTree: () -> TrailblazeNode? = { parseDescribeUi(describeUi(), "AxeScreenState") },
+  /**
+   * True when [readTree] may change the screen (it answers a notification alert): the screenshot
+   * is then taken after the tree, so both show the screen the read left behind.
+   */
+  private val readTreeBeforeScreenshot: () -> Boolean = { false },
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val captureScreenshot: () -> ByteArray? = { captureAxeScreenshot(udid) },
 ) : ScreenState {
 
   companion object {
@@ -141,18 +147,29 @@ class AxeScreenState(
   }
 
   override val screenshotBytes: ByteArray? by lazy {
-    val tmp = Files.createTempFile("axe-screen-", ".png")
-    val res = AxeCli.screenshot(udid, outputPath = tmp.toAbsolutePath().toString())
+    if (readTreeBeforeScreenshot()) parsedTree
+    captureScreenshot()
+  }
+}
+
+/**
+ * One screenshot (taken with `simctl`, see [AxeCli.screenshot]) as PNG bytes; null (with a log line)
+ * when it fails. The file `simctl` writes lives where CoreSimulator can write it, see
+ * [CoreSimulatorTempFiles]. [capture] takes the UDID and that path.
+ */
+internal fun captureAxeScreenshot(
+  udid: String,
+  capture: (udid: String, outputPath: String) -> AxeCli.Result = { id, path -> AxeCli.screenshot(id, path) },
+): ByteArray? {
+  val tmp = CoreSimulatorTempFiles.createTempFile("axe-screen-", ".png")
+  try {
+    val res = capture(udid, tmp.absolutePath)
     if (!res.success) {
-      System.err.println("[AxeScreenState] axe screenshot failed: ${res.stderr.trim()}")
-      Files.deleteIfExists(tmp)
-      null
-    } else {
-      try {
-        Files.readAllBytes(Paths.get(tmp.toAbsolutePath().toString()))
-      } finally {
-        Files.deleteIfExists(tmp)
-      }
+      System.err.println("[AxeScreenState] screenshot failed: ${res.stderr.trim()}")
+      return null
     }
+    return tmp.readBytes()
+  } finally {
+    tmp.delete()
   }
 }

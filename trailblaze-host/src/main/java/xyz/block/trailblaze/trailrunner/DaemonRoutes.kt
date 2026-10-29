@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.cli.daemonSpawnArgv
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -43,6 +44,10 @@ internal fun Route.daemonRoutes(deps: TrailRunnerDeps) {
  * time to flush); a compile or restart-scheduling failure rides in `RebuildDaemonResponse.ok=false`.
  */
 internal suspend fun buildRebuildDaemonResponse(deps: TrailRunnerDeps): RebuildDaemonResponse {
+  // The rebuild runs `gradlew` and restarts through a bash script and the shell launcher.
+  if (isWindows()) {
+    return RebuildDaemonResponse(ok = false, error = "Rebuild and restart need a macOS or Linux source checkout.")
+  }
   val root = File(System.getProperty("user.dir"))
   val compile = withContext(Dispatchers.IO) {
     runCatching {

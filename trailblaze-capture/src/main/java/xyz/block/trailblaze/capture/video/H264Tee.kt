@@ -108,6 +108,14 @@ class H264Tee internal constructor(
   /** True while a producer is streaming; see [feeding]. Read it before detaching. */
   internal val isFeeding: Boolean get() = feeding
 
+  // Whether this producer session has sent a coded picture, not just bytes; see [AnnexBPictureScan].
+  // Kept across respawns: a recorder asks once, at start, whether the device can be filmed at all.
+  @Volatile private var deliveredPicture = false
+  private val pictureScan = AnnexBPictureScan()
+
+  /** True once the screen stream has carried a picture. A recorder polls it after attaching. */
+  internal val hasDeliveredPicture: Boolean get() = deliveredPicture
+
   /**
    * Whether the running producer writes each frame's device time into the stream as a
    * [FrameTimeSei]. Settled once [attach] returns, since the first attach starts the producer.
@@ -190,6 +198,8 @@ class H264Tee internal constructor(
     // under refCountLock on the first attach, before the reader thread that owns it exists.
     cachedKeyframe = null
     gopSplitter.reset()
+    deliveredPicture = false
+    pictureScan.reset()
     val sdk = runCatching { sdkLevelProvider() }.getOrDefault(0)
     val unlimited = sdk >= ANDROID_U_SDK
     Console.log(
@@ -247,6 +257,7 @@ class H264Tee internal constructor(
           // an undecodable stream. (The joiner can now be seeded with a keyframe from a chunk
           // it also receives live — a duplicated keyframe is decodable, a missing one is not.)
           updateKeyframeCache(buf, n)
+          if (!deliveredPicture && pictureScan.feed(buf, n)) deliveredPicture = true
           fanOut(buf, n)
         }
       } catch (e: Exception) {

@@ -2,6 +2,9 @@ package xyz.block.trailblaze.cli
 
 import java.nio.file.Path
 import java.nio.file.Paths
+import xyz.block.trailblaze.config.ServedTrailmaps
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.isWindows
 
 /**
  * Thread-local context for the *caller's* current working directory.
@@ -40,7 +43,7 @@ import java.nio.file.Paths
  * invocations (no `withCallerCwd` wrapping), so [callerCwd] returns `Paths.get("")`
  * which still resolves to the user's process cwd. Same as before.
  */
-internal object CliCallerContext {
+object CliCallerContext {
 
   private val callerCwdLocal = ThreadLocal<Path?>()
 
@@ -119,11 +122,30 @@ internal object CliCallerContext {
   }
 
   /**
-   * Returns the caller's cwd if pinned for this thread, else `Paths.get("")`. CLI
-   * code should call this in place of `Paths.get("")` when walking relative paths
-   * that should be anchored at the user's interactive cwd.
+   * Returns the caller's cwd if pinned for this thread, else the [LAUNCHER_CWD_ENV] the
+   * development launcher exports when it runs the CLI through Gradle (whose JVM starts in the
+   * module's directory, not the caller's), else `Paths.get("")`. CLI code should call this in
+   * place of `Paths.get("")` when walking relative paths that should be anchored at the user's
+   * interactive cwd.
    */
-  fun callerCwd(): Path = callerCwdLocal.get() ?: Paths.get("")
+  fun callerCwd(): Path = resolveCallerCwd(callerCwdLocal.get(), System.getenv(LAUNCHER_CWD_ENV))
+
+  /** [callerCwd] given the [forwarded] cwd and the [launcherCwd] env value; a blank or relative one is ignored. */
+  internal fun resolveCallerCwd(forwarded: Path?, launcherCwd: String?): Path = forwarded
+    ?: launcherCwd?.takeIf { it.isNotBlank() }?.let { Paths.get(it) }?.takeIf { it.isAbsolute }
+    ?: Paths.get("")
+
+  /** The caller's shell cwd, as `./trailblaze --gradle` exports it to the JVM Gradle starts. */
+  const val LAUNCHER_CWD_ENV = "TRAILBLAZE_CALLER_CWD"
+
+  /**
+   * Drops [LAUNCHER_CWD_ENV] from a daemon's [env] before the CLI spawns it. The daemon serves many
+   * callers, each forwarding its own cwd; inheriting this one would anchor every unforwarded
+   * relative path at the directory of whichever caller started it.
+   */
+  fun removeLauncherCwd(env: MutableMap<String, String>) {
+    env.remove(LAUNCHER_CWD_ENV)
+  }
 
   /**
    * Run [block] with the caller's [env] vars pinned to the current thread. Same
@@ -174,7 +196,9 @@ internal object CliCallerContext {
    */
   fun callerEnv(name: String): String? {
     val pinned = callerEnvLocal.get()
-    return if (pinned != null) pinned[name] else System.getenv(name)
+    if (pinned != null) return pinned[name]
+    // `trailblaze.cmd` cannot supply the shell PID or a tty check, so the JVM works them out.
+    return System.getenv(name) ?: if (isWindows()) WindowsCallerShell.derivedEnv(name) else null
   }
 
   /** The HTTP port of the daemon running this command, when it arrived through `/cli/exec`. */
@@ -197,4 +221,24 @@ internal object CliCallerContext {
    * version, its workspace — can be read here without the round trip.
    */
   fun isServedBy(port: Int): Boolean = servingPortLocal.get() == port
+
+  /** Reads the serving daemon's live targets, when this command arrived through `/cli/exec`. */
+  private val servedTargetsLocal = ThreadLocal<(() -> Set<TrailblazeHostAppTarget>)?>()
+
+  /** Run [block] with [targets] as the serving daemon's live targets. Null leaves them unknown. */
+  fun <T> withServedTargets(targets: (() -> Set<TrailblazeHostAppTarget>)?, block: () -> T): T {
+    val prev = servedTargetsLocal.get()
+    servedTargetsLocal.set(targets)
+    try {
+      return block()
+    } finally {
+      servedTargetsLocal.set(prev)
+    }
+  }
+
+  /**
+   * Where the serving daemon loaded each live target from — see [ServedTrailmaps.of]. Null when
+   * this command did not arrive through `/cli/exec`.
+   */
+  fun servedTrailmaps(): Map<String, Map<String, String?>>? = servedTargetsLocal.get()?.let { ServedTrailmaps.of(it()) }
 }

@@ -16,11 +16,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("hideKeyboard")
-@LLMDescription(
-  """
-Hide the keyboard on the screen. Use after entering text into an input field.
-  """,
-)
+@LLMDescription("Hide the on-screen keyboard.")
 data object HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {

@@ -1,5 +1,5 @@
 import { trailblaze, type TrailblazeNodeSelector } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
+import { ensureContactsRoot, nonEmptyString, tapOnText, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_QUERY = "John";
 
@@ -22,32 +22,17 @@ const ROW_WAIT_MS = 5000;
 const RESULTS_LIST_LABEL = "Search results";
 
 export interface SearchContactsArgs {
-  /** Query to type into the contacts list's pull-down search field. */
+  /** Text to type into the Contacts search field. */
   query?: string;
-  /**
-   * Row text the tool taps after typing the query. Defaults to `query`. Pass
-   * this explicitly when the query is a partial prefix of the row's visible
-   * label (e.g. `query="alb"` + `rowText="Albert Einstein"`).
-   */
+  /** Result row to tap. Defaults to `query`; set it when the query is a prefix, e.g. "Albert Einstein" for "alb". */
   rowText?: string;
-  /**
-   * When true (default), taps the first visible matching row to open the
-   * contact's detail screen. When false, leaves the search active so a caller
-   * can verify the autocomplete-style suggestion list itself.
-   */
+  /** Open the first matching contact. Default true; false leaves the results showing. */
   openFirstResult?: boolean;
 }
 
 /**
- * Search the iOS Contacts list for a name and (optionally) open the first
- * matching contact. Use this whenever the task is to search Contacts for a
- * person, look up a contact by name, find someone in Contacts, or jump to a
- * known contact's detail screen. Handles the iOS pull-down-to-reveal-search
- * gesture, types the query, and either taps the first match (default) or
- * leaves the search active so the caller can verify the suggestion list. When
- * `openFirstResult: true` and the query yields no matches, throws a
- * descriptive error so callers can distinguish "wrong query" from "wrong row
- * text".
+ * Restart Contacts, search for a name, and by default open the first matching
+ * contact. Fails if no row matches `rowText`.
  */
 // Implementation notes:
 // Two branches:
@@ -63,7 +48,7 @@ export interface SearchContactsArgs {
 // separate "land on list, then search" primitive keeps the gesture sequence
 // stable across composing flows.
 export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const query = nonEmptyString(input?.query, DEFAULT_QUERY);
     const rowText = nonEmptyString(input?.rowText, query);
@@ -75,7 +60,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     // gesture scrolls it into view; once visible, the input is tappable by its
     // "Search" accessibility label and accepts text.
     await ctx.tools.swipe({ direction: "DOWN" });
-    await ctx.tools.tapOnElementWithText({ text: "Search" });
+    await tapOnText(ctx, "Search");
     await ctx.tools.inputText({ text: query });
 
     if (!openFirstResult) {
@@ -108,7 +93,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     // Tap the result ROW via its accessibility label, scoped to the results list — never via
     // a bare text match.
     //
-    // 1. LABEL, not text. A bare `tapOnElementWithText(rowText)` matches any node whose
+    // 1. LABEL, not text. A bare text selector matches any node whose
     //    text / hintText / accessibilityText contains `rowText` — and on the host
     //    (Maestro/XCUITest) tree a text field's `text` attribute is its typed VALUE, so when
     //    `query == rowText` (e.g. `contacts_ios_openContact` passing the same full name to
@@ -125,7 +110,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     //    would only match labels that equal (or, with a trailing `.*`, start with) it —
     //    breaking substring queries like a last name (`rowText: "Appleseed"` must still match
     //    the "John Appleseed" row) and labels that append detail text after the name. The
-    //    surrounding `.*` restores the old `tapOnElementWithText` CONTAINS contract.
+    //    surrounding `.*` preserves the retired text tap's CONTAINS contract.
     //
     // 3. SCOPED to the results list. Contains-matching on the label is necessary but not
     //    sufficient: the search field's own label ("Search") contains plenty of substrings a

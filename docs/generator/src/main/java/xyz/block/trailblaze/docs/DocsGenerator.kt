@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.docs
 
-import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
@@ -91,10 +90,6 @@ class DocsGenerator(
             .forEach { toolClass: KClass<out TrailblazeTool> ->
                 createPageForCommand(toolClass)?.let { keepNames += it }
             }
-        ToolYamlLoader.discoverYamlDefinedTools(classpathOnly).values
-            .forEach { config: ToolYamlConfig ->
-                createPageForYamlDefinedTool(config).let { keepNames += it }
-            }
         // Orphan-prune emitter-owned pages whose tool no longer exists. Recognizes the
         // shared `GENERATED_BANNER` first line — hand-authored files in the same directory
         // (no banner) are left untouched.
@@ -103,17 +98,6 @@ class DocsGenerator(
                 val firstLine = runCatching { file.bufferedReader().use { it.readLine().orEmpty() } }.getOrNull()
                 if (firstLine == ResolvedTargetToolDetailRenderer.GENERATED_BANNER) file.delete()
             }
-    }
-
-    fun createPageForYamlDefinedTool(config: ToolYamlConfig): String {
-        val fileName = "${config.id}.md"
-        val detail = ToolDetail.YamlDefined(name = config.id, config = config)
-        val file = File(generatedFunctionsDocsDir, "custom/$fileName")
-        ResolvedTargetIdempotentWrite.writeIfChanged(
-            file,
-            ResolvedTargetToolDetailRenderer.renderMarkdown(detail = detail, header = FRAMEWORK_HEADER),
-        )
-        return fileName
     }
 
     companion object {

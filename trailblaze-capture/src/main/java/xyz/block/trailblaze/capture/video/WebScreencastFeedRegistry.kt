@@ -31,8 +31,9 @@ object WebScreencastFeedRegistry {
   interface Feed {
     /**
      * Attaches [onFrame] to the shared screencast. Each composited JPEG frame is delivered with
-     * the host-clock timestamp ([System.currentTimeMillis]) at which it was observed — the same
-     * clock the session log stamps events on, so the muxed video aligns to the report timeline.
+     * the host-clock instant (epoch ms) the browser showed it — the clock the session log stamps
+     * events on, so the muxed video aligns to the report timeline. It is the browser's swap time,
+     * not the instant the frame was read, which can trail the screen by hundreds of ms.
      *
      * Frames are delivered off the Playwright pump thread so a slow subscriber (e.g. a disk write)
      * can't stall the screencast. Returns a handle; closing it detaches this subscriber and, when

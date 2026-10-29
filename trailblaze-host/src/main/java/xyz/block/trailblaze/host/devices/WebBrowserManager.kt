@@ -69,10 +69,9 @@ class WebBrowserManager {
     @Volatile var headlessPreference: Boolean = true
 
     /**
-     * Viewport spec recorded by callers — written by the desktop UI text field
-     * (`WebBrowserControlPanel`), the `trailblaze device create web` CLI command
-     * (via `device(action=CREATE_WEB, viewport=…)`), and the recording-tab
-     * launcher (which forwards the desktop's `appConfig.webViewport`).
+     * Viewport spec recorded by callers — written by the `trailblaze device create web`
+     * CLI command (via `device(action=CREATE_WEB, viewport=…)`) and the recording
+     * connect path (which forwards the saved `appConfig.webViewport`).
      * Null = use Playwright defaults. Stored on the slot so a subsequent
      * `launchBrowser()` call without an explicit spec inherits the last value the
      * user set — same lifecycle as [headlessPreference].
@@ -180,18 +179,8 @@ class WebBrowserManager {
   private fun capExceeded(instanceId: String): IllegalStateException =
     IllegalStateException(
       "Refusing to provision web browser instance '$instanceId': $MAX_NAMED_SLOTS " +
-        "named instances already exist. Close one with the desktop UI or restart the daemon.",
+        "named instances already exist. Close one or restart the daemon.",
     )
-
-  /**
-   * State flow for the default playwright-native browser. Used by the desktop UI's
-   * launch panel which has no concept of named instances.
-   *
-   * Cached at init so the property has stable identity — Compose code or anything
-   * that compares references (`===`) sees the same instance every time.
-   */
-  val browserStateFlow: StateFlow<WebBrowserState> =
-    slots.getValue(PLAYWRIGHT_NATIVE_INSTANCE_ID).state.asStateFlow()
 
   /**
    * Returns the state flow for the browser identified by [instanceId], creating
@@ -204,7 +193,7 @@ class WebBrowserManager {
    * Launches a web browser instance asynchronously on [Dispatchers.IO].
    *
    * @param instanceId Identifier for the browser slot. Defaults to the singleton
-   *   [PLAYWRIGHT_NATIVE_INSTANCE_ID] (the desktop UI's "Launch Browser" target).
+   *   [PLAYWRIGHT_NATIVE_INSTANCE_ID].
    * @param headless Whether to launch the browser headless. Named instances default
    *   to headless. The singleton defaults to headed when a display is available and
    *   headless otherwise (e.g. on remote workstations or headless servers).
@@ -292,13 +281,6 @@ class WebBrowserManager {
       onComplete?.invoke()
     }
   }
-
-  /**
-   * Returns a device summary for the default singleton browser if it is running.
-   * Used by the desktop UI; CLI/MCP code should use [getAllRunningBrowserSummaries].
-   */
-  fun getRunningBrowserSummary(): TrailblazeConnectedDeviceSummary? =
-    summaryFor(slots[PLAYWRIGHT_NATIVE_INSTANCE_ID])
 
   /**
    * Returns a device summary for the named browser if it is running.

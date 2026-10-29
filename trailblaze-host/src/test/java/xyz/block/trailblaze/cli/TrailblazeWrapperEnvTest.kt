@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
+import xyz.block.trailblaze.logs.server.endpoints.CliEndpoints
 import xyz.block.trailblaze.logs.server.endpoints.CliExecChunk
 import xyz.block.trailblaze.logs.server.endpoints.CliExecReplayFormat
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
@@ -333,6 +334,28 @@ class TrailblazeWrapperEnvTest {
     }
   }
 
+  /**
+   * A daemon that predates the route answers 404, so the launcher runs the command in its own JVM,
+   * which restarts the stale daemon, rather than letting it run without the checks this CLI relies on.
+   */
+  @Test
+  fun `ipc_try_forward posts to the exec route only daemons with today's checks serve`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+
+    val (exitCode, stdout, stderr) = forwardSnapshotCapturing(jqFilter = ".args[0]", extraEnv = emptyMap())
+
+    assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+    val args = stdout.lineSequence().first { it.startsWith("ARGS=") }
+    assertTrue(
+      Regex("""localhost:\d+${Regex.escape(CliEndpoints.EXEC_V2)}\s""").containsMatchIn(args),
+      "the launcher must forward to ${CliEndpoints.EXEC_V2}; curl argv:\n$args",
+    )
+  }
+
   // ---------------------------------------------------------------------------
   // A timed-out command's own hint tells the user to raise
   // TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS. On this path the JVM that waits is the daemon, whose env
@@ -563,7 +586,7 @@ class TrailblazeWrapperEnvTest {
   }
 
   @Test
-  fun `app v2 activates the callers git root before opening Trail Runner`() {
+  fun `trailrunner activates the callers git root before opening Trail Runner`() {
     assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
     assumeTrue("git required for workspace-root test", ProcessBuilder("git", "--version").start().waitFor() == 0)
     val wrapper = locateWrapperScript()
@@ -601,11 +624,11 @@ class TrailblazeWrapperEnvTest {
           return 0
         }
         cd '${nested.absolutePath}'
-        source '${wrapper.absolutePath}' app --v2
+        source '${wrapper.absolutePath}' trailrunner
       """.trimIndent()
 
       val (exitCode, _, stderr) = runBash(script, emptyMap())
-      assertEquals(0, exitCode, "app --v2 wrapper should exit cleanly; stderr=\n$stderr")
+      assertEquals(0, exitCode, "trailrunner wrapper should exit cleanly; stderr=\n$stderr")
       assertEquals(
         repo.canonicalPath,
         captured.readText(),

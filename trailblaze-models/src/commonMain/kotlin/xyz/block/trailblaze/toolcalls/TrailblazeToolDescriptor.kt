@@ -120,7 +120,7 @@ data class TrailblazeToolDescriptor(
    * [coerceArgsToDescriptorTypes] can re-align a scalar buried inside `overrides[].value` to its
    * declared type, not just top-level args. Populated for scripted (`.ts`) tools whose schema is
    * known (see [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]); `null` for
-   * class-backed / YAML-defined tools, where coercion falls back to the flat parameter view.
+   * class-backed tools, where coercion falls back to the flat parameter view.
    *
    * Kept outside the primary constructor — like [TrailblazeToolParameterDescriptor.visibleWhen] —
    * so adding this serialized metadata doesn't change the public JVM constructor/copy ABI for

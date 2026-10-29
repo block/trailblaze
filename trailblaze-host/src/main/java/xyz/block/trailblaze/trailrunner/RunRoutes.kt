@@ -457,9 +457,11 @@ internal fun saveBackRefusal(status: SessionStatus, trailFile: File): String? = 
 }
 
 /**
- * The tool logs a recording is actually built from: the same `isRecordable` population
- * [xyz.block.trailblaze.yaml.generateRecordedTrailItems] keeps. Counting the rest would let a run
- * whose only tool calls are non-recordable author utilities look like it recorded something.
+ * The tool logs a recording is built from: the same `isRecordable` population
+ * [xyz.block.trailblaze.yaml.generateRecordedTrailItems] reads. Counting the rest would let a run
+ * whose only tool calls are non-recordable author utilities look like it recorded something. Failed
+ * calls stay in the count even though the generator drops them: a failed log landing is still the
+ * device flushing, which is what the settle check below watches for.
  */
 internal fun List<TrailblazeLog>.recordableToolLogs(): List<TrailblazeLog.TrailblazeToolLog> =
   filterIsInstance<TrailblazeLog.TrailblazeToolLog>().filter { it.isRecordable }

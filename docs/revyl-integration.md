@@ -26,7 +26,7 @@ Core data classes and the CLI client live in the `trailblaze-revyl` module. Host
    brew install RevylAI/tap/revyl
    ```
 
-2. Set the `REVYL_API_KEY` environment variable (or configure it in Settings > Environment Variables in the desktop app).
+2. Set the `REVYL_API_KEY` environment variable in the shell you start Trailblaze from. If the daemon is already running, restart it (`trailblaze app --stop`) so it picks the key up.
 
 **Optional overrides:**
 
@@ -102,7 +102,7 @@ All 12 Trailblaze tools are fully implemented:
 | launchApp | `revyl device launch --bundle-id <id>` |
 | installApp | `revyl device install --app-url <url>` |
 | eraseText | `revyl device clear-text` |
-| pressBack | `revyl device back` |
+| pressKey (BACK) | `revyl device back` |
 | pressKey | `revyl device key --key ENTER` |
 | openUrl | `revyl device navigate --url "..."` |
 | screenshot | `revyl device screenshot --out <path>` |

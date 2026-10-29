@@ -137,6 +137,74 @@ class OpenAppReadinessTest {
   }
 
   @Test
+  fun `an accepted launch whose first-frame wait expired still needs drawn evidence`() {
+    val start = AndroidOpenAppReadiness.parseAmStartWait(
+      """
+      Starting: Intent { cmp=com.example.app/.MainActivity }
+      Status: timeout
+      LaunchState: UNKNOWN (-1)
+      Activity: com.example.app/.MainActivity
+      WaitTime: 10195
+      Complete
+      """.trimIndent(),
+    )
+    assertThat(start.succeeded).isTrue()
+    assertThat(start.readinessTimedOut).isTrue()
+  }
+
+  @Test
+  fun `drawn evidence belongs to the app's own activity`() {
+    val notDrawn = dumpsys(appIdle = false).replace(
+      "packageName=com.android.settings", "nowVisible=false\n          packageName=com.android.settings",
+    ).replace("state=STOPPED", "nowVisible=true\n          state=STOPPED")
+    assertThat(AndroidOpenAppReadiness.activityDrawnState(notDrawn, SETTINGS)).isEqualTo(false)
+    assertThat(AndroidOpenAppReadiness.activityDrawnState(notDrawn.replace("nowVisible=false", "nowVisible=true"), SETTINGS))
+      .isEqualTo(true)
+    assertThat(AndroidOpenAppReadiness.activityDrawnState(notDrawn, "com.example.absent")).isNull()
+    assertThat(AndroidOpenAppReadiness.activityDrawnState(dumpsys(appIdle = true), SETTINGS)).isNull()
+  }
+
+  @Test
+  fun `an accepted launch waits for a drawn window without relaunching`() {
+    val clock = FakeClock()
+    val dumps = ArrayDeque(listOf("nowVisible=false", "nowVisible=false", "nowVisible=true"))
+    val drawn = AndroidOpenAppReadiness.awaitActivityDrawn(
+      appId = SETTINGS,
+      nowMs = clock::now,
+      sleep = clock::advance,
+    ) { dumpsys(appIdle = false).replace("packageName=com.android.settings", "${dumps.removeFirst()}\n          packageName=com.android.settings") }
+    assertThat(drawn).isTrue()
+    assertThat(clock.now()).isEqualTo(500L)
+  }
+
+  @Test
+  fun `a slow cold start that draws after 30s is still opened`() {
+    val clock = FakeClock()
+    val drawn = AndroidOpenAppReadiness.awaitActivityDrawn(
+      appId = SETTINGS,
+      nowMs = clock::now,
+      sleep = clock::advance,
+    ) {
+      val visible = clock.now() >= 30_000L
+      dumpsys(appIdle = false).replace("packageName=com.android.settings", "nowVisible=$visible\n          packageName=com.android.settings")
+    }
+    assertThat(drawn).isTrue()
+  }
+
+  @Test
+  fun `missing drawn evidence fails at the existing readiness cap`() {
+    val clock = FakeClock()
+    val drawn = AndroidOpenAppReadiness.awaitActivityDrawn(
+      appId = SETTINGS,
+      timeoutMs = 1_000L,
+      nowMs = clock::now,
+      sleep = clock::advance,
+    ) { dumpsys(appIdle = true) }
+    assertThat(drawn).isFalse()
+    assertThat(clock.now()).isEqualTo(1_000L)
+  }
+
+  @Test
   fun `the idle flag is read from the app's own record, not a neighbour's`() {
     // The launcher below is idle; the app on top is not yet. Reading past the app's record into the
     // next one would report the app idle while its main thread is still starting up.

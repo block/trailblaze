@@ -6,11 +6,13 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.models.RpcErrorResponse
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Helper function to handle RPC result responses.
@@ -81,11 +83,15 @@ inline fun <reified TResponse : Any, reified TRequest : RpcRequest<TResponse>> R
       call.respondRpcDeserializationError(e)
       return@post
     }
-    try {
-      val result = handler.handle(request)
-      call.respondRpcResult(result)
-    } catch (e: Exception) {
-      call.respondRpcException(e)
+    // Ktor's CIO server runs routes on Dispatchers.IO, which in-process is the app's pool; run the
+    // handler and serialize its response on threads the app cannot occupy. See
+    // TrailblazeDispatchers.
+    withContext(TrailblazeDispatchers.IO) {
+      try {
+        call.respondRpcResult(handler.handle(request))
+      } catch (e: Exception) {
+        call.respondRpcException(e)
+      }
     }
   }
 }

@@ -104,7 +104,7 @@ class UsagesCommand : Callable<Int> {
         "Passing any --trails replaces the configured roots rather than adding to them. " +
         "Default: the workspace's effective trails directory (TRAILBLAZE_TRAILS_DIR, the " +
         "workspace `trails:` declaration, or the configured default) plus any extra roots " +
-        "configured in Trail Runner.",
+        "configured in Trailblaze App.",
     ],
   )
   var trailsDirs: List<String> = emptyList()

@@ -178,6 +178,12 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   border: 0; border-bottom: 1px solid var(--line); background: var(--header); color: var(--sub); cursor: pointer;
 }
 #tb-shell.tb-shell-min #tb-shell-handle { display: flex; }
+/* Embedded (?chrome=none) the host chose the archives, so the loader has nothing to offer its
+   reader: no bar, no list of zip URLs, no handle to reopen them. Only the panel's spinner or error
+   shows. Marked from <head>, so the bar never paints for a frame first. */
+html[data-tb-embed] #tb-shell #tb-shell-bar,
+html[data-tb-embed] #tb-shell #tb-shell-list,
+html[data-tb-embed] #tb-shell #tb-shell-handle { display: none; }
 #tb-shell-handle svg { width: 12px; height: 12px; }
 #tb-shell-handle:hover { color: var(--txt); background: var(--raised); }
 #tb-shell-panel {
@@ -225,13 +231,18 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 .tb-analysis-card { position: relative; display: grid; align-content: start; gap: 18px; padding: 28px; border: 1px solid var(--tb-analysis-line); border-radius: 20px; background: var(--tb-analysis-card); overflow: hidden; }
 .tb-analysis-card::before, .tb-analysis-action::before { position: absolute; inset: 0 auto auto 0; width: 100%; height: 3px; background: linear-gradient(90deg, var(--tb-analysis-tone), var(--tb-analysis-grad-mid) 55%, var(--tb-analysis-grad-end)); content: ''; }
 .tb-analysis-card header, .tb-analysis-toolbar, .tb-analysis-siblings { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.tb-analysis-card header { color: var(--tb-analysis-muted); font-size: 12px; }
-.tb-analysis-card h2 { font-size: clamp(23px, 3vw, 32px); line-height: 1.14; }
+.tb-analysis-card header { flex-wrap: wrap; padding: 0 0 12px; border-bottom: 1px solid var(--tb-analysis-line); background: transparent; color: var(--tb-analysis-muted); font-size: 12px; }
+.tb-analysis-card h2 { font-size: clamp(22px, 2.1vw, 26px); line-height: 1.16; }
 .tb-analysis-card h2 a { color: var(--tb-analysis-text); }
 .tb-analysis-card-summary { color: var(--tb-analysis-deck); font-size: 15px; line-height: 1.5; }
+.tb-analysis-diagnostic-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: -2px 0 0; padding: 8px 10px; border-left: 3px solid color-mix(in srgb, var(--tb-analysis-tone) 70%, var(--tb-analysis-line)); border-radius: 8px; background: color-mix(in srgb, var(--tb-analysis-tone) 6%, var(--tb-analysis-card)); color: var(--tb-analysis-deck); font-size: 13px; line-height: 1.4; }
+.tb-analysis-diagnostic-summary b { color: var(--tb-analysis-muted); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+.tb-analysis-diagnostic-summary > span { color: var(--tb-analysis-text); }
 .tb-analysis-card-action { display: grid; gap: 7px; padding-top: 18px; border-top: 1px solid var(--tb-analysis-line); }
 .tb-analysis-card h3, .tb-analysis-kind { color: var(--tb-analysis-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
 .tb-analysis-card-action p { color: var(--tb-analysis-deck); }
+.tb-analysis-action-links { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.tb-analysis-action-links a { font-size: 13px; font-weight: 600; }
 .tb-analysis-open { display: inline-flex; align-items: center; gap: 10px; margin-top: 6px; width: fit-content; font-weight: 600; }
 .tb-analysis-open span { font-size: 18px; }
 .tb-analysis-critical { --tb-analysis-tone: var(--tb-analysis-red); }
@@ -249,18 +260,35 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 .tb-analysis-hero .tb-analysis-eyebrow { margin-top: 4px; }
 .tb-analysis-hero h1 { max-width: 100%; font-size: clamp(30px, 3.6vw, 46px); line-height: 1.12; letter-spacing: -.035em; }
 .tb-analysis-attention { max-width: 760px; color: var(--tb-analysis-deck); font-size: clamp(16px, 1.6vw, 19px); line-height: 1.5; letter-spacing: -.01em; }
-.tb-analysis-priority { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 16px; align-items: stretch; }
+.tb-analysis-focus .tb-analysis-run-cards { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.tb-analysis-run-cards li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 18px 0; border-top: 1px solid var(--tb-analysis-line); }
+.tb-analysis-run-cards li:first-child { padding-top: 0; border-top: 0; }
+.tb-analysis-run-cards h3 { font-size: 16px; line-height: 1.4; }
+.tb-analysis-run-cards .tb-analysis-run-meta > span { margin-left: 0; }
+.tb-analysis-run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.tb-analysis-run-meta .tb-analysis-status { color: var(--tb-analysis-text); padding: 3px 8px; font-size: 11px; }
+.tb-analysis-run-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.tb-analysis a.tb-analysis-run-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 12px; border: 1px solid var(--tb-analysis-link); border-radius: 8px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tb-analysis a.tb-analysis-run-button:hover { background: var(--tb-analysis-control-hover); text-decoration: none; }
+.tb-analysis a.tb-analysis-run-button-primary { background: var(--tb-analysis-link); color: var(--tb-analysis-bg); }
+.tb-analysis a.tb-analysis-run-button-primary:hover { opacity: .9; }
+.tb-analysis-priority { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); gap: 16px; align-items: stretch; }
 .tb-analysis-focus section { display: grid; align-content: start; gap: 14px; min-width: 0; }
 .tb-analysis-priority > section { padding: 25px; border: 1px solid var(--tb-analysis-line); border-radius: 20px; background: var(--tb-analysis-card); }
 .tb-analysis-action { position: relative; overflow: hidden; }
 .tb-analysis-action p { font-size: 17px; line-height: 1.5; }
-.tb-analysis-priority > .tb-analysis-key-evidence { border-color: color-mix(in srgb, var(--tb-analysis-tone) 32%, var(--tb-analysis-line)); }
+.tb-analysis-key-evidence { border-color: color-mix(in srgb, var(--tb-analysis-tone) 32%, var(--tb-analysis-line)); }
 .tb-analysis-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .tb-analysis-detail-grid > section, .tb-analysis-lower { padding: 25px; border: 1px solid var(--tb-analysis-line); border-radius: 18px; background: var(--tb-analysis-card); }
 .tb-analysis-detail-grid > section > h2, .tb-analysis-lower > h2 { padding-bottom: 14px; border-bottom: 1px solid var(--tb-analysis-line); }
 .tb-analysis-subjects, .tb-analysis-evidence-list, .tb-analysis-focus ol, .tb-analysis-focus ul { display: grid; gap: 10px; margin: 0; padding-left: 20px; }
 .tb-analysis-subjects li, .tb-analysis-focus li { overflow-wrap: anywhere; }
-.tb-analysis-subjects li span, .tb-analysis-focus ol li span, .tb-analysis-focus ul li span { margin-left: 8px; color: var(--tb-analysis-muted); }
+.tb-analysis-focus ol li span, .tb-analysis-focus ul li span { margin-left: 8px; color: var(--tb-analysis-muted); }
+.tb-analysis-subjects li > .tb-analysis-subject-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.tb-analysis-subjects li > .tb-analysis-subject-heading span { margin-left: 0; color: var(--tb-analysis-muted); }
+.tb-analysis-run-cards li .tb-analysis-subject-diagnostic { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 6px 0 0; color: var(--tb-analysis-deck); font-size: 12px; }
+.tb-analysis-run-cards li .tb-analysis-diagnostic-label { margin-left: 0; color: var(--tb-analysis-text); font-weight: 600; }
+.tb-analysis-run-cards li .tb-analysis-diagnostic-confidence { margin-left: 0; color: var(--tb-analysis-muted); font-size: 11px; font-weight: 400; }
 .tb-analysis-evidence-list { list-style: none; padding-left: 0 !important; }
 .tb-analysis-evidence-list li + li { padding-top: 15px; border-top: 1px solid var(--tb-analysis-line); }
 .tb-analysis-evidence { padding: 2px 0 10px; }
@@ -283,9 +311,13 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   .tb-analysis-siblings { display: grid; grid-template-columns: 1fr; }
   .tb-analysis-siblings a:last-child { margin-left: 0; text-align: left; }
 }
+@media (max-width: 900px) {
+  .tb-analysis-priority { grid-template-columns: 1fr; }
+}
 @media (max-width: 480px) {
   .tb-analysis-toolbar { align-items: flex-start; flex-direction: column; }
   .tb-analysis-hero { padding: 20px; }
+  .tb-analysis-run-cards li { grid-template-columns: 1fr; }
   .tb-analysis-card, .tb-analysis-priority > section, .tb-analysis-detail-grid > section, .tb-analysis-lower { padding: 20px; }
 }
 .tb-shell-spinner {
@@ -321,6 +353,7 @@ function buildViewerShellHtml(): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Trailblaze Report Viewer</title>
 <script>(()=>{let theme='dark';try{const saved=localStorage.getItem('trailblaze-report-theme');theme=saved==='light'||saved==='dark'?saved:(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){theme=typeof matchMedia==='function'&&matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}document.documentElement.dataset.theme=theme})()</script>
+<script>if(location.search.slice(1).split('&').includes('chrome=none'))document.documentElement.dataset.tbEmbed=''</script>
 <style>${RUN_REPORT_CSS}</style>
 <style>${VIEWER_SHELL_CSS}</style>
 </head>

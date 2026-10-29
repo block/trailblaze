@@ -10,19 +10,13 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("compose_verify_element_visible", isVerification = true)
-@LLMDescription(
-  """
-Verify that a UI element is visible.
-Identify the element using its element ID from the view hierarchy.
-This is a test assertion — it will fail if the element is not found.
-""",
-)
+@LLMDescription("Assert an element is on screen, identified by elementId or testTag.")
 data class ComposeVerifyElementVisibleTool(
-  @param:LLMDescription("Accessibility identifier of the element to verify.")
+  @param:LLMDescription("Element testTag.")
   val testTag: String? = null,
-  @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e5'.")
+  @param:LLMDescription("Element ID, e.g. 'e5'.")
   val elementId: String? = null,
-  @param:LLMDescription("Human-readable description of the element being verified, for logging.")
+  @param:LLMDescription("Short description of the element, for logs.")
   val element: String = "",
 ) : ComposeExecutableTool {
 

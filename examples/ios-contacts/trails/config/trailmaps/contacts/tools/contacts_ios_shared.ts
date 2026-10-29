@@ -101,6 +101,19 @@ export async function textIsVisible(ctx: ToolContext, text: string): Promise<boo
   );
 }
 
+/** Taps an iOS element whose Maestro text contains [text], matching the retired text tap's contract. */
+export async function tapOnText(ctx: ToolContext, text: string): Promise<void> {
+  await ctx.tools.tapOnElementBySelector({
+    nodeSelector: {
+      iosMaestro: { textRegex: `(?is).*${escapeRegExp(text)}.*` },
+    },
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Re-launches the Contacts app from scratch and asserts the list root is
  * visible. Idempotent — safe to call from any prior state, including from

@@ -20,28 +20,21 @@ class BunRuntimeTest {
     assertThat(runtime).isEqualTo(BunRuntime(bunPath))
   }
 
-  @Test fun `detect falls through to bun dot exe on Windows-style PATH`() {
-    // Mirrors ScriptedToolDefinitionAnalyzer.resolveBunBinary's dual-name probe so a Windows
-    // checkout that ships bun as `bun.exe` resolves the same way both bun-locating sites do.
+  @Test fun `detect resolves bun dot exe where that is the platform name`() {
     val bunExePath = File("C:/bun/bun.exe")
-    val runtime = BunRuntimeDetector.detect { name ->
+    val runtime = BunRuntimeDetector.detect(binaryName = "bun.exe") { name ->
       if (name == "bun.exe") bunExePath else null
     }
     assertThat(runtime).isEqualTo(BunRuntime(bunExePath))
   }
 
-  @Test fun `detect prefers bun over bun dot exe when both are present`() {
-    // Pins the probe order: on a misconfigured machine that has both, the POSIX-style name
-    // wins (matches the order in BUN_BINARY_NAMES).
-    val bunExePath = File("/opt/homebrew/bin/bun.exe")
-    val runtime = BunRuntimeDetector.detect { name ->
-      when (name) {
-        "bun" -> bunPath
-        "bun.exe" -> bunExePath
-        else -> null
+  @Test fun `detect looks up only the platform name`() {
+    // A `bun.exe` off Windows, or an extensionless `bun` shim on Windows, is not a bun to run.
+    assertFailure {
+      BunRuntimeDetector.detect(binaryName = "bun") { name ->
+        if (name == "bun.exe") File("/opt/homebrew/bin/bun.exe") else null
       }
-    }
-    assertThat(runtime).isEqualTo(BunRuntime(bunPath))
+    }.hasClass(NoBunRuntimeException::class)
   }
 
   @Test fun `detect does not fall back to other runtimes`() {

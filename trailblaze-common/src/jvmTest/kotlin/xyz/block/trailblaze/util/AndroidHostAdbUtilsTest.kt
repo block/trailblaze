@@ -5,8 +5,14 @@ import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import dadb.AdbOperationFailedException
+import dadb.SyncResult
+import dadb.orThrow
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import org.junit.Test
@@ -668,17 +674,32 @@ class AndroidHostAdbUtilsTest {
   }
 
   @Test
-  fun runOnResolvedClientPropagatesASyncFailureWithoutRecovery() {
+  fun runOnResolvedClientPropagatesADeviceRefusalWithoutRecovery() {
     var recovered = false
     val thrown = runCatching {
       runOnResolvedClient<FakeClient, Unit>(
         resolve = { FakeClient() },
         onClientResolved = {},
         onTransportFailure = { _, _ -> recovered = true },
-        block = { throw IOException("Sync failed: permission denied") },
+        block = { SyncResult.Failure("permission denied").orThrow() },
       )
     }.exceptionOrNull()
-    assertThat(thrown?.message).isEqualTo("Sync failed: permission denied")
+    assertThat(thrown).isNotNull().isInstanceOf(AdbOperationFailedException::class)
+    assertThat(recovered).isFalse()
+  }
+
+  @Test
+  fun runOnResolvedClientPropagatesAMissingLocalFileWithoutRecovery() {
+    var recovered = false
+    val thrown = runCatching {
+      runOnResolvedClient<FakeClient, Unit>(
+        resolve = { FakeClient() },
+        onClientResolved = {},
+        onTransportFailure = { _, _ -> recovered = true },
+        block = { throw FileNotFoundException("/tmp/missing.apk (No such file or directory)") },
+      )
+    }.exceptionOrNull()
+    assertThat(thrown).isNotNull().isInstanceOf(FileNotFoundException::class)
     assertThat(recovered).isFalse()
   }
 
@@ -821,6 +842,65 @@ class AndroidHostAdbUtilsTest {
   fun anUnreadableSocketTableFallsBackToTheProcessCheck() {
     assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe("2369\n", 54624)).isTrue()
     assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe("\n", 54624)).isFalse()
+  }
+
+  // ── onDeviceRunnerStateFromProbe ─────────────────────────────────────────
+
+  private fun reuseProbe(pid: String, vararg launcherPids: String): String =
+    listOf(probe(pid, listenerOn54624), "trailblaze-instrumentation-launcher", *launcherPids).joinToString("\n")
+
+  @Test
+  fun aServingRunnerWhoseLauncherIsAliveIsReused() {
+    assertThat(AndroidHostAdbUtils.onDeviceRunnerStateFromProbe(reuseProbe("2369", "2301"), 54624))
+      .isEqualTo(AndroidHostAdbUtils.OnDeviceRunnerState.REUSABLE)
+  }
+
+  /**
+   * The host that launched the runner exited, so adbd killed its `am instrument` and the runner's
+   * UiAutomation with it. Process and port both look healthy; reusing it fails the first action.
+   */
+  @Test
+  fun aServingRunnerWhoseLauncherHasExitedIsNotReused() {
+    assertThat(AndroidHostAdbUtils.onDeviceRunnerStateFromProbe(reuseProbe("2369"), 54624))
+      .isEqualTo(AndroidHostAdbUtils.OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED)
+  }
+
+  /** A device without `pgrep` must not read its shell's complaint as a live launcher. */
+  @Test
+  fun onlyPidsCountAsALiveLauncher() {
+    assertThat(
+      AndroidHostAdbUtils.onDeviceRunnerStateFromProbe(reuseProbe("2369", "/system/bin/sh: pgrep: not found"), 54624),
+    ).isEqualTo(AndroidHostAdbUtils.OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED)
+  }
+
+  @Test
+  fun aProbeCutOffBeforeTheLauncherCheckIsNotReused() {
+    assertThat(AndroidHostAdbUtils.onDeviceRunnerStateFromProbe(probe("2369", listenerOn54624), 54624))
+      .isEqualTo(AndroidHostAdbUtils.OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED)
+  }
+
+  @Test
+  fun aLauncherWithoutAServingRunnerIsNotRunning() {
+    assertThat(
+      AndroidHostAdbUtils.onDeviceRunnerStateFromProbe(
+        listOf(probe("2369"), "trailblaze-instrumentation-launcher", "2301").joinToString("\n"),
+        54624,
+      ),
+    ).isEqualTo(AndroidHostAdbUtils.OnDeviceRunnerState.NOT_RUNNING)
+  }
+
+  @Test
+  fun theLauncherPatternMatchesAmInstrumentButNotTheProbeRunningIt() {
+    val pattern = AndroidHostAdbUtils.instrumentationLauncherPattern("xyz.block.trailblaze.runner")
+    val regex = Regex(pattern)
+    // `ps -A -o ARGS` for a live runner's launcher.
+    val amInstrument = "app_process /system/bin com.android.commands.am.Am instrument -w -r " +
+      "--no-hidden-api-checks -e class xyz.block.trailblaze.AndroidStandaloneServerTest " +
+      "xyz.block.trailblaze.runner/androidx.test.runner.AndroidJUnitRunner"
+    assertThat(regex.containsMatchIn(amInstrument)).isTrue()
+    assertThat(regex.containsMatchIn("sh -c pidof xyz.block.trailblaze.runner ; pgrep -f '$pattern'")).isFalse()
+    assertThat(regex.containsMatchIn(amInstrument.replace("xyz.block.trailblaze.runner/", "com.example.other/")))
+      .isFalse()
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

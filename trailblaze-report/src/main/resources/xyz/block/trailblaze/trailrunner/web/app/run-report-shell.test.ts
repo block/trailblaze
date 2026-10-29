@@ -7,7 +7,7 @@ import { toSessionPayloads } from "./run-report-extract";
 import { buildMultiReportHtml } from "./run-report-html";
 import { buildViewerShellHtml } from "./run-report-shell-html";
 import { VIEWER_ROUTE_KEYS } from "./run-report-route";
-import { addArchiveUrls, addressWithoutArchive, analysisParamsFrom, analysisProblemHref, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderAnalysisView, renderButtonState, renderPlan, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
+import { addArchiveUrls, addressWithoutArchive, analysisParamsFrom, analysisProblemHref, gzipAnalysisSnapshot, launchCategoryFix, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderAnalysisView, renderButtonState, renderPlan, repairMachineFor, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
 import type { ArchiveSource } from "./run-report-shell";
 
 describe("buildViewerShellHtml", () => {
@@ -116,6 +116,17 @@ describe("buildViewerShellHtml", () => {
     expect(shell).not.toMatch(/id="tb-shell-handle"[^>]* hidden/);
   });
 
+  test("embedded with chrome=none, the loader chrome never shows", () => {
+    // The host picked the archives, so the URL bar, the zip list and the reopen handle are noise in
+    // its frame. Marked from <head>, before the body parses, so the bar cannot paint first.
+    const head = shell.slice(0, shell.indexOf("</head>"));
+    expect(head).toContain("includes('chrome=none')");
+    expect(head).toContain("dataset.tbEmbed");
+    for (const id of ["tb-shell-bar", "tb-shell-list", "tb-shell-handle"]) {
+      expect(shell).toContain(`html[data-tb-embed] #tb-shell #${id}`);
+    }
+  });
+
   test("says up front that loading by URL depends on the archive host's CORS header", () => {
     // The two load paths have different requirements: a dropped file needs no network, while `?zip=`
     // is a cross-origin fetch that only works when the host opts in. The loader already names the
@@ -196,6 +207,110 @@ describe("structured analysis deep links", () => {
     ],
   };
 
+  test("shows the category action only with a usable configured launcher", () => {
+    expect(renderAnalysisView(payload, "checkout")).not.toContain("Fix this category");
+    expect(renderAnalysisView({ ...payload, fix_category_launcher_url: "javascript:launch()" }, "checkout")).not.toContain("Fix this category");
+    const configured = { ...payload, fix_category_launcher_url: "https://actions.example/fix" };
+    const href = "https://viewer.example/?analysis=https%3A%2F%2Fviewer.example%2Fanalysis.json";
+    expect(renderAnalysisView(configured, "checkout", href)).toContain('data-tb-fix-category="checkout"');
+    expect(renderAnalysisView(configured, "checkout", href)).toContain("Fix on Linux");
+    expect(renderAnalysisView(configured, "checkout", href)).not.toContain("data-tb-fix-machine");
+    expect((renderAnalysisView(configured, "all", href).match(/Fix on Linux/g) || []).length).toBe(2);
+    expect(renderAnalysisView(configured, "checkout", "https://viewer.example/?analysis=https%3A%2F%2Fattacker.example%2Fanalysis.json")).not.toContain("Fix on Linux");
+  });
+
+  test("routes iOS and mixed affected members to the Mac fixer, with Linux as the default", () => {
+    expect(repairMachineFor(payload.problem_sets[0])).toBe("linux");
+    const mixed = {
+      ...payload,
+      fix_category_launcher_url: "https://actions.example/fix",
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], platform: "android" }],
+      }, {
+        ...payload.problem_sets[1],
+        affected_subjects: [{ ...payload.problem_sets[1].affected_subjects[0], platform: "ios" }],
+      }],
+    };
+    expect(repairMachineFor(mixed.problem_sets[1])).toBe("mac-ios");
+    expect(repairMachineFor({ affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], context: "ios simulator", platform: undefined }] })).toBe("mac-ios");
+    expect(repairMachineFor({ affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], context: "mobile", device: "iPhone 15", platform: undefined }] })).toBe("mac-ios");
+    const html = renderAnalysisView(mixed, "all", "https://viewer.example/?analysis=https%3A%2F%2Fviewer.example%2Fanalysis.json");
+    expect(html).toContain("Fix on Linux");
+    expect((html.match(/Fix on Mac \(iOS\)/g) || []).length).toBe(1);
+  });
+
+  test("puts every failed attempt beside next action with exact trail/replay links and keeps evidence below", () => {
+    const problem = payload.problem_sets[0];
+    const first = "https://viewer.example/?zip=first.zip&tab=video";
+    const retry = "https://viewer.example/?zip=retry.zip&tab=video";
+    const enriched = { ...payload, problem_sets: [{ ...problem, affected_subjects: [
+      { ...problem.affected_subjects[0], key: "first", label: "First <failed> trail & run", report_href: first, status: { tone: "warning", label: "Needs investigation" } },
+      { ...problem.affected_subjects[0], key: "retry", report_href: retry, status: { tone: "notice", label: "Change available" } },
+      { ...problem.affected_subjects[0], key: "missing", label: "Missing report attempt", report_href: "javascript:alert(1)", status: { tone: 'warning" onclick="bad()', label: "BAD_STATUS" } },
+    ] }, payload.problem_sets[1]] };
+    const html = renderAnalysisView(enriched, "checkout");
+    const panelStart = html.indexOf('class="tb-analysis-failed-trails"');
+    const panel = html.slice(panelStart, html.indexOf('</section>', panelStart));
+    expect(panel).toContain('href="https://viewer.example/?zip=first.zip&amp;tab=recording"');
+    expect(panel).toContain('href="https://viewer.example/?zip=first.zip&amp;tab=replay"');
+    expect(panel).toContain('href="https://viewer.example/?zip=retry.zip&amp;tab=recording"');
+    expect(panel).toContain('href="https://viewer.example/?zip=retry.zip&amp;tab=replay"');
+    expect((panel.match(/>View trail ↗/g) || []).length).toBe(2);
+    expect((panel.match(/>Watch replay ↗/g) || []).length).toBe(2);
+    expect(panel).toContain('First &lt;failed&gt; trail &amp; run');
+    expect(panel).toContain('Missing report attempt');
+    expect(panel).toContain('Report unavailable');
+    expect(panel).toContain('tb-analysis-status tb-analysis-warning">Needs investigation');
+    expect(panel).toContain('tb-analysis-status tb-analysis-notice">Change available');
+    expect(panel).not.toContain('BAD_STATUS');
+    expect(html.indexOf('Next action')).toBeLessThan(panelStart);
+    expect(panelStart).toBeLessThan(html.indexOf('Key evidence'));
+    expect(html).not.toContain('Affected runs');
+    expect(html).not.toContain('tab=video');
+    expect(html).not.toContain("javascript:");
+    expect(renderAnalysisView(payload, "checkout")).toContain("Report unavailable");
+  });
+
+  test("compresses the original UTF-8 analysis bytes without reserializing JSON", async () => {
+    const analysisJson = ' {\r\n "label": "caf\\u00e9 ☕", "problem_sets": []\r\n}\n';
+    expect(JSON.stringify(JSON.parse(analysisJson))).not.toBe(analysisJson);
+    const encoded = await gzipAnalysisSnapshot(analysisJson);
+    const compressed = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const restored = new Uint8Array(await new Response(stream).arrayBuffer());
+    expect(restored).toEqual(new TextEncoder().encode(analysisJson));
+  });
+
+  test("transfers explicit click context only to its matching launch window", async () => {
+    type Listener = Parameters<Parameters<typeof launchCategoryFix>[4]['addEventListener']>[1];
+    let listener: Listener | undefined;
+    let opened = "";
+    const sent: unknown[] = [];
+    const popup = { postMessage: (message: unknown, origin: string) => sent.push({ message, origin }) };
+    const browser = {
+      crypto, location: { origin: "https://viewer.example" },
+      open: (url: string) => { opened = url; return popup; },
+      addEventListener: (_type: 'message', callback: Listener) => { listener = callback; },
+      removeEventListener: () => { listener = undefined; },
+    };
+    expect(sent).toEqual([]);
+    expect(() => launchCategoryFix("https://actions.example/fix", "https://attacker.example/analysis.json", "checkout", "https://viewer.example/problem", browser)).toThrow("published by this report host");
+    expect(opened).toBe("");
+    const analysisJson = ' {\r\n "problem_sets": [], "label": "caf\\u00e9"\r\n}\n';
+    const analysisGzip = await gzipAnalysisSnapshot(analysisJson);
+    launchCategoryFix("https://actions.example/fix", "https://viewer.example/analysis.json", "checkout", "https://viewer.example/problem", browser, "https://ci.example/project/builds/1", analysisGzip);
+    const nonce = new URL(opened).searchParams.get('nonce')!;
+    expect(new URL(opened).searchParams.get('source_origin')).toBe("https://viewer.example");
+    listener!({ source: popup, origin: "https://spoof.example", data: { type: 'trailblaze-fix-category-ready', nonce } });
+    listener!({ source: null, origin: "https://actions.example", data: { type: 'trailblaze-fix-category-ready', nonce } });
+    listener!({ source: popup, origin: "https://actions.example", data: { type: 'trailblaze-fix-category-ready', nonce: 'other' } });
+    expect(sent).toEqual([]);
+    listener!({ source: popup, origin: "https://actions.example", data: { type: 'trailblaze-fix-category-ready', nonce } });
+    expect(sent).toEqual([{ origin: "https://actions.example", message: { type: 'trailblaze-fix-category-launch', nonce, context: { analysis: "https://viewer.example/analysis.json", category: "checkout", pageUrl: "https://viewer.example/problem", buildUrl: "https://ci.example/project/builds/1", analysisGzip } } }]);
+    expect(listener).toBeUndefined();
+  });
+
   test("round-trips the analysis document and selected problem", () => {
     const document = "https://cdn.example/analysis/a.json?signature=a&key=b";
     const href = `https://viewer.example/?analysis=${encodeURIComponent(document)}&problem=checkout`;
@@ -229,6 +344,147 @@ describe("structured analysis deep links", () => {
     expect(html).toContain("Compare a run before and after this commit.");
     expect(html).toContain(`href="https://github.com/example/checkout-app/commit/${"a".repeat(40)}"`);
     expect(html).toContain('data-tb-copy-status class="tb-shell-sr"');
+    expect(html).not.toContain("Diagnostic classification:");
+  });
+
+  test("renders published self-heal PR links in the overview and focused action", () => {
+    const withHealPr = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        status: { tone: "notice", label: "Change available" },
+        next_action_or_evidence_needed: {
+          ...payload.problem_sets[0].next_action_or_evidence_needed,
+          links: [{ label: "Open self-heal PR", href: "https://github.com/example/trails/pull/123" }],
+        },
+      }, payload.problem_sets[1]],
+    };
+    const overview = renderAnalysisView(withHealPr, "all");
+    expect(overview).toContain("Open self-heal PR");
+    expect(overview).toContain('href="https://github.com/example/trails/pull/123"');
+    const focused = renderAnalysisView(withHealPr, "checkout");
+    expect(focused).toContain("Open self-heal PR");
+    expect(focused).toContain('target="_blank" rel="noopener noreferrer"');
+  });
+
+  test("ignores malformed action links while preserving the analysis", () => {
+    const malformed = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        next_action_or_evidence_needed: {
+          ...payload.problem_sets[0].next_action_or_evidence_needed,
+          links: [
+            { label: "Unsafe scheme", href: "javascript:alert(1)" },
+            { label: "Missing URL" },
+          ],
+        },
+      }, payload.problem_sets[1]],
+    };
+    const html = renderAnalysisView(malformed, "checkout");
+    expect(html).toContain("Inspect the checkout step.");
+    expect(html).not.toContain("Unsafe scheme");
+    expect(html).not.toContain("javascript:");
+  });
+
+  test("renders optional diagnostics per affected run and in the problem summary", () => {
+    const annotated = {
+      ...payload,
+      problem_sets: [
+        {
+          ...payload.problem_sets[0],
+          diagnostic_summary: "The available evidence points to a product change.",
+          affected_subjects: [{
+            ...payload.problem_sets[0].affected_subjects[0],
+            diagnostic: {
+              status: "classified",
+              label: "Product regression (intermittency observed)",
+              primary_diagnosis: "PRODUCT_REGRESSION",
+              intermittency: "OBSERVED",
+              confidence: 0.875,
+            },
+          }],
+        },
+        {
+          ...payload.problem_sets[1],
+          affected_subjects: [{
+            ...payload.problem_sets[1].affected_subjects[0],
+            diagnostic: { status: "unavailable", label: "Classification unavailable" },
+          }],
+        },
+      ],
+    };
+    const overview = renderAnalysisView(annotated, "all");
+    expect(overview).toContain("Diagnostic classification:");
+    expect(overview).toContain("The available evidence points to a product change.");
+    expect(overview.indexOf("1 affected run(s)")).toBeLessThan(overview.indexOf("Diagnostic classification:"));
+    expect(overview.indexOf("Diagnostic classification:")).toBeLessThan(overview.indexOf("Checkout &lt;changed&gt;"));
+    expect(overview.indexOf("Diagnostic classification:")).toBeLessThan(overview.indexOf("Open problem and evidence"));
+    expect(overview).not.toContain("1 affected run · high confidence");
+    expect(overview).toContain("high confidence");
+    const countOnlyOverview = renderAnalysisView({
+      ...annotated,
+      problem_sets: annotated.problem_sets.map((problem) => ({
+        ...problem,
+        context_summary: `${problem.affected_subjects.length} affected run(s)`,
+      })),
+    }, "all");
+    expect((countOnlyOverview.match(/1 affected run\(s\)/g) || []).length).toBe(2);
+    const checkout = renderAnalysisView(annotated, "checkout");
+    expect(checkout).toContain("Diagnostic classification: Product regression (intermittency observed)");
+    expect(checkout).toContain("Classifier confidence: 0.875");
+    expect(checkout.indexOf("1 affected run · high confidence")).toBeLessThan(checkout.indexOf("Diagnostic classification:"));
+    expect(checkout.indexOf("Diagnostic classification:")).toBeLessThan(checkout.indexOf("Key evidence"));
+    const settings = renderAnalysisView(annotated, "settings");
+    expect(settings).toContain("Diagnostic classification: Classification unavailable");
+    expect(settings).toContain("Classification unavailable");
+  });
+
+  test("renders unresolved intermittency and fails soft on malformed optional annotations", () => {
+    const unknownObserved = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        affected_subjects: [{
+          ...payload.problem_sets[0].affected_subjects[0],
+          diagnostic: {
+            status: "classified",
+            label: "Flaky; cause unresolved",
+            primary_diagnosis: "UNKNOWN",
+            intermittency: "OBSERVED",
+          },
+        }],
+      }, payload.problem_sets[1]],
+    };
+    expect(renderAnalysisView(unknownObserved, "checkout")).toContain("Diagnostic classification: Flaky; cause unresolved");
+
+    const unknownCause = {
+      ...unknownObserved,
+      problem_sets: [{
+        ...unknownObserved.problem_sets[0],
+        affected_subjects: [{
+          ...unknownObserved.problem_sets[0].affected_subjects[0],
+          diagnostic: { status: "classified", label: "Unknown cause", primary_diagnosis: "UNKNOWN" },
+        }],
+      }, unknownObserved.problem_sets[1]],
+    };
+    expect(renderAnalysisView(unknownCause, "checkout")).toContain("Diagnostic classification: Unknown cause");
+
+    const malformed = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        diagnostic_summary: 42,
+        affected_subjects: [{
+          ...payload.problem_sets[0].affected_subjects[0],
+          diagnostic: { status: "not-valid", label: "should be ignored", confidence: "high" },
+        }],
+      }, payload.problem_sets[1]],
+    };
+    const html = renderAnalysisView(malformed, "checkout");
+    expect(html).not.toContain("Diagnostic classification:");
+    expect(html).not.toContain("should be ignored");
+    expect(html).toContain("Affected run 1");
   });
 
   test("renders all problem sets and rejects missing or malformed selections", () => {

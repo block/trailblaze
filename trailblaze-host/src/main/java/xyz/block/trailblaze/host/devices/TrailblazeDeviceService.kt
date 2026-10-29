@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
+import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getMaestroOnDeviceSpecificPort
@@ -14,6 +15,7 @@ import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 object TrailblazeDeviceService {
@@ -25,9 +27,16 @@ object TrailblazeDeviceService {
    */
   private const val CACHE_TTL_MS = 30_000L
 
+  // iOS only, deliberately: Android devices come from AndroidHostAdbUtils, the one adb client every
+  // other Android host path already uses, rather than a second listing through Maestro's own dadb
+  // connections. listIOSConnectedDevices keeps physical iPhones
+  // visible to a by-id lookup so HostIosDriverFactory can say why they're refused.
   private val connectedDevices = ConnectedDeviceLookup(
     ttlMs = CACHE_TTL_MS,
-    listAll = { DeviceService.listConnectedDevices() },
+    listAll = {
+      DeviceService.listIOSDevices().filterIsInstance<Device.Connected>() +
+        DeviceService.listIOSConnectedDevices()
+    },
     bootedSimulatorIds = { IosHostSimctlUtils.listBootedDeviceIds() },
   )
 
@@ -73,6 +82,27 @@ object TrailblazeDeviceService {
   }
 
   /**
+   * [describe]'s first successful result, retried for up to [AXE_CONNECT_RETRY_MS]. A SpringBoard
+   * that just restarted (as a device-language switch does) posts that it started a moment before
+   * the accessibility server can describe its screen, and AXe reports that as a failure.
+   */
+  internal fun describeUiOnceReady(
+    nanoTime: () -> Long = System::nanoTime,
+    sleep: (Long) -> Unit = Thread::sleep,
+    describe: () -> AxeCli.Result,
+  ): AxeCli.Result {
+    val deadline = nanoTime() + AXE_CONNECT_RETRY_MS * 1_000_000
+    while (true) {
+      val result = describe()
+      if (result.success || nanoTime() >= deadline) return result
+      sleep(AXE_CONNECT_RETRY_INTERVAL_MS)
+    }
+  }
+
+  private const val AXE_CONNECT_RETRY_MS = 10_000L
+  private const val AXE_CONNECT_RETRY_INTERVAL_MS = 250L
+
+  /**
    * Gets a connected iOS Simulator via the AXe CLI. Simulator-only by design — AXe uses
    * Apple's private Accessibility APIs which are not available on real devices.
    */
@@ -86,7 +116,7 @@ object TrailblazeDeviceService {
     // Bounds come from the AXe root `AXApplication` frame — the `application` element is
     // sized to the screen. Cheaper than calling `xcrun simctl` and doesn't require an
     // extra subprocess.
-    val describe = AxeCli.describeUi(udid)
+    val describe = describeUiOnceReady { AxeCli.describeUi(udid) }
     if (!describe.success) {
       System.err.println("[IOS_AXE] axe describe-ui failed for $udid: ${describe.stderr.trim()}")
       return null
@@ -140,13 +170,31 @@ object TrailblazeDeviceService {
     return connected
   }
 
-  fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> {
-    return connectedDevices.all().map {
+  /**
+   * [devices] without physical iPhones, which Trailblaze does not support: only simulators are
+   * offered on iOS. Lookup by id still sees an iPhone, so asking for one by its id fails in
+   * [HostIosDriverFactory.createIOS] with a message that says why, not "device not found".
+   */
+  internal fun supportedDevices(devices: List<Device.Connected>): List<Device.Connected> =
+    devices.filterNot { it.platform == Platform.IOS && it.deviceType == Device.DeviceType.REAL }
+
+  fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> = combineConnectedDevices(
+    iosDevices = connectedDevices.all(),
+    androidDevices = AndroidHostAdbUtils.listConnectedAdbDevices(),
+  )
+
+  /** The listing seam: iOS from Maestro (physical iPhones dropped), Android from adb. */
+  internal fun combineConnectedDevices(
+    iosDevices: List<Device.Connected>,
+    androidDevices: List<TrailblazeDeviceId>,
+  ): Set<TrailblazeDeviceId> {
+    val ios = supportedDevices(iosDevices).map {
       TrailblazeDeviceId(
         instanceId = it.instanceId,
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
       )
-    }.toSet()
+    }
+    return (ios + androidDevices).toSet()
   }
 
   /**

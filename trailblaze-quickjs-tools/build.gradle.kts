@@ -6,7 +6,7 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
   alias(libs.plugins.kotlin.serialization)
   // Bundles author tool sources under
-  // `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools/`
+  // `examples/android-sample-app/trails/config/quickjs-tools/`
   // into runnable JS via esbuild. The produced bundle is consumed by SampleAppToolsDemoTest as
   // the "real esbuild output" proof point — no inline esbuild invocation in the test.
   id("trailblaze.author-tool-bundle")
@@ -24,7 +24,7 @@ trailblazeAuthorToolBundles {
   register("sampleAppTyped") {
     // Path is relative to this module's projectDir — works regardless of repository layout.
     sourceDir.set(
-      layout.projectDirectory.dir("../examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools"),
+      layout.projectDirectory.dir("../examples/android-sample-app/trails/config/quickjs-tools"),
     )
     entryPoint.set("typed.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
@@ -44,11 +44,18 @@ trailblazeAuthorToolBundles {
     entryPoint.set("bench.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
   }
+  // An SDK-authored trailhead with `teardown`, for `QuickJsTrailheadTeardownTest`.
+  register("trailheadTeardown") {
+    sourceDir.set(layout.projectDirectory.dir("src/jvmTest/fixtures/trailhead-teardown"))
+    entryPoint.set("trailhead.ts")
+    autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
+  }
 }
 
 tasks.named("bundleSampleAppTypedAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 tasks.named("bundleOnDeviceMemoryProbeAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 tasks.named("bundleDispatchBenchmarkAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
+tasks.named("bundleTrailheadTeardownAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 
 // Wire the produced bundle into jvmTest as a system property and a task dependency. The
 // `SampleAppToolsDemoTest.on-device TS bundles via esbuild and runs in QuickJS` test reads
@@ -65,20 +72,37 @@ val onDeviceMemoryProbeBundle = tasks.named("bundleOnDeviceMemoryProbeAuthorTool
 val dispatchBenchmarkBundle = tasks.named("bundleDispatchBenchmarkAuthorTool").map { task ->
   (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
 }
+val trailheadTeardownBundle = tasks.named("bundleTrailheadTeardownAuthorTool").map { task ->
+  (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
+}
 tasks.withType<Test>().configureEach {
   if (name == "jvmTest") {
     dependsOn("bundleSampleAppTypedAuthorTool")
     dependsOn("bundleOnDeviceMemoryProbeAuthorTool")
-    dependsOn("bundleDispatchBenchmarkAuthorTool")
+    dependsOn("bundleTrailheadTeardownAuthorTool")
     systemProperty("trailblaze.test.sampleAppTypedBundle", sampleAppTypedBundle.get())
     systemProperty("trailblaze.test.onDeviceMemoryProbeBundle", onDeviceMemoryProbeBundle.get())
-    systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
-    // Opt-in for QuickJsToolDispatchBenchmark. A provider, not System.getenv in the test, so the
-    // configuration cache keys on it instead of replaying a stale value into later runs:
-    //   ./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
-    //     -Dtrailblaze.benchmark=true -i
-    systemProperty("trailblaze.benchmark", providers.systemProperty("trailblaze.benchmark").getOrElse("false"))
+    systemProperty("trailblaze.test.trailheadTeardownBundle", trailheadTeardownBundle.get())
+    // A benchmark, not a test: it runs only through `dispatchBenchmark` below.
+    filter.excludeTestsMatching("*QuickJsToolDispatchBenchmark")
   }
+}
+
+// Times scripted-tool dispatch for the devlog; asserts nothing about speed, so it stays out of
+// `check`. Run it with: ./gradlew :trailblaze-quickjs-tools:dispatchBenchmark
+val dispatchBenchmark = tasks.register<Test>("dispatchBenchmark") {
+  description = "Times QuickJS scripted-tool dispatch against a Kotlin tool and prints the table."
+  group = "verification"
+  // The collections, not the task: they carry the compile dependencies without running jvmTest.
+  val jvmTest = tasks.named<Test>("jvmTest").get()
+  testClassesDirs = jvmTest.testClassesDirs
+  classpath = jvmTest.classpath
+  filter.includeTestsMatching("*QuickJsToolDispatchBenchmark")
+  dependsOn("bundleDispatchBenchmarkAuthorTool")
+  systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
+  testLogging.showStandardStreams = true
+  // Timings, so never served from cache or skipped as up to date.
+  outputs.upToDateWhen { false }
 }
 
 android {
@@ -95,6 +119,7 @@ android {
 
 kotlin {
   androidTarget {
+    publishLibraryVariants("release", "debug")
     compilerOptions {
       jvmTarget = JvmTarget.JVM_17
     }

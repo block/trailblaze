@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.android.accessibility
 
-import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Bundle
 import android.text.Spanned
@@ -25,7 +24,7 @@ fun AccessibilityNodeInfo.toAccessibilityNode(
   nodeIdCounter: NodeIdCounter = NodeIdCounter(),
   tally: TreeCaptureTally = TreeCaptureTally(),
 ): AccessibilityNode {
-  val nodeRect = Rect().apply { getBoundsInScreen(this) }
+  val nodeRect = prepareForSnapshot()
   val bounds = AccessibilityNode.Bounds(
     left = nodeRect.left,
     top = nodeRect.top,

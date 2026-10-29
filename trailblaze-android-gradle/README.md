@@ -75,6 +75,11 @@ trailblazeAndroid {
   // (optional) restrict to specific trails within a class — e.g. a fast-PR-check subset.
   // Class not in the map → all its trails generate. Method name typos fail loudly at build time.
   // onlyMethodNames.put("LoginFlowTest", setOf("happyPath", "invalidCredentials"))
+  // (optional) run a class's trails that share a trailhead in one @Test, in order, so they share
+  // an emulator and app process — and, with the `trailblaze.trailheadReuse=true` instrumentation
+  // arg, the trailhead's setup. Each trail keeps its own session and result; the device farm sees
+  // one test per group. Groups hold at most maxTrailsPerTrailheadGroup trails (default 2).
+  // groupTrailsByTrailhead = true
 
   // (optional) pre-compile a trailmap's scripted tools too — see "Scripted-tool bundling" below.
   // trailmap {
@@ -254,6 +259,15 @@ under `sdkDir`:
 | `node_modules/.bin/esbuild` | The esbuild binary — populated by `bun install` |
 | `src/in-process.ts` | The slim in-process SDK entry esbuild aliases `@trailblaze/scripting` to |
 | `tools/in-process-wrapper-template.mjs` | The wrapper template that registers each tool |
+
+A trailmap with a `.ts` tool that has no descriptor YAML also needs the analyzer, which writes
+the `<tool>.tooldefs.json` a device reads to find that tool by name:
+
+| Requirement | What it is |
+| --- | --- |
+| `tools/extract-tool-defs.mjs` under `sdkDir` | The analyzer. Without it no `.tooldefs.json` is written, and such a tool is reachable only through a target's `tools:` list |
+| `node_modules/typescript`, `node_modules/ts-json-schema-generator` under `sdkDir` | Its dependencies, populated by the same `bun install` |
+| `bun` on `PATH` | Runs the analyzer. A trailmap whose `.ts` tools all have descriptor YAMLs doesn't need it |
 
 Inside the Trailblaze framework source tree, leave `sdkDir` unset — the walk-up finds it. Outside
 that tree, set `sdkDir` explicitly; until `@trailblaze/scripting` publishes to npm, vendor a copy:

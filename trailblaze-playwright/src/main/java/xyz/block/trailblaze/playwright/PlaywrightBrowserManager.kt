@@ -23,6 +23,7 @@ import xyz.block.trailblaze.tracing.PlatformIds
 import xyz.block.trailblaze.tracing.SpanKind
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -239,7 +240,7 @@ class PlaywrightBrowserManager(
   private val isCI = isRunningOnCi()
 
   private val xdgTempDir: java.nio.file.Path? =
-    if (System.getenv("XDG_RUNTIME_DIR").isNullOrBlank()) {
+    if (!isWindows() && System.getenv("XDG_RUNTIME_DIR").isNullOrBlank()) {
       java.nio.file.Files.createTempDirectory("xdg")
     } else {
       null
@@ -247,6 +248,10 @@ class PlaywrightBrowserManager(
 
   private val customEnv =
     HashMap<String, String>().apply {
+      // This map REPLACES the browser's environment. Chromium on Windows cannot start networking,
+      // TLS or its profile without the host's own variables (SystemRoot, TEMP, LOCALAPPDATA, ...),
+      // so there it starts from the full host environment and the entries below only override.
+      if (isWindows()) putAll(System.getenv())
       xdgTempDir?.let { put("XDG_RUNTIME_DIR", it.toString()) }
       put("DBUS_SESSION_BUS_ADDRESS", "")
       put("DBUS_SYSTEM_BUS_ADDRESS", "")
@@ -519,6 +524,7 @@ class PlaywrightBrowserManager(
           // Ensure the Chromium browser binary is installed. This is a no-op after first install.
           PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
           playwright = Playwright.create()
+          PlaywrightTextRuns.register(playwright)
           // Resolve the user-facing viewport spec against the live Playwright registry
           // before any context is built — preset typos surface here as a clean
           // IllegalArgumentException ("Unknown Playwright device preset 'iPhne 14'…")

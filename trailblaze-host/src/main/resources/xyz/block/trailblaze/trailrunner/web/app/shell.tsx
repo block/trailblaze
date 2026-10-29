@@ -58,7 +58,7 @@ const NAV = [
 // One door for runs: the Runs screen lists in-flight runs under an "Active" section and finished
 // ones under "Completed", so there's nothing to split across two nav rows. No group heading — it
 // would render "Runs" directly above the single row also labelled "Runs".
-const RUNS_NAV = [{ group: null, items: [['runs', 'Runs', 'gallery-vertical-end']] }];
+const RUNS_NAV = [{ group: null, items: [['runs', 'Runs', 'gallery-vertical-end'], ['devices', 'Devices', 'monitor-smartphone']] }];
 // Trailmaps is reference material, not part of the Blaze→Trails authoring flow — pin it to the
 // bottom of the rail (just above Search), visually separated by a divider.
 const TRAILMAPS = [
@@ -399,7 +399,7 @@ function NavRail({ route, go, badges = {}, workspaceNavigation = [], openPalette
   return (
     <div className={'tb-rail' + (compact ? ' collapsed' : '')}>
       <div className="tb-brand" style={{ justifyContent: compact ? 'center' : 'space-between' }}>
-        <span className="name">Trail Runner</span>
+        <span className="name">Trailblaze App</span>
         <RailHoverTip compact={compact} tip="Expand sidebar">
           <button type="button" onClick={toggleRail}
             title={compact ? undefined : 'Collapse sidebar'} aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -524,6 +524,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
     ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
     ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('runs'); close(); }],
+    ['monitor-smartphone', 'Go to Devices', null, () => { go('devices'); close(); }],
     ['wrench', 'Browse custom tools', null, () => { go('tools'); close(); }],
   ].filter(([, label]) => match(label)).map(([ico, label, kbd, fn]) => ({ ico, label, kbd, sub: null, fn }));
 
@@ -649,9 +650,9 @@ function DaemonDownBanner({ retry }) {
     <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', background: 'rgba(255,90,90,.14)', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
       <Ico n="unplug" s={15} c="var(--tb-danger-text)" />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--tb-danger-text)' }}>Can't reach the Trail Runner daemon.</span>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--tb-danger-text)' }}>Can't reach the Trailblaze daemon.</span>
         <span className="tb-sub" style={{ fontSize: 12, marginLeft: 8 }}>
-          Requests are timing out; data on screen may be stale. Reconnecting automatically - if this persists, restart Trail Runner.
+          Requests are timing out; data on screen may be stale. Reconnecting automatically - if this persists, restart Trailblaze App.
         </span>
       </div>
       <Btn sm ico="refresh-cw" onClick={retry}>Retry now</Btn>
@@ -733,11 +734,22 @@ const zipReportDeepLink = (() => {
   try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
 })();
 
+// Third deep link: #devices opens straight onto the live device mirrors, and #devices/<id> onto
+// one device with the whole screen. `true` for the first, the device id for the second.
+const devicesDeepLink = (() => {
+  const m = /^#devices(?:\/([^/?#]+))?\/?$/.exec(window.location.hash || '');
+  if (!m) return null;
+  if (!m[1]) return true;
+  // A malformed escape must not stop the app from booting; the raw id just finds no device.
+  try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+})();
+
 function App() {
-  const initialRoute = companionDeepLink ? 'companion' : zipReportDeepLink ? 'zip-report' : 'home';
+  const initialRoute = companionDeepLink ? 'companion' : zipReportDeepLink ? 'zip-report' : devicesDeepLink ? 'devices' : 'home';
   const initialPayload = companionDeepLink
     ? { for: 'companion', data: { runId: companionDeepLink } }
-    : zipReportDeepLink ? { for: 'zip-report', data: { zipUrl: zipReportDeepLink } } : {};
+    : zipReportDeepLink ? { for: 'zip-report', data: { zipUrl: zipReportDeepLink } }
+    : typeof devicesDeepLink === 'string' ? { for: 'devices', data: { focus: devicesDeepLink } } : {};
   const [route, setRoute] = useState(initialRoute);
   const [payload, setPayload] = useState(initialPayload);
   // Browser-style view history: a stack of {route, payload} with a pointer.
@@ -914,6 +926,7 @@ function App() {
     active: <RedirectScreen go={go} to="runs" params={pf('active')} />,
     completed: <RedirectScreen go={go} to="runs" params={pf('completed')} />,
     runs: <SessionsScreen initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
+    devices: <DeviceConsoleScreen go={go} initFocus={pf('devices').focus} />,
     integrations: <IntegrationsScreen go={go} />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
     // Deep-link only (#companion/<runId>, opened by `trailblaze companion start`): the read-only

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
+import xyz.block.trailblaze.surveys.SurveyBundles
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.ByteArrayOutputStream
@@ -415,7 +416,16 @@ class DaemonScriptedToolBundler(
     bundleOneInternal(scriptPath, scriptPath.name.substringBeforeLast('.'), multiExport = true)
   }
 
-  private fun bundleOneInternal(scriptPath: File, toolName: String, multiExport: Boolean): File {
+  /**
+   * Bundles one survey file for the sandbox: its exports plus the survey runtime, as an IIFE that
+   * assigns [SurveyBundles.GLOBAL_NAME] (see [SurveyBundles.entrySource]). `ctx.surveys` loads it
+   * through `trailblaze.surveys.load`. Same cache and dependency tracking as a tool bundle.
+   */
+  suspend fun bundleSurvey(surveyPath: File): File = withContext(Dispatchers.IO) {
+    bundleOneInternal(surveyPath, SurveyBundles.surveyFileStem(surveyPath.name), multiExport = false, survey = true)
+  }
+
+  private fun bundleOneInternal(scriptPath: File, toolName: String, multiExport: Boolean, survey: Boolean = false): File {
     if (!scriptPath.isFile) {
       throw IOException("Scripted-tool source not found: ${scriptPath.absolutePath}")
     }
@@ -428,7 +438,7 @@ class DaemonScriptedToolBundler(
     // Only meaningful on the single-export path: there `toolName` IS the export key the wrapper
     // bracket-accesses. The multi-export form derives every key from the file's own exports, so
     // `toolName` is just a cache-key / header stem and the pattern does not apply to it.
-    require(multiExport || InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(toolName)) {
+    require(multiExport || survey || InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(toolName)) {
       "Invalid scripted-tool name '$toolName' for ${scriptPath.absolutePath}: must match " +
         "${InlineScriptToolConfig.TOOL_NAME_PATTERN} (letters, digits, _, -, ., starting with a " +
         "letter or _). Update the per-tool YAML descriptor's `name:` field to use a supported " +
@@ -455,7 +465,11 @@ class DaemonScriptedToolBundler(
     //    busts when a shared imported module changes even though the importing tool's own bytes
     //    didn't. A self-contained tool has an empty dep set → fullKey is a pure function of cheapKey.
     val sourceBytes = scriptPath.readBytes()
-    val wrapperForm = if (multiExport) "multi-export" else "single-export"
+    val wrapperForm = when {
+      survey -> "survey"
+      multiExport -> "multi-export"
+      else -> "single-export"
+    }
     val cheapKey = sha256Hex(
       sourceBytes + toolName.toByteArray(Charsets.UTF_8) +
         wrapperForm.toByteArray(Charsets.UTF_8) + bundlerProfileFingerprint,
@@ -579,13 +593,15 @@ class DaemonScriptedToolBundler(
     // "could not resolve" or partial-read failures. Co-located with the user's script so
     // esbuild's relative-import resolution finds the named export.
     val wrapperFile = File.createTempFile("$WRAPPER_FILENAME_PREFIX$cheapKey-", ".ts", scriptPath.parentFile)
-    wrapperFile.writeText(synthesizeWrapper(scriptPath, toolName, multiExport))
+    wrapperFile.writeText(
+      if (survey) SurveyBundles.entrySource("./${scriptPath.name}") else synthesizeWrapper(scriptPath, toolName, multiExport),
+    )
     val tmpFile = File.createTempFile("$cheapKey.", ".bundle.js.tmp", cacheDir)
     // esbuild writes the exact set of files it bundled here (`--metafile`); we read it to fingerprint
     // the dependency closure (and persist it as the manifest) instead of re-deriving imports ourselves.
     val metafileFile = File.createTempFile("$cheapKey.", ".meta.json", cacheDir)
     try {
-      runEsbuild(entry = wrapperFile, output = tmpFile, metafileOut = metafileFile, userSource = scriptPath)
+      runEsbuild(entry = wrapperFile, output = tmpFile, metafileOut = metafileFile, userSource = scriptPath, survey = survey)
       if (!tmpFile.isFile || tmpFile.length() == 0L) {
         throw IOException(
           "esbuild reported success but ${tmpFile.absolutePath} is missing or empty " +
@@ -705,6 +721,7 @@ class DaemonScriptedToolBundler(
       appendLine("    const result = await __userHandler(args, ctx, __client);")
       appendLine("    return __normalizeResult(result);")
       appendLine("  },")
+      appendLine("  teardown: __teardownMember(__userHandler),")
       appendLine("};")
     }
     return InProcessScriptedToolWrapperTemplate.render(
@@ -974,7 +991,7 @@ class DaemonScriptedToolBundler(
     }
   }
 
-  private fun runEsbuild(entry: File, output: File, metafileOut: File, userSource: File) {
+  private fun runEsbuild(entry: File, output: File, metafileOut: File, userSource: File, survey: Boolean = false) {
     // Followup #2749: unify esbuild flags with BundleAuthorToolsTask.
     // The flag set below mirrors `BundleAuthorToolsTask:267-278`. Risk #4 in the
     // 2749 plan documents that duplicating these constants is acceptable for A1;
@@ -986,6 +1003,8 @@ class DaemonScriptedToolBundler(
       add("--bundle")
       add("--platform=neutral")
       add("--format=iife")
+      // A survey bundle is evaluated by the SDK, which reads its exports off this global.
+      if (survey) add("--global-name=${SurveyBundles.GLOBAL_NAME}")
       add("--target=es2020")
       add("--main-fields=module,main")
       // Emit the metafile: esbuild records the exact set of input files it resolved + bundled, which
@@ -993,7 +1012,9 @@ class DaemonScriptedToolBundler(
       // the authoritative dependency list (esbuild's own resolver), so the cache tracks precisely the
       // files the real bundle depends on — no hand-rolled import resolution to drift from esbuild.
       add("--metafile=${metafileOut.absolutePath}")
-      add("--external:node:process")
+      // A tool may import `node:process` and run it on a host that has it. A survey bundle runs in
+      // the sandbox, which has no `require`, so there the import must fail to resolve instead.
+      if (!survey) add("--external:node:process")
       // Slim in-process profile: resolve `@trailblaze/scripting` to the typed-only slim entry so a
       // tool importing it doesn't drag the full ~1.2 MB MCP SDK into its on-device bundle. Omitted
       // (→ node_modules full-SDK resolution) only when the slim entry can't be located.
@@ -1006,6 +1027,15 @@ class DaemonScriptedToolBundler(
         // so aliasing it adds ~30 KB and pulls in nothing else.
         matcherAliasTargetFor(sdkEntry)?.let {
           add("--alias:@trailblaze/scripting/matcher=${it.absolutePath}")
+        }
+        // A survey bundle gets the surveys subpath's sandbox entry, which reads `ctx.events`
+        // instead of session directories; a survey that needs more fails to resolve here. A tool
+        // never does: it reaches surveys through `ctx.surveys`, and one that imports the subpath
+        // is classified host-only (see [ScriptedToolImportAnalyzer]) and gets the full entry.
+        if (survey) {
+          surveysAliasTargetFor(sdkEntry)?.let {
+            add("--alias:@trailblaze/scripting/surveys=${it.absolutePath}")
+          }
         }
         add("--alias:@trailblaze/scripting=${sdkEntry.absolutePath}")
       }
@@ -1145,6 +1175,19 @@ class DaemonScriptedToolBundler(
     }
 
     /**
+     * What `@trailblaze/scripting/surveys` aliases to in the sandbox, beside the entry
+     * `@trailblaze/scripting` aliases to — or null when that layout ships none. Source tree:
+     * `src/surveys/in-process.ts`. Extracted runtime bundle: the flat `dist/surveys-in-process.js`.
+     */
+    internal fun surveysAliasTargetFor(sdkEntry: File): File? {
+      val sdkDir = sdkEntry.parentFile ?: return null
+      File(sdkDir, "surveys/in-process.ts").takeIf { it.isFile }?.let { return it }
+      val entryExtension = sdkEntry.name.substringAfterLast('.', missingDelimiterValue = "")
+      val flatSibling = if (entryExtension.isEmpty()) "surveys-in-process" else "surveys-in-process.$entryExtension"
+      return File(sdkDir, flatSibling).takeIf { it.isFile }
+    }
+
+    /**
      * Environment variables stripped from the esbuild child. Named here rather than referencing
      * `MakeTestApkCommand`, which lives in the CLI layer this module must not depend on.
      *
@@ -1166,9 +1209,11 @@ class DaemonScriptedToolBundler(
      * Version token folded into the per-tool cache key via [bundlerProfileFingerprint]. Bump this
      * whenever the esbuild flag set / bundling profile changes in a way that affects output, so
      * existing content-addressed cache entries (keyed on source + tool name + this fingerprint)
-     * invalidate instead of serving a stale bundle. `v2` = the slim `@trailblaze/scripting` alias.
+     * invalidate instead of serving a stale bundle. `v2` = the slim `@trailblaze/scripting` alias;
+     * `v3` = the sandbox `@trailblaze/scripting/surveys` alias; `v4` = no `node:process` external
+     * in survey bundles; `v5` = survey wrappers export `capabilities`.
      */
-    private const val BUNDLER_PROFILE_VERSION = "v2-slim-inprocess-alias"
+    private const val BUNDLER_PROFILE_VERSION = "v5-survey-capabilities"
 
     /** Trailmap-relative directory that owns scripted-tool descriptor YAMLs. */
     private const val SCRIPTED_TOOLS_DIR = "tools"

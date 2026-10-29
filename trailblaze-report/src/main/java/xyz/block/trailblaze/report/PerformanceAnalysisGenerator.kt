@@ -6,11 +6,14 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.time.TimeSource
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.DeviceClockSync
+import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
@@ -98,6 +101,11 @@ class PerformanceAnalysisGenerator(
             // by timestamp containment — so they replace guesswork inside a tool with the
             // instrumented calls (HTTP, Maestro driver ops, selector matching) that explain it.
             put("trace", snapshot.traceEventsJson)
+            // Measured device clock readings, so device-recorded trace spans land on the host
+            // timeline at their measured offset rather than the logs' upper-bound estimate.
+            DeviceClockSyncFile.read(File(logsDir, snapshot.sessionId.value))?.let { sync ->
+              put("deviceClock", Json.parseToJsonElement(DeviceClockSync.encode(sync)))
+            }
           },
         )
       }

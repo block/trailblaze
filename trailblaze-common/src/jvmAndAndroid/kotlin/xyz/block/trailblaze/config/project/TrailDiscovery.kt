@@ -168,6 +168,21 @@ object TrailDiscovery {
   ): List<File> = discoverTrails(root, extraExcludedDirs).map { it.toFile() }
 
   /**
+   * [discoverTrailFiles] for a [root] that may itself be a symlink to a directory, such as a
+   * workspace whose `trails/` links to a shared checkout. Walks the resolved directory, then maps
+   * each result back under [root], so a caller relativizing against [root] sees the same paths
+   * either way. In-tree symlinks stay untraversed. Empty when the link cannot be resolved.
+   */
+  fun discoverTrailFilesFollowingRoot(
+    root: Path,
+    extraExcludedDirs: Set<String> = emptySet(),
+  ): List<File> {
+    if (!Files.isSymbolicLink(root)) return discoverTrailFiles(root, extraExcludedDirs)
+    val real = runCatching { root.toRealPath() }.getOrNull() ?: return emptyList()
+    return discoverTrails(real, extraExcludedDirs).map { root.resolve(real.relativize(it)).toFile() }
+  }
+
+  /**
    * Returns true when [fileName] names a trail artifact Phase 3 considers discoverable.
    * Delegates to [TrailRecordings.isTrailFile] so the set of accepted names stays in
    * sync with recording-layer code (e.g. the UI scanner's variant grouping).

@@ -12,6 +12,11 @@ import kotlin.test.assertTrue
 import picocli.CommandLine
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
@@ -711,6 +716,157 @@ class WaypointLocateBatchTest {
       paths,
       "framework default walks all three screen-state log types — one row per type",
     )
+  }
+
+  // ==========================================================================
+  // Matching against the app and device the session recorded.
+  // ==========================================================================
+
+  @Test
+  fun `templated waypoint matches using the app id the session recorded, with no --target`() {
+    val workspace = newTempDir()
+    val root = stageTemplatedWaypointRoot(workspace)
+    val sessionDir = File(workspace, "logs/20260520_session").apply { mkdirs() }
+    writeStartLog(sessionDir, appId = "com.example.app", device = androidPhone)
+    writeStep(sessionDir, "001_AgentDriverLog.json", DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.app:id/welcome"))
+
+    val exit = runCapturing {
+      execute("waypoint", "locate", "--root", root.absolutePath, "--session", sessionDir.absolutePath)
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
+    assertEquals(mapOf("${sessionDir.name}/001_AgentDriverLog.json" to setOf("testpack/templated")), parseTsv(stdout()))
+  }
+
+  @Test
+  fun `templated waypoint with no recorded app and no --target is reported as skipped, not silently NONE`() {
+    // The matcher skips a templated waypoint it can't expand. Reporting that only as NONE is
+    // how Android coverage came out near zero; stderr must say the checks were skipped.
+    val workspace = newTempDir()
+    val root = stageTemplatedWaypointRoot(workspace)
+    val sessionDir = File(workspace, "logs/20260520_session").apply { mkdirs() }
+    writeStep(sessionDir, "001_AgentDriverLog.json", DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.app:id/welcome"))
+
+    val exit = runCapturing {
+      execute("waypoint", "locate", "--root", root.absolutePath, "--session", sessionDir.absolutePath)
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
+    assertEquals(mapOf("${sessionDir.name}/001_AgentDriverLog.json" to emptySet<String>()), parseTsv(stdout()))
+    assertTrue(
+      "skipped, not evaluated" in stderr() && "--target" in stderr(),
+      "stderr must say the checks were skipped and how to supply the app; stderr=${stderr()}",
+    )
+  }
+
+  @Test
+  fun `templated waypoint matches through the session's target when no app was installed at start`() {
+    // The app can be installed after the session starts, so the start log records a target
+    // but no app id. The target's trailmap (the bundled `clock` one) declares the app ids.
+    val workspace = newTempDir()
+    val sessionDir = File(workspace, "logs/20260520_clock").apply { mkdirs() }
+    writeStartLog(sessionDir, appId = null, device = androidPhone, targetId = "clock")
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      children = listOf(
+        TrailblazeNode(nodeId = 2, driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.android.deskclock:id/tab_menu_clock", isSelected = true)),
+        TrailblazeNode(nodeId = 3, driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.android.deskclock:id/cities")),
+      ),
+    )
+    File(sessionDir, "001_AgentDriverLog.json").writeText(
+      """{"trailblazeNodeTree":${TrailblazeJson.defaultWithoutToolsInstance.encodeToString(TrailblazeNode.serializer(), tree)}}""",
+    )
+
+    val exit = runCapturing {
+      execute("waypoint", "locate", "--root", File(workspace, "empty").apply { mkdirs() }.absolutePath, "--session", sessionDir.absolutePath)
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
+    assertTrue(
+      "clock/android/clock_tab" in parseTsv(stdout())["${sessionDir.name}/001_AgentDriverLog.json"].orEmpty(),
+      "the clock tab must match via the target's declared app id; stdout=${stdout()} stderr=${stderr()}",
+    )
+    assertTrue("skipped, not evaluated" !in stderr(), "no check should be skipped; stderr=${stderr()}")
+  }
+
+  @Test
+  fun `an iOS session's screens are matched against the waypoint's ios block`() {
+    val workspace = newTempDir()
+    val root = File(workspace, "trails").apply { mkdirs() }
+    File(root, "welcome-ios.waypoint.yaml").writeText(
+      """
+      id: "testpack/welcome-ios"
+      ios:
+        required:
+          - selector:
+              iosMaestro:
+                textRegex: "Welcome.*"
+      """.trimIndent(),
+    )
+    val sessionDir = File(workspace, "logs/20260520_ios").apply { mkdirs() }
+    writeStep(sessionDir, "001_AgentDriverLog.json", DriverNodeDetail.IosMaestro(text = "Welcome"))
+    val stepKey = "${sessionDir.name}/001_AgentDriverLog.json"
+    val args = arrayOf("waypoint", "locate", "--root", root.absolutePath, "--session", sessionDir.absolutePath)
+
+    // Control: with no start log the screen is loaded as ANDROID and the ios block never applies.
+    runCapturing { execute(*args) }
+    assertEquals(mapOf(stepKey to emptySet<String>()), parseTsv(stdout()))
+
+    writeStartLog(sessionDir, appId = "com.example.app", device = ipad)
+    capturedOut.reset()
+    val exit = runCapturing { execute(*args) }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
+    assertEquals(mapOf(stepKey to setOf("testpack/welcome-ios")), parseTsv(stdout()))
+  }
+
+  private val androidPhone = TrailblazeDeviceInfo(
+    trailblazeDeviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID),
+    trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    widthPixels = 1080,
+    heightPixels = 1920,
+    classifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+  )
+
+  private val ipad = TrailblazeDeviceInfo(
+    trailblazeDeviceId = TrailblazeDeviceId("SIM-1", TrailblazeDevicePlatform.IOS),
+    trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+    widthPixels = 2360,
+    heightPixels = 1640,
+    classifiers = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("ipad")),
+  )
+
+  private fun stageTemplatedWaypointRoot(workspace: File): File {
+    val root = File(workspace, "trails").apply { mkdirs() }
+    File(root, "templated.waypoint.yaml").writeText(
+      """
+      id: "testpack/templated"
+      android:
+        required:
+          - selector:
+              androidAccessibility:
+                resourceIdRegex: "^{{target.appId}}:id/welcome$"
+      """.trimIndent(),
+    )
+    return root
+  }
+
+  /** A `Started` status log carrying the fields `locate` reads: the target, the app, and the device. */
+  private fun writeStartLog(sessionDir: File, appId: String?, device: TrailblazeDeviceInfo, targetId: String? = null) {
+    val deviceJson = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(TrailblazeDeviceInfo.serializer(), device)
+    val app = appId?.let { ""","targetAppInfo":{"appId":"$it"}""" }.orEmpty()
+    val trail = targetId?.let { ""","trailConfig":{"target":"$it"}""" }.orEmpty()
+    File(sessionDir, "000_TrailblazeSessionStatusChangeLog.json").writeText(
+      """{"sessionStatus":{"class":"Started","trailblazeDeviceInfo":$deviceJson$app$trail},"session":"s1"}""",
+    )
+  }
+
+  /** A driver log as the runtime writes it: a node tree and no device fields. */
+  private fun writeStep(sessionDir: File, name: String, detail: DriverNodeDetail) {
+    val tree = TrailblazeNode(nodeId = 1, driverDetail = detail, children = listOf(TrailblazeNode(nodeId = 2, driverDetail = detail)))
+    val json = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(TrailblazeNode.serializer(), tree)
+    File(sessionDir, name).writeText("""{"trailblazeNodeTree":$json}""")
   }
 
   // ==========================================================================

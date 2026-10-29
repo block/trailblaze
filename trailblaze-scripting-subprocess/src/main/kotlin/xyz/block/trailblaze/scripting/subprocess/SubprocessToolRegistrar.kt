@@ -6,6 +6,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -49,7 +50,8 @@ object SubprocessToolRegistrar {
     tools: List<Tool>,
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean,
-  ): List<RegisteredSubprocessTool> = filterAdvertisedTools(tools, listOf(driver), preferHostAgent)
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): List<RegisteredSubprocessTool> = filterAdvertisedTools(tools, listOf(driver), preferHostAgent, classifiers)
 
   /**
    * Multi-device overload: keeps a tool when it applies to ANY of the session's drivers —
@@ -61,9 +63,10 @@ object SubprocessToolRegistrar {
     tools: List<Tool>,
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): List<RegisteredSubprocessTool> = tools.mapNotNull { tool ->
     val meta = TrailblazeToolMeta.fromTool(tool)
-    if (!meta.shouldRegister(drivers, preferHostAgent)) {
+    if (!meta.shouldRegister(drivers, preferHostAgent, classifiers)) {
       null
     } else {
       RegisteredSubprocessTool(
@@ -98,7 +101,9 @@ object SubprocessToolRegistrar {
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean,
     logPrefix: String = "[subprocess-tools]",
-  ): List<InlineScriptToolConfig> = applicableInlineTools(tools, listOf(driver), preferHostAgent, logPrefix)
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): List<InlineScriptToolConfig> =
+    applicableInlineTools(tools, listOf(driver), preferHostAgent, logPrefix, classifiers)
 
   /** Multi-device overload — same any-driver semantics as [filterAdvertisedTools]'s. */
   fun applicableInlineTools(
@@ -106,13 +111,19 @@ object SubprocessToolRegistrar {
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
     logPrefix: String = "[subprocess-tools]",
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): List<InlineScriptToolConfig> {
     val (applicable, skipped) = tools.partition {
       val meta = advertisedMeta(it)?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      meta.shouldRegister(drivers, preferHostAgent)
+      meta.shouldRegister(drivers, preferHostAgent, classifiers)
     }
     if (skipped.isNotEmpty()) {
-      val sessionDescription = drivers.joinToString(" + ") { "${it.platform.name} / ${it.yamlKey}" }
+      val driverDescription = drivers.joinToString(" + ") { "${it.platform.name} / ${it.yamlKey}" }
+      // Classifiers are a gate too — without them a tool skipped only for `requiredClassifiers`
+      // reads as skipped for a session it plainly applies to.
+      val sessionDescription = classifiers
+        ?.let { "$driverDescription [${it.joinToString("-") { c -> c.classifier }}]" }
+        ?: driverDescription
       Console.log(
         "$logPrefix Not registering ${skipped.size} scripted tool(s) that don't apply to a " +
           "$sessionDescription session: ${skipped.joinToString(", ") { it.name }}",

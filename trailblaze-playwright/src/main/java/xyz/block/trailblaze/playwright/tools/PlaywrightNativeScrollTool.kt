@@ -13,23 +13,14 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_scroll")
-@LLMDescription(
-  """
-Scroll the page or a specific container in the specified direction.
-When ref is provided, scrolls within that container (e.g., a sidebar or panel) by moving the
-mouse to its center first. When ref is omitted, scrolls the full page.
-""",
-)
+@LLMDescription("Scroll the page, or the container given by ref (e.g. a sidebar).")
 data class PlaywrightNativeScrollTool(
-  @param:LLMDescription("Direction to scroll. UP/DOWN for vertical, LEFT/RIGHT for horizontal.")
+  @param:LLMDescription("UP, DOWN, LEFT, or RIGHT.")
   val direction: ScrollDirection = ScrollDirection.DOWN,
-  @param:LLMDescription("Number of pixels to scroll. Defaults to 500.")
+  @param:LLMDescription("Pixels to scroll (default 500).")
   val amount: Int = 500,
   @param:LLMDescription(
-    "Element reference for the container to scroll within: ARIA descriptor " +
-      "(e.g., 'navigation \"Sidebar\"'), element ID (e.g., 'e5'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#scrollable-panel'). " +
-      "When omitted, scrolls the full page.",
+    "Container to scroll: element ID ('e5'), ARIA descriptor ('navigation \"Sidebar\"'), or 'css=<selector>'.",
   )
   val ref: String? = null,
   override val reasoning: String? = null,

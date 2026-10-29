@@ -13,10 +13,19 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
@@ -37,6 +46,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -87,6 +97,24 @@ class TrailblazeLoggingRuleTest {
       snapshotLogs.single().displayName,
       "snapshot log's displayName must match the contract consumers filter on",
     )
+  }
+
+  @Test
+  fun `captureFailureScreenshot(session) takes no second shot after the runner took one before teardown`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    var invocations = 0
+    rule.failureScreenStateProvider = {
+      invocations++
+      FakeScreenState
+    }
+    val session = session()
+    rule.logger.logFailureSnapshot(session, FakeScreenState)
+
+    rule.captureFailureScreenshot(session)
+
+    assertEquals(0, invocations, "the end-of-run capture would read the screen teardown left")
+    assertEquals(1, captured.filterIsInstance<TrailblazeLog.TrailblazeSnapshotLog>().size)
   }
 
   @Test
@@ -336,6 +364,19 @@ class TrailblazeLoggingRuleTest {
   }
 
   @Test
+  fun `a no-logging run writes no screenshot`() {
+    // With logging off the server reads as unavailable, which is the condition that sends a
+    // screenshot to the disk fallback.
+    val written = mutableListOf<TrailblazeScreenStateLog>()
+    val rule = TestLoggingRule(writeScreenshotToDisk = { written += it }, noLogging = true)
+    rule.failureScreenStateProvider = { FakeScreenState }
+
+    rule.captureFailureScreenshot(session())
+
+    assertEquals(emptyList(), written, "a suppressed run must not write a screenshot to disk")
+  }
+
+  @Test
   fun `a no-logging run leaves a concurrent run's buffered spans in the recorder`() {
     // The recorder is process-wide and a daemon runs trails concurrently. A suppressed run that
     // emptied it on its way out would take the other run's spans with it, and that run exports an
@@ -447,6 +488,51 @@ class TrailblazeLoggingRuleTest {
 
     assertEquals(1, received.get(), "once the server answers, the next log must reach it")
     assertEquals(1, written.size, "a log the server accepted must not also fall back to disk")
+  }
+
+  @Test
+  fun `logs still reach the server while every Dispatchers IO worker is held by someone else`() {
+    // In-process, Dispatchers.IO is the app's pool, and an app SDK can park on every worker for
+    // minutes. A log upload queued behind it stalled 60-130 s per write. Uploads must not need it.
+    val received = AtomicInteger(0)
+    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    server.createContext("/ping") { exchange ->
+      exchange.sendResponseHeaders(200, 0)
+      exchange.responseBody.close()
+    }
+    server.createContext("/agentlog") { exchange ->
+      exchange.requestBody.readBytes()
+      received.incrementAndGet()
+      exchange.sendResponseHeaders(200, 0)
+      exchange.responseBody.close()
+    }
+    server.start()
+    val written = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(
+      writeLogToDisk = { _, log -> written += log },
+      logsBaseUrl = "http://127.0.0.1:${server.address.port}",
+    )
+    val release = CountDownLatch(1)
+    // Far more blockers than the pool has workers, so every worker is taken whatever its size.
+    val blockers = List(512) { CoroutineScope(Dispatchers.IO).launch { release.await() } }
+    try {
+      val probeRan = CountDownLatch(1)
+      CoroutineScope(Dispatchers.IO).launch { probeRan.countDown() }
+      assertFalse(
+        probeRan.await(500, TimeUnit.MILLISECONDS),
+        "control: Dispatchers.IO must be saturated for this test to mean anything",
+      )
+
+      val upload = thread { rule.endSession(session(), isSuccess = true) }
+      upload.join(10_000)
+
+      assertEquals(1, received.get(), "the log must reach the server while Dispatchers.IO is full")
+      assertTrue(written.isEmpty(), "a log the server accepted must not fall back to disk")
+    } finally {
+      release.countDown()
+      runBlocking { blockers.joinAll() }
+      server.stop(0)
+    }
   }
 
   @Test
@@ -656,6 +742,82 @@ class TrailblazeLoggingRuleTest {
   /** Any Description will do — afterTestExecution reads the result, not the description. */
   private val DESCRIPTION: Description = Description.createTestDescription("Fake", "run")
 
+  @Test
+  fun `cleanup finishes after the terminal capture and before the session verdict`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    var serviceRunning = true
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter { log ->
+      if (log is TrailblazeLog.TrailblazeSessionStatusChangeLog) {
+        assertFalse(serviceRunning, "Session finalized before service cleanup")
+      }
+      captured += log
+    })
+    rule.failureScreenStateProvider = {
+      assertTrue(serviceRunning, "Service stopped before the terminal screenshot")
+      FakeScreenState
+    }
+    rule.setSession(session())
+
+    rule.afterTestExecution(DESCRIPTION, Result.success(null)) { serviceRunning = false }
+
+    assertTrue(endStatus(captured) is SessionStatus.Ended.Succeeded)
+    assertTrue(captured.any { it is TrailblazeLog.TrailblazeSnapshotLog })
+  }
+
+  @Test
+  fun `a cleanup failure fails both JUnit and the session report`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val cleanupFailure = IllegalStateException("service did not stop")
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    rule.setSession(session())
+
+    val thrown = assertFailsWith<IllegalStateException> {
+      rule.afterTestExecution(DESCRIPTION, Result.success(null)) { throw cleanupFailure }
+    }
+
+    assertSame(cleanupFailure, thrown)
+    val status = endStatus(captured)
+    assertTrue(status is SessionStatus.Ended.Failed)
+    assertEquals(cleanupFailure.message, status.exceptionMessage)
+  }
+
+  @Test
+  fun `cleanup cannot replace a failing replay or deferred turbo verdict`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val originalFailure = IllegalStateException("replay or turbo verification failed")
+    val cleanupFailure = IllegalArgumentException("service did not stop")
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    rule.setSession(session())
+
+    rule.afterTestExecution(DESCRIPTION, Result.failure(originalFailure)) { throw cleanupFailure }
+
+    assertEquals(listOf(cleanupFailure), originalFailure.suppressed.toList())
+    val status = endStatus(captured)
+    assertTrue(status is SessionStatus.Ended.Failed)
+    assertEquals(originalFailure.message, status.exceptionMessage)
+    assertTrue(status.exceptionStackTrace?.contains("Suppressed:") == true)
+  }
+
+  @Test
+  fun `a terminal capture error remains primary when cleanup also fails`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val captureFailure = AssertionError("terminal capture failed")
+    val cleanupFailure = IllegalStateException("service did not stop")
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    rule.failureScreenStateProvider = { throw captureFailure }
+    rule.setSession(session())
+
+    val thrown = assertFailsWith<AssertionError> {
+      rule.afterTestExecution(DESCRIPTION, Result.success(null)) { throw cleanupFailure }
+    }
+
+    assertSame(captureFailure, thrown)
+    assertEquals(listOf(cleanupFailure), thrown.suppressed.toList())
+    val status = endStatus(captured)
+    assertTrue(status is SessionStatus.Ended.Failed)
+    assertEquals(captureFailure.message, status.exceptionMessage)
+  }
+
   /**
    * An on-device run with no reachable host writes its logs to the device's disk, and those files
    * are all CI pulls. The strings have to be on that copy, read while the tree was in hand, or a
@@ -716,6 +878,7 @@ class TrailblazeLoggingRuleTest {
     override val useDeviceClock: Boolean = false,
     writeLogToDisk: ((SessionId, TrailblazeLog) -> Unit) = { _, _ -> },
     writeTraceToDisk: ((SessionId, String) -> Unit) = { _, _ -> },
+    writeScreenshotToDisk: ((TrailblazeScreenStateLog) -> Unit) = { _ -> },
     noLogging: Boolean = false,
     logsBaseUrl: String = "http://127.0.0.1:1",
     override val logServerRetryAfterMs: Long = LogServerAvailability.DEFAULT_INITIAL_RETRY_AFTER_MS,
@@ -724,6 +887,7 @@ class TrailblazeLoggingRuleTest {
     additionalLogEmitter = additionalLogEmitter,
     writeLogToDisk = writeLogToDisk,
     writeTraceToDisk = writeTraceToDisk,
+    writeScreenshotToDisk = writeScreenshotToDisk,
     noLogging = noLogging,
   ) {
     override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {

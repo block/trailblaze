@@ -15,12 +15,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 /**
- * OpenAI's `/v1/chat/completions` rejects any GPT-5.6-family request that carries function tools
+ * OpenAI's `/v1/chat/completions` rejects any GPT-5.6- or GPT-6-family request that carries function tools
  * alongside an active `reasoning_effort`: "Function tools with reasoning_effort are not supported…
  * set reasoning_effort to 'none'". Koog injects `reasoning_effort` itself, so no Trailblaze-side
  * option can prevent it — the only place to satisfy the constraint is the wire.
  *
- * Do not drop this when syncing: without it every function-tool call against a GPT-5.6-family model
+ * Do not drop this when syncing: without it every function-tool call against a GPT-5.6- or GPT-6-family model
  * 400s, which takes the whole agent loop down.
  *
  * Keyed on the request body's `model` because that is where the OpenAI provider carries it; a plugin
@@ -36,7 +36,9 @@ object OpenAiReasoningEffortCompatibilityPlugin :
   private const val NONE = "none"
 
   // Both spellings occur: the OpenAI catalog names models `gpt-5.6-*`, deployment ids use `gpt-5-6`.
-  private val REASONING_EFFORT_INCOMPATIBLE_MODEL = Regex("gpt-5[.\\-]6", RegexOption.IGNORE_CASE)
+  // GPT-6 (`gpt-6-*`, `gpt-6.1-*`) carries the same restriction.
+  private val REASONING_EFFORT_INCOMPATIBLE_MODEL =
+    Regex("gpt-(5[.\\-]6|6)(?![0-9])", RegexOption.IGNORE_CASE)
 
   private val json = Json {
     ignoreUnknownKeys = true
@@ -62,7 +64,7 @@ object OpenAiReasoningEffortCompatibilityPlugin :
 
   /**
    * Returns the request body with `reasoning_effort` pinned to `none`, or null when the request must
-   * go out byte-identical — anything that is not a GPT-5.6-family chat completion carrying function
+   * go out byte-identical — anything that is not a GPT-5.6- or GPT-6-family chat completion carrying function
    * tools, including a body that is already pinned.
    */
   internal fun pinReasoningEffortForFunctionTools(requestBody: String): String? {
@@ -73,6 +75,9 @@ object OpenAiReasoningEffortCompatibilityPlugin :
         null
       } ?: return null
 
+    // Only chat completions carry `messages`; a Responses API body (`input`) takes `reasoning.effort`
+    // and rejects a top-level `reasoning_effort`.
+    if (body["messages"] !is JsonArray) return null
     val model = (body["model"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
     if (!REASONING_EFFORT_INCOMPATIBLE_MODEL.containsMatchIn(model)) return null
 

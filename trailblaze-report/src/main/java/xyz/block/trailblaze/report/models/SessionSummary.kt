@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report.models
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import maestro.orchestra.ApplyConfigurationCommand
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -33,6 +34,20 @@ data class SessionSummary(
   companion object {
 
     private const val DEFAULT_HTTP_PORT: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
+
+    private fun maestroCode(logs: List<TrailblazeLog.MaestroCommandLog>): String {
+      val redacted = logs.map { it.maestroCommandJsonObj }
+      return runCatching {
+        MaestroYamlSerializer.toYaml(
+          redacted.map { it.asMaestroCommand() ?: error("Maestro command could not be decoded") },
+          includeConfiguration = false,
+        )
+      }.getOrElse {
+        // A redacted scalar may have occupied a typed enum field. The persisted JSON is already
+        // safe to show; rendering it directly keeps both the timeline and grouped report alive.
+        JsonArray(redacted).toString()
+      }
+    }
 
     fun screenshotUrl(
       sessionId: String,
@@ -201,10 +216,7 @@ data class SessionSummary(
             is TrailblazeLog.MaestroCommandLog -> SessionEvent.MaestroCommand(
               timestamp = log.timestamp,
               durationMs = log.durationMs,
-              code = MaestroYamlSerializer.toYaml(
-                listOf(log.maestroCommandJsonObj.asMaestroCommand()!!),
-                false,
-              ),
+              code = maestroCode(listOf(log)),
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
@@ -255,13 +267,7 @@ data class SessionSummary(
           }
         }
 
-        val commands = logsInGroup.logs
-          .filterIsInstance<TrailblazeLog.MaestroCommandLog>()
-          .map { it.maestroCommandJsonObj.asMaestroCommand()!! }
-        val maestroYaml = MaestroYamlSerializer.toYaml(
-          commands = commands,
-          includeConfiguration = false,
-        )
+        val maestroYaml = maestroCode(logsInGroup.logs.filterIsInstance<TrailblazeLog.MaestroCommandLog>())
 
         PromptEventGroup(
           prompt = logsInGroup.prompt,

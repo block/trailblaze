@@ -2,18 +2,20 @@ package xyz.block.trailblaze.toolcalls
 
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.MalformedArgTokenException
+import xyz.block.trailblaze.yaml.TrailArgTokens
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -51,8 +53,6 @@ import java.util.concurrent.ConcurrentHashMap
  *   that a serializer round-trip cannot reconstruct. Their `execute()` resolves the args JSON at
  *   the engine boundary while `rawToolArguments` stays token-bearing for logs — the pattern this
  *   function generalizes to class-backed tools.
- * - [YamlDefinedTrailblazeTool] — params tree interpolated directly (the class has no
- *   `@Serializable` constructor; its params ARE the JSON tree already).
  * - Everything else — encode via the tool's concrete class serializer, interpolate the tree,
  *   decode back. Tools that can't round-trip (no serializer, contextual nested fields) pass
  *   through unchanged with a once-per-class diagnostic; they keep whatever behavior they had.
@@ -66,17 +66,6 @@ fun <T : TrailblazeTool> interpolateMemoryInTool(
   return when (tool) {
     is OtherTrailblazeTool -> tool
     is RawArgumentTrailblazeTool -> tool
-    is YamlDefinedTrailblazeTool -> {
-      val interpolatedParams = tool.params.mapValues { (_, value) ->
-        memory.interpolateVariablesInJson(value)
-      }
-      if (interpolatedParams == tool.params) {
-        tool
-      } else {
-        @Suppress("UNCHECKED_CAST")
-        (YamlDefinedTrailblazeTool(tool.config, interpolatedParams) as T)
-      }
-    }
     else -> interpolateViaClassSerializer(tool, memory)
   }
 }
@@ -108,19 +97,121 @@ fun <R : TrailblazeToolResult> R.withAuthoredCommandIdentity(authored: Trailblaz
  * structured-payload scrub can remap tokens because it re-interpolates the authored args; an opaque
  * string a tool already baked (e.g. an error message) has no tokens left, so it is matched by value.
  * That is coarser — a very short sensitive value could match unintended substrings — but it is the
- * only handle on an opaque string, and over-masking a diagnostic is the safe failure. No-op when
- * there are no sensitive keys.
+ * only handle on an opaque string, and over-masking a diagnostic is the safe failure.
+ *
+ * An `args.` value that captured a secret ([AgentMemory.sensitiveArgNames]) is masked to its
+ * `{{args.name}}` token too. That taint outlives the memory key it came from, so the value stays
+ * masked after that key is deleted. A token whose name holds a secret is masked as
+ * [REDACTED_TOOL_ARG_PLACEHOLDER] instead. No-op when nothing is sensitive.
  */
-fun scrubSensitiveValues(text: String, memory: AgentMemory): String {
-  if (memory.sensitiveKeys.isEmpty()) return text
-  var result = text
-  memory.sensitiveKeys.forEach { key ->
-    val value = memory.variables[key]
-    if (!value.isNullOrEmpty()) {
-      result = result.replace(value, "{{$key}}")
+fun scrubSensitiveValues(text: String, memory: AgentMemory): String =
+  scrubSensitiveValues(text, listOf(memory))
+
+/**
+ * Match all invocation candidates against the original text; never scrub generated tokens. Each of
+ * [declaredSecrets] (secrets a tool gives by value) is masked as [REDACTED_TOOL_ARG_PLACEHOLDER] in
+ * the same pass, so a secret overlapping another is masked whole rather than around the other's token.
+ */
+internal fun scrubSensitiveValues(
+  text: String,
+  memories: List<AgentMemory>,
+  declaredSecrets: Collection<String> = emptyList(),
+): String {
+  val replacements = (
+    memories.flatMap { memory ->
+      memory.sensitiveKeys.mapNotNull { key ->
+        memory.variables[key]?.takeIf { it.isNotEmpty() }?.let { it to "{{$key}}" }
+      } + sensitiveArgTexts(memory).map { (name, value) ->
+        value to "{{${TrailArgTokens.ARGS_PREFIX}$name}}"
+      }
+    } + declaredSecrets.filter { it.isNotBlank() }.map { it to REDACTED_TOOL_ARG_PLACEHOLDER }
+    ).flatMap { (value, token) ->
+    // A secret inside a JSON string reads escaped (a quote as `\"`), so mask that form too.
+    val escaped = Json.encodeToString(String.serializer(), value).removeSurrounding("\"")
+    if (escaped == value) listOf(value to token) else listOf(value to token, escaped to token)
+  }.sortedByDescending { it.first.length }.distinctBy { it.first }.toMap().let { byValue ->
+    // A key can be named after a secret (`token-1234` beside `pin`), so its token would show one.
+    byValue.mapValues { (_, token) -> if (byValue.keys.any { it in token }) REDACTED_TOOL_ARG_PLACEHOLDER else token }
+  }
+  if (replacements.isEmpty()) return text
+  return maskMatches(text, replacements)
+}
+
+/**
+ * [text] with every occurrence of each key of [replacements] replaced by its token. Matches that
+ * intersect (`1234` and `34abcd` in `1234abcd`) are masked as one span, so neither secret shows
+ * around the other's token: the span takes the token of a match that covers it whole, else
+ * [REDACTED_TOOL_ARG_PLACEHOLDER].
+ */
+private fun maskMatches(text: String, replacements: Map<String, String>): String {
+  class Match(val start: Int, val end: Int, val token: String)
+  val matches = replacements.flatMap { (value, token) ->
+    generateSequence(text.indexOf(value).takeIf { it >= 0 }) { from ->
+      text.indexOf(value, from + 1).takeIf { it >= 0 }
+    }.map { Match(it, it + value.length, token) }.toList()
+  }.sortedWith(compareBy<Match> { it.start }.thenByDescending { it.end })
+  if (matches.isEmpty()) return text
+  return buildString {
+    var copiedTo = 0
+    var i = 0
+    while (i < matches.size) {
+      val first = matches[i]
+      var end = first.end
+      var j = i + 1
+      while (j < matches.size && matches[j].start < end) {
+        end = maxOf(end, matches[j].end)
+        j++
+      }
+      append(text, copiedTo, first.start)
+      // Sorted by start then longest, so [first] is the one match that can cover the whole span.
+      append(if (first.end == end) first.token else REDACTED_TOOL_ARG_PLACEHOLDER)
+      copiedTo = end
+      i = j
+    }
+    append(text, copiedTo, text.length)
+  }
+}
+
+/**
+ * Each sensitive arg's value as text, for value matching. Null and boolean args are skipped: they
+ * can't hold a secret, and masking every `true` in a payload would only hide diagnostics. Sensitive
+ * object args also retain scalar values reachable through supported dotted args paths.
+ */
+private fun sensitiveArgTexts(memory: AgentMemory): List<Pair<String, String>> {
+  if (memory.sensitiveArgNames.isEmpty()) return emptyList()
+  val args = memory.args
+  return buildList {
+    fun addObjectScalars(path: String, value: JsonObject) {
+      value.forEach { (key, child) ->
+        if (!TrailArgTokens.isValidArgName(key)) return@forEach
+        val childPath = "$path.$key"
+        when (child) {
+          is JsonObject -> addObjectScalars(childPath, child)
+          is JsonPrimitive -> {
+            if (child != JsonNull && (child.isString || child.booleanOrNull == null)) {
+              child.content.takeIf { it.isNotEmpty() }?.let { add(childPath to it) }
+            }
+          }
+          else -> Unit
+        }
+      }
+    }
+
+    memory.sensitiveArgNames.forEach { name ->
+      val value = args[name]
+      val text =
+        when (value) {
+          null,
+          JsonNull -> null
+          is JsonPrimitive ->
+            value.content.takeUnless { value.booleanOrNull != null && !value.isString }
+          else -> value.toString()
+        }
+      text?.takeIf { it.isNotEmpty() }?.let { add(name to it) }
+      // Only object paths supported by args interpolation can name a scalar replacement.
+      if (value is JsonObject) addObjectScalars(name, value)
     }
   }
-  return result
 }
 
 /**
@@ -135,18 +226,31 @@ fun scrubSensitiveValues(text: String, memory: AgentMemory): String {
  * non-string primitive whose text matches a secret (e.g. a numeric PIN) is masked as a string
  * token: the type change is visible, the secret is not.
  */
-fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement {
-  if (memory.sensitiveKeys.isEmpty()) return payload
+fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement =
+  scrubSensitivePayload(payload, listOf(memory))
+
+/**
+ * [scrubSensitivePayload] that also masks each of [declaredSecrets] in string values, in the same
+ * pass as memory's secrets (see [scrubSensitiveValues]). Keys are scrubbed against memory only.
+ */
+internal fun scrubSensitivePayload(
+  payload: JsonElement,
+  memories: List<AgentMemory>,
+  declaredSecrets: Collection<String> = emptyList(),
+): JsonElement {
+  if (declaredSecrets.isEmpty() && memories.all { it.sensitiveKeys.isEmpty() && it.sensitiveArgNames.isEmpty() }) {
+    return payload
+  }
   return when (payload) {
     is JsonObject -> JsonObject(
       payload.entries.associate { (key, value) ->
-        scrubSensitiveValues(key, memory) to scrubSensitivePayload(value, memory)
+        scrubSensitiveValues(key, memories) to scrubSensitivePayload(value, memories, declaredSecrets)
       },
     )
-    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memory) })
+    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memories, declaredSecrets) })
     is JsonPrimitive -> {
       if (payload is JsonNull) return payload
-      val scrubbed = scrubSensitiveValues(payload.content, memory)
+      val scrubbed = scrubSensitiveValues(payload.content, memories, declaredSecrets)
       when {
         scrubbed == payload.content -> payload
         else -> JsonPrimitive(scrubbed)
@@ -252,7 +356,7 @@ private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: 
       // into the tree; when the receiving Kotlin field is a String, the strict decode rejects
       // the unquoted scalar. The tree walk can't know the field type, so retry with every token
       // rendered as text — reachable only when the native-typed tree already failed, so working
-      // native substitutions (YAML-defined params trees, matching field types) are unaffected.
+      // native substitutions (matching field types) are unaffected.
       // If this also fails, the outer catch's pass-through diagnostics apply as usual.
       val textRendered = memory.interpolateVariablesInJson(tree, renderWholeScalarArgTokensAsText = true)
       INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, textRendered)

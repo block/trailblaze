@@ -38,8 +38,7 @@ data class TargetTemplateContext(
  *  - `AccessibilityDeviceManager`, `HostMaestroTrailblazeAgent`, `AxeDeviceManager` —
  *    each take a `templateContext` constructor param and forward on every resolve.
  *
- * Inspector UI (`InspectTrailblazeNodeSelectorHelper`, `WaypointExamplePanel`) and other
- * inspection paths pass null — placeholders render as the literal `{{target.appId}}` for
+ * Inspection paths pass null — placeholders render as the literal `{{target.appId}}` for
  * display, which is the right shape for a "what does this selector say" view.
  *
  * The wire-side YAML form expresses cross-variant app id matching as

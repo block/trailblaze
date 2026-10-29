@@ -332,6 +332,7 @@ object McpSubprocessRuntimeLauncher {
           tools = advertisedTools.filterNot { it.name == SessionResourceFinalizerProtocol.TOOL_NAME },
           drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
           preferHostAgent = config.preferHostAgent,
+          classifiers = deviceInfo.classifiers,
         )
         registered.forEach { reg ->
           pendingRegistrations += SubprocessToolRegistration(

@@ -101,10 +101,10 @@ camelCase inside each part, for example `playwrightSample_web_openFixtureAndVeri
 
 ## Minimal authoring loop
 
-1. Add a `.ts` file under `tools/`.
-2. Add a matching `script:` + `name:` entry under `tools:` in `targets/playwright-sample.yaml`.
-3. Stop and restart the Trailblaze daemon.
-4. Run `toolbox` or call the new tool directly.
+1. Add a `.ts` file under `trailmaps/playwrightSample/tools/` that exports a
+   `trailblaze.tool(...)`. It's on the target with no `trailmap.yaml` entry.
+2. Stop and restart the Trailblaze daemon.
+3. Run `toolbox` or call the new tool directly.
 
 ## How Registration Works
 
@@ -125,7 +125,6 @@ tools:
     _meta:
       trailblaze/supportedPlatforms: [WEB]
       trailblaze/toolset: web_core
-      trailblaze/requiresContext: true
     inputSchema:
       type: object
       properties:
@@ -155,8 +154,8 @@ export async function myTarget_web_myTool(
     action: "GOTO",
     url: args.relativePath ?? "./sample-app/index.html",
   });
-  await client.tools.web_verifyTextVisible({
-    text: "Trailblaze Test Fixture",
+  await client.tools.web_verifyElementVisible({
+    ref: 'heading "Trailblaze Test Fixture"',
   });
 
   return "Opened the page and verified the heading.";
@@ -193,11 +192,11 @@ probe pattern: try a deterministic verification, then fall back when that inner 
 ```ts
 export async function playwrightSample_web_openFormIfNeeded(args, ctx, client) {
   try {
-    await client.tools.web_verifyTextVisible({ text: "Contact Form" });
+    await client.tools.web_verifyElementVisible({ ref: 'heading "Contact Form"' });
     return "The form section was already visible.";
   } catch {
     await client.tools.web_click({ ref: "css=a[href='#form']" });
-    await client.tools.web_verifyTextVisible({ text: "Contact Form" });
+    await client.tools.web_verifyElementVisible({ ref: 'heading "Contact Form"' });
     return "Opened the form section.";
   }
 }

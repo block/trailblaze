@@ -88,7 +88,7 @@ object TrailArgBinder {
           // A declared default is coerced by the same rule, so `default: '007'` on a string arg
           // keeps "007" and `default: 3` on an integer arg stays 3. Token-valued string defaults
           // (`'{{memory.email}}'`) pass through as their token text and resolve at seed time.
-          when (val coerced = coerce(name, config.type, config.default.value)) {
+          when (val coerced = coerce(name, config.type, (config.default as DefaultBehavior.Use).value)) {
             is CoerceResult.Ok -> bound[name] = coerced.value
             is CoerceResult.Err -> return BindResult.Failure(
               "Default for arg '$name' is invalid: ${coerced.message}",

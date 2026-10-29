@@ -223,6 +223,7 @@ class RunReportGenerator(
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
       copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
       copyResource(TRACE_SPANS_RESOURCE, File(workDir, "run-report-trace-spans.ts"))
+      copyResource(DEVICE_CLOCK_RESOURCE, File(workDir, "device-clock-sync.ts"))
       // The Kotlin/JS selector engine for the UI Inspector's suggestions. OPTIONAL by design: the
       // resource is only in the JAR when :trailblaze-selector-engine-js's bundle task ran at build
       // time, and an older/bundle-less JAR must keep producing reports — the driver embeds it (once
@@ -433,6 +434,8 @@ class RunReportGenerator(
 
     /** The driver's `trace.json` slimmer, a sibling module it imports like the two above. */
     private const val TRACE_SPANS_RESOURCE = "xyz/block/trailblaze/report/run-report-trace-spans.ts"
+    /** Imported by run-report-events.ts and the driver: device-clock records onto the host timeline. */
+    private const val DEVICE_CLOCK_RESOURCE = "xyz/block/trailblaze/report/device-clock-sync.ts"
 
     /**
      * The Kotlin/JS selector engine (built by `:trailblaze-selector-engine-js:bundleSelectorEngine`,
@@ -610,6 +613,8 @@ class RunReportGenerator(
           skip.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
             put("metadata", metadata.toJsonObject())
           }
+          // Same `config.context` [sessionMetaJson] emits, which the index search also reads.
+          skip.context?.takeIf { it.isNotBlank() }?.let { put("context", it) }
           put(
             "ranAt",
             LocalDateTime.ofInstant(
@@ -635,6 +640,8 @@ class RunReportGenerator(
       // page hands off to its all-runs report by this id (see `allRunsUrl`).
       put("sessionId", sessionInfo.sessionId.value)
       put("title", sessionInfo.displayName)
+      // The trail's `config.context`: what the case proves and the setup it assumes.
+      sessionInfo.trailConfig?.context?.takeIf { it.isNotBlank() }?.let { put("context", it) }
       put("status", statusLabel(status))
       sessionInfo.trailConfig?.target?.let { put("target", it) }
       sessionInfo.targetAppInfo?.let { app ->
@@ -683,6 +690,7 @@ class RunReportGenerator(
         put("metadata", metadata.toJsonObject())
       }
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
+      sessionInfo.trailSourceUrl?.let { put("trailSourceUrl", it) }
       failureReason(status)?.let { put("error", it) }
       failureCodeOf(failurePayloadOf(status))?.let { put("failureCode", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
@@ -707,10 +715,7 @@ class RunReportGenerator(
       val buildNumber = environment.firstValue("CI_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "GITHUB_RUN_NUMBER")
       val commit = environment.firstValue("GIT_COMMIT", "BUILDKITE_COMMIT", "GITHUB_SHA")
       val branch = environment.firstValue("GIT_BRANCH", "BUILDKITE_BRANCH", "GITHUB_REF_NAME")
-      val repository = GitRepoUrls.webBaseUrl(environment["BUILDKITE_REPO"])
-        ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
-          "${environment["GITHUB_SERVER_URL"] ?: "https://github.com"}/$repo"
-        }
+      val repository = repositoryWebUrl(environment)
 
       buildUrl?.takeIf { it.isNotBlank() }?.let { put("buildUrl", it) }
       buildNumber?.takeIf { it.isNotBlank() }?.let { put("buildNumber", it) }
@@ -719,6 +724,15 @@ class RunReportGenerator(
         repository?.let { put("commitUrl", "$it/commit/$sha") }
       }
       branch?.takeIf { it.isNotBlank() }?.let { put("branch", it) }
+    }
+
+    /** Same sanitized repository link for an embedded report and a summary-backed index. */
+    internal fun repositoryWebUrl(environment: Map<String, String>): String? {
+      val repository = GitRepoUrls.webBaseUrl(environment["BUILDKITE_REPO"])
+        ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
+          GitRepoUrls.actionsWebBaseUrl(environment["GITHUB_SERVER_URL"] ?: "https://github.com", repo)
+        }
+      return repository
     }
 
     private fun Map<String, String>.firstValue(vararg keys: String): String? =
@@ -743,7 +757,7 @@ class RunReportGenerator(
       is SessionStatus.Ended.Cancelled -> status.cancellationMessage
       is SessionStatus.Ended.TimeoutReached -> status.message
       is SessionStatus.Ended.MaxCallsLimitReached ->
-        "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+        status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
       else -> null
     }
 

@@ -121,6 +121,8 @@
       ago: w.timestampMs ? new Date(w.timestampMs).toLocaleString() : '',
       err: w.error || null,
       trailId: w.trailId || null,
+      ...(w.trailSourceUrl ? { trailSourceUrl: w.trailSourceUrl } : {}),
+      ...(w.context ? { context: w.context } : {}),
       metadata: w.metadata || null,
       imported: !!w.imported,
       timestampMs: w.timestampMs || 0,
@@ -155,6 +157,8 @@
       ranAt: s.timestampMs ? new Date(s.timestampMs).toLocaleString() : (s.ago || null),
       steps: trace.length,
       trailId: s.trailId || null,
+      ...(s.trailSourceUrl ? { trailSourceUrl: s.trailSourceUrl } : {}),
+      ...(s.context ? { context: s.context } : {}),
       ...(s.metadata && Object.keys(s.metadata).length ? { metadata: s.metadata } : {}),
       cmd: a.cmd || null,
       error: s.err || null,
@@ -390,7 +394,10 @@
           total: s.count || (s.events || []).length,
           truncated: !!s.truncated,
           events: (s.events || []).map(function (e) {
-            return { t: e.timeMs == null ? null : e.timeMs, d: JSON.stringify(e.data == null ? e : e.data) };
+            var event = { t: e.timeMs == null ? null : e.timeMs, d: JSON.stringify(e.data == null ? e : e.data) };
+            // Still on the device clock (nothing measured to convert with), as the static report marks it.
+            if (e.clock === 'device') event.clock = 'device';
+            return event;
           }),
         };
       });

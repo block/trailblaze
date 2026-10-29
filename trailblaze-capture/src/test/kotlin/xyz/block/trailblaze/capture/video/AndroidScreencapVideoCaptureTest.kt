@@ -53,6 +53,13 @@ class AndroidScreencapVideoCaptureTest {
     File(sessionDir, ".trailblaze-screencap-frames").listFiles()?.sorted().orEmpty()
 
   /**
+   * [VideoDuration.probeMs], given three tries. Its 5 s cap is sized for the teardown path, and a
+   * loaded CI agent running ffmpeg encodes in parallel can spend that on ffprobe's launch alone. A
+   * container that truly states no duration still answers null every time.
+   */
+  private fun probeDurationMs(file: File): Long? = (1..3).firstNotNullOfOrNull { VideoDuration.probeMs(file) }
+
+  /**
    * Polls [count] until it reaches [n] or [timeoutMs] passes, returning the last value. A fixed
    * sleep is a ceiling on a loaded CI agent: 300ms once bought only two 20ms samples.
    */
@@ -91,7 +98,7 @@ class AndroidScreencapVideoCaptureTest {
     val endMs = assertNotNull(artifact.endTimestampMs, "a recording with no end cannot be scaled onto")
     val windowMs = endMs - artifact.startTimestampMs
     val durationMs = assertNotNull(
-      VideoDuration.probeMs(artifact.file),
+      probeDurationMs(artifact.file),
       "a recording whose length cannot be read cannot be scrubbed",
     )
     assertTrue(
@@ -116,7 +123,7 @@ class AndroidScreencapVideoCaptureTest {
 
     val endMs = assertNotNull(artifact.endTimestampMs)
     val windowMs = endMs - artifact.startTimestampMs
-    val durationMs = assertNotNull(VideoDuration.probeMs(artifact.file))
+    val durationMs = assertNotNull(probeDurationMs(artifact.file))
     assertTrue(
       durationMs <= windowMs + GRID_TOLERANCE_MS,
       "container is ${durationMs}ms for a ${windowMs}ms session; it must not outrun the window",

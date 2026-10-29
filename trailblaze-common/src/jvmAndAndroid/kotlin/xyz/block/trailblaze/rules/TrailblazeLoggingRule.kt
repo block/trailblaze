@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.rules
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
@@ -26,6 +25,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Base JUnit4 Logging Rule for Trailblaze Tests
@@ -264,7 +264,7 @@ abstract class TrailblazeLoggingRule(
       val sessionId = session?.sessionId ?: SessionId("unknown")
       // False only when the server was reachable and this log missed it: the log then sits on the
       // device's disk while the logs around it reach the host.
-      val reachedServerIfUp = runBlocking(Dispatchers.IO) {
+      val reachedServerIfUp = runBlocking(TrailblazeDispatchers.IO) {
         if (isServerAvailable) {
           try {
             val sent = trailblazeLogServerClient.sendAgentLog(log)
@@ -337,7 +337,9 @@ abstract class TrailblazeLoggingRule(
     ServerScreenStateLogger(
       isServerAvailable = { isServerAvailable },
       trailblazeLogServerClient = trailblazeLogServerClient,
-      writeScreenshotToDisk = writeScreenshotToDisk,
+      // [isServerAvailable] is false under [noLogging], which would otherwise send every
+      // screenshot down the disk fallback.
+      writeScreenshotToDisk = if (noLogging) { _ -> } else writeScreenshotToDisk,
     )
   }
 
@@ -357,6 +359,18 @@ abstract class TrailblazeLoggingRule(
         }
       },
     )
+  }
+
+  /**
+   * Pings the log server on a background thread, so the first log does not pay for the client
+   * build and the connection. Only a reachable answer is kept: see [LogServerAvailability.warm].
+   * Call it from where the runner is waiting on something else, ahead of the first log.
+   */
+  fun warmLogServer() {
+    if (noLogging) return
+    Thread({ logServerAvailability.warm() }, "trailblaze-log-server-warmup")
+      .apply { isDaemon = true }
+      .start()
   }
 
   /**
@@ -392,31 +406,66 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    // Per-step AgentDriverLog screenshots are all pre-action frames, so capture a
-    // terminal screenshot here or the outcome of the last step is never in the report.
-    session?.let { currentSession ->
-      if (result.isFailure) {
-        captureFailureScreenshot(currentSession)
-      } else {
-        captureFinalScreenshot(currentSession)
+    afterTestExecution(description, result, cleanup = {})
+  }
+
+  /** Captures the terminal screen before cleanup, then includes cleanup failures in the verdict. */
+  fun afterTestExecution(
+    description: Description,
+    result: Result<Nothing?>,
+    cleanup: () -> Unit,
+  ) {
+    var failure = result.exceptionOrNull()
+    fun recordFailure(error: Throwable) {
+      val original = failure
+      if (original == null) failure = error
+      else if (original !== error) original.addSuppressed(error)
+    }
+
+    try {
+      // Per-step AgentDriverLog screenshots are all pre-action frames, so capture a
+      // terminal screenshot here or the outcome of the last step is never in the report.
+      session?.let { currentSession ->
+        if (result.isFailure) {
+          captureFailureScreenshot(currentSession)
+        } else {
+          captureFinalScreenshot(currentSession)
+        }
       }
+    } catch (error: Throwable) {
+      recordFailure(error)
     }
 
-    // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
-    // use — so this path is equally protected from an export that throws, and a run that ends
-    // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
-    exportTracesBeforeEnd(session?.sessionId ?: SessionId("unknown"))
-
-    // End session if it exists
-    session?.let { currentSession ->
-      sessionManager.endSession(
-        session = currentSession,
-        isSuccess = result.isSuccess,
-        exception = result.exceptionOrNull(),
-      )
+    try {
+      cleanup()
+    } catch (error: Throwable) {
+      recordFailure(error)
     }
 
-    session = null
+    try {
+      // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
+      // use — so this path is equally protected from an export that throws, and a run that ends
+      // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
+      // No session when a caller ended its own (a grouped test ends one per trail): nothing to
+      // export, and exporting under a made-up id would file this test's spans under no run.
+      session?.sessionId?.let(::exportTracesBeforeEnd)
+
+      // End session if it exists
+      session?.let { currentSession ->
+        sessionManager.endSession(
+          session = currentSession,
+          isSuccess = failure == null,
+          exception = failure,
+        )
+      }
+    } catch (error: Throwable) {
+      recordFailure(error)
+    } finally {
+      session = null
+    }
+    // A failing test already reaches JUnit through SimpleTestRule; keep cleanup attached to it.
+    // A failure discovered during teardown must turn an otherwise passing test into a failure.
+    if (result.isSuccess) failure?.let { throw it }
   }
 
   /**
@@ -444,9 +493,13 @@ abstract class TrailblazeLoggingRule(
    * isn't pre-wired onto the rule.
    */
   fun captureFailureScreenshot(session: TrailblazeSession, screenStateProvider: () -> ScreenState) {
+    if (logger.hasFailureSnapshot(session.sessionId)) {
+      Console.log("📸 Failure screenshot already captured before teardown for session ${session.sessionId.value}")
+      return
+    }
     try {
       val screenState = screenStateProvider()
-      logger.logSnapshot(session, screenState, displayName = "failure_screenshot")
+      logger.logFailureSnapshot(session, screenState)
       Console.log("📸 Failure screenshot captured for session ${session.sessionId.value}")
     } catch (e: Exception) {
       Console.log(
@@ -497,7 +550,7 @@ abstract class TrailblazeLoggingRule(
 
   private fun exportTraces(explicitSessionId: SessionId? = null) {
     val sessionId = explicitSessionId ?: session?.sessionId ?: SessionId("unknown")
-    runBlocking(Dispatchers.IO) {
+    runBlocking(TrailblazeDispatchers.IO) {
       TrailblazeTraceExporter.exportAndSave(
         sessionId = sessionId,
         client = trailblazeLogServerClient,
@@ -516,7 +569,7 @@ private class ServerScreenStateLogger(
 ) : ScreenStateLogger {
   override fun logScreenState(screenState: TrailblazeScreenStateLog): String {
     // Send Log
-    return runBlocking(Dispatchers.IO) {
+    return runBlocking(TrailblazeDispatchers.IO) {
       if (isServerAvailable()) {
         try {
           val sent = trailblazeLogServerClient.sendScreenshot(

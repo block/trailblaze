@@ -3,6 +3,7 @@ package xyz.block.trailblaze.playwright.network
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.network.NetworkEvent
 import xyz.block.trailblaze.network.Phase
 import xyz.block.trailblaze.network.REDACTED_VALUE
@@ -14,7 +15,9 @@ import java.io.Writer
 import java.lang.reflect.Constructor
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -37,9 +40,14 @@ class WebNetworkCaptureUnitTest {
   private fun newCapture(sessionDir: File = tmp.newFolder()): WebNetworkCapture {
     @Suppress("UNCHECKED_CAST")
     val ctor = WebNetworkCapture::class.java.declaredConstructors
-      .single { it.parameterCount == 3 } as Constructor<WebNetworkCapture>
+      .single { it.parameterCount == 4 } as Constructor<WebNetworkCapture>
     ctor.isAccessible = true
-    return ctor.newInstance("session-test", sessionDir, null)
+    return ctor.newInstance(
+      "session-test",
+      sessionDir,
+      null,
+      WebNetworkCapture.ndjsonFileFor(sessionDir, deviceLabel = null),
+    )
   }
 
   // The drainer's failure modes live behind `private` and only reachable through a real
@@ -295,7 +303,8 @@ class WebNetworkCaptureUnitTest {
    */
   @Test
   fun `a failing flush is charged to the dropped-write count`() {
-    val cap = newCapture()
+    val sessionDir = tmp.newFolder()
+    val cap = newCapture(sessionDir)
     val failing = BufferedWriter(
       object : Writer() {
         override fun write(cbuf: CharArray, off: Int, len: Int) = Unit
@@ -311,6 +320,98 @@ class WebNetworkCaptureUnitTest {
     val summary = invokePrivate(cap, "summarizeDrops") as String?
     assertNotNull(summary, "A lost batch must be summarized, not reported as a clean stop.")
     assertTrue(summary.contains("writes=1"), "expected one dropped write, got: $summary")
+    assertNotNull(SessionCaptureHealth.failure(sessionDir, "network"), "event queries must report the lost batch")
+  }
+
+  @Test
+  fun `a request body that can't be stored tells event queries the stream is incomplete`() {
+    val sessionDir = tmp.newFolder()
+    File(sessionDir, "bodies").writeText("a file where the bodies folder goes")
+    val cap = newCapture(sessionDir)
+    val event = NetworkEvent(
+      id = "upload",
+      sessionId = "session-test",
+      phase = Phase.REQUEST_START,
+      timestampMs = 0L,
+      method = "POST",
+      url = "https://example.com/upload",
+      urlPath = "/upload",
+      source = Source.PLAYWRIGHT_WEB,
+    )
+    val pending = Class.forName("xyz.block.trailblaze.playwright.network.WebNetworkCapture\$PendingWrite")
+      .declaredConstructors.single { it.parameterCount == 4 }
+      .apply { isAccessible = true }
+      .newInstance(event, ByteArray(8) { 1 }, "application/octet-stream", 8L)
+
+    invokePrivateWithArg(cap, "toLine", pending)
+
+    assertEquals("web network capture: a request body could not be stored", SessionCaptureHealth.failure(sessionDir, "network"))
+  }
+
+  private fun request(postDataBuffer: () -> ByteArray?, postData: () -> String?): com.microsoft.playwright.Request =
+    java.lang.reflect.Proxy.newProxyInstance(
+      javaClass.classLoader,
+      arrayOf(com.microsoft.playwright.Request::class.java),
+    ) { _, method, _ ->
+      when (method.name) {
+        "postDataBuffer" -> postDataBuffer()
+        "postData" -> postData()
+        else -> throw UnsupportedOperationException(method.name)
+      }
+    } as com.microsoft.playwright.Request
+
+  @Test
+  fun `a request body neither accessor can read is a failure, not an absent body`() {
+    val cap = newCapture()
+    assertNull(cap.extractRequestBodyBytes(request({ null }, { null })), "no body")
+    assertEquals("ab", String(cap.extractRequestBodyBytes(request({ error("buffer") }, { "ab" }))!!))
+    assertFailsWith<IllegalStateException> {
+      cap.extractRequestBodyBytes(request({ error("buffer") }, { error("text") }))
+    }
+  }
+
+  @Test
+  fun `a queue overflow tells event queries the stream is incomplete`() {
+    val sessionDir = tmp.newFolder()
+    val cap = newCapture(sessionDir)
+    (WebNetworkCapture::class.java.getDeclaredField("active").apply { isAccessible = true }.get(cap) as AtomicBoolean)
+      .set(true)
+    (WebNetworkCapture::class.java.getDeclaredField("queuedCount").apply { isAccessible = true }.get(cap) as AtomicInteger)
+      .set(10_000)
+
+    invokePrivateWithArg(cap, "enqueue", newPendingWrite("overflow"))
+
+    assertEquals("web network capture: queue overflow", SessionCaptureHealth.failure(sessionDir, "network"))
+  }
+
+  @Test
+  fun `a queue overflow does not wait on the disk to record its loss`() {
+    val sessionDir = tmp.newFolder()
+    // A pipe where the marker goes: opening it to write blocks until something reads it, the way a
+    // stalled disk would. The overflow runs on Playwright's thread and must not wait for it.
+    val marker = File(sessionDir, SessionCaptureHealth.markerFileName("network"))
+    assertEquals(0, ProcessBuilder("mkfifo", marker.path).start().waitFor())
+    val cap = newCapture(sessionDir)
+    (WebNetworkCapture::class.java.getDeclaredField("active").apply { isAccessible = true }.get(cap) as AtomicBoolean)
+      .set(true)
+    (WebNetworkCapture::class.java.getDeclaredField("queuedCount").apply { isAccessible = true }.get(cap) as AtomicInteger)
+      .set(10_000)
+
+    val playwrightThread = Thread { invokePrivateWithArg(cap, "enqueue", newPendingWrite("overflow")) }.apply {
+      isDaemon = true
+      start()
+      join(5_000)
+    }
+
+    try {
+      assertFalse(playwrightThread.isAlive, "the overflow returned without waiting on the marker write")
+      assertEquals("web network capture: queue overflow", SessionCaptureHealth.failure(sessionDir, "network"))
+      // The marker is still written, off that thread: reading the pipe receives it.
+      assertEquals("web network capture: queue overflow", marker.readText().trim())
+    } finally {
+      // Unblock whichever thread is still waiting to write.
+      Thread { runCatching { marker.inputStream().close() } }.apply { isDaemon = true }.start()
+    }
   }
 
   /**

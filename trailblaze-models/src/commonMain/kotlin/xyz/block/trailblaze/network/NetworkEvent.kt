@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.network
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
  * One captured network exchange phase. NDJSON-friendly — each emitted line in
@@ -37,6 +38,20 @@ data class NetworkEvent(
   val requestBodyRef: BodyRef? = null,
   val responseBodyRef: BodyRef? = null,
   val source: Source,
+  /**
+   * Which clock stamped [timestampMs]: [TrailblazeClockDomain.DEVICE] when the device supplied the
+   * time (the app's own request or emit timestamp), null (omitted) for the host's. Same
+   * convention as a session event's `clock` — see `SessionEvents`.
+   */
+  val clock: TrailblazeClockDomain? = null,
+  /**
+   * The trail phase the exchange started in: `trailhead`, `trail` or `teardown`. Every event of
+   * the exchange carries its start's phase, so a request the trailhead sent is the trailhead's even
+   * when its response arrives during the trail. Null for a trail without a trailhead, for a request
+   * sent before the trailhead started, for a response whose request was not captured, and when the
+   * trail runs in a different process from the capture (an agent running on the device).
+   */
+  val trailPhase: String? = null,
 )
 
 /** Placeholder value substituted for sensitive header values; see [NetworkEvent.requestHeaders]. */

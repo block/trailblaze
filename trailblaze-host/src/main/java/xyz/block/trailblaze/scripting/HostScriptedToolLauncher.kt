@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.scripting
 
+import xyz.block.trailblaze.surveys.SurveyBundles
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -13,6 +14,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.config.ScriptedToolRuntime
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
@@ -21,6 +23,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.scripting.subprocess.SubprocessToolRegistrar
@@ -80,13 +83,71 @@ object HostScriptedToolLauncher {
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
     logPrefix: String,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): Pair<List<InlineScriptToolConfig>, List<InlineScriptToolConfig>> =
     SubprocessToolRegistrar.applicableInlineTools(
       tools = tools,
       drivers = drivers,
       preferHostAgent = preferHostAgent,
       logPrefix = logPrefix,
+      classifiers = classifiers,
     ).partition { tool -> ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS }
+
+  /**
+   * The target's own tools in [tools] to keep off the LLM's list: each one its `excluded_tools:`
+   * names on every session driver the tool supports. They still register, so a recorded step that
+   * names one dispatches.
+   */
+  fun targetExcludedTools(
+    target: TrailblazeHostAppTarget,
+    tools: List<InlineScriptToolConfig>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): Set<ToolName> {
+    val excludedByDriver = drivers.associateWith { target.getExcludedScriptedToolNamesForDriver(it) }
+    return tools.mapNotNullTo(mutableSetOf()) { tool ->
+      val name = ToolName(tool.name)
+      val meta = SubprocessToolRegistrar.advertisedMeta(tool)?.let(TrailblazeToolMeta::fromJsonObject)
+        ?: TrailblazeToolMeta()
+      val supported = drivers.filter { meta.shouldRegister(it, preferHostAgent, classifiers) }
+      name.takeIf { supported.isNotEmpty() && supported.all { name in excludedByDriver.getValue(it) } }
+    }
+  }
+
+  /** Names a launch hides from, and shows to, the LLM. */
+  data class TargetToolVisibility(val hide: Set<ToolName>, val show: Set<ToolName>)
+
+  /**
+   * How one target's launch changes which of its [tools] the LLM sees, decided from what actually
+   * registered. A tool is offered when any target that registered it permits it, whichever launched
+   * first: hide the ones this target excludes and [registeredNow], and show the ones it permits that
+   * are registered, by this launch or an earlier one ([preRegistered]), clearing an earlier hide.
+   * A tool whose registration failed (say, no bundle) changes nothing, and neither does one this
+   * target marks `surfaceToLlm: false`: a hidden provider offers nothing to show. A shown tool is
+   * offered even when the copy that registered first is another target's hidden one.
+   */
+  fun targetToolVisibility(
+    target: TrailblazeHostAppTarget,
+    tools: List<InlineScriptToolConfig>,
+    preRegistered: Set<ToolName>,
+    registeredNow: Set<ToolName>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): TargetToolVisibility {
+    val excluded = targetExcludedTools(target, tools, drivers, preferHostAgent, classifiers)
+    val offered = tools
+      .filter { tool ->
+        tool.surfaceToLlm &&
+          (tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()).surfaceToLlm
+      }
+      .mapTo(mutableSetOf()) { ToolName(it.name) }
+    return TargetToolVisibility(
+      hide = excluded intersect registeredNow,
+      show = (offered intersect (preRegistered + registeredNow)) - excluded,
+    )
+  }
 
   /**
    * @param includeSubprocess when `false`, the Node/Bun **subprocess** MCP path is skipped entirely
@@ -100,6 +161,8 @@ object HostScriptedToolLauncher {
   suspend fun launch(
     targetTestApp: TrailblazeHostAppTarget?,
     config: TrailblazeConfig,
+    /** The trail file this session runs, whose workspace `ctx.surveys` loads surveys from. */
+    trailFilePath: String? = null,
     sessionId: SessionId,
     deviceInfo: TrailblazeDeviceInfo,
     logsRepo: LogsRepo,
@@ -114,8 +177,19 @@ object HostScriptedToolLauncher {
      * single-device sessions.
      */
     additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
+    /**
+     * Drivers of the devices that run [targetTestApp], which decide whether its `excluded_tools:`
+     * hide a tool. Narrower than the session's drivers in a multi-device session: a browser
+     * companion's driver must not unhide a tool an Android-only target excludes. Null uses
+     * [deviceInfo]'s driver plus [additionalDriverTypes].
+     */
+    targetDriverTypes: Set<TrailblazeDriverType>? = null,
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
+    // `ctx.surveys` builds a survey on first use, from the trail's own workspace:
+    // a daemon serves trails from many workspaces, and its cwd is none of them. Released with the
+    // returned runtime, or here when the launch returns none.
+    val surveyConfigDir by lazy { WorkspaceSurveyBundleSource.configDirFor(trailFilePath, targetTestApp) }
     // A `--no-logging` run's repo hands back a session path it deliberately never created, and the
     // launchers below would create it and write QuickJS bundles and `inline-script-tools/` wrappers
     // there — so "no session files" would hold for everything except a trail that uses scripted
@@ -130,8 +204,9 @@ object HostScriptedToolLauncher {
     } else {
       null
     }
-    var tempWorkDirHandedOff = false
+    var handedOff = false
     try {
+      SurveyBundles.register(sessionId, WorkspaceSurveyBundleSource(configDir = { surveyConfigDir }))
       val sessionDir = tempWorkDir ?: logsRepo.getSessionDir(sessionId)
 
       // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
@@ -162,6 +237,7 @@ object HostScriptedToolLauncher {
         drivers = sessionDrivers,
         preferHostAgent = config.preferHostAgent,
         logPrefix = logPrefix,
+        classifiers = deviceInfo.classifiers,
       )
       val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
         // Filter out tools an earlier pass already registered (idempotency) up front, so neither the
@@ -204,9 +280,11 @@ object HostScriptedToolLauncher {
         toolRepo = toolRepo,
         sessionId = sessionId,
         sessionDir = sessionDir,
-        toolNames = toolRepo.allCatalogScriptedToolNames,
+        toolNames = toolRepo.allCatalogScriptedToolNames +
+          sessionDrivers.flatMap { toolRepo.widenCatalogToDriver(it) },
         drivers = sessionDrivers,
         preferHostAgent = config.preferHostAgent,
+        classifiers = deviceInfo.classifiers,
         skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
         classLoader = classLoader,
         logPrefix = logPrefix,
@@ -220,8 +298,14 @@ object HostScriptedToolLauncher {
       // handle — catch + dispose them before rethrowing.
       //
       // Already gated on the session's driver/platform by [partitionSessionInlineTools]: a tool this
-      // session would discard at `tools/list` must not cost a fork and a `script:` resolution.
-      val spawnableInlineTools = if (includeSubprocess) nodeApiInlineTools else emptyList()
+      // session would discard at `tools/list` must not cost a fork and a `script:` resolution. A name
+      // already registered (an earlier target's copy in a multi-device session, or an earlier pass)
+      // keeps that registration, as on the in-process path: spawning it again would collide.
+      val spawnableInlineTools = if (includeSubprocess) {
+        nodeApiInlineTools.filter { ToolName(it.name) !in preRegistered }
+      } else {
+        emptyList()
+      }
       val mcpServers = if (spawnableInlineTools.isNotEmpty()) {
         InlineScriptToolServerSynthesizer.synthesize(
           tools = spawnableInlineTools,
@@ -260,18 +344,37 @@ object HostScriptedToolLauncher {
         null
       }
 
+      // After both runtimes registered, so only tools that actually registered change visibility.
+      if (targetTestApp != null) {
+        val visibility = targetToolVisibility(
+          target = targetTestApp,
+          tools = nodeApiInlineTools + quickJsInlineTools,
+          preRegistered = preRegistered,
+          registeredNow = toolRepo.getRegisteredDynamicTools().keys - preRegistered,
+          drivers = targetDriverTypes ?: sessionDrivers,
+          preferHostAgent = config.preferHostAgent,
+          classifiers = deviceInfo.classifiers,
+        )
+        toolRepo.hideScriptedToolsFromLlm(visibility.hide)
+        toolRepo.showScriptedToolsToLlm(visibility.show)
+      }
+
       // If neither path produced anything actionable, no cleanup needed.
       if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
 
-      tempWorkDirHandedOff = true
+      handedOff = true
       return LaunchedScriptingRuntime(
         subprocessRuntime = subprocessRuntime,
         inlineRegistrations = inlineRegistrations,
         toolRepo = toolRepo,
         tempWorkDir = tempWorkDir,
+        onShutdown = { SurveyBundles.unregister(sessionId) },
       )
     } finally {
-      if (!tempWorkDirHandedOff) tempWorkDir?.deleteRecursively()
+      if (!handedOff) {
+        tempWorkDir?.deleteRecursively()
+        SurveyBundles.unregister(sessionId)
+      }
     }
   }
 
@@ -569,16 +672,17 @@ object HostScriptedToolLauncher {
 
   /**
    * The (tool -> bundle) pairs for a [InlineToolRoute.LiveBundle] route, in the route's tool order.
-   * A binary user's JAR-shipped tools ([shippedPrecompiledBundles]) take their precompiled bundle
-   * directly; only the rest go to [bundleLive], which is not called when nothing is left. A source
-   * checkout sends every tool to [bundleLive] so an edit always takes effect.
+   * JAR-shipped tools ([shippedPrecompiledBundles]) take their precompiled bundle directly, even
+   * when an SDK override is available: their extracted tools tree need not contain external imports.
+   * Only the rest go to [bundleLive], which is not called when nothing is left. Workspace sources
+   * always bundle live so a shipped bundle cannot shadow an edit.
    */
   internal suspend fun liveBundleRoute(
     route: InlineToolRoute.LiveBundle,
     shippedBundles: (List<InlineScriptToolConfig>) -> Map<InlineScriptToolConfig, File> = { shippedPrecompiledBundles(it) },
     bundleLive: suspend (List<InlineScriptToolConfig>) -> List<Pair<InlineScriptToolConfig, File>>,
   ): List<Pair<InlineScriptToolConfig, File>> {
-    val shipped = if (route.allowPrecompiledFallback) shippedBundles(route.tools) else emptyMap()
+    val shipped = shippedBundles(route.tools)
     val liveTools = route.tools.filter { it !in shipped }
     val bundles = shipped + if (liveTools.isEmpty()) emptyList() else bundleLive(liveTools)
     return route.tools.mapNotNull { tool -> bundles[tool]?.let { tool to it } }

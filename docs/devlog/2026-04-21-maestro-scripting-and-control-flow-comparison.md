@@ -6,6 +6,10 @@ date: 2026-04-21
 
 # Maestro Scripting & Flow Control — Comparison and Self-Validation
 
+> **Update 2026-10-05:** parts of this entry are out of date. Replay now re-runs the scripted tool
+> rather than the calls it made, tools can write memory, and `fetch` has shipped. See
+> [Trailblaze vs Maestro: TypeScript Tools, Subflows and Maestro MCP](2026-10-05-typescript-tools-vs-maestro-javascript-and-subflows.md).
+
 ## Summary
 
 Walked through Maestro's JavaScript execution model and YAML flow control primitives

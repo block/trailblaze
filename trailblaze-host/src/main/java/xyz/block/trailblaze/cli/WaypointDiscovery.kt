@@ -8,6 +8,7 @@ import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.util.Console
@@ -43,6 +44,13 @@ object WaypointDiscovery {
      * silent empty result doesn't look identical to "no trailmaps configured."
      */
     val trailmapLoadFailed: Boolean,
+    /**
+     * The trailmap resolution these waypoints came from (workspace, or the classpath-only
+     * fallback), or `null` when both failed. Callers that also need the resolved targets — the
+     * waypoint graph reads trailheads off them — reuse it instead of resolving again, which would
+     * re-run every scripted-tool analysis that failed this time.
+     */
+    val resolvedConfig: TrailblazeResolvedConfig? = null,
   )
 
   fun discover(root: File): Result = discover(root = root, fromPath = Paths.get(""))
@@ -69,18 +77,19 @@ object WaypointDiscovery {
     val trailmapLoad = loadTrailmapWaypoints(fromPath)
     val filesystemResult = WaypointLoader.loadAllResilient(root)
     val combined = linkedMapOf<String, WaypointDefinition>()
-    trailmapLoad.definitions.forEach { def -> combined.putIfAbsent(def.id, def) }
+    trailmapLoad.resolved?.waypoints.orEmpty().forEach { def -> combined.putIfAbsent(def.id, def) }
     filesystemResult.definitions.forEach { def -> combined.putIfAbsent(def.id, def) }
     return Result(
       definitions = combined.values.toList(),
       rootFailures = filesystemResult,
       trailmapLoadFailed = trailmapLoad.trailmapLoadFailed,
+      resolvedConfig = trailmapLoad.resolved,
     )
   }
 
   /** Internal aggregation: which trailmap-load attempts hit typed errors during resolution. */
   private data class TrailmapLoadOutcome(
-    val definitions: List<WaypointDefinition>,
+    val resolved: TrailblazeResolvedConfig?,
     val trailmapLoadFailed: Boolean,
   )
 
@@ -98,15 +107,15 @@ object WaypointDiscovery {
   private fun loadTrailmapWaypoints(fromPath: Path): TrailmapLoadOutcome {
     var trailmapLoadFailed = false
     // Try workspace + classpath together first.
-    val workspaceWaypoints = tryLoadWorkspaceWaypoints(fromPath, onError = { trailmapLoadFailed = true })
-    if (workspaceWaypoints != null) {
-      return TrailmapLoadOutcome(workspaceWaypoints, trailmapLoadFailed)
+    val workspaceResolved = tryLoadWorkspaceWaypoints(fromPath, onError = { trailmapLoadFailed = true })
+    if (workspaceResolved != null) {
+      return TrailmapLoadOutcome(workspaceResolved, trailmapLoadFailed)
     }
     // Workspace path returned null — either no workspace anchor, or a typed error
     // happened (in which case `trailmapLoadFailed` is already set). Fall back to a
     // classpath-only resolution so framework-bundled trailmaps still surface.
-    val classpathWaypoints = tryLoadClasspathOnlyWaypoints(onError = { trailmapLoadFailed = true })
-    return TrailmapLoadOutcome(classpathWaypoints, trailmapLoadFailed)
+    val classpathResolved = tryLoadClasspathOnlyWaypoints(onError = { trailmapLoadFailed = true })
+    return TrailmapLoadOutcome(classpathResolved, trailmapLoadFailed)
   }
 
   /**
@@ -114,28 +123,27 @@ object WaypointDiscovery {
    * also pulls in classpath-bundled trailmaps).
    *
    * Returns:
-   *  - the resolved waypoints when the workspace anchor exists and loads successfully
+   *  - the resolved config when the workspace anchor exists and loads successfully
    *  - `null` when no workspace anchor exists, OR the workspace config fails to load
    *    with a typed [TrailblazeProjectConfigException] — null signals the caller to
    *    fall back to [tryLoadClasspathOnlyWaypoints]
    *
    * The asymmetric return type vs. [tryLoadClasspathOnlyWaypoints] is intentional:
    * a workspace failure has a meaningful fallback, so it returns a sentinel; a
-   * classpath failure has no further fallback, so it returns an empty list directly.
+   * classpath failure has no further fallback, so it carries the failure via `onError`.
    */
   private fun tryLoadWorkspaceWaypoints(
     fromPath: Path,
     onError: () -> Unit,
-  ): List<WaypointDefinition>? {
+  ): TrailblazeResolvedConfig? {
     return try {
       val workspace = TrailblazeWorkspaceConfigResolver.resolve(fromPath)
       val configFile = workspace.configFile ?: return null
-      val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
         configFile = configFile,
         includeClasspathTrailmaps = true,
         scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
       )
-      resolved?.waypoints
     } catch (e: TrailblazeProjectConfigException) {
       // Typed loader error — workspace config is malformed or a workspace trailmap ref
       // is broken. Logged at error level so the message stays visible above the
@@ -156,11 +164,10 @@ object WaypointDiscovery {
    * no workspace anchor, or when [tryLoadWorkspaceWaypoints] hit a typed error and
    * fell through.
    *
-   * Returns the list directly (never null) because there's no further fallback after
-   * this — if classpath discovery itself errors, the CLI proceeds with an empty
-   * waypoint set rather than crashing.
+   * There's no further fallback after this — if classpath discovery itself errors, this
+   * returns `null` and the CLI proceeds with an empty waypoint set rather than crashing.
    */
-  private fun tryLoadClasspathOnlyWaypoints(onError: () -> Unit): List<WaypointDefinition> {
+  private fun tryLoadClasspathOnlyWaypoints(onError: () -> Unit): TrailblazeResolvedConfig? {
     return try {
       TrailblazeProjectConfigLoader.resolveRuntime(
         loaded = LoadedTrailblazeProjectConfig(
@@ -169,7 +176,7 @@ object WaypointDiscovery {
         ),
         includeClasspathTrailmaps = true,
         scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
-      ).waypoints
+      )
     } catch (e: TrailblazeProjectConfigException) {
       // Typed loader error from a malformed classpath trailmap manifest. Logged at error
       // level so it's visible but not fatal — the CLI continues with an empty
@@ -177,7 +184,7 @@ object WaypointDiscovery {
       // Generic Exception is intentionally not caught (see tryLoadWorkspaceWaypoints).
       Console.error("Warning: failed to load classpath trailmap waypoints: ${e.message}")
       onError()
-      emptyList()
+      null
     }
   }
 }

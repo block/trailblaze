@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.test.Test
@@ -23,7 +24,8 @@ class DesktopDispatchDecisionTest {
   private fun decide(
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean = false,
-  ) = DesktopDispatchDecision.decide(driver, preferHostAgent)
+    selectedConfigurationName: String? = null,
+  ) = DesktopDispatchDecision.decide(driver, preferHostAgent, selectedConfigurationName)
 
   /**
    * A retired driver has no runtime to dispatch to, so the table below makes no claim about one.
@@ -96,16 +98,31 @@ class DesktopDispatchDecisionTest {
    * worked). Derived from [decide] rather than restated, so a capability change moves both.
    */
   @Test
-  fun `only the Android on-device driver can run multi-device trails`() {
+  fun `only the Android on-device driver, the iOS simulator drivers and the browser can run multi-device trails`() {
     val multiDeviceCapable = runnableDrivers.filter { driver ->
       listOf(false, true).any { preferHostAgent ->
-        DesktopDispatchDecision.supportsMultiDevice(decide(driver, preferHostAgent))
+        DesktopDispatchDecision.supportsMultiDevice(decide(driver, preferHostAgent, "pos-pair"))
       }
     }.toSet()
 
     assertThat(multiDeviceCapable).isEqualTo(
-      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+      setOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.IOS_HOST,
+        TrailblazeDriverType.IOS_AXE,
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      ),
     )
+  }
+
+  /** An iOS or browser launch takes the multi-device host agent only when the run selects a configuration. */
+  @Test
+  fun `an iOS simulator or browser launch routes to the multi-device host agent only when a configuration is selected`() {
+    listOf(TrailblazeDriverType.IOS_HOST, TrailblazeDriverType.IOS_AXE, TrailblazeDriverType.PLAYWRIGHT_NATIVE).forEach { driver ->
+      assertThat(decide(driver, selectedConfigurationName = "pos-pair"))
+        .isEqualTo(DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC)
+      assertThat(decide(driver)).isEqualTo(DispatchPath.HOST_IN_PROCESS_KOOG)
+    }
   }
 
   /** Every rejection names the change that would actually unblock the run. */
@@ -129,10 +146,10 @@ class DesktopDispatchDecisionTest {
 
     assertThat(
       DesktopDispatchDecision.multiDeviceRemedy(
-        decide(TrailblazeDriverType.IOS_HOST),
-        TrailblazeDriverType.IOS_HOST,
+        decide(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, selectedConfigurationName = "pos-pair"),
+        TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
       ),
-    ).contains("runs entirely on the host")
+    ).contains("Launch this trail with IOS_HOST, IOS_AXE, PLAYWRIGHT_NATIVE")
   }
 
   /**
@@ -150,8 +167,57 @@ class DesktopDispatchDecisionTest {
   }
 
   /**
+   * A browser-launched configuration builds a fresh browser agent per call, so a call continuing
+   * its session would act without the secrets an earlier call filled; only that call is refused.
+   */
+  @Test
+  fun `a browser-launched configuration refuses a call that continues its session`() {
+    fun refuses(driver: TrailblazeDriverType, configuration: String?, startsSession: Boolean) =
+      DesktopDispatchDecision.refusesContinuedBrowserLaunch(driver, configuration, startsSession)
+
+    assertThat(refuses(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "web-iphone", startsSession = false)).isTrue()
+    assertThat(refuses(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "web-iphone", startsSession = true)).isFalse()
+    assertThat(refuses(TrailblazeDriverType.PLAYWRIGHT_NATIVE, null, startsSession = false)).isFalse()
+    assertThat(
+      refuses(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "pos-pair", startsSession = false),
+    ).isFalse()
+  }
+
+  /**
+   * A call without a configuration is not refused, so a browser-launched configuration ends its own
+   * session even when its caller keeps sessions open; nothing is left for that call to continue.
+   */
+  @Test
+  fun `a browser-launched configuration ends its session when it returns`() {
+    fun ends(driver: TrailblazeDriverType, configuration: String?, sendsSessionEndLog: Boolean) =
+      DesktopDispatchDecision.endsSessionOnReturn(driver, configuration, sendsSessionEndLog)
+
+    assertThat(ends(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "web-iphone", sendsSessionEndLog = false)).isTrue()
+    assertThat(ends(TrailblazeDriverType.PLAYWRIGHT_NATIVE, null, sendsSessionEndLog = false)).isFalse()
+    assertThat(
+      ends(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "pos-pair", sendsSessionEndLog = false),
+    ).isFalse()
+    assertThat(
+      ends(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "pos-pair", sendsSessionEndLog = true),
+    ).isTrue()
+  }
+
+  @Test
+  fun `a reuse request is called out only where the run executes on the device`() {
+    fun notice(driver: TrailblazeDriverType, preferHostAgent: Boolean) =
+      DesktopDispatchDecision.ignoredTrailheadReuseNotice(decide(driver, preferHostAgent), driver)
+
+    assertThat(notice(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = false)!!)
+      .contains("Enable `preferHostAgent`")
+    assertThat(notice(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)!!)
+      .contains("trailblaze.trailheadReuse")
+    assertThat(notice(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isNull()
+    assertThat(notice(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isNull()
+  }
+
+  /**
    * A trail declaring single-device entries beside its configuration runs single-device when no
-   * companions are bound, so a host-only path (iOS, web) must accept it — and refuse it once the
+   * companions are bound, so a host-only path (Electron) must accept it — and refuse it once the
    * run binds companions and so selects the configuration.
    */
   @Test
@@ -177,11 +243,15 @@ class DesktopDispatchDecisionTest {
       requestDeviceBindingNames = emptySet(),
       rawDeviceBindings = rawDeviceBindings,
     )
-    val hostOnly = decide(TrailblazeDriverType.IOS_HOST)
+    fun refuses(rawDeviceBindings: String?): Boolean {
+      val selected = selection(rawDeviceBindings)
+      return DesktopDispatchDecision.refusesMultiDeviceRun(
+        decide(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, selectedConfigurationName = selected),
+        selected,
+      )
+    }
 
-    assertThat(DesktopDispatchDecision.refusesMultiDeviceRun(hostOnly, selection(null))).isFalse()
-    assertThat(
-      DesktopDispatchDecision.refusesMultiDeviceRun(hostOnly, selection("buyer=emulator-5562")),
-    ).isTrue()
+    assertThat(refuses(null)).isFalse()
+    assertThat(refuses("buyer=emulator-5562")).isTrue()
   }
 }

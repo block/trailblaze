@@ -177,6 +177,8 @@ object MaestroCommandConverter {
 
     val xStr = parts[0]
     val yStr = parts[1]
+    // `repeat: 2` is a double-tap. A long press has no repeated form, so it ignores `repeat`.
+    val repeat = (command.repeat?.repeat ?: 1).coerceAtLeast(1)
 
     return if (xStr.endsWith("%") && yStr.endsWith("%")) {
       // Relative/percentage coordinates — keep as Double through coordinate calculation
@@ -191,8 +193,9 @@ object MaestroCommandConverter {
         )
       } else {
         AccessibilityAction.TapRelative(
-          percentX = xPercent.toInt(),
-          percentY = yPercent.toInt(),
+          percentX = xPercent,
+          percentY = yPercent,
+          repeat = repeat,
         )
       }
     } else {
@@ -202,7 +205,7 @@ object MaestroCommandConverter {
       if (command.longPress == true) {
         AccessibilityAction.LongPress(x = x, y = y)
       } else {
-        AccessibilityAction.Tap(x = x, y = y)
+        AccessibilityAction.Tap(x = x, y = y, repeat = repeat)
       }
     }
   }

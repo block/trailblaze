@@ -12,6 +12,10 @@ import io.ktor.server.testing.testApplication
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -62,7 +66,7 @@ class HomeEndpointTest {
     val body = client.get("/").bodyAsText()
 
     assertTrue("href=\"/trailrunner/\"" in body, "expected a direct Trail Runner link")
-    assertTrue("Open Trail Runner" in body, "expected Trail Runner to be the primary action")
+    assertTrue("Open Trailblaze App" in body, "expected the Trailblaze App to be the primary action")
     assertTrue("href=\"/report\"" in body, "expected the all-session report link")
     assertTrue("href=\"/devices\"" in body, "expected the devices link")
     assertTrue("href=\"/ping\"" in body, "expected the health-check link")
@@ -78,6 +82,25 @@ class HomeEndpointTest {
     assertFalse("href=\"/trailrunner/\"" in body, "must not link an unavailable Trail Runner route")
     assertTrue("href=\"/report\"" in body, "expected the report to remain the primary destination")
     assertFalse("fonts.googleapis.com" in body, "daemon home must not depend on an external font request")
+  }
+
+  @Test
+  fun `home page summarizes how many sessions are running, failed, and passed`() = testApplication {
+    val logsRepo = createTestLogsRepo()
+    application { logsServerKtorEndpoints(logsRepo) }
+
+    postStatusLog(this, "passing-session", SessionStatus.Ended.Succeeded(durationMs = 1_500))
+    postStatusLog(this, "failing-session", SessionStatus.Ended.Failed(durationMs = 2_500, exceptionMessage = "boom"))
+    postStatusLog(this, "timed-out-session", SessionStatus.Ended.TimeoutReached(durationMs = 9_000, message = "slow"))
+    postStatusLog(this, "running-session", startedStatus())
+
+    val visibleText = client.get("/").bodyAsText()
+      .substringAfter("<body>")
+      .substringBefore("<script>")
+      .replace(Regex("<[^>]+>"), " ")
+      .replace(Regex("\\s+"), " ")
+
+    assertTrue("Running 1 Failed 2 Passed 1" in visibleText, "expected outcome counts, got: $visibleText")
   }
 
   @Test
@@ -199,6 +222,24 @@ class HomeEndpointTest {
       setBody(json)
     }
     assertEquals(HttpStatusCode.OK, response.status, "seeding session log failed")
+  }
+
+  private fun startedStatus(): SessionStatus.Started {
+    val deviceId = TrailblazeDeviceId(instanceId = "emulator-5554", trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID)
+    return SessionStatus.Started(
+      trailConfig = null,
+      trailFilePath = null,
+      hasRecordedSteps = false,
+      testMethodName = "running",
+      testClassName = "HomeEndpointTest",
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = deviceId,
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        widthPixels = 1080,
+        heightPixels = 2400,
+      ),
+      trailblazeDeviceId = deviceId,
+    )
   }
 
   private suspend fun postAgentDriverLog(

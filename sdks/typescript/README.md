@@ -82,9 +82,13 @@ trailblaze.tool(
     const user = JSON.parse(userResult.textContent) as { name: string; email: string };
 
     // Drive the UI with built-in Trailblaze tools — same typed surface.
-    await client.tools.tapOnElementWithText({ text: "Sign up" });
+    await client.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Sign up.*" } },
+    });
     await client.tools.inputText({ text: user.email });
-    await client.tools.tapOnElementWithText({ text: "Continue" });
+    await client.tools.tapOnElementBySelector({
+      nodeSelector: { androidAccessibility: { textRegex: "(?is).*Continue.*" } },
+    });
 
     return {
       content: [{ type: "text", text: JSON.stringify(user) }],
@@ -100,7 +104,7 @@ sequence of awaits, no success-flag branching. Only tools declared in
 `TrailblazeToolMap` are reachable; the SDK ships built-ins (`inputText`,
 `tapOnPoint`, `pressKey`, …) and the per-trailmap `trailblaze-client.d.ts` files written
 by `trailblaze check` augment `TrailblazeToolMap` for every scripted tool
-declared in a trailmap's `target.tools:` plus tools transitively inherited via
+in a trailmap's own `tools/` folder plus tools transitively inherited via
 `dependencies:` `exports:` (see *Typed bindings* below).
 
 The lower-level `callTool` dispatcher still exists on the runtime object —
@@ -117,7 +121,7 @@ each other via `client.tools.<name>(args)` over the callback channel.
 
 Each trailmap that ships scripted tools gets a generated `tools/trailblaze-client.d.ts`
 that augments `TrailblazeToolMap` with one entry per tool the trailmap's TS authors can
-dispatch — the trailmap's own `target.tools:` plus every scripted tool transitively
+dispatch — the trailmap's own scripted tools plus every scripted tool transitively
 inherited through `dependencies:` via the dep's `exports:` field, plus the Kotlin
 tools resolved from the trailmap's own platform `tool_sets:`. The file is regenerated on
 every `trailblaze check` (and on every daemon-aware command via the bootstrap), and

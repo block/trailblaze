@@ -1,0 +1,100 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze selector suggest [-hV] [--json] [--live] [--anchor=<anchor>]
+                                   [--at=<at>] [--batch=<file.jsonl>]
+                                   [-d=<device>]
+                                   [--maestro-selector=<maestroSelector>]
+                                   [--max=<max>] [--ref=<ref>]
+                                   [--session=<session>] [--step=<step>]
+                                   [<positionalLogFile>]
+Suggest selectors for one element of a captured screen, or the device's
+(--live) — the whole menu.
+Name the element by --ref (from `trailblaze snapshot --all`), by --at x,y, or
+by a legacy --maestro-selector. Prints EVERY strategy that computes a selector
+resolving to the element, each with its strategy name + live match count,
+ranked most-stable first.
+      [<positionalLogFile>]  Path to a *_TrailblazeLlmRequestLog.json (required
+                               unless --session or --batch is given).
+      --anchor=<anchor>      Compose the leaf selector with an ancestor
+                               predicate. Currently supported:
+                               parent-selected — find the nearest ancestor with
+                               isSelected=true and emit a     selector that
+                               matches that ancestor as a `View` with
+                               `isSelected: true`,     using the leaf as
+                               `containsChild`. This is the canonical
+                               bottom-nav-tab     waypoint pattern: any app
+                               with selectable bottom-nav tabs uses this to
+                               pin identity to the *currently active* tab
+                               rather than to any tab with the     given label.
+                               Without the anchor, the leaf selector matches a
+                               tab regardless     of selection state — fine for
+                               tap targets, wrong for waypoint identity,
+                               because we want to know WHICH tab is currently
+                               active.
+      --at, --xy=<at>        Screen-coordinate pair `x,y` (in device pixels)
+                               identifying the target element. The frontmost
+                               interactive node whose bounds contain the point
+                               is selected via the same hit-test the runtime
+                               uses for taps. Useful for the deterministic
+                               Maestro-selector → accessibility-selector
+                               migration: resolve the Maestro selector to a
+                               center coordinate, then ask this command for an
+                               accessibility selector that covers the same
+                               node. Mutually exclusive with --ref /
+                               --maestro-selector.
+      --batch=<file.jsonl>   Answer many questions in one call. Each line is a
+                               JSON object with the same keys as the flags:
+                               `log` (or `session` + optional `step`, or `live:
+                               true` with --live), one of `ref` / `at` /
+                               `maestroSelector`, and optional `max` / `anchor`
+                               (defaulting to this command's --max / --anchor).
+                               Prints one JSON object per line, in order; a
+                               line that can't be answered prints {"line":N,"
+                               error":...} and the rest still run (exit 3 at
+                               the end, 2 if it failed unexpectedly).
+  -d, --device=<device>      Device: platform (android, ios, web) or
+                               platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
+                               set (manual override; rare), otherwise this
+                               terminal's pin (set by `trailblaze device
+                               connect`). In a fresh-shell harness (Claude
+                               Code, Cursor, Codex, CI), pass --device on every
+                               call.
+  -h, --help                 Show this help message and exit.
+      --json                 Print the menu as one JSON object instead of
+                               commented YAML.
+      --live                 Read the connected device's current screen instead
+                               of a log: the screen `trailblaze snapshot --all`
+                               shows, so its refs resolve here. With --batch,
+                               lets lines read it with `live: true`.
+      --maestro-selector=<maestroSelector>
+                             Inline TrailblazeElementSelector YAML (the legacy
+                               flat selector with fields like `textRegex`,
+                               `idRegex`, `accessibilityTextRegex`, `index`,
+                               `enabled`, etc.) — the shape used by the older
+                               Maestro-driver tap recordings. The selector is
+                               resolved against the captured `viewHierarchy`
+                               (Maestro tree) using the same matcher the
+                               runtime taps use; the resulting node's CENTER
+                               coordinate is then hit-tested against the
+                               captured `trailblazeNodeTree` (accessibility
+                               tree) to find the accessibility node that covers
+                               the same on-screen element. The output is the
+                               same selector cascade as `--ref` / `--at`, but
+                               starting from a Maestro selector. This is the
+                               deterministic Maestro→accessibility migration
+                               primitive. Mutually exclusive with --ref / --at.
+      --max=<max>            Maximum candidate selectors to print (default: 25
+                               — enough to show them all)
+      --ref=<ref>            Element ref from the captured tree (e.g. 'a812').
+                               Exactly one of --ref, --at, or
+                               --maestro-selector must be provided.
+      --session=<session>    Session log directory. Steps count every screen
+                               capture in it that has an element tree, oldest
+                               first.
+      --step=<step>          1-based step within --session (default: last step)
+  -V, --version              Print version information and exit.

@@ -4,6 +4,7 @@
 // The exceptions are the free-text fields (`contains`, bodies, device-log lines) where a string is
 // a case-insensitive substring, because an exact match of a whole body is never what anyone wants.
 
+import type { TrailblazeLog } from "../generated/trailrunner-dtos.js";
 import type {
   AnalyticsEvent,
   DeviceLogLine,
@@ -318,9 +319,13 @@ export function matchLog(rec: LogRecord, q: LogQuery): boolean {
   return q.where === undefined || q.where(rec);
 }
 
+/** A plain test of one record, accepted wherever a query is. */
+export type Predicate<T> = (item: T) => boolean;
+
 /**
  * A queryable, ordered list of one record kind. Every accessor on a session returns one of these,
- * so the same five verbs work on requests, analytics events, tool calls, and the rest.
+ * so the same five verbs work on requests, analytics events, tool calls, and the rest. Each takes a
+ * query object or a plain function of the record.
  */
 export class Records<T extends SessionRecord, Q> implements Iterable<T> {
   constructor(
@@ -334,31 +339,32 @@ export class Records<T extends SessionRecord, Q> implements Iterable<T> {
   }
 
   /** First record matching the query, or undefined. */
-  find(query: Q = {} as Q): T | undefined {
-    return this.items.find((i) => this.matcher(i, query));
+  find(query: Q | Predicate<T> = {} as Q): T | undefined {
+    return this.items.find(this.test(query));
   }
 
   /** Last record matching the query, or undefined. */
-  findLast(query: Q = {} as Q): T | undefined {
+  findLast(query: Q | Predicate<T> = {} as Q): T | undefined {
+    const test = this.test(query);
     for (let i = this.items.length - 1; i >= 0; i--) {
       const item = this.items[i]!;
-      if (this.matcher(item, query)) return item;
+      if (test(item)) return item;
     }
     return undefined;
   }
 
   /** Every record matching the query, in session order. */
-  filter(query: Q = {} as Q): T[] {
-    return this.items.filter((i) => this.matcher(i, query));
+  filter(query: Q | Predicate<T> = {} as Q): T[] {
+    return this.items.filter(this.test(query));
   }
 
   /** Whether at least one record matches. */
-  has(query: Q = {} as Q): boolean {
+  has(query: Q | Predicate<T> = {} as Q): boolean {
     return this.find(query) !== undefined;
   }
 
   /** How many records match. */
-  count(query: Q = {} as Q): number {
+  count(query: Q | Predicate<T> = {} as Q): number {
     return this.filter(query).length;
   }
 
@@ -368,5 +374,32 @@ export class Records<T extends SessionRecord, Q> implements Iterable<T> {
 
   [Symbol.iterator](): Iterator<T> {
     return this.items[Symbol.iterator]();
+  }
+
+  private test(query: Q | Predicate<T>): Predicate<T> {
+    return typeof query === "function" ? (query as Predicate<T>) : (i) => this.matcher(i, query);
+  }
+}
+
+type LastSegment<S extends string> = S extends `${string}.${infer Rest}` ? LastSegment<Rest> : S;
+
+/** The short name of every Trailblaze log type, e.g. `TrailblazeToolLog`. */
+export type TrailblazeLogType = TrailblazeLog extends infer L ? (L extends { class: infer C extends string } ? LastSegment<C> : never) : never;
+
+/** The generated interface of the log type named `N`, e.g. `TrailblazeToolLog`. */
+export type TrailblazeLogOf<N extends string> = Extract<TrailblazeLog, { class: `${string}.${N}` }>;
+
+/**
+ * `session.trailblazeLogs`. `ofType("TrailblazeToolLog")` narrows it to that log type's generated
+ * interface, so `.filter((r) => !r.log.successful)` reads typed fields with no cast.
+ */
+export class LogRecords<L extends TrailblazeLog = TrailblazeLog> extends Records<LogRecord<L>, LogQuery> {
+  constructor(items: ReadonlyArray<LogRecord<L>>) {
+    super(items, matchLog);
+  }
+
+  /** Only the records of these log types, typed as them. */
+  ofType<N extends TrailblazeLogType>(...types: [N, ...N[]]): LogRecords<TrailblazeLogOf<N>> {
+    return new LogRecords(this.filter({ type: types }) as unknown as LogRecord<TrailblazeLogOf<N>>[]);
   }
 }

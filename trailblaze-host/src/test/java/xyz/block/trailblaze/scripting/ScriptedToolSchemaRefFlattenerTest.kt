@@ -110,6 +110,40 @@ class ScriptedToolSchemaRefFlattenerTest {
   }
 
   @Test
+  fun `a multi-byte percent-encoded ref name decodes as UTF-8`() {
+    val schema = parse(
+      """
+      {
+        "type": "object",
+        "properties": { "mode": { "${'$'}ref": "#/definitions/Mode%E2%80%94Fast" } },
+        "definitions": { "Mode—Fast": { "type": "string", "enum": ["a"] } }
+      }
+      """.trimIndent(),
+    )
+
+    val mode = ScriptedToolSchemaRefFlattener.flatten(schema)["properties"]?.jsonObject?.get("mode")?.jsonObject
+    assertNotNull(mode)
+    assertEquals("string", mode["type"]?.jsonPrimitive?.content)
+  }
+
+  @Test
+  fun `a malformed percent escape falls back to the literal ref name`() {
+    val schema = parse(
+      """
+      {
+        "type": "object",
+        "properties": { "pct": { "${'$'}ref": "#/definitions/100%ZZ" } },
+        "definitions": { "100%ZZ": { "type": "number" } }
+      }
+      """.trimIndent(),
+    )
+
+    val pct = ScriptedToolSchemaRefFlattener.flatten(schema)["properties"]?.jsonObject?.get("pct")?.jsonObject
+    assertNotNull(pct)
+    assertEquals("number", pct["type"]?.jsonPrimitive?.content)
+  }
+
+  @Test
   fun `nested and array refs are resolved recursively`() {
     // A ref nested under a property's object, and a ref under array `items` — both must inline.
     val schema = parse(

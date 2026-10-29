@@ -7,6 +7,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.devices.HostProbe
 import xyz.block.trailblaze.host.driver.DeviceListingVisibility
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
@@ -48,6 +49,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -231,7 +233,6 @@ class RevylHostDriverDescriptor(
         TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "Revyl Native Tool Set",
           toolClasses = revylToolSet.toolClasses,
-          yamlToolNames = revylToolSet.yamlToolNames,
         ),
         // Bind the repo to the Revyl driver so the KOOG verify-step surface scopes to
         // `revyl_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS).
@@ -239,6 +240,11 @@ class RevylHostDriverDescriptor(
         // generic `requestDetailedViewHierarchy` inspection tool off the Revyl KOOG surface (Revyl
         // is excluded from KOOG_INSPECTION_DRIVERS — its agent can't run that generic tool).
         driverType = runOnHostParams.trailblazeDriverType,
+        // The target's own tools register later; hide the ones `excluded_tools:` opts out of here.
+        excludedScriptedToolNames = runOnHostParams.targetTestApp
+          ?.getExcludedToolSurfaceForDriver(runOnHostParams.trailblazeDriverType)
+          ?.scriptedToolNames
+          .orEmpty(),
       )
 
       val agent = RevylTrailblazeAgent(
@@ -250,6 +256,7 @@ class RevylHostDriverDescriptor(
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
         trailblazeToolRepo = toolRepo,
+        sessionDirProvider = loggingRule.logsRepo::getSessionDir,
       )
 
       val elementComparator = TrailblazeElementComparator(
@@ -271,6 +278,8 @@ class RevylHostDriverDescriptor(
         sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
         maxLlmCalls = runYamlRequest.maxLlmCalls,
         systemPromptTemplate = TrailblazeSystemPrompt.compose(),
+        alwaysShownTools = runOnHostParams.targetTestApp
+          ?.getAlwaysShownToolNamesForDriver(runOnHostParams.trailblazeDriverType).orEmpty(),
       )
 
       val trailblazeYaml = createTrailblazeYaml(
@@ -283,7 +292,9 @@ class RevylHostDriverDescriptor(
           agent.runTrailblazeTools(
             trailblazeTools,
             runYamlRequest.traceId,
-            screenState = screenStateProvider(),
+            // Null defers to the context's capture-on-read, so a tool that never reads the screen (the
+            // Teardown step among them) neither waits on a capture nor fails when one does.
+            screenState = null,
             elementComparator = elementComparator,
             screenStateProvider = screenStateProvider,
           ).result
@@ -293,6 +304,9 @@ class RevylHostDriverDescriptor(
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
         sessionUpdater = { loggingRule.setSession(it) },
+        // Off: every run provisions a new cloud device under the same catalog id, so a hand-off
+        // could reach a device that never had the setup.
+        trailheadReuse = false,
         // Shares one execution context + snapshot frame across the recording, matching the
         // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
         // device state today either (Revyl's device state lives in the cloud device, dispatched
@@ -311,6 +325,7 @@ class RevylHostDriverDescriptor(
         onProgressMessage = onProgressMessage,
         screenshotProvider = screenStateProvider,
         noLogging = runOnHostParams.noLogging,
+        metadata = runYamlRequest.trailSessionMetadata(),
         cleanup = {
           withContext(NonCancellable) {
             finishScriptingRuntimeCleanup(subprocessRuntimes) {
@@ -322,6 +337,7 @@ class RevylHostDriverDescriptor(
         TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
           targetTestApp = runOnHostParams.targetTestApp,
           config = runYamlRequest.config,
+          trailFilePath = runYamlRequest.trailFilePath,
           sessionId = session.sessionId,
           deviceInfo = trailblazeDeviceInfo,
           logsRepo = loggingRule.logsRepo,
@@ -377,6 +393,7 @@ class RevylHostDriverDescriptor(
                 rawYaml = runYamlRequest.yaml,
                 hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
                 trailblazeDeviceId = trailblazeDeviceId,
+                trailSourceUrl = runYamlRequest.trailSourceUrl,
                 resolvedInitialMemory = resolvedInitialMemory,
                 sensitiveMemoryKeys = sensitiveMemoryKeys,
               ),
@@ -392,29 +409,32 @@ class RevylHostDriverDescriptor(
           trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
         )
 
-        for (item in trailItems) {
-          val itemResult = when (item) {
-            is TrailYamlItem.PromptsTrailItem ->
-              // Agent-agnostic: replays recorded steps deterministically and delegates only
-              // unrecorded steps to the selected runner (legacy / KOOG). Default unchanged.
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = item.promptSteps,
-                useRecordedSteps = runYamlRequest.useRecordedSteps,
-                selfHeal = runYamlRequest.config.selfHeal,
-              )
-            is TrailYamlItem.TrailheadTrailItem ->
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = listOf(item.trailhead.toPromptStep()),
-                useRecordedSteps = true,
-                selfHeal = runYamlRequest.config.selfHeal,
-              )
-            is TrailYamlItem.ToolTrailItem ->
-              trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-            is TrailYamlItem.ConfigTrailItem ->
-              item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-          }
-          if (itemResult is TrailblazeToolResult.Error) {
-            throw TrailblazeException(itemResult.errorMessage)
+        // One trail: the trailhead's teardown runs after it, whatever the outcome.
+        trailblazeRunnerUtil.runTrail {
+          for (item in trailItems) {
+            val itemResult = when (item) {
+              is TrailYamlItem.PromptsTrailItem ->
+                // Agent-agnostic: replays recorded steps deterministically and delegates only
+                // unrecorded steps to the selected runner (legacy / KOOG). Default unchanged.
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = item.promptSteps,
+                  useRecordedSteps = runYamlRequest.useRecordedSteps,
+                  selfHeal = runYamlRequest.config.selfHeal,
+                )
+              is TrailYamlItem.TrailheadTrailItem ->
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = listOf(item.trailhead.toPromptStep()),
+                  useRecordedSteps = true,
+                  selfHeal = runYamlRequest.config.selfHeal,
+                )
+              is TrailYamlItem.ToolTrailItem ->
+                trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
+              is TrailYamlItem.ConfigTrailItem ->
+                item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+            }
+            if (itemResult is TrailblazeToolResult.Error) {
+              throw TrailblazeException(itemResult.errorMessage)
+            }
           }
         }
 

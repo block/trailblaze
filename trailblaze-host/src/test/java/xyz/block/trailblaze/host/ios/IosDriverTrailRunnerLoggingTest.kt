@@ -34,6 +34,27 @@ import kotlin.test.Test
  */
 class IosDriverTrailRunnerLoggingTest {
 
+  @Test
+  fun `native launch errors redact credentials echoed by the device transport`() {
+    val secret = "fixture-session-secret"
+    val manager = FakeIosDeviceManager(failWith = IllegalStateException("simctl stderr: $secret"))
+    val action = IosDriverAction.LaunchApp(
+      bundleId = "com.example.app",
+      launchArguments = listOf("-credential", secret),
+    )
+
+    val result = IosDriverTrailRunner.runActions(
+      actions = listOf(action), traceId = null, deviceManager = manager,
+      trailblazeLogger = capturingLogger, sessionProvider = sessionProvider,
+    )
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat((manager.executedActions.single() as IosDriverAction.LaunchApp).launchArguments)
+      .isEqualTo(listOf("-credential", secret))
+    kotlin.test.assertFalse(result.toString().contains(secret))
+    kotlin.test.assertFalse(driverLogs().toString().contains(secret))
+  }
+
   // Lazy like AxeScreenState: the screenshot is only materialized on first read, and blows up
   // if that first read happens after any later action executed. This pins the runner's central
   // guarantee — lazies are forced on the calling thread BEFORE the action dispatches; without

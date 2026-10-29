@@ -34,7 +34,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     )
   }
 
-  override fun startTrailblazeDesktopApp(headless: Boolean, daemonAlreadyRunning: Boolean) {
+  override fun startTrailblazeDesktopApp(daemonAlreadyRunning: Boolean) {
     installRunHandler()
     // Anchor every workspace-config consumer (tool catalog, LSP schema, scripted-tool source
     // lookups, target discovery) to the trails directory picked in Trail Runner settings — not the
@@ -47,15 +47,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       logsRepo = desktopAppConfig.logsRepo,
       trailblazeMcpServerProvider = { trailblazeMcpServer },
     ).runTrailblazeApp(
-      allTabs = {
-        desktopAppConfig.getTabs(
-          deviceManager = deviceManager,
-          yamlRunner = { desktopYamlRunner.runYaml(it) },
-          mcpServerDebugStateFlow = trailblazeMcpServer.mcpServerDebugStateFlow,
-        )
-      },
       deviceManager = deviceManager,
-      headless = headless,
       daemonAlreadyRunning = daemonAlreadyRunning,
       trailRunnerPath = "/trailrunner/",
       // Serve the Trail Runner web UI (/trailrunner/) on the daemon. The open-source build runs it
@@ -89,8 +81,6 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       // target registration (TrailblazeDeviceManager.registerNewTarget). Single source of truth
       // with the startup `availableAppTargets` seed, so the two can't drift.
       freshAppTargetsProvider = { failFast -> desktopAppConfig.rediscoverAppTargets(failFast) },
-      appIconProvider = desktopAppConfig.appIconProvider,
-      deviceClassifierIconProvider = desktopAppConfig.deviceClassifierIconProvider,
       defaultHostAppTarget = desktopAppConfig.defaultAppTarget,
       runYamlLambda = { desktopYamlRunner.runYaml(it) },
       installedAppIdsProviderBlocking = { desktopAppConfig.getInstalledAppIds(it) },

@@ -11,8 +11,7 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.isCommandAvailabl
  * dadb does not cover (currently `adb reverse` and `adb forward tcp:X localabstract:Y`); most
  * shell/install/push/pull/forward operations go directly over the adb wire protocol via dadb.
  *
- * The candidate SDK directories and executable filenames live in [AndroidSdkPaths]
- * so the desktop `ToolAvailabilityChecker` can share them without drift.
+ * The candidate SDK directories and executable filenames live in [AndroidSdkPaths].
  */
 object AdbPathResolver {
 

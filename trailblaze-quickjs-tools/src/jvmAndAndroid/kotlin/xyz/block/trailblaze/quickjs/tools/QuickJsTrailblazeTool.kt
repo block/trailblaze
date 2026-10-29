@@ -14,6 +14,8 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.trailhead.TeardownCapableTool
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 
 /**
  * Executable form of a tool advertised by a QuickJS bundle. Implements
@@ -68,7 +70,10 @@ class QuickJsTrailblazeTool(
    * below. [DeclaredSensitiveArgs.None] (the default) leaves the payload untouched.
    */
   internal val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
-) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool, SensitiveArgsTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool,
+  RawArgumentTrailblazeTool,
+  SensitiveArgsTrailblazeTool,
+  TeardownCapableTool {
 
   /**
    * Satisfies [SensitiveArgsTrailblazeTool] so the log-encode boundary masks these args' values in
@@ -109,7 +114,12 @@ class QuickJsTrailblazeTool(
     // resolved args carry no tokens). rawToolArguments stays un-interpolated so replaying a tokenized
     // trail keeps the token in a re-recording (on the AI path, args were already resolved upstream).
     val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args) as? JsonObject) ?: args
-    val ctx = buildCtxEnvelope(toolExecutionContext)
+    // A trailhead invocation consumes this device's hand-off before any of its code runs, and
+    // receives it as `ctx.previousRun` on an exact, reusable match. Null for every other call.
+    val trailheadInvocation = TrailheadRuns.beginInvocation(toolExecutionContext, this, resolvedArgs)
+    val ctx = buildCtxEnvelope(toolExecutionContext, TrailheadRuns.envelopeFor(trailheadInvocation))
+    var resultMeta: JsonObject? = null
+    var handlerSucceeded = false
     // Install the session context on the binding so nested client.callTool() calls from inside
     // the JS bundle can resolve it via SessionScopedHostBinding.callFromBundle. The QuickJS
     // asyncFunction callback fires on Dispatchers.Default (a different thread) so
@@ -119,7 +129,15 @@ class QuickJsTrailblazeTool(
     binding?.activeContext = toolExecutionContext
     return try {
       val resultJson = host.callTool(advertisedName.toolName, resolvedArgs, ctx)
-      val toolResult = resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
+      resultMeta = resultJson["_meta"] as? JsonObject
+      val decoded = resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
+      // A failed or unfinished catch-up fails the trailhead even when the handler caught it, and so
+      // does a reused setup that lands somewhere other than where the previous run's trailhead ended.
+      val reuseFailure = (decoded as? TrailblazeToolResult.Success)?.let {
+        TrailheadRuns.reuseFailure(trailheadInvocation, resultMeta)
+          ?: TrailheadRuns.checkLanding(toolExecutionContext, trailheadInvocation, resultMeta)
+      }
+      val toolResult = reuseFailure?.let { TrailblazeToolResult.Error.ExceptionThrown(errorMessage = it) } ?: decoded
       // Flush the handler's `ctx.memory.set(...)` / `.delete(...)` writes back into the shared
       // AgentMemory, mirroring SubprocessTrailblazeTool. The in-process/on-device SDK
       // (`defineTypedTool` → `attachMemoryDeltaToResult`) stamps the buffered diff onto the result's
@@ -136,6 +154,7 @@ class QuickJsTrailblazeTool(
       // the raw wire field, since the QuickJS envelope has no SDK-guaranteed `isError` presence.
       if (toolResult is TrailblazeToolResult.Success) {
         applyScriptedToolMemoryDelta(toolExecutionContext.memory, resultJson["_meta"] as? JsonObject)
+        handlerSucceeded = true
       }
       toolResult
     } catch (e: CancellationException) {
@@ -147,10 +166,54 @@ class QuickJsTrailblazeTool(
       TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, this)
     } finally {
       binding?.activeContext = null
+      // The reuse report rides the error envelope too, so a handler that threw after
+      // `previousRun.reuse(...)` is still recorded as a failed reuse.
+      TrailheadRuns.completeInvocation(
+        toolExecutionContext,
+        advertisedName.toolName,
+        trailheadInvocation,
+        resultMeta,
+        failed = !handlerSucceeded,
+      )
     }
   }
 
-  private fun buildCtxEnvelope(toolExecutionContext: TrailblazeToolExecutionContext): JsonObject {
+  override val trailheadToolName: String get() = advertisedName.toolName
+
+  override val trailheadCodeVersion: String get() = host.bundleSha256
+
+  override suspend fun definesTeardown(): Boolean =
+    host.hasToolMember(advertisedName.toolName, QuickJsToolHost.TEARDOWN_MEMBER)
+
+  override suspend fun teardown(
+    context: TrailblazeToolExecutionContext,
+    args: JsonObject,
+    trailRun: JsonObject,
+  ): JsonObject {
+    val ctx = buildCtxEnvelope(context, previousRun = null)
+    binding?.activeContext = context
+    try {
+      val resultJson = host.callToolMember(
+        name = advertisedName.toolName,
+        member = QuickJsToolHost.TEARDOWN_MEMBER,
+        args = args,
+        ctx = ctx,
+        extraArg = trailRun,
+      ) ?: error("'${advertisedName.toolName}' defines no teardown")
+      return when (val result = resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)) {
+        is TrailblazeToolResult.Success -> result.structuredContent as? JsonObject
+          ?: error("teardown returned no result object")
+        is TrailblazeToolResult.Error -> error(result.errorMessage)
+      }
+    } finally {
+      binding?.activeContext = null
+    }
+  }
+
+  private fun buildCtxEnvelope(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+    previousRun: JsonObject?,
+  ): JsonObject {
     val sessionId = toolExecutionContext.sessionProvider.invoke().sessionId
     val deviceInfo = toolExecutionContext.trailblazeDeviceInfo
     // ctx.target is populated only when the host runner pre-resolved a target at session
@@ -195,6 +258,8 @@ class QuickJsTrailblazeTool(
       ),
       target = target,
       memory = nonSensitiveMemory,
+      previousRun = previousRun,
+      hostPlatform = hostPlatformOrNull(),
     )
     // The host expects the ctx as a JsonObject (it embeds it inline as a JS literal),
     // so encode-to-element rather than encode-to-string — saves a parse-back trip.

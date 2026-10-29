@@ -92,6 +92,13 @@ class AndroidVideoCapture(
   private val nowMs: () -> Long = System::currentTimeMillis,
   /** Test seam: holds a recording's last frame out to a clip time; see [RecordingTailHold]. */
   private val holdLastFrame: (File, Long) -> Boolean = { file, untilMs -> RecordingTailHold.holdLastFrame(file, untilMs) },
+  /** How long a started stream may go without a picture before the session is recorded by [fallback]. */
+  private val firstPictureTimeoutMs: Long = FIRST_PICTURE_TIMEOUT_MS,
+  /**
+   * Devices already found to stream no pictures. Shared across sessions for the life of the
+   * process, so only a device's first session waits [firstPictureTimeoutMs] before falling back.
+   */
+  private val picturelessDevices: MutableSet<String> = PICTURELESS_DEVICES,
 ) : CaptureStream {
 
   override val type: CaptureType get() = format.captureType
@@ -125,6 +132,13 @@ class AndroidVideoCapture(
         "format=$format",
     )
 
+    if (deviceId in picturelessDevices) {
+      Console.log("[AndroidVideoCapture] $deviceId streamed no picture earlier; recording from screenshots")
+      usingFallback = true
+      fallback.start(sessionDir, deviceId, appId)
+      return
+    }
+
     val tee = H264Tee.forDevice(trailblazeDeviceId, videoSize = videoSize, bitRate = BIT_RATE)
     val streaming = muxFactory(File(sessionDir, format.filename(basename)), tee, format.liveMuxOutput())
     try {
@@ -139,7 +153,41 @@ class AndroidVideoCapture(
       fallback.start(sessionDir, deviceId, appId)
       return
     }
+    val gotPicture = try {
+      awaitFirstPicture(streaming)
+    } catch (e: InterruptedException) {
+      // The mux is not stored until the wait ends, so stop() could never reach it: stop it here,
+      // or its ffmpeg and tee subscription outlive the session.
+      runCatching { streaming.stop() }
+      Thread.currentThread().interrupt()
+      throw e
+    }
+    if (!gotPicture) {
+      // The stream started but carries no pictures — measured on a vendor arm64 emulator
+      // image, whose only H.264 encoder fails to configure: the stream connects, pictures never
+      // come, and the session would end with no recording at all. Screenshots still work there.
+      picturelessDevices.add(deviceId)
+      Console.log(
+        "[AndroidVideoCapture] $deviceId streamed no picture within ${firstPictureTimeoutMs}ms; " +
+          "recording from screenshots",
+      )
+      runCatching { streaming.stop() }
+      // The fallback writes the same filename; clear the stream's header-only file out of its way.
+      File(sessionDir, format.filename(basename)).delete()
+      usingFallback = true
+      fallback.start(sessionDir, deviceId, appId)
+      return
+    }
     mux = streaming
+  }
+
+  private fun awaitFirstPicture(streaming: WallClockVideoMux): Boolean {
+    val deadline = nowMs() + firstPictureTimeoutMs
+    while (!streaming.hasPicture()) {
+      if (nowMs() >= deadline) return false
+      Thread.sleep(FIRST_PICTURE_POLL_MS)
+    }
+    return true
   }
 
   override fun stop(options: CaptureOptions): CaptureArtifact? {
@@ -231,6 +279,17 @@ class AndroidVideoCapture(
     /** Target for the short side when scaling down for recording. */
     private const val TARGET_SHORT_SIDE = 720
     private const val BIT_RATE = "4000000" // 4 Mbps
+
+    /**
+     * A healthy device sends its first picture as soon as the stream starts — scrcpy and
+     * `screenrecord` both encode the current screen at once, still or not — so this only has to
+     * outlast a loaded CI host.
+     */
+    const val FIRST_PICTURE_TIMEOUT_MS = 10_000L
+    private const val FIRST_PICTURE_POLL_MS = 100L
+
+    /** See the `picturelessDevices` constructor parameter. */
+    private val PICTURELESS_DEVICES: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /**
      * Scales the device's real display dimensions down so the short side is ~[TARGET_SHORT_SIDE]px.

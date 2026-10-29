@@ -10,8 +10,6 @@ import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
-import xyz.block.trailblaze.config.YamlDefinedToolSerializer
-import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
@@ -56,30 +54,53 @@ class TrailblazeToolRepo(
    *
    * Governs [allCatalogScriptedToolNames], so the scripted-tool launcher bundles only what the
    * scope can deliver. Must be set to the same ids [withDynamicToolSets] resolved the initial
-   * class/YAML surface from, or the repo would advertise scripted tools from toolsets whose
+   * class-backed surface from, or the repo would advertise scripted tools from toolsets whose
    * class-backed siblings it dropped.
    */
   private val toolSetIds: List<String>? = null,
+  /**
+   * Scripted tool names the target's `excluded_tools:` opted out of on this repo's driver. Hidden
+   * from the LLM by [RegisteredToolsSnapshot.advertisedDynamic] even when the tool isn't a catalog
+   * tool — a trailmap's own `.ts` tools are on its target unlisted, and still register for
+   * dispatch so recorded replays resolve them.
+   */
+  private val excludedScriptedToolNames: Set<ToolName> = emptySet(),
 ) {
   val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
     .asTools()
     .toMutableSet()
 
+  /** Added by [hideScriptedToolsFromLlm]; guarded by [registeredTrailblazeToolClasses]. */
+  private val hiddenScriptedToolNames = mutableSetOf<ToolName>()
+
+  /** Added by [showScriptedToolsToLlm]; guarded by [registeredTrailblazeToolClasses]. */
+  private val shownScriptedToolNames = mutableSetOf<ToolName>()
+
   /**
-   * YAML-defined (`tools:` mode) tool names the LLM should see. These don't have a KClass —
-   * they're identified by their `id:` and constructed at execute time via
-   * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool]. Keyed by [ToolName] to stay
-   * type-consistent with [registeredDynamicTools] and the rest of the resolver chain.
+   * Keeps [names] off the LLM's tool list while they stay registered and dispatchable. A launcher
+   * calls this with the `excluded_tools:` of the target whose tools it registers, so the opt-out
+   * holds however this repo was constructed.
    */
-  private val registeredYamlToolNames: MutableSet<ToolName> = trailblazeToolSet
-    .asYamlToolNames()
-    .toMutableSet()
+  fun hideScriptedToolsFromLlm(names: Collection<ToolName>) = synchronized(registeredTrailblazeToolClasses) {
+    hiddenScriptedToolNames += names
+  }
+
+  /**
+   * Undoes [hideScriptedToolsFromLlm] for [names]: a later launcher whose target offers one of them
+   * puts it back, even when the registration that won the name is another target's copy marked
+   * `surfaceToLlm: false`. The exclusions this repo was constructed with (the session's own target)
+   * still win.
+   */
+  fun showScriptedToolsToLlm(names: Collection<ToolName>) = synchronized(registeredTrailblazeToolClasses) {
+    hiddenScriptedToolNames -= names.toSet()
+    shownScriptedToolNames += names
+  }
 
   /**
    * Scripted (`.ts` / `.js`) tool names the LLM should see. These are dispatched through
    * [registeredDynamicTools] (registered at session start by the bundling layer), but TRACKED
    * here so [advertisedDynamic] can hide a scripted tool that a target's `excluded_tools:` opted
-   * out of. Symmetric with [registeredYamlToolNames] for the scripted-tool case.
+   * out of.
    */
   private val registeredScriptedToolNames: MutableSet<ToolName> = trailblazeToolSet
     .asScriptedToolNames()
@@ -89,18 +110,13 @@ class TrailblazeToolRepo(
    * Session-scoped dynamic tool registrations (subprocess MCP today; future bundled on-device
    * runtimes plug in here too). Keyed by [ToolName] so lookups can't be accidentally mixed
    * with raw-string identifiers from other sources. Participates in [asToolRegistry],
-   * [getCurrentToolDescriptors], and [toolCallToTrailblazeTool] alongside the KClass and
-   * YAML-name sets.
+   * [getCurrentToolDescriptors], and [toolCallToTrailblazeTool] alongside the KClass set.
    */
   private val registeredDynamicTools: MutableMap<ToolName, DynamicTrailblazeToolRegistration> =
     mutableMapOf()
 
   fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.toSet()
-  }
-
-  fun getRegisteredYamlToolNames(): Set<ToolName> = synchronized(registeredTrailblazeToolClasses) {
-    registeredYamlToolNames.toSet()
   }
 
   fun getRegisteredScriptedToolNames(): Set<ToolName> = synchronized(registeredTrailblazeToolClasses) {
@@ -129,29 +145,49 @@ class TrailblazeToolRepo(
     }
   }
 
+  /** Catalog scripted names [widenCatalogToDriver] added for drivers other than [driverType]. */
+  private val widenedCatalogScriptedToolNames: MutableSet<ToolName> = mutableSetOf()
+
+  /**
+   * Returns the catalog scripted names for [driver], a multi-device companion's, and counts them
+   * as catalog names, so the advertisement gate hides them unless the repo advertises them.
+   * [toolSetIds] scopes the launch device's target, so another driver gets its whole catalog.
+   */
+  fun widenCatalogToDriver(driver: TrailblazeDriverType): Set<ToolName> {
+    if (driver == driverType) return allCatalogScriptedToolNames
+    val names = toolSetCatalog
+      ?.let { TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(driver, it) }
+      .orEmpty()
+    synchronized(registeredTrailblazeToolClasses) { widenedCatalogScriptedToolNames += names }
+    return names
+  }
+
   fun getRegisteredDynamicTools(): Map<ToolName, DynamicTrailblazeToolRegistration> =
     synchronized(registeredTrailblazeToolClasses) { registeredDynamicTools.toMap() }
 
   /**
-   * Point-in-time snapshot of class-backed, YAML-defined, and dynamic registered tools.
+   * Point-in-time snapshot of class-backed and dynamic registered tools.
    * Read under a single lock so concurrent [addDynamicTools] calls
    * can't yield a half-registered view.
    */
   private data class RegisteredToolsSnapshot(
     val toolClasses: Set<KClass<out TrailblazeTool>>,
-    val yamlToolNames: Set<ToolName>,
     val dynamic: Map<ToolName, DynamicTrailblazeToolRegistration>,
     /** Scripted tool names that survived the target's `excluded_tools:` — i.e. the advertised set. */
     val advertisedScriptedToolNames: Set<ToolName>,
     /** Every scripted tool name the catalog could deliver (before exclusions). */
     val allCatalogScriptedToolNames: Set<ToolName>,
+    /** The target's `excluded_tools:` scripted opt-outs, catalog or target-declared. */
+    val excludedScriptedToolNames: Set<ToolName>,
+    /** Names a target offers to the LLM though the registration holding them is hidden. */
+    val shownScriptedToolNames: Set<ToolName>,
   ) {
     /**
-     * Dynamic registrations visible to the LLM right now: every dynamic tool EXCEPT a catalog
-     * scripted tool that a target's `excluded_tools:` dropped. A scripted tool is registered for
+     * Dynamic registrations visible to the LLM right now: every dynamic tool EXCEPT a scripted
+     * tool that a target's `excluded_tools:` dropped. A scripted tool is registered for
      * dispatch as soon as its bundle loads (so recorded replays + direct calls work via
      * [toolCallToTrailblazeTool]), but an excluded one is hidden from the LLM. Non-scripted dynamic
-     * tools (subprocess MCP, target-declared scripted tools) are always advertised.
+     * tools (subprocess MCP, target-declared scripted tools) are advertised unless excluded.
      *
      * A registration that declares `surfaceToLlm = false` (e.g. a scripted internal step composed
      * by a parent tool) is dropped regardless — it stays dispatchable by name and resolvable for
@@ -161,7 +197,8 @@ class TrailblazeToolRepo(
     fun advertisedDynamic(): List<DynamicTrailblazeToolRegistration> =
       dynamic.entries
         .filter { (name, reg) ->
-          reg.surfaceToLlm &&
+          (reg.surfaceToLlm || name in shownScriptedToolNames) &&
+            name !in excludedScriptedToolNames &&
             (name !in allCatalogScriptedToolNames || name in advertisedScriptedToolNames)
         }
         .map { it.value }
@@ -170,10 +207,11 @@ class TrailblazeToolRepo(
   private fun snapshotRegisteredTools(): RegisteredToolsSnapshot = synchronized(registeredTrailblazeToolClasses) {
     RegisteredToolsSnapshot(
       toolClasses = registeredTrailblazeToolClasses.toSet(),
-      yamlToolNames = registeredYamlToolNames.toSet(),
       dynamic = registeredDynamicTools.toMap(),
       advertisedScriptedToolNames = registeredScriptedToolNames.toSet(),
-      allCatalogScriptedToolNames = allCatalogScriptedToolNames,
+      allCatalogScriptedToolNames = allCatalogScriptedToolNames + widenedCatalogScriptedToolNames,
+      excludedScriptedToolNames = excludedScriptedToolNames + hiddenScriptedToolNames,
+      shownScriptedToolNames = shownScriptedToolNames.toSet(),
     )
   }
 
@@ -183,9 +221,6 @@ class TrailblazeToolRepo(
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
       tools((snapshot.toolClasses + verifyTools + koogInspectionTools).toKoogTools(trailblazeToolContextProvider))
-      if (snapshot.yamlToolNames.isNotEmpty()) {
-        tools(KoogToolExt.buildKoogToolsForYamlDefined(snapshot.yamlToolNames, trailblazeToolContextProvider))
-      }
       val advertisedDynamic = snapshot.advertisedDynamic()
       if (advertisedDynamic.isNotEmpty()) {
         tools(advertisedDynamic.map { it.buildKoogTool(trailblazeToolContextProvider) })
@@ -196,7 +231,7 @@ class TrailblazeToolRepo(
   /**
    * Executor-routed [ToolRegistry] for agent-driven, in-process Koog loops (e.g. the web path).
    *
-   * Differs from [asToolRegistry] only in how class-backed and YAML-defined tool calls are
+   * Differs from [asToolRegistry] only in how class-backed tool calls are
    * EXECUTED: instead of calling `tool.execute(context)` directly, each decoded tool is
    * dispatched through [toolDispatcher] — typically `agent.runTrailblazeTools(listOf(tool), …)`.
    * That route is mandatory for driver-specific tools (Playwright / Compose) whose own
@@ -218,10 +253,13 @@ class TrailblazeToolRepo(
   )
 
   /**
-   * @param afterDynamicToolExecution runs after every dynamic (scripted) tool call, including one
-   *   that throws.
-   * @param decorateDynamicToolResult rewrites a dynamic tool's successful result before the LLM
-   *   reads it — the strategy-graph runner appends the post-action screen, as it already does for
+   * Host-local dynamic tools (scripted tools) are dispatched through [toolDispatcher] too, so the
+   * two hooks below only see the other dynamic tools.
+   *
+   * @param afterDynamicToolExecution runs after every such dynamic tool call, including one that
+   *   throws.
+   * @param decorateDynamicToolResult rewrites such a tool's successful result before the LLM reads
+   *   it — the strategy-graph runner appends the post-action screen, as it already does for
    *   class-backed tools.
    */
   internal fun asToolRegistryWithDynamicToolHook(
@@ -233,9 +271,6 @@ class TrailblazeToolRepo(
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
       tools((snapshot.toolClasses + verifyTools + koogInspectionTools).toKoogToolsWithExecutor(toolDispatcher))
-      if (snapshot.yamlToolNames.isNotEmpty()) {
-        tools(KoogToolExt.buildKoogToolsForYamlDefinedWithExecutor(snapshot.yamlToolNames, toolDispatcher))
-      }
       // Same advertisement gate as the context-provider overload above: filter through
       // `advertisedDynamic()` so a scripted internal step declaring `surfaceToLlm = false` (and a
       // scripted tool whose toolset isn't active) stays out of the LLM's menu on the
@@ -246,18 +281,27 @@ class TrailblazeToolRepo(
         tools(
           advertisedDynamic.map {
             it.buildKoogTool(trailblazeToolContextProvider)
-              .withAfterExecution(afterDynamicToolExecution, decorateDynamicToolResult)
+              .withAfterExecution(toolDispatcher, afterDynamicToolExecution, decorateDynamicToolResult)
           },
         )
       }
     }
   }
 
+  /**
+   * A host-local tool (a QuickJS or subprocess scripted tool) is dispatched through
+   * [toolDispatcher] like a class-backed one, because the agent's dispatch is what logs it: run
+   * from here directly, the model's scripted calls never reached the session log, so recordings
+   * and reports left them out. The dispatcher also attaches the post-action screen itself, so
+   * neither hook runs for those calls.
+   */
   private fun <T : TrailblazeTool> TrailblazeKoogTool<T>.withAfterExecution(
+    toolDispatcher: suspend (TrailblazeTool) -> String,
     afterExecution: () -> Unit,
     decorateResult: (String) -> String,
   ): Tool<T, String> = object : Tool<T, String>(argsType, resultType, descriptor, metadata) {
     override suspend fun execute(args: T): String {
+      if (args is HostLocalExecutableTrailblazeTool) return toolDispatcher(args)
       val result = try {
         this@withAfterExecution.execute(args)
       } finally {
@@ -285,7 +329,6 @@ class TrailblazeToolRepo(
 
   fun addTrailblazeToolSet(trailblazeToolSet: TrailblazeToolSet) = synchronized(registeredTrailblazeToolClasses) {
     addTrailblazeTools(*trailblazeToolSet.asTools().toTypedArray())
-    registeredYamlToolNames.addAll(trailblazeToolSet.asYamlToolNames())
     registeredScriptedToolNames.addAll(trailblazeToolSet.asScriptedToolNames())
   }
 
@@ -299,7 +342,7 @@ class TrailblazeToolRepo(
    * registration N rolls back the whole call — registrations 0…N-1 never land in the repo —
    * so a partial failure can't leave the repo in an inconsistent state. Collision classes
    * checked: duplicate names within the batch, clashes against an existing Kotlin-backed
-   * tool, a YAML-defined tool, or another dynamic registration.
+   * tool or another dynamic registration.
    */
   fun addDynamicTools(registrations: Iterable<DynamicTrailblazeToolRegistration>) =
     synchronized(registeredTrailblazeToolClasses) {
@@ -314,9 +357,6 @@ class TrailblazeToolRepo(
         require(kotlinClash == null) {
           "Dynamic tool '$rawName' collides with Kotlin-registered tool ${kotlinClash?.qualifiedName}"
         }
-        require(incoming !in registeredYamlToolNames) {
-          "Dynamic tool '$rawName' collides with a YAML-defined tool of the same name"
-        }
         require(incoming !in registeredDynamicTools) {
           "Dynamic tool '$rawName' is already registered by another dynamic source"
         }
@@ -326,15 +366,22 @@ class TrailblazeToolRepo(
       registeredDynamicTools.putAll(batch)
     }
 
+  /**
+   * Also drops [name]'s show/hide override: it described the registration being removed, and must
+   * not decide the visibility of a later registration of the same name.
+   */
   fun removeDynamicTool(name: ToolName) = synchronized(registeredTrailblazeToolClasses) {
+    hiddenScriptedToolNames -= name
+    shownScriptedToolNames -= name
     registeredDynamicTools.remove(name)
   }
 
   fun removeAllTrailblazeTools() = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.clear()
-    registeredYamlToolNames.clear()
     registeredScriptedToolNames.clear()
     registeredDynamicTools.clear()
+    hiddenScriptedToolNames.clear()
+    shownScriptedToolNames.clear()
   }
 
   fun toolCallToTrailblazeTool(toolCall: MessagePart.Tool.Call): TrailblazeTool? = toolCallToTrailblazeTool(
@@ -372,19 +419,6 @@ class TrailblazeToolRepo(
       return TrailblazeJsonInstance.decodeFromString(trailblazeToolClass.serializer(), toolContent)
     }
 
-    // 3. YAML-defined path — resolve to the registered ToolYamlConfig + decode via that tool's
-    //    pre-bound [YamlDefinedToolSerializer]. Mirrors what [asToolRegistry] does on the Koog
-    //    side so planners that advertise YAML tools via [getCurrentToolDescriptors] can also
-    //    have those tool calls deserialize cleanly on execution paths that route through here.
-    //    Koog hands us the name as a raw String; wrap it once for the typed-set membership test.
-    val typedName = ToolName(toolName)
-    if (typedName in snapshot.yamlToolNames) {
-      val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-      if (config != null) {
-        return TrailblazeJsonInstance.decodeFromString(YamlDefinedToolSerializer(config), toolContent)
-      }
-    }
-
     error(
       buildString {
         appendLine("Could not find Trailblaze tool for name: $toolName.")
@@ -396,9 +430,6 @@ class TrailblazeToolRepo(
           appendLine()
         }
         appendLine("Registered class-backed tools: ${snapshot.toolClasses.map { it.simpleName }}")
-        val advertisedYamlNames = KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames)
-          .map { it.name }
-        appendLine("LLM-advertised YAML-defined tools: $advertisedYamlNames")
         val advertisedDynamicNames = snapshot.advertisedDynamic().map { it.name.toolName }
         if (advertisedDynamicNames.isNotEmpty()) {
           appendLine("LLM-advertised dynamic tools: $advertisedDynamicNames")
@@ -427,10 +458,6 @@ class TrailblazeToolRepo(
       snapshot.toolClasses
         .filter { it.toKoogToolDescriptor() != null }
         .forEach { add(it.toolName().toolName) }
-      // Use the same descriptor builder as getCurrentToolDescriptors(), rather than raw registered
-      // names. It excludes missing configs and YAML tools marked surface_to_llm: false, both of
-      // which remain dispatchable composition details but must not appear in an MCP suggestion.
-      KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames).forEach { add(it.name) }
       snapshot.advertisedDynamic().forEach { add(it.name.toolName) }
     }
 
@@ -450,22 +477,17 @@ class TrailblazeToolRepo(
   )
 
   /**
-   * Variant of [toolCallToTrailblazeTool] that bypasses the `surfaceToLlm` filter for YAML-defined
-   * tools by falling back to the global [TrailblazeSerializationInitializer.buildYamlDefinedTools]
-   * registry if the standard lookup misses.
+   * Variant of [toolCallToTrailblazeTool] that falls back to the global class-backed registry
+   * ([TrailblazeSerializationInitializer.buildAllTools]) if the session lookup misses.
    *
    * Used by inline scripted-tool composition (`SessionScopedHostBinding` in
-   * `:trailblaze-quickjs-tools`) where author bundles can call into YAML-defined tools that
-   * are intentionally hidden from the LLM (`surface_to_llm: false`). The standard
-   * [toolCallToTrailblazeTool] already bypasses the filter for class-backed tools and for
-   * YAML tools that are registered into [registeredYamlToolNames]; this method extends that
-   * bypass to YAML tools that exist globally on the classpath but aren't in the session's
-   * registered set.
+   * `:trailblaze-quickjs-tools`) where author bundles can call class-backed tools that exist on
+   * the classpath but aren't in the session's registered set.
    *
    * Returns null instead of throwing on a missing tool name — composition callers handle the
    * miss by returning a structured error envelope to JS rather than propagating an exception.
    * Null therefore implies [toolCallToTrailblazeTool] already threw its rich unknown-tool
-   * error and both global tiers missed; a caller that wants that message (did-you-mean
+   * error and the global tier missed; a caller that wants that message (did-you-mean
    * suggestions, registered-tool listing) has to re-run the filtered lookup to obtain it.
    */
   fun toolCallToTrailblazeToolUnfiltered(
@@ -482,18 +504,13 @@ class TrailblazeToolRepo(
       // continue into the global tiers instead of unwinding the session.
       throw e
     } catch (_: IllegalStateException) {
-      // Fall through to the unfiltered global lookups below — first global YAML, then
-      // global class registry. Both extend the bypass to tools that exist on the classpath
-      // but aren't in the session's registered set, which is the shape inline scripted-tool
+      // Fall through to the unfiltered global class registry below. It extends the bypass to
+      // tools that exist on the classpath but aren't in the session's registered set, which is
+      // the shape inline scripted-tool
       // composition needs: an author calling `client.callTool("runCommand", …)` from inside
       // a `.ts` body should reach the framework's `RunCommandTrailblazeTool` even when the
       // session's target hasn't explicitly listed it in its custom tool classes.
       val typedName = ToolName(toolName)
-      val yamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-      if (yamlConfig != null) {
-        @OptIn(InternalSerializationApi::class)
-        return TrailblazeJsonInstance.decodeFromString(YamlDefinedToolSerializer(yamlConfig), toolContent)
-      }
       // Global class-backed registry — any class annotated `@TrailblazeToolClass(name=...)`
       // that's been discovered at JVM init. The standard [toolCallToTrailblazeTool] only
       // searches the session's registered classes; this extends the search to every
@@ -513,8 +530,8 @@ class TrailblazeToolRepo(
    * tool doesn't accept — closing the loophole where `kotlinx.serialization`'s
    * `ignoreUnknownKeys = true` silently drops misspelled / LLM-scaffolding keys.
    *
-   * **Paired with [requiredArgumentKeysFor]** — both methods walk the same four-tier resolution
-   * chain (dynamic → session class → session YAML → global YAML → global class) and return
+   * **Paired with [requiredArgumentKeysFor]** — both methods walk the same resolution chain
+   * (dynamic → session class → global class) and return
    * `null` for the same "schema can't be introspected" branch. Any future change that re-routes
    * one method's resolution chain MUST update the other in lockstep, or the validator's
    * unknown-key gate and missing-required gate will fall out of agreement.
@@ -528,7 +545,6 @@ class TrailblazeToolRepo(
    *  1. Class-backed tool (session-registered, then global registry as a fallback for the
    *     unfiltered path).
    *  2. Dynamic tool registration (subprocess MCP, bundled on-device runtimes).
-   *  3. YAML-defined tool (session-registered, then global classpath as a fallback).
    *
    * Returns `null` only when no schema can be located:
    *  - The tool name is unknown to every resolution tier, OR
@@ -539,11 +555,11 @@ class TrailblazeToolRepo(
    *
    * Returns an **empty set** when the tool's schema is author-controlled and exhaustively
    * declares zero parameters (class-backed `@TrailblazeToolClass` with no constructor args;
-   * YAML tools with `parameters: []`; dynamic registrations with
+   * dynamic registrations with
    * `declaresExhaustiveParameters = true`, e.g. a scripted `.ts` tool whose analyzer-generated
    * schema is `properties: {}`). In that case every incoming key is unknown and the
    * validator MUST reject — leniency here would re-introduce the exact silent-drop behavior
-   * this change closes (e.g. for `pressBack` and other no-arg YAML tools).
+   * this change closes.
    */
   @OptIn(InternalSerializationApi::class)
   fun expectedArgumentKeysFor(toolName: String): Set<String>? {
@@ -553,7 +569,7 @@ class TrailblazeToolRepo(
     snapshot.dynamic[typedName]?.let { registration ->
       val names = registration.trailblazeDescriptor.parameterNames()
       // An exhaustive parameter split (analyzer-generated / author-declared schema) rejects
-      // strictly even when empty — same policy as YAML `parameters: []`. A non-exhaustive
+      // strictly even when empty. A non-exhaustive
       // one (subprocess MCP server without an explicit schema) falls through to "skip"
       // rather than rejecting every call to an unannotated subprocess tool.
       return if (registration.declaresExhaustiveParameters) names else names.ifEmpty { null }
@@ -566,24 +582,10 @@ class TrailblazeToolRepo(
       return sessionClass.serializer().descriptor.elementNames.toSet()
     }
 
-    if (typedName in snapshot.yamlToolNames) {
-      val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-      if (config != null) {
-        // YAML tools: author-controlled exhaustive `parameters:` list. Empty means
-        // "tool takes no args" — reject any incoming key (closes the `pressBack` /
-        // no-arg YAML loophole flagged on #3213).
-        return config.toTrailblazeToolDescriptor().parameterNames()
-      }
-    }
-
     // Unfiltered fallback — covers [toolCallToTrailblazeToolUnfiltered]'s lookup of global
-    // YAML configs and class-backed tools that aren't in the session's registered set. Keeps
-    // the unknown-key check live for scripted bundles that compose host-side helpers like
-    // `runCommand` which intentionally aren't in every target's toolset.
-    val globalYamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-    if (globalYamlConfig != null) {
-      return globalYamlConfig.toTrailblazeToolDescriptor().parameterNames()
-    }
+    // class-backed tools that aren't in the session's registered set. Keeps the unknown-key
+    // check live for scripted bundles that compose host-side helpers like `runCommand` which
+    // intentionally aren't in every target's toolset.
     val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
     if (globalToolClass != null) {
       return globalToolClass.serializer().descriptor.elementNames.toSet()
@@ -601,14 +603,14 @@ class TrailblazeToolRepo(
   /**
    * Set of argument keys the runtime considers REQUIRED for [toolName], or `null` if no schema
    * can be located. Pairs with [expectedArgumentKeysFor] — the unknown-key gate and the
-   * missing-required-key gate run off the same four-tier resolution chain (dynamic → session
-   * class → session YAML → global YAML → global class), so a tool whose schema is
+   * missing-required-key gate run off the same resolution chain (dynamic → session class →
+   * global class), so a tool whose schema is
    * introspectable for one check is introspectable for the other. Future changes to one
    * method's chain MUST update the other in lockstep.
    *
    * Returns an **empty set** when the tool's schema is known but declares no required
-   * parameters — e.g., a scripted tool whose every input is `required: false`, a YAML tool
-   * with `parameters: []`, or a class-backed tool whose every constructor argument has a
+   * parameters — e.g., a scripted tool whose every input is `required: false`, or a
+   * class-backed tool whose every constructor argument has a
    * default. Returning empty (rather than null) means "I checked, nothing is required" so
    * callers reject empty payloads only when something actually must be present.
    *
@@ -619,10 +621,10 @@ class TrailblazeToolRepo(
    *
    * Class-backed tools introspect via `SerialDescriptor.isElementOptional` so a Kotlin
    * property with a default value (`val foo: String = "x"`) is treated as optional even
-   * though `expectedArgumentKeysFor` lists it among the accepted keys. YAML and dynamic
-   * tools read straight off the descriptor's `requiredParameters` split — the partition
-   * that [LazyYamlScriptedToolRegistration] and [ToolYamlConfig.toTrailblazeToolDescriptor]
-   * already populate from the author-declared `required:` annotation.
+   * though `expectedArgumentKeysFor` lists it among the accepted keys. Dynamic tools read
+   * straight off the descriptor's `requiredParameters` split — the partition that
+   * [LazyYamlScriptedToolRegistration] populates from the author-declared `required:`
+   * annotation.
    */
   @OptIn(InternalSerializationApi::class)
   fun requiredArgumentKeysFor(toolName: String): Set<String>? {
@@ -645,17 +647,6 @@ class TrailblazeToolRepo(
       return classRequiredKeys(sessionClass)
     }
 
-    if (typedName in snapshot.yamlToolNames) {
-      val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-      if (config != null) {
-        return config.toTrailblazeToolDescriptor().requiredParameterNames()
-      }
-    }
-
-    val globalYamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
-    if (globalYamlConfig != null) {
-      return globalYamlConfig.toTrailblazeToolDescriptor().requiredParameterNames()
-    }
     val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
     if (globalToolClass != null) {
       return classRequiredKeys(globalToolClass)
@@ -679,24 +670,22 @@ class TrailblazeToolRepo(
     // round-trip collapses non-primitive params (e.g. List<String>) to String via parseKoogParameterType.
     val snapshot = snapshotRegisteredTools()
     val classDescriptors = snapshot.toolClasses.mapNotNull { it.toKoogToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames)
     val dynamicDescriptors = snapshot.advertisedDynamic().map {
       it.trailblazeDescriptor.toKoogToolDescriptor(strict = false)
     }
-    return classDescriptors + yamlDescriptors + dynamicDescriptors
+    return classDescriptors + dynamicDescriptors
   }
 
   /**
    * Trailblaze-native descriptor view for catalog/debug surfaces. Unlike [getCurrentToolDescriptors],
-   * this preserves source metadata so callers can classify tools as Kotlin, YAML, TypeScript,
+   * this preserves source metadata so callers can classify tools as Kotlin, TypeScript,
    * JavaScript, or generic dynamic registrations without re-inferring provenance from names.
    */
   fun getCurrentTrailblazeToolDescriptors(): List<TrailblazeToolDescriptor> {
     val snapshot = snapshotRegisteredTools()
     val classDescriptors = snapshot.toolClasses.mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-    val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(snapshot.yamlToolNames)
     val dynamicDescriptors = snapshot.advertisedDynamic().map { it.trailblazeDescriptor }
-    return classDescriptors + yamlDescriptors + dynamicDescriptors
+    return classDescriptors + dynamicDescriptors
   }
 
   companion object {
@@ -726,7 +715,7 @@ class TrailblazeToolRepo(
 
     /**
      * Creates a [TrailblazeToolRepo] carrying the catalog tools in scope for the driver, plus any
-     * [customToolClasses] / [customYamlToolNames] / [customScriptedToolNames]. The full surface is
+     * [customToolClasses] / [customScriptedToolNames]. The full surface is
      * advertised from the start — there is no runtime opt-in.
      *
      * [toolSetIds] is the catalog scope: pass a target's trailmap `tool_sets:` declarations to get
@@ -743,23 +732,16 @@ class TrailblazeToolRepo(
      * `drivers:` (e.g. `core_interaction.yaml` on Playwright) are filtered out. Leave null if the
      * driver isn't known — the catalog then resolves every entry regardless of driver.
      *
-     * [customYamlToolNames] lets callers contribute YAML-defined tools (those without a
-     * backing [KClass]) to the initial surface — symmetric with [customToolClasses] for
-     * class-backed tools. Callers that only reference class-backed tools can leave it at
-     * the default empty set.
-     *
-     * [excludedToolClasses] / [excludedYamlToolNames] / [excludedScriptedToolNames] are the
+     * [excludedToolClasses] / [excludedScriptedToolNames] are the
      * target's `excluded_tools:` opt-outs, one set per backing — each subtracted from the matching
      * surface so an excluded tool (e.g. the scripted `openUrl`) isn't served to the LLM. Callers
-     * should populate all three from `getExcludedToolSurfaceForDriver` rather than wiring them
+     * should populate both from `getExcludedToolSurfaceForDriver` rather than wiring them
      * individually, so a backing can't be excluded here but forgotten elsewhere.
      */
     fun withDynamicToolSets(
       customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
-      customYamlToolNames: Set<ToolName> = emptySet(),
       customScriptedToolNames: Set<ToolName> = emptySet(),
       excludedToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
-      excludedYamlToolNames: Set<ToolName> = emptySet(),
       excludedScriptedToolNames: Set<ToolName> = emptySet(),
       catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
       driverType: TrailblazeDriverType? = null,
@@ -783,12 +765,12 @@ class TrailblazeToolRepo(
         trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "All Tools",
           toolClasses = scopedTools.toolClasses + customToolClasses - excludedToolClasses,
-          yamlToolNames = scopedTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
           scriptedToolNames = scopedTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
         ),
         toolSetCatalog = catalog,
         driverType = driverType,
         toolSetIds = toolSetIds,
+        excludedScriptedToolNames = excludedScriptedToolNames,
       )
     }
   }
@@ -823,7 +805,7 @@ class TrailblazeToolRepo(
   // always DISPATCHABLE on a verify step. It MUST use the same driver-scoped entry selection as
   // [verifyStepToolDescriptors] (the advertised surface): otherwise a driver-specific class-backed
   // verify tool could be advertised but not registered, stranding the agent under
-  // `ToolChoice.Required`. The driver-specific YAML verify tools (`web_verifyTextVisible`, …) have
+  // `ToolChoice.Required`. The driver-specific scripted verify tools (`web_verifyElementVisible`, …) have
   // no backing KClass, so they still reach the registry as dynamic registrations (`advertisedDynamic`).
   private val verifyTools: Set<KClass<out TrailblazeTool>> by lazy {
     verificationToolsetEntries().flatMap { it.toolClasses }.toSet() +
@@ -837,11 +819,10 @@ class TrailblazeToolRepo(
    * Driver-aware on purpose (see [verificationToolsetEntries]): each driver builds its verify surface
    * from a different verification toolset. Android on-device + iOS host use the generic `verification`
    * toolset (class-backed `assertVisible` / `assertNotVisibleWithText`); web uses `web_verification`,
-   * Revyl uses `revyl_verification`, Compose uses `compose_verification`. Some contribute YAML-defined
-   * tools with no backing KClass. Returning only the generic class-backed set (the historical
-   * behavior) advertised Android assertion tools on a web/Revyl verify step and dropped that driver's
-   * real verify tools, so we build descriptors from both the class-backed and YAML-defined tools of
-   * every verification toolset compatible with this repo's [driverType].
+   * Revyl uses `revyl_verification`, Compose uses `compose_verification`. Returning only the generic
+   * class-backed set advertised Android assertion tools on a web/Revyl verify step and dropped that
+   * driver's real verify tools, so we build descriptors from the class-backed tools of every
+   * verification toolset compatible with this repo's [driverType].
    *
    * objectiveStatus is always included: without it the agent can't end a verify step.
    *
@@ -858,16 +839,13 @@ class TrailblazeToolRepo(
     val verifyEntries = verificationToolsetEntries()
     val classDescriptors = verifyEntries.flatMap { it.toolClasses }.toSet()
       .mapNotNull { it.toKoogToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
-      verifyEntries.flatMap { it.yamlToolNames }.toSet(),
-    )
-    val handoverDescriptors = if (classDescriptors.isEmpty() && yamlDescriptors.isEmpty()) {
+    val handoverDescriptors = if (classDescriptors.isEmpty()) {
       emptyList()
     } else {
       handoverVerifyTools().mapNotNull { it.toKoogToolDescriptor() }
     }
     val objectiveStatusDescriptor = ObjectiveStatusTrailblazeTool::class.toKoogToolDescriptor()
-    return (classDescriptors + yamlDescriptors + handoverDescriptors + listOfNotNull(objectiveStatusDescriptor))
+    return (classDescriptors + handoverDescriptors + listOfNotNull(objectiveStatusDescriptor))
       .distinctBy { it.name }
   }
 

@@ -164,6 +164,11 @@ abstract class MaestroTrailblazeAgent(
      * routes; drivers that always dispatch a gesture ignore this.
      */
     tapRoute: TapRouteOverride? = null,
+    /**
+     * How long to wait for the element to appear before failing. `null` means the call site is
+     * not opinionated and each agent applies its own per-driver default.
+     */
+    timeoutMs: Long? = null,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
@@ -215,6 +220,8 @@ abstract class MaestroTrailblazeAgent(
    * Override in drivers that can focus a node directly (today: the Android accessibility driver).
    *
    * `inputText` calls this after tapping the field, so an override only has to focus and type.
+   * With [clearFirst], the override empties that same field before typing, so it ends up holding
+   * only [text].
    *
    * @return A [TrailblazeToolResult] if the driver handled the action, or null to fall back to
    *   typing into the field the tap focused.
@@ -223,8 +230,32 @@ abstract class MaestroTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     text: String,
     hideKeyboardAfter: Boolean,
+    clearFirst: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
+
+  /**
+   * Empties the focused text field, for `inputText`'s `clearFirst`.
+   *
+   * Override in drivers with a clear that doesn't depend on knowing the field's length (today: the
+   * Android accessibility driver sets the field's text directly, and the AXe iOS driver selects all
+   * and deletes).
+   *
+   * @return A [TrailblazeToolResult] if the driver handled the clear, or null to fall back to
+   *   erasing a counted number of characters.
+   */
+  open suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult? = null
+
+  /**
+   * Has the driver answer [appId]'s iOS notifications alert whenever a screen read sees it: [allow]
+   * true taps Allow, false taps Don't Allow, null stops answering it.
+   *
+   * Override in drivers that answer the alert themselves (today: the AXe iOS driver).
+   *
+   * @return A [TrailblazeToolResult] if the driver handled it, or null when this driver has no
+   *   answer of its own.
+   */
+  open suspend fun answerNotificationsAlert(appId: String, allow: Boolean?, traceId: TraceId?): TrailblazeToolResult? = null
 
   /**
    * Waits until the on-device UI tree changes relative to a baseline captured at call entry,
@@ -369,14 +400,14 @@ abstract class MaestroTrailblazeAgent(
       is OtherTrailblazeTool -> throw TrailblazeException(
         // Align prose with `HostOnDeviceRpcTrailblazeAgent.executeTool`'s else-branch
         // diagnostic so an operator triaging a failed trail sees the same precise
-        // taxonomy ("class-backed, YAML-defined, or dynamic scripted tool") regardless
+        // taxonomy ("class-backed or dynamic scripted tool") regardless
         // of which agent fired. Drift between the two messages would make triage
         // depend on which dispatcher the trail's driver routes through — confusing
         // for a debugger who doesn't know that detail.
         message = buildString {
           appendLine(
             "Unknown tool '${repoResolvedTool.toolName}' is not registered in this session's " +
-              "tool repo as a class-backed, YAML-defined, or dynamic scripted tool, and cannot " +
+              "tool repo as a class-backed or dynamic scripted tool, and cannot " +
               "be executed.",
           )
           appendLine(

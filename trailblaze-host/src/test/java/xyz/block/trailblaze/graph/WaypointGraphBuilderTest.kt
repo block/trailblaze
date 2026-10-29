@@ -10,11 +10,9 @@ import org.junit.Test
  * depend on for correct per-(target, platform) scoping.
  *
  * The end-to-end script run validates the function works once empirically, but a
- * regression in the cascade-to-edges logic (e.g. flipping a shortcut endpoint check
- * from `from in keptIds && to in keptIds` to `from in keptIds || to in keptIds`, or
- * dropping the trailhead `to` filter entirely) would silently produce
- * structurally-wrong maps and only surface during the next manual republish. This
- * suite catches those mutations.
+ * regression in the cascade-to-trailheads logic (e.g. dropping the trailhead `to`
+ * filter entirely) would silently produce structurally-wrong maps and only surface
+ * during the next manual republish. This suite catches those mutations.
  */
 class WaypointGraphBuilderTest {
 
@@ -22,20 +20,18 @@ class WaypointGraphBuilderTest {
 
   @Test
   fun targetOnly_keepsMatchingPrefixDropsRest() {
-    val (kept, shortcuts, trailheads) = WaypointGraphBuilder.applyScope(
+    val (kept, trailheads) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(
         node("alpha/home", platform = "android"),
         node("alpha/details", platform = "android"),
         node("beta/home", platform = "android"),
       ),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = "alpha",
       platformFilter = null,
     )
 
     assertEquals(listOf("alpha/home", "alpha/details"), kept.map { it.id })
-    assertTrue(shortcuts.isEmpty())
     assertTrue(trailheads.isEmpty())
   }
 
@@ -43,14 +39,13 @@ class WaypointGraphBuilderTest {
 
   @Test
   fun platformOnly_keepsMatchingPlatformDropsRest() {
-    val (kept, _, _) = WaypointGraphBuilder.applyScope(
+    val (kept, _) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(
         node("alpha/home", platform = "android"),
         node("alpha/profile", platform = "ios"),
         node("alpha/dashboard", platform = "web"),
         node("alpha/orphan", platform = null),
       ),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = null,
       platformFilter = "android",
@@ -69,7 +64,6 @@ class WaypointGraphBuilderTest {
     val webOnly = node("alpha/marketing", platform = "web", platforms = listOf("web"))
     fun scopeTo(p: String) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(fused, webOnly),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = null,
       platformFilter = p,
@@ -89,7 +83,6 @@ class WaypointGraphBuilderTest {
     val idOnly = node("alpha/id-only", platform = null, platforms = emptyList())
     fun scopeTo(p: String) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(legacy, idOnly),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = null,
       platformFilter = p,
@@ -103,13 +96,12 @@ class WaypointGraphBuilderTest {
 
   @Test
   fun targetAndPlatform_intersectsBothConstraints() {
-    val (kept, _, _) = WaypointGraphBuilder.applyScope(
+    val (kept, _) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(
         node("alpha/home", platform = "android"),
         node("alpha/profile", platform = "ios"),
         node("beta/home", platform = "android"),
       ),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = "alpha",
       platformFilter = "android",
@@ -123,12 +115,10 @@ class WaypointGraphBuilderTest {
   @Test
   fun noFilters_returnsInputUnchanged() {
     val nodes = listOf(node("alpha/home", platform = "android"), node("beta/home", platform = "ios"))
-    val edges = listOf(shortcut("alpha-to-beta", from = "alpha/home", to = "beta/home"))
     val trailheads = listOf(trailhead("entry", to = "alpha/home"))
 
-    val (keptNodes, keptShortcuts, keptTrailheads) = WaypointGraphBuilder.applyScope(
+    val (keptNodes, keptTrailheads) = WaypointGraphBuilder.applyScope(
       waypoints = nodes,
-      shortcuts = edges,
       trailheads = trailheads,
       targetFilter = null,
       platformFilter = null,
@@ -138,62 +128,18 @@ class WaypointGraphBuilderTest {
     // re-allocate copies of the input lists. The CLI's "no flags" path runs through
     // here on every invocation.
     assertTrue(keptNodes === nodes)
-    assertTrue(keptShortcuts === edges)
     assertTrue(keptTrailheads === trailheads)
-  }
-
-  // ---------- shortcut cascade ----------
-
-  @Test
-  fun shortcutWhoseToIsOutOfScope_isDropped() {
-    val (_, keptShortcuts, _) = WaypointGraphBuilder.applyScope(
-      waypoints = listOf(
-        node("alpha/home", platform = "android"),
-        node("beta/home", platform = "android"),
-      ),
-      shortcuts = listOf(
-        // Both endpoints in scope — must survive.
-        shortcut("alpha-internal", from = "alpha/home", to = "alpha/home"),
-        // `from` survives but `to` is filtered out — must be dropped, not kept as a
-        // dangling edge pointing at a node that's no longer in the graph.
-        shortcut("alpha-to-beta", from = "alpha/home", to = "beta/home"),
-      ),
-      trailheads = emptyList(),
-      targetFilter = "alpha",
-      platformFilter = null,
-    )
-
-    assertEquals(listOf("alpha-internal"), keptShortcuts.map { it.id })
-  }
-
-  @Test
-  fun shortcutWhoseFromIsOutOfScope_isDropped() {
-    val (_, keptShortcuts, _) = WaypointGraphBuilder.applyScope(
-      waypoints = listOf(
-        node("alpha/home", platform = "android"),
-        node("beta/home", platform = "android"),
-      ),
-      shortcuts = listOf(
-        shortcut("beta-to-alpha", from = "beta/home", to = "alpha/home"),
-      ),
-      trailheads = emptyList(),
-      targetFilter = "alpha",
-      platformFilter = null,
-    )
-
-    assertTrue(keptShortcuts.isEmpty(), "Inbound edge from out-of-scope target must be dropped")
   }
 
   // ---------- trailhead cascade ----------
 
   @Test
   fun trailheadWhoseToIsOutOfScope_isDropped() {
-    val (_, _, keptTrailheads) = WaypointGraphBuilder.applyScope(
+    val (_, keptTrailheads) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(
         node("alpha/home", platform = "android"),
         node("beta/home", platform = "android"),
       ),
-      shortcuts = emptyList(),
       trailheads = listOf(
         trailhead("alpha-entry", to = "alpha/home"),
         trailhead("beta-entry", to = "beta/home"),
@@ -211,12 +157,11 @@ class WaypointGraphBuilderTest {
   fun idWithNoSlash_treatsWholeIdAsTarget() {
     // Mirrors the front-end's `wp.id.split('/')[0]` behavior: a malformed id without
     // a slash IS its own target, so `--target=lonely` matches it.
-    val (kept, _, _) = WaypointGraphBuilder.applyScope(
+    val (kept, _) = WaypointGraphBuilder.applyScope(
       waypoints = listOf(
         node("lonely", platform = "android"),
         node("alpha/home", platform = "android"),
       ),
-      shortcuts = emptyList(),
       trailheads = emptyList(),
       targetFilter = "lonely",
       platformFilter = null,
@@ -235,15 +180,6 @@ class WaypointGraphBuilderTest {
       sourceLabel = null,
       platform = platform,
       platforms = platforms,
-    )
-
-  private fun shortcut(id: String, from: String, to: String): WaypointGraphShortcut =
-    WaypointGraphShortcut(
-      id = id,
-      description = null,
-      from = from,
-      to = to,
-      variant = null,
     )
 
   private fun trailhead(id: String, to: String): WaypointGraphTrailhead =

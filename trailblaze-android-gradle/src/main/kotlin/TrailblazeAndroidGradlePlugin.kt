@@ -6,6 +6,7 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
@@ -13,6 +14,7 @@ import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.IgnoreEmptyDirectories
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
@@ -180,7 +182,8 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
     // generate time.
     extension.onlyClassNames.convention(emptySet())
     extension.onlyMethodNames.convention(emptyMap())
-
+    extension.groupTrailsByTrailhead.convention(false)
+    extension.maxTrailsPerTrailheadGroup.convention(DEFAULT_MAX_TRAILS_PER_TRAILHEAD_GROUP)
     // Wire task inputs from the extension after defaults are in place. (Conventions on the
     // extension flow to the task only if we plumb them — the task is registered before the
     // extension so both can coexist on the extension's public surface.)
@@ -198,6 +201,9 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
       task.onlyMethodNames.set(extension.onlyMethodNames)
       task.authoringDirDescription.set(extension.authoringDirDescription)
       task.authoringSourceNote.set(extension.authoringSourceNote)
+      task.trailSourceUrlMapFile.set(extension.trailSourceUrlMapFile)
+      task.groupTrailsByTrailhead.set(extension.groupTrailsByTrailhead)
+      task.maxTrailsPerTrailheadGroup.set(extension.maxTrailsPerTrailheadGroup)
     }
 
     // Auto-wire AGP's `androidTest`-shaped Kotlin compile + lint tasks to depend on [generate], so
@@ -680,7 +686,34 @@ constructor(
    * silently emitting zero methods would mean "method not found" at test runtime, not build time).
    */
   abstract val onlyMethodNames: MapProperty<String, Set<String>>
+
+  /** Build-generated TSV mapping final asset paths to their original source URLs. */
+  abstract val trailSourceUrlMapFile: RegularFileProperty
+
+  /**
+   * Runs the trails of a class that start from the same trailhead in ONE `@Test`, in order, so they
+   * share an emulator and an app process, and a trailhead can hand its setup on to the next trail
+   * (with `trailblaze.trailheadReuse=true`). Each trail still gets a session and a result row of
+   * its own; the farm sees one test per group. Off by default.
+   *
+   * Trails group when their `trailhead:` recordings and `config` read the same, ignoring the config
+   * keys that only name or describe a trail (`id`, `title`, `description`, `priority`, `source`,
+   * `metadata`, `tags`). A trail with no trailhead, or one whose config sets a `locale` or a `skip`,
+   * always runs alone.
+   */
+  abstract val groupTrailsByTrailhead: Property<Boolean>
+
+  /**
+   * The most trails one grouped `@Test` runs, since they all share its timeout, and on a device
+   * farm its window for instrumentation output, which a test writes only at its start and end.
+   * A larger set of trails with one trailhead is split into several groups. Defaults to
+   * [DEFAULT_MAX_TRAILS_PER_TRAILHEAD_GROUP].
+   */
+  abstract val maxTrailsPerTrailheadGroup: Property<Int>
 }
+
+/** See [TrailblazeAndroidGradleExtension.maxTrailsPerTrailheadGroup]. */
+const val DEFAULT_MAX_TRAILS_PER_TRAILHEAD_GROUP: Int = 2
 
 /**
  * The codegen task. Walks [trailsAssetsDir], emits one Kotlin source file per direct subdirectory
@@ -690,9 +723,10 @@ constructor(
  *
  * Marked `@CacheableTask` because output is a pure function of `(packageName, baseClassFqn,
  * onlyClassNames, every trail filename/directory-name under trailsAssetsDir)` — inputs Gradle
- * already tracks via the annotated properties. The actual YAML *contents* don't enter the rendered
- * shell (only file/directory names do), so PathSensitivity.RELATIVE on the assets dir lets the
- * cache match across worktrees / CI agents.
+ * already tracks via the annotated properties. With [groupTrailsByTrailhead] on, each trail's
+ * `trailhead:` and `config` blocks enter it too; Gradle fingerprints the trail files' contents
+ * either way. PathSensitivity.RELATIVE on the assets dir lets the cache match across worktrees /
+ * CI agents.
  */
 @org.gradle.api.tasks.CacheableTask
 abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
@@ -775,6 +809,15 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
   @get:Input @get:Optional abstract val authoringDirDescription: Property<String>
 
   @get:Input @get:Optional abstract val authoringSourceNote: Property<String>
+
+  @get:InputFile
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val trailSourceUrlMapFile: RegularFileProperty
+
+  @get:Input @get:Optional abstract val groupTrailsByTrailhead: Property<Boolean>
+
+  @get:Input @get:Optional abstract val maxTrailsPerTrailheadGroup: Property<Int>
 
   @get:OutputDirectory abstract val generatedSourceDir: DirectoryProperty
 
@@ -900,7 +943,13 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
     val pkgDir = outRoot.resolve(pkg.replace('.', '/'))
     pkgDir.mkdirs()
 
+    val grouping = groupTrailsByTrailhead.getOrElse(false)
+    val maxPerGroup = maxTrailsPerTrailheadGroup.getOrElse(DEFAULT_MAX_TRAILS_PER_TRAILHEAD_GROUP)
+    if (grouping && maxPerGroup < 1) {
+      throw GradleException("trailblazeAndroid.maxTrailsPerTrailheadGroup must be at least 1, got $maxPerGroup.")
+    }
     val methodAllowLists = onlyMethodNames.get()
+    val trailSourceUrls = Companion.readTrailSourceUrls(trailSourceUrlMapFile.orNull?.asFile)
     var generatedCount = 0
     val generatedClassNames = mutableListOf<String>()
     ownedClassDirs.forEach { classDir ->
@@ -962,14 +1011,26 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           "generated file — rename one of each colliding pair."
       }
 
+      val withUrls =
+        methods.map { method ->
+          method.copy(trailSourceUrl = trailSourceUrls[Companion.assetPathFor(method, className)])
+        }
+      val groups =
+        if (grouping) {
+          Companion.groupByTrailhead(withUrls, maxPerGroup) { Companion.groupableTrailYaml(classDir, it) }
+        } else {
+          emptyList()
+        }
+      val grouped = groups.flatMap { it.members }.toSet()
       val source =
         renderShell(
           pkg,
           className,
           mode,
-          methods,
+          withUrls.filterNot { it in grouped },
           authoringDirDescription.getOrElse(DEFAULT_AUTHORING_DIR),
           authoringSourceNote.orNull,
+          groups,
         )
       pkgDir.resolve("$className.kt").writeText(source, Charsets.UTF_8)
       generatedClassNames += className
@@ -1093,7 +1154,15 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
     val isRecordingDir: Boolean,
     /** On-disk source relative to the assets dir, for validation / collision error messages. */
     val source: String,
+    /** Immutable GitHub permalink for the source trail, when the build can prove one. */
+    val trailSourceUrl: String? = null,
   )
+
+  /**
+   * One `@Test` that runs [members] in order through `runFromAssets`. See
+   * [TrailblazeAndroidGradleExtension.groupTrailsByTrailhead].
+   */
+  internal data class TrailGroup(val methodName: String, val members: List<TrailMethod>)
 
   /**
    * Active emit mode resolved from the extension's `baseClassFqn` / `ruleClassFqn` properties.
@@ -1278,13 +1347,118 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       methods: List<TrailMethod>,
       authoringDir: String = DEFAULT_AUTHORING_DIR,
       sourceNote: String? = null,
+      groups: List<TrailGroup> = emptyList(),
     ): String =
       when (mode) {
         is TestHostMode.BaseClass ->
-          renderBaseClassShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote)
+          renderBaseClassShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote, groups)
         is TestHostMode.InlineRule ->
-          renderInlineRuleShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote)
+          renderInlineRuleShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote, groups)
       }
+
+    /**
+     * Groups [methods] whose trails start from the same trailhead, in their given order, at most
+     * [maxPerGroup] to a group. A trailhead only one trail uses makes no group; neither does a
+     * trail [trailheadGroupKey] can't key. [readTrail] returns a method's trail YAML, or null for a
+     * trail that must run alone.
+     */
+    internal fun groupByTrailhead(
+      methods: List<TrailMethod>,
+      maxPerGroup: Int,
+      readTrail: (TrailMethod) -> String?,
+    ): List<TrailGroup> {
+      val taken = methods.map { it.methodName }.toMutableSet()
+      return methods
+        .groupBy { readTrail(it)?.let(::trailheadGroupKey) }
+        .filterKeys { it != null }
+        .values
+        .flatMap { it.chunked(maxPerGroup) }
+        .filter { it.size > 1 }
+        .map { members ->
+          val base = "${members.first().methodName}And${members.size - 1}More"
+          val name = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base$it" }.first { it !in taken }
+          taken += name
+          TrailGroup(name, members)
+        }
+    }
+
+    /**
+     * What two trails must share to run in one grouped test: the recording of their top-level
+     * `trailhead:` and their `config:` block, less the [TRAIL_IDENTITY_CONFIG_KEYS] that only name or
+     * describe a trail (they differ between nearly any two trails, so keeping them groups nothing).
+     * Null — the trail runs alone — for a trail with no recorded trailhead, one whose config mentions
+     * a `locale` (nothing resets it for the next trail) or a `skip` (a skipped trail inside a group
+     * would end its session as passed), or one that writes either block as an inline mapping.
+     *
+     * A text read, on purpose: this plugin carries no YAML parser. Two trails that mean the same
+     * thing but spell it differently just don't group; the trails still run, each set up in full.
+     */
+    internal fun trailheadGroupKey(trailYaml: String): String? {
+      val lines = trailYaml.lines().map { it.trimEnd() }.filterNot { it.trimStart().startsWith("#") }
+      // `config: { driver: ... }` and the like: unreadable here, so not safe to share.
+      if (lines.any { line -> listOf("config:", "trailhead:").any { line.startsWith(it) && line != it } }) {
+        return null
+      }
+      fun topLevelBlock(key: String): List<String>? {
+        val start = lines.indexOf("$key:")
+        if (start < 0) return null
+        return lines.drop(start + 1).takeWhile { it.isEmpty() || it.first().isWhitespace() }.filter { it.isNotEmpty() }
+      }
+      val config = withoutTrailIdentity(topLevelBlock("config").orEmpty())
+      if (config.any { line -> listOf("locale", "skip").any { line.contains(it, ignoreCase = true) } }) return null
+      val trailhead = topLevelBlock("trailhead") ?: return null
+      val recordingAt = trailhead.indexOfFirst { it.trim() == "recording:" }
+      if (recordingAt < 0) return null
+      val indent = trailhead[recordingAt].indexOfFirst { !it.isWhitespace() }
+      val recording =
+        trailhead.drop(recordingAt + 1).takeWhile { line -> line.indexOfFirst { !it.isWhitespace() } > indent }
+      if (recording.isEmpty()) return null
+      return (config + "---" + recording).joinToString("\n")
+    }
+
+    /**
+     * `config:` keys that name or describe a trail without changing how it runs. Every other key —
+     * `target`, `driver`, `devices`, `memory`, `context`, and any added later — stays in the key.
+     */
+    private val TRAIL_IDENTITY_CONFIG_KEYS = setOf("id", "title", "description", "priority", "source", "metadata", "tags")
+
+    /** [configLines] less each [TRAIL_IDENTITY_CONFIG_KEYS] entry and the lines nested under or listed after it. */
+    private fun withoutTrailIdentity(configLines: List<String>): List<String> {
+      fun indentOf(line: String) = line.indexOfFirst { !it.isWhitespace() }
+      val keyIndent = configLines.minOfOrNull(::indentOf) ?: return configLines
+      var dropping = false
+      return configLines.filter { line ->
+        // A `- item` at the key's own indent is that key's sequence (`tags:\n  - smoke`), not a new key.
+        if (indentOf(line) == keyIndent && !line.trimStart().startsWith("-")) {
+          dropping = line.trimStart().substringBefore(':') in TRAIL_IDENTITY_CONFIG_KEYS
+        }
+        !dropping
+      }
+    }
+
+    /**
+     * The YAML [trailheadGroupKey] keys [method] on, or null when it must run alone: a recording
+     * directory holding a classifier-specific recording, which the runtime prefers over
+     * `trail.yaml`, so the file read here might not be the one that runs.
+     */
+    internal fun groupableTrailYaml(classDir: java.io.File, method: TrailMethod): String? {
+      if (!method.isRecordingDir) return classDir.resolve("${method.methodName}.trail.yaml").readText(Charsets.UTF_8)
+      val dir = classDir.resolve(method.methodName)
+      val hasClassifierRecording =
+        dir.listFiles().orEmpty().any { it.name != BARE_UNIFIED_TRAIL_FILENAME && it.name.endsWith(".trail.yaml") }
+      return if (hasClassifierRecording) null else dir.resolve(BARE_UNIFIED_TRAIL_FILENAME).readText(Charsets.UTF_8)
+    }
+
+    /** The asset path passed to [runFromAsset] for a generated method. */
+    internal fun assetPathFor(method: TrailMethod, className: String): String =
+      if (method.isRecordingDir) "trails/$className/${method.methodName}"
+      else "trails/$className/${method.methodName}.trail.yaml"
+
+    private fun readTrailSourceUrls(mapFile: java.io.File?): Map<String, String> =
+      mapFile?.readLines()?.associate { line ->
+        val (path, url) = line.split('\t', limit = 2)
+        path to url
+      }.orEmpty()
 
     /**
      * The directory the generated header names when the consumer hasn't said otherwise — i.e. the
@@ -1305,6 +1479,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       methods: List<TrailMethod>,
       authoringDir: String = DEFAULT_AUTHORING_DIR,
       sourceNote: String? = null,
+      groups: List<TrailGroup> = emptyList(),
     ): String = buildString {
       val baseSimpleName = baseClassFqn.substringAfterLast('.')
       appendHeader(this, className, authoringDir, sourceNote)
@@ -1317,10 +1492,41 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       methods.forEach { method ->
         appendLine()
         appendLine()
-        append("  @Test fun ${method.methodName}() = runFromAsset()")
+        val argument =
+          method.trailSourceUrl?.let {
+            "trailSourceUrl = ${kotlinStringLiteral(it)}"
+          } ?: ""
+        append("  @Test fun ${method.methodName}() = runFromAsset($argument)")
+      }
+      groups.forEach { group ->
+        appendLine()
+        appendLine()
+        appendGroupMethod(this, group, className, invocation = "runFromAssets")
       }
       appendLine()
       appendLine("}")
+    }
+
+    /** A grouped `@Test`, without its trailing newline. */
+    private fun appendGroupMethod(sb: StringBuilder, group: TrailGroup, className: String, invocation: String) {
+      sb.appendLine("  @Test")
+      sb.appendLine("  fun ${group.methodName}() =")
+      sb.appendLine("    $invocation(")
+      sb.appendLine("      listOf(")
+      group.members.forEach { sb.appendLine("        ${kotlinStringLiteral(assetPathFor(it, className))},") }
+      sb.appendLine("      ),")
+      val sourceUrls = group.members.mapNotNull { member -> member.trailSourceUrl?.let { member to it } }
+      if (sourceUrls.isNotEmpty()) {
+        sb.appendLine("      trailSourceUrls =")
+        sb.appendLine("        mapOf(")
+        sourceUrls.forEach { (member, url) ->
+          sb.appendLine(
+            "          ${kotlinStringLiteral(assetPathFor(member, className))} to ${kotlinStringLiteral(url)},"
+          )
+        }
+        sb.appendLine("        ),")
+      }
+      sb.append("    )")
     }
 
     /**
@@ -1336,6 +1542,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       methods: List<TrailMethod>,
       authoringDir: String = DEFAULT_AUTHORING_DIR,
       sourceNote: String? = null,
+      groups: List<TrailGroup> = emptyList(),
     ): String = buildString {
       val ruleSimpleName = ruleClassFqn.substringAfterLast('.')
       appendHeader(this, className, authoringDir, sourceNote)
@@ -1356,17 +1563,26 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         // (classifier-specific recording → trail.yaml → blaze.yaml). Splits across multiple lines
         // if the single-line form would push past 95 chars to stay inside ktfmt's preferred width.
         val methodName = method.methodName
-        val assetPath =
-          if (method.isRecordingDir) "trails/$className/$methodName"
-          else "trails/$className/$methodName.trail.yaml"
-        val singleLine = "  @Test fun $methodName() = rule.runFromAsset(\"$assetPath\")"
+        val assetPath = assetPathFor(method, className)
+        val sourceUrlArgument =
+          method.trailSourceUrl?.let {
+            ", trailSourceUrl = ${kotlinStringLiteral(it)}"
+          } ?: ""
+        val invocation =
+          "rule.runFromAsset(${kotlinStringLiteral(assetPath)}$sourceUrlArgument)"
+        val singleLine = "  @Test fun $methodName() = $invocation"
         if (singleLine.length <= 95) {
           appendLine(singleLine)
         } else {
           appendLine("  @Test")
           appendLine("  fun $methodName() =")
-          appendLine("    rule.runFromAsset(\"$assetPath\")")
+          appendLine("    $invocation")
         }
+      }
+      groups.forEach { group ->
+        appendLine()
+        appendGroupMethod(this, group, className, invocation = "rule.runFromAssets")
+        appendLine()
       }
       appendLine("}")
     }
@@ -1396,5 +1612,13 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       }
       sb.appendLine()
     }
+
+    private fun kotlinStringLiteral(value: String): String =
+      "\"" + value.replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("$", "\\$")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t") + "\""
   }
 }

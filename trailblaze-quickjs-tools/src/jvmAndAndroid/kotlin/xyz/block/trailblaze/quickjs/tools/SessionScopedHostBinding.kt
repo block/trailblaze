@@ -4,10 +4,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.history.ToolCallHistory
+import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher.toEnvelopeJson
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toolDecodeFailureReason
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -25,16 +32,15 @@ import xyz.block.trailblaze.util.Console
  *
  * 1. Look up the named tool via
  *    [TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered] — this bypasses the
- *    `surfaceToLlm = false` filter that hides YAML-defined building-block tools from the LLM
+ *    `surfaceToLlm = false` filter that hides building-block tools from the LLM
  *    descriptor list. Class-backed tools were already reachable through the dispatch path
  *    (see `TrailblazeToolRepo.toolCallToTrailblazeTool` line 257-269); the unfiltered
- *    variant extends the bypass to YAML-defined tools that exist globally on the classpath
+ *    variant extends the bypass to tools that exist globally on the classpath
  *    but aren't in this session's registered set.
  * 2. Execute the tool against the [TrailblazeToolExecutionContext] snapshotted in
  *    [ToolExecutionContextThreadLocal] at the outer `runTrailblazeTools` boundary. Both
  *    [ExecutableTrailblazeTool] (single execute) and [DelegatingTrailblazeTool] (expand to
- *    a sequence of executables and run them in order) are supported. The latter is what a
- *    YAML-defined tool resolves to.
+ *    a sequence of executables and run them in order) are supported.
  * 3. Serialize the resulting [TrailblazeToolResult] to JSON via [TrailblazeJsonInstance]
  *    and return the string for QuickJS to `JSON.parse`.
  *
@@ -45,7 +51,7 @@ import xyz.block.trailblaze.util.Console
  * `{"isError":true,"error":"<message>"}` so the awaiting handler sees a well-formed
  * response on the JS side instead of an opaque transport error. Failure cases:
  *
- *  - Unknown tool name (no class-backed, dynamic, or YAML-defined match).
+ *  - Unknown tool name (no class-backed or dynamic match).
  *  - No execution context installed in the [ToolExecutionContextThreadLocal] — caller forgot to call
  *    [installContext] at the dispatch boundary.
  *  - Tool resolved but not executable (neither [ExecutableTrailblazeTool] nor
@@ -53,6 +59,12 @@ import xyz.block.trailblaze.util.Console
  *  - The tool's `execute(...)` throws.
  *  - The tool returns a [TrailblazeToolResult.Error] (mapped to the same envelope shape so
  *    the JS side can branch on `isError`).
+ *
+ * The failures that stop the call before the tool runs (no context, rejected argument keys, args
+ * that don't decode, a failed lookup, an unknown name, a same-host re-entry or a cycle) also carry
+ * `"dispatchFailed":true`, so a caller can tell "this call could not run" from "the tool ran and
+ * failed". `runIf` relies on it: a failing condition tool means false, a condition that cannot run
+ * is an authoring error.
  *
  * ### Concurrency
  *
@@ -65,6 +77,7 @@ import xyz.block.trailblaze.util.Console
 class SessionScopedHostBinding(
   private val toolRepo: TrailblazeToolRepo,
   private val sessionId: SessionId,
+  private val hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
 ) : HostBinding {
 
   /**
@@ -91,12 +104,21 @@ class SessionScopedHostBinding(
    * outer call still holds the host's non-reentrant `evalMutex` deadlocks (and would clobber
    * the outer call's `__trailblazeLastResult` global). Composing a tool in a *different*
    * bundle (different host) or a host/driver tool (no QuickJS re-entry, e.g. `maestro`) is
-   * unaffected. Null on the host daemon path
-   * ([LazyYamlScriptedToolRegistration][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]),
-   * which isolates each tool in its own host so same-host re-entry can't arise there.
+   * unaffected. Also set by
+   * [LazyYamlScriptedToolRegistration][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]
+   * on the host daemon path: each tool has its own host there, but a tool composing itself
+   * (e.g. a nested `runIf`) still re-enters it.
    */
   @Volatile
   var ownHost: QuickJsToolHost? = null
+
+  override suspend fun callHostFunction(name: String, argsJson: String): String {
+    val context = activeContext ?: ToolExecutionContextThreadLocal.get()
+      ?: return hostFunctionErrorEnvelopeJson(
+        "ctx.host.$name: no execution context installed for this session",
+      )
+    return TrailblazeHostFunctionDispatcher.call(name, argsJson, context, hostFunctions).toEnvelopeJson()
+  }
 
   override suspend fun callFromBundle(name: String, argsJson: String): String {
     // Prefer the directly-set [activeContext] (used by the in-process scripted-tool
@@ -110,7 +132,7 @@ class SessionScopedHostBinding(
         "[SessionScopedHostBinding] CALL_NO_CONTEXT tool=$name session=${sessionId.value} " +
           "— no TrailblazeToolExecutionContext installed; install at runTrailblazeTools boundary",
       )
-      return errorEnvelope(
+      return dispatchErrorEnvelope(
         "trailblaze.call('$name'): no execution context installed for this session",
       )
     }
@@ -140,7 +162,7 @@ class SessionScopedHostBinding(
       Console.log(
         "[SessionScopedHostBinding] $rejectionTag tool=$name session=${sessionId.value} $message",
       )
-      return errorEnvelope(message)
+      return dispatchErrorEnvelope(message)
     }
 
     val resolved: TrailblazeTool? = try {
@@ -154,12 +176,14 @@ class SessionScopedHostBinding(
       // Preserved as a distinct catch so the log line distinguishes "args didn't decode"
       // from "lookup itself failed" (e.g. a custom KSerializer threw an unchecked
       // exception). The Throwable branch below catches the unchecked-exception case.
+      // The args can carry credentials and no tool exists yet to mask them.
+      val reason = toolDecodeFailureReason(e, argsJson)
       Console.log(
         "[SessionScopedHostBinding] CALL_DECODE_FAIL tool=$name session=${sessionId.value} " +
-          "reason=${e.message}",
+          "reason=$reason",
       )
-      return errorEnvelope(
-        "trailblaze.call('$name'): failed to decode args — ${e.message}",
+      return dispatchErrorEnvelope(
+        "trailblaze.call('$name'): failed to decode args — $reason",
       )
     } catch (e: Throwable) {
       // Catches IllegalStateException (the standard "not found" path is null-returned by
@@ -168,12 +192,13 @@ class SessionScopedHostBinding(
       // (NPE, IllegalArgumentException, NumberFormatException, …). The HostBinding contract
       // is JSON-on-every-path; a propagated unchecked throw would surface to the JS side as
       // an opaque transport error.
+      val reason = toolDecodeFailureReason(e, argsJson)
       Console.log(
         "[SessionScopedHostBinding] CALL_LOOKUP_FAIL tool=$name session=${sessionId.value} " +
-          "reason=${e::class.simpleName}: ${e.message}",
+          "reason=$reason",
       )
-      return errorEnvelope(
-        "trailblaze.call('$name'): tool lookup failed — ${e.message ?: e::class.simpleName}",
+      return dispatchErrorEnvelope(
+        "trailblaze.call('$name'): tool lookup failed — $reason",
       )
     }
 
@@ -181,7 +206,7 @@ class SessionScopedHostBinding(
       Console.log(
         "[SessionScopedHostBinding] CALL_UNKNOWN tool=$name session=${sessionId.value}",
       )
-      return errorEnvelope(
+      return dispatchErrorEnvelope(
         "trailblaze.call('$name'): no tool registered with that name",
       )
     }
@@ -190,21 +215,35 @@ class SessionScopedHostBinding(
     // host would re-enter [QuickJsToolHost.callTool] while the outer call still holds the
     // host's non-reentrant evalMutex — a deadlock. Refuse with a structured envelope instead.
     // Cross-bundle composition (different host) and host/driver tools (not a
-    // [QuickJsTrailblazeTool]) fall through and dispatch normally. `ownHost` is null on the
-    // host daemon path, so this guard is a no-op there.
+    // [QuickJsTrailblazeTool]) fall through and dispatch normally.
     val reentryHost = ownHost
-    if (reentryHost != null && resolved is QuickJsTrailblazeTool && resolved.host === reentryHost) {
+    if (reentryHost != null && resolved.quickJsHost() === reentryHost) {
       Console.log(
         "[SessionScopedHostBinding] SAME_HOST_REENTRY tool=$name session=${sessionId.value} " +
           "— refusing same-bundle compose (would deadlock the shared QuickJS engine)",
       )
-      return errorEnvelope(
+      return dispatchErrorEnvelope(
         "trailblaze.call('$name'): composing a tool from the same bundle is not supported " +
           "(it would deadlock the shared QuickJS engine). If '$name' lives in this same file, " +
           "call its logic as a plain local function instead of round-tripping through " +
           "trailblaze.call — same-file reuse is a utility call, not a framework-dispatched tool. " +
           "If you want it dispatched and logged as its own tool, move it to a separate bundle. " +
           "Calling a host/driver tool also works (no QuickJS re-entry).",
+      )
+    }
+
+    // Cycle guard. A tool in another host that is already waiting further up this call path (e.g.
+    // tool A → tool B → tool A) would wait on that host's evalMutex forever.
+    val targetHost = resolved.quickJsHost()
+    if (targetHost != null && QuickJsToolHost.isOnCurrentCallPath(targetHost)) {
+      Console.log(
+        "[SessionScopedHostBinding] CALL_CYCLE tool=$name session=${sessionId.value} " +
+          "— refusing a dispatch back into an engine waiting further up this call path",
+      )
+      return dispatchErrorEnvelope(
+        "trailblaze.call('$name'): '$name' is already running further up this call path (a tool " +
+          "cycle such as A → B → A), so dispatching it again would wait forever. Run the shared " +
+          "logic as a local function in one tool instead of dispatching back up the chain.",
       )
     }
 
@@ -243,7 +282,7 @@ class SessionScopedHostBinding(
 
   /**
    * Execute the resolved tool against [context]. Handles both single-execute tools
-   * ([ExecutableTrailblazeTool]) and YAML-defined / scripted compositions
+   * ([ExecutableTrailblazeTool]) and delegating tools
    * ([DelegatingTrailblazeTool]). For delegating tools, each expanded executable runs in
    * order; the first error short-circuits and is returned; otherwise the last success
    * (or default `Success`) is returned.
@@ -264,19 +303,32 @@ class SessionScopedHostBinding(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     return when (tool) {
-      is ExecutableTrailblazeTool -> context.nestedToolExecutor?.invoke(tool) ?: tool.execute(context)
-      is DelegatingTrailblazeTool -> {
+      // With no nested executor (some drivers have none) the tool runs here, outside any dispatch,
+      // so it's recorded here; through the executor, the dispatch records it.
+      is ExecutableTrailblazeTool -> context.nestedToolExecutor?.invoke(tool)
+        ?: ToolCallHistory.recordExecution(context, tool) { tool.execute(context) }
+      // Expanded here rather than dispatched whole, so the composed call is recorded here; each
+      // expanded tool is dispatched and names it as their parent.
+      is DelegatingTrailblazeTool -> ToolCallHistory.recordExecution(context, tool) {
         val expanded = tool.toExecutableTrailblazeTools(context)
         var last: TrailblazeToolResult = TrailblazeToolResult.Success()
         for (sub in expanded) {
-          val r = context.nestedToolExecutor?.invoke(sub) ?: sub.execute(context)
-          if (r is TrailblazeToolResult.Error) return r
+          val r = context.nestedToolExecutor?.invoke(sub)
+            ?: ToolCallHistory.recordExecution(context, sub) { sub.execute(context) }
+          if (r is TrailblazeToolResult.Error) return@recordExecution r
           last = r
         }
         last
       }
       else -> TrailblazeToolResult.Error.UnknownTrailblazeTool(command = tool)
     }
+  }
+
+  /** The QuickJS host [this] dispatches into, seeing through the host path's context-setting wrapper. */
+  private fun TrailblazeTool.quickJsHost(): QuickJsToolHost? = when (this) {
+    is QuickJsTrailblazeTool -> host
+    is LazyYamlScriptedToolRegistration.ContextSettingScriptedTool -> inner.host
+    else -> null
   }
 
   /**
@@ -286,13 +338,17 @@ class SessionScopedHostBinding(
    * names would leak class info to the JS side; the binding-error envelope is intentionally
    * minimal).
    */
-  private fun errorEnvelope(message: String): String {
+  private fun errorEnvelope(message: String, dispatchFailed: Boolean = false): String {
     val obj: JsonObject = buildJsonObject {
       put("isError", true)
       put("error", message)
+      if (dispatchFailed) put("dispatchFailed", true)
     }
     return obj.toString()
   }
+
+  /** [errorEnvelope] for a call that never reached the tool. See the class KDoc. */
+  private fun dispatchErrorEnvelope(message: String): String = errorEnvelope(message, dispatchFailed = true)
 
   companion object {
     /**

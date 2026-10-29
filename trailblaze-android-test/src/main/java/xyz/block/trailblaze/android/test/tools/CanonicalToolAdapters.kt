@@ -69,21 +69,16 @@ internal object CanonicalToolAdapters {
       // tapRoute is ignored, matching every non-accessibility driver: it pins how the
       // ACCESSIBILITY driver routes a tap, and its own contract says other drivers dispatch
       // their one native gesture unconditionally.
-      AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress)
+      AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
     }
 
     is AssertVisibleBySelectorTrailblazeTool -> CanonicalDispatch { target, context ->
       val selector = tool.nodeSelector
         ?: return@CanonicalDispatch malformed("assertVisibleBySelector has no nodeSelector", tool)
-      val visibility = AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = tool.timeoutMs)
+      tool.removedFieldError()?.let { return@CanonicalDispatch it }
+      AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
-      // `expectedText` is the canonical tool's own post-pass (re-resolve, read the matched
-      // element's text, compare under textMatchMode) and runs on the shared resolver against
-      // this driver's tree via context.screenStateProvider — so it is delegated, not mirrored:
-      // one implementation is what keeps EXACT/PREFIX/REGEX and the Zs-folding identical on
-      // every driver. No-op when expectedText is unset or the visibility check failed.
-      tool.applyExpectedTextPostPass(context, visibility)
     }
 
     is AssertNotVisibleWithTextTrailblazeTool -> CanonicalDispatch { target, context ->
@@ -203,6 +198,11 @@ internal object CanonicalToolAdapters {
         val tapped = AndroidTestTapTool(nodeSelector = selector).executeWithAndroidTest(target, context)
         if (tapped !is TrailblazeToolResult.Success) return@CanonicalDispatch tapped
       }
+      // After the tap, so the field emptied is the one the keys are about to reach.
+      if (tool.clearFirst) {
+        val cleared = clearFocusedTextField(target, tool)
+        if (cleared !is TrailblazeToolResult.Success) return@CanonicalDispatch cleared
+      }
       // Key-event injection into the focused window — the same semantics the instrumentation
       // driver this vocabulary was recorded under gives `inputText`, and the only shape that
       // also reaches a passcode keypad listening for key presses rather than an EditText.
@@ -232,37 +232,7 @@ internal object CanonicalToolAdapters {
     // in one action, the same shape `AndroidViewActions.replaceText` uses so a field that re-renders
     // mid-erase cannot drop half the keystrokes. Selector-free by design, like the canonical tool:
     // "the focused field" is the whole contract.
-    is ClearTextTrailblazeTool -> CanonicalDispatch { target, _ ->
-      val focusedCompose = target.composeRoots().firstNotNullOfOrNull { findFocusedEditableText(it) }
-      val cleared =
-        when {
-          focusedCompose != null -> {
-            AndroidComposeActions.replaceText(target, focusedCompose.id, "")
-            "the focused Compose text input"
-          }
-          else ->
-            try {
-              target.dispatchAndAwaitSettle {
-                target.performViewAction(
-                  allOf(isAssignableFrom(EditText::class.java), hasFocus()),
-                  ViewActions.clearText(),
-                )
-              }
-              "the focused EditText"
-            } catch (_: NoMatchingViewException) {
-              null
-            }
-        }
-      if (cleared == null) {
-        return@CanonicalDispatch TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "clearText found no focused text field — neither a focused Compose text " +
-            "input nor a focused EditText is on screen.",
-          command = tool,
-        )
-      }
-      target.waitForIdle()
-      TrailblazeToolResult.Success(message = "Cleared $cleared")
-    }
+    is ClearTextTrailblazeTool -> CanonicalDispatch { target, _ -> clearFocusedTextField(target, tool) }
 
     is InputTextRandomTrailblazeTool -> CanonicalDispatch { target, context ->
       if (tool.digitCount <= 0) {
@@ -288,6 +258,43 @@ internal object CanonicalToolAdapters {
     }
 
     else -> null
+  }
+
+  /**
+   * Empties the focused Compose text input or, failing that, the focused EditText — `clearText`, and
+   * `inputText`'s `clearFirst`. Fails when neither is on screen, rather than letting the typing
+   * that follows land on whatever the field still holds.
+   */
+  private suspend fun clearFocusedTextField(target: AndroidTestTarget, tool: TrailblazeTool): TrailblazeToolResult {
+    val focusedCompose = target.composeRoots().firstNotNullOfOrNull { findFocusedEditableText(it) }
+    val cleared =
+      when {
+        focusedCompose != null -> {
+          AndroidComposeActions.replaceText(target, focusedCompose.id, "")
+          "the focused Compose text input"
+        }
+        else ->
+          try {
+            target.dispatchAndAwaitSettle {
+              target.performViewAction(
+                allOf(isAssignableFrom(EditText::class.java), hasFocus()),
+                ViewActions.clearText(),
+              )
+            }
+            "the focused EditText"
+          } catch (_: NoMatchingViewException) {
+            null
+          }
+      }
+    if (cleared == null) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "Found no focused text field to clear — neither a focused Compose text " +
+          "input nor a focused EditText is on screen.",
+        command = tool,
+      )
+    }
+    target.waitForIdle()
+    return TrailblazeToolResult.Success(message = "Cleared $cleared")
   }
 
   /**

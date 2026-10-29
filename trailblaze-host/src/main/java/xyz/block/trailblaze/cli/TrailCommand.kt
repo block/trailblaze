@@ -11,6 +11,7 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
+import xyz.block.trailblaze.config.ServedTrailmaps
 import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.LlmTokenStatus
@@ -56,9 +57,12 @@ import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.strings.VisibleStringsLog
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.resolveRunTargetApp
+import xyz.block.trailblaze.ui.shadowedTrailmapsRefusal
 import xyz.block.trailblaze.ui.unresolvedDeclaredTargetWarning
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
@@ -77,6 +81,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 import xyz.block.trailblaze.yaml.TrailMetadataValue
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
@@ -327,7 +332,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--llm"],
-    description = ["LLM provider/model shorthand (e.g., openai/gpt-4-1). " +
+    description = ["LLM provider/model shorthand (e.g., openai/gpt-6-luna). " +
         "Mutually exclusive with --llm-provider and --llm-model."]
   )
   var llm: String? = null
@@ -340,7 +345,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--llm-model"],
-    description = ["LLM model ID override (e.g., gemini-3-flash, gpt-4-1)"]
+    description = ["LLM model ID override (e.g., gemini-3-flash, gpt-6-luna)"]
   )
   var llmModel: String? = null
 
@@ -486,7 +491,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--no-logging"],
-    description = ["Disable session logging — no files written to logs/, session does not appear in Sessions tab"]
+    description = ["Disable session logging — no files written to logs/, run does not appear in Trailblaze App's Runs list"]
   )
   var noLogging: Boolean = false
 
@@ -527,10 +532,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   @Option(
     names = ["--capture-video"],
     description = [
-      "Record device screen video for the session. Off by default — video writes large files " +
-        "— pass --capture-video to enable it for a run. " +
-        "When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved " +
-        "`trailblaze config capture-video` setting.",
+      "Record device screen video for the session. On by default for `run`; use " +
+        "--no-capture-video to skip it. Interactive sessions (`session start`, `tool`, `blaze`, " +
+        "MCP) stay off unless TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config capture-video` " +
+        "opts them in.",
     ],
     negatable = true,
   )
@@ -593,9 +598,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     description = [
       "Auto-capture network requests/responses to <session-dir>/network.ndjson on " +
         "supported devices (web today; mobile devices added as engines land). " +
-        "Mirrors the desktop-app \"Capture Network Traffic\" toggle. On by default; " +
-        "use --no-capture-network to disable. When neither flag is passed, inherits the " +
-        "desktop app's saved setting.",
+        "Mirrors the \"Network traffic\" capture default in Trailblaze App Settings. On by default; " +
+        "use --no-capture-network to disable. When neither flag is passed, inherits that " +
+        "saved setting.",
     ],
     negatable = true,
   )
@@ -618,12 +623,16 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   var testNameOverride: String? = null
 
   /**
-   * The `--capture-video` value to hand downstream, or null when the user passed neither
-   * `--capture-video` nor `--no-capture-video`. Null is load-bearing: it's what lets
-   * `TRAILBLAZE_CAPTURE_VIDEO` and the persisted `capture-video` config be the middle tier.
-   * Forwarding a resolved `false` here would silently outrank both.
+   * Whether this run records video: on unless `--no-capture-video`. A trail run is bounded and has
+   * a goal, so its recording is worth the disk. Interactive sessions can run for hours with no
+   * goal, so they keep the opt-in default (`TRAILBLAZE_CAPTURE_VIDEO` / `config capture-video`);
+   * those tiers only ever opt in, so resolving here loses nothing for `run`.
    */
-  private fun resolvedCaptureVideo(): Boolean? = if (captureAll) true else captureVideo
+  private fun resolvedCaptureVideo(): Boolean = captureAll || (captureVideo ?: true)
+
+  /** Whether a run's session records anything: video, a device log or memory. */
+  internal fun capturesSessions(): Boolean =
+    resolvedCaptureVideo() || captureOptions.run { captureLogcat || captureIosLogs || captureMemory }
 
   /**
    * Whether the Playwright browser runs headless. Headless unless the run asked for a visible
@@ -635,9 +644,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   internal fun resolvedBrowserHeadless(): Boolean = !showBrowser && headless
 
   /**
-   * The device-log toggles only. Video is deliberately absent: it is forwarded downstream as the
-   * tri-state [resolvedCaptureVideo], and resolving it into a non-null value here would discard
-   * the null that the env and config tiers need.
+   * The device-log toggles only. Video is forwarded downstream separately as [resolvedCaptureVideo].
    */
   private val captureOptions: CaptureOptions get() {
     return CaptureOptions(
@@ -648,6 +655,50 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   override fun call(): Int = quietUnlessVerbose(verbose) { runTrail() }
+
+  /**
+   * The trail YAML actually sent to the runner, after templates resolve. Subclasses may rewrite it,
+   * and one that does must turn off `saveRecording`: a pass would save the rewritten run's
+   * recording into the source trail.
+   */
+  internal open fun yamlToRun(yamlContent: String): String = yamlContent
+
+  /**
+   * Whether each run asks its trailhead to take the setup the last run of the same trailhead on
+   * the device handed on (true) or refuses it (false). Null, `run`'s answer, leaves it to the
+   * daemon's `TRAILBLAZE_TRAILHEAD_REUSE`.
+   */
+  internal open val trailheadReuse: Boolean? get() = null
+
+  /** One run of a trail on a device that got as far as a session, as [runAgain] sees it. */
+  internal data class FinishedRun(val passed: Boolean, val sessionDir: File)
+
+  /**
+   * Whether to run the same trail on the same device again after [run]. Subclasses may ask for it.
+   * [run] is null when the run was rejected before its session started, or ran through the daemon
+   * with `--no-logging`. In process, a `--no-logging` run still gets a [FinishedRun], whose
+   * [FinishedRun.sessionDir] was never written.
+   */
+  internal open fun runAgain(run: FinishedRun?): Boolean = false
+
+  /**
+   * Called as each run starts, with the directory its session should log into, so a subclass can
+   * watch it; [FinishedRun.sessionDir] is where the session actually landed.
+   */
+  internal open fun sessionStarting(sessionDir: File) {}
+
+  /** Set by both run loops after each run that recorded a session; null otherwise. */
+  private var lastRun: FinishedRun? = null
+
+  /** Each device spec, repeated for as long as [runAgain] asks. Lazy: it asks after each run. */
+  private fun withReruns(deviceSpecs: List<String?>): Sequence<String?> = sequence {
+    for (spec in deviceSpecs) {
+      do {
+        lastRun = null
+        yield(spec)
+      } while (runAgain(lastRun))
+    }
+  }
 
   /** The command proper; [call] owns the quiet scope around it. */
   private fun runTrail(): Int {
@@ -696,7 +747,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       } else {
         val parts = llm!!.split("/", limit = 2)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-          Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1) or 'none' for recordings-only mode.")
+          Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-6-luna) or 'none' for recordings-only mode.")
           return TrailblazeExitCode.MISUSE.code
         }
         llmProvider = parts[0]
@@ -1001,6 +1052,15 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         ) ?: deviceClassifierRejection(
           requestsDeviceClassifier = resolvedDeviceClassifierOverride.isNotEmpty(),
           daemonCapabilities = capabilities,
+        ) ?: trailheadReuseRejection(
+          requestsTrailheadReuse = trailheadReuse != null,
+          daemonCapabilities = capabilities,
+        ) ?: workspaceTrailmapsRejection(
+          callerHasWorkspaceTrailmaps = ServedTrailmaps.hasWorkspaceTrailmaps(
+            CliCallerContext.callerCwd(),
+            callerConfigDir(),
+          ),
+          daemonCapabilities = capabilities,
         )
         delegationRejection?.let { rejection ->
           reportCliError(
@@ -1069,6 +1129,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers = configClassifiers,
       deviceConfiguration = deviceConfiguration,
       bindsCompanionDevices = bindsCompanionDevices(),
+      boundDeviceNames = boundDeviceNames(),
     )
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
@@ -1130,7 +1191,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             continue
           }
           // One run per resolved device (usually one; several with --device a,b / --all-devices).
-          for (deviceSpec in deviceSpecs) {
+          for (deviceSpec in withReruns(deviceSpecs)) {
             if (cancelled) break
             val runLabel = if (deviceSpecs.size > 1) {
               "${item.file.name} on ${deviceSpec ?: "default device"}"
@@ -1140,6 +1201,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             Console.info("\n[${index + 1}/$total] Running: $runLabel")
             Console.info(ITEM_DIVIDER)
             val (exitCode, sessionIds) = runSingleTrailFile(item.file, deviceSpec, app)
+            lastRun = sessionIds.lastOrNull()?.let {
+              FinishedRun(
+                passed = exitCode == TrailblazeExitCode.SUCCESS.code,
+                sessionDir = File(app.deviceManager.logsRepo.logsDir, it.value),
+              )
+            }
             allNewSessionIds.addAll(sessionIds)
             if (exitCode == TrailblazeExitCode.SUCCESS.code) {
               passed++
@@ -1192,7 +1259,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           skips = newSkips,
         ).let { report ->
           if (report != null) {
-            Console.info("\nReport: file://${report.absolutePath}")
+            Console.info("\nReport: ${report.fileUrl()}")
           } else {
             Console.error("\nReport generation failed — see the output above. The trail results are unaffected.")
           }
@@ -1209,7 +1276,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         val reportGenerator = app.createCliReportGenerator()
         val markdownFile = reportGenerator.generateMarkdownReport(logsRepo, allNewSessionIds)
         if (markdownFile != null) {
-          Console.info("Markdown: file://${markdownFile.absolutePath}")
+          Console.info("Markdown: ${markdownFile.fileUrl()}")
         }
       } catch (e: Exception) {
         Console.error("Failed to generate markdown report: ${e.message}")
@@ -1271,6 +1338,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers = configClassifiers,
       deviceConfiguration = deviceConfiguration,
       bindsCompanionDevices = bindsCompanionDevices(),
+      boundDeviceNames = boundDeviceNames(),
     )
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
@@ -1279,8 +1347,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       Console.info("No trail files to run after filtering. Exiting.")
       return TrailblazeExitCode.SUCCESS.code
     }
-    // The up-front gate sees only --bind/--configuration, but a mixed trail also forwards this
-    // shell's TRAILBLAZE_DEVICE_BINDINGS (delegatedDeviceBindings), which a daemon predating per-run
+    // The up-front gate sees only --bind/--configuration, but a mixed or multi-configuration trail
+    // also forwards this shell's TRAILBLAZE_DEVICE_BINDINGS (delegatedDeviceBindings), which a daemon predating per-run
     // bindings would drop and run single-device. Which trails forward is known only once planned.
     perRunDeviceBindingsRejection(
       requestsPerRunDeviceBindings = forwardsEnvironmentBindings(
@@ -1292,7 +1360,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     )?.let { rejection ->
       reportCliError(
         verb = "Trail run",
-        reason = "a mixed trail carries this shell's $DEVICE_BINDINGS_ENV_VAR on its run request, " +
+        reason = "a mixed or multi-configuration trail carries this shell's " +
+          "$DEVICE_BINDINGS_ENV_VAR on its run request, " +
           "but $rejection",
         hint = "restart the daemon so it picks up this build (`trailblaze --stop`, then " +
           "re-run), or run in-process with --no-daemon",
@@ -1359,7 +1428,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             continue
           }
           // One daemon run per resolved device (usually one; several with --device a,b / --all-devices).
-          for (resolvedDeviceSpec in deviceSpecs) {
+          for (resolvedDeviceSpec in withReruns(deviceSpecs)) {
             val runLabel = if (deviceSpecs.size > 1) {
               "${file.name} on ${resolvedDeviceSpec ?: "default device"}"
             } else {
@@ -1369,7 +1438,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             Console.info(ITEM_DIVIDER)
 
             val rawYaml = file.readText()
-            val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+            val yamlContent = yamlToRun(TrailYamlTemplateResolver.resolve(rawYaml, file))
             val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
 
             // Surface the effective replay-vs-AI mode to the user before the run kicks off.
@@ -1396,47 +1465,18 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               continue
             }
 
-            val request = CliRunRequest(
+            val sessionId = SessionId.pinnedFor(testName)
+            val request = delegatedRunRequest(
+              file = file,
               yamlContent = yamlContent,
-              trailFilePath = file.absolutePath,
               testName = testName,
-              driverType = driverType,
-              deviceId = resolvedDeviceSpec,
-              deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
-              llmProvider = llmProvider,
-              llmModel = llmModel,
+              deviceSpec = resolvedDeviceSpec,
               useRecordedSteps = effectiveUseRecordedSteps,
-              showBrowser = !resolvedBrowserHeadless(),
-              noLogging = noLogging,
-              selfHeal = selfHeal,
-              captureVideo = resolvedCaptureVideo(),
-              turbo = turbo,
-              captureLogcat = captureLogcat || captureAll,
-              captureIosLogs = captureIosLogs || captureAll,
-              captureMemory = captureMemory || captureAll,
-              // Tri-state: forward the explicit flag value when the user passed
-              // --capture-network / --no-capture-network, else null so the daemon inherits its
-              // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
-              // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
-              captureNetworkTraffic = if (captureAll) true else captureNetwork,
-              maxLlmCalls = resolveEffectiveMaxLlmCalls(),
-              initialMemorySeeds = parsedMemorySeeds(),
-              initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
               initialArgs = initialArgs,
-              deviceConfiguration = deviceConfiguration,
-              deviceBindings = delegatedDeviceBindings(
-                yamlContent = yamlContent,
-                explicitBindings = parsedDeviceBinds(),
-                rawEnvironmentBindings = System.getenv(DEVICE_BINDINGS_ENV_VAR),
-              ),
-              snapshotBaseline = resolvedSnapshotBaseline(),
-              snapshotBaselineThresholdPercent = snapshotBaselineThreshold,
-              // Anchor the daemon's workspace `defaults.target` (rung-3) resolution at OUR cwd, not
-              // the daemon's launch dir, so a run with no `config.target` targets the same app
-              // `config get target` reports here. `run` isn't a forwarded subcommand, so this
-              // executes in the user's CLI JVM — callerCwd() is the user's shell cwd.
-              callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
+              originalYaml = rawYaml,
+              sessionId = sessionId,
             )
+            sessionStarting(File(daemonLogsDir, sessionId.value))
 
             var lastProgress: String? = null
             val response = daemon.runSync(request) { progress ->
@@ -1447,6 +1487,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // Before the pass/fail split: a failed run still captured screens, and its strings are
             // exactly what someone comparing against a green run wants to read.
             response.sessionId?.let { delegatedSessions += SessionId(it) to sessionLogsDir(response, daemonLogsDir) }
+            lastRun = response.sessionId?.let {
+              FinishedRun(passed = response.success, sessionDir = File(sessionLogsDir(response, daemonLogsDir), it))
+            }
 
             if (response.success) {
               Console.info("✅ PASSED")
@@ -1807,7 +1850,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   ): Pair<Int, List<SessionId>> {
     // Read the YAML file and resolve template variables (e.g., {{CWD}}, {{BASE_URL}})
     val rawYaml = file.readText()
-    val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+    val yamlContent = yamlToRun(TrailYamlTemplateResolver.resolve(rawYaml, file))
     if (verbose) {
       Console.log("Reading trail file: ${file.absolutePath}")
       Console.log("YAML content (${yamlContent.length} bytes)")
@@ -1908,6 +1951,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     // trail's session rather than enumerating every "new" session in the logs repo.
     // See SessionId.pinnedFor — same construction is used in handleCliRunRequest.
     val pinnedSessionId = SessionId.pinnedFor(testName)
+    sessionStarting(File(app.deviceManager.logsRepo.logsDir, pinnedSessionId.value))
 
     // Bind parameterized-trail args against this trail's declaration before dispatch, so a
     // missing required / unknown / bad-typed arg exits MISUSE before the device does any work.
@@ -1925,6 +1969,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       testName = testName,
       yaml = yamlContent,
       trailFilePath = file.absolutePath,
+      trailSourceUrl = GitTrailSourceUrl.capture(file, rawYaml),
       targetAppName = trailConfig?.target,
       useRecordedSteps = effectiveUseRecordedSteps,
       trailblazeDeviceId = targetDevice.trailblazeDeviceId,
@@ -1951,6 +1996,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         // path (DeviceConnectionService) which already threads appConfig.preferHostAgent.
         preferHostAgent =
           config.trailblazeSettingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
+        trailheadReuse = trailheadReuse,
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       maxLlmCalls = resolveEffectiveMaxLlmCalls(),
@@ -2033,6 +2079,17 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       Console.log("Target app: ${targetTestApp?.displayName ?: "None (using built-in tools only)"}")
     }
 
+    // The same check the daemon makes on a delegated run: this process loaded the workspace itself,
+    // but a workspace trailmap that failed to load leaves a bundled copy filling in for it.
+    val callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString()
+    val refusalFor = { target: TrailblazeHostAppTarget? ->
+      shadowedTrailmapsRefusal(callerWorkspaceDir, target, callerConfigDir())
+    }
+    refusalFor(targetTestApp)?.let {
+      Console.error(it)
+      return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
+    }
+
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = false,
       runYamlRequest = runYamlRequest,
@@ -2040,8 +2097,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       unresolvedDeclaredTarget = unresolvedDeclaredTarget,
       sessionStartAdvisories = sessionStartAdvisories,
       // Same registry the session target resolves against above, so a multi-device
-      // configuration's per-device `target:` override resolves here too.
-      findTargetById = { id -> config.availableAppTargets.findById(id) },
+      // configuration's per-device `target:` override resolves here too, and is checked the same way.
+      findTargetById = { id ->
+        config.availableAppTargets.findById(id)?.also { target ->
+          refusalFor(target)?.let { throw TrailblazeException(it) }
+        }
+      },
       onProgressMessage = { message ->
         Console.info(message)
         lastProgress = message
@@ -2076,9 +2137,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       // path forwards these via `CliRunRequest`; without this the no-daemon path dropped them
       // and `DesktopYamlRunner` fell back to the persisted desktop appConfig — so
       // `trailblaze run --no-daemon --capture-ios-logs` (and `--no-capture-video` /
-      // `--capture-logcat`) silently had no effect. `null` means "use appConfig", which is what
-      // video wants when neither video flag was passed — that's the tier the env var and
-      // `config capture-video` live in. `--capture-all` folds in via `resolvedCaptureVideo`.
+      // `--capture-logcat`) silently had no effect. `--capture-all` folds in via
+      // `resolvedCaptureVideo`.
       captureVideo = resolvedCaptureVideo(),
       turbo = turbo,
       captureLogcat = captureOptions.captureLogcat,
@@ -2238,7 +2298,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    *
    * Not gated on `--no-report`: this is a data artifact a later locale or copy diff reads, not part
    * of the HTML report. It is one file write, plus, for a session with screenshot-less captures and
-   * a recording, probing and decoding that recording once to save their frames.
+   * a recording, probing and decoding that recording once to save their frames, and on macOS one
+   * OCR read per iOS AXe screenshot.
    */
   private fun writeVisibleStrings(sessions: List<Pair<SessionId, File>>) {
     sessions.groupBy({ it.second }, { it.first }).forEach { (logsDir, sessionIds) ->
@@ -2291,7 +2352,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       val waitStart = System.currentTimeMillis()
 
       fun readLogs(): List<xyz.block.trailblaze.logs.client.TrailblazeLog> {
-        val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+        // By name first: log files are named in write order, and the timestamp sort below is
+        // stable, so logs stamped in the same millisecond keep that order. listFiles() order is
+        // the filesystem's (unsorted on Linux), and a zero-width objective window falls back to
+        // position, so an ObjectiveComplete listed before its ObjectiveStart dropped the step's tools.
+        val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" }?.sortedBy { it.name }
+          ?: emptyList()
         return logFiles.mapNotNull { file ->
           try {
             xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -2896,6 +2962,67 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   /**
+   * The request a delegated run sends the daemon for one trail on one device. Everything the
+   * daemon cannot see for itself — this shell's env, cwd, and flags — must be resolved here.
+   */
+  internal fun delegatedRunRequest(
+    file: File,
+    yamlContent: String,
+    testName: String,
+    deviceSpec: String?,
+    useRecordedSteps: Boolean,
+    initialArgs: Map<String, String>,
+    envReader: (String) -> String? = System::getenv,
+    originalYaml: String? = null,
+    sessionId: SessionId? = null,
+  ): CliRunRequest = CliRunRequest(
+    yamlContent = yamlContent,
+    trailFilePath = file.absolutePath,
+    trailSourceUrl = originalYaml?.let { GitTrailSourceUrl.capture(file, it, envReader) },
+    testName = testName,
+    driverType = driverType,
+    deviceId = deviceSpec,
+    deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
+    llmProvider = llmProvider,
+    llmModel = llmModel,
+    useRecordedSteps = useRecordedSteps,
+    showBrowser = !resolvedBrowserHeadless(),
+    noLogging = noLogging,
+    selfHeal = resolveSelfHealOverride(envReader),
+    captureVideo = resolvedCaptureVideo(),
+    turbo = turbo,
+    captureLogcat = captureLogcat || captureAll,
+    captureIosLogs = captureIosLogs || captureAll,
+    captureMemory = captureMemory || captureAll,
+    // Tri-state: forward the explicit flag value when the user passed
+    // --capture-network / --no-capture-network, else null so the daemon inherits its
+    // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
+    // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
+    captureNetworkTraffic = if (captureAll) true else captureNetwork,
+    maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+    initialMemorySeeds = parsedMemorySeeds(),
+    initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+    initialArgs = initialArgs,
+    deviceConfiguration = deviceConfiguration,
+    deviceBindings = delegatedDeviceBindings(
+      yamlContent = yamlContent,
+      explicitBindings = parsedDeviceBinds(),
+      rawEnvironmentBindings = envReader(DEVICE_BINDINGS_ENV_VAR),
+    ),
+    snapshotBaseline = resolvedSnapshotBaseline(),
+    snapshotBaselineThresholdPercent = snapshotBaselineThreshold,
+    // Anchor the daemon's workspace `defaults.target` (rung-3) resolution at OUR cwd, not
+    // the daemon's launch dir, so a run with no `config.target` targets the same app
+    // `config get target` reports here. `run` isn't a forwarded subcommand, so this
+    // executes in the user's CLI JVM — callerCwd() is the user's shell cwd.
+    callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
+    // The daemon resolves our workspace for its trailmap check, and cannot read our env.
+    callerConfigDir = envReader(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR),
+    trailheadReuse = trailheadReuse,
+    sessionId = sessionId?.value,
+  )
+
+  /**
    * Resolves the effective `self-heal` setting for this run, honoring the usual precedence:
    *   1. `--self-heal` CLI flag (explicit per-run intent).
    *   2. `TRAILBLAZE_SELF_HEAL_ENABLED` env var (CI / pipeline intent — a CI pipeline runner
@@ -2906,12 +3033,23 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    * Companion resolver for JUnit runs: [xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest]`
    * .resolveSelfHealFromEnvOrConfig()`, which is a 2-tier (env → config) subset — tests have no
    * CLI flag to honor.
+   *
+   * Delegated runs split this chain: the client sends tiers 1–2 ([resolveSelfHealOverride]) and
+   * the daemon applies tiers 3–4 ([resolveSelfHeal]).
    */
-  internal fun resolveEffectiveSelfHeal(): Boolean =
-    selfHeal
-      ?: System.getenv("TRAILBLAZE_SELF_HEAL_ENABLED")?.lowercase()?.toBooleanStrictOrNull()
-      ?: CliConfigHelper.readConfig()?.selfHealEnabled
-      ?: false
+  internal fun resolveEffectiveSelfHeal(
+    envReader: (String) -> String? = System::getenv,
+    persistedConfigReader: () -> Boolean? = ::readPersistedSelfHeal,
+  ): Boolean = resolveSelfHeal(resolveSelfHealOverride(envReader), persistedConfigReader)
+
+  /**
+   * The `--self-heal` flag, else this shell's `TRAILBLAZE_SELF_HEAL_ENABLED`; null when neither
+   * is set. A delegated run must send this rather than the bare flag: the daemon is a separate
+   * process that never sees this shell's env, so without it a persisted `config self-heal`
+   * outranks the env var.
+   */
+  internal fun resolveSelfHealOverride(envReader: (String) -> String? = System::getenv): Boolean? =
+    selfHeal ?: envReader(SELF_HEAL_ENV_VAR)?.lowercase()?.toBooleanStrictOrNull()
 
   /**
    * Resolves the effective per-objective LLM call cap for this run, honoring:
@@ -3047,11 +3185,18 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    * beside its configuration runs as that configuration. The planner's prediction only: an
    * unparseable env value counts as none here, and the runtime reports it properly.
    */
-  private fun bindsCompanionDevices(): Boolean = parsedDeviceBinds().isNotEmpty() ||
+  private fun bindsCompanionDevices(): Boolean = boundDeviceNames().isNotEmpty()
+
+  /**
+   * The device names this run binds — `--bind`, else this shell's `TRAILBLAZE_DEVICE_BINDINGS`, as
+   * the runtime reads them — which pick among a trail's several configurations the one declaring
+   * exactly those devices beyond its start device. The same prediction as [bindsCompanionDevices].
+   */
+  private fun boundDeviceNames(): Set<String> = parsedDeviceBinds().keys.ifEmpty {
     runCatching {
-      MultiDeviceConfigurationResolver.parseDeviceBindings(System.getenv(DEVICE_BINDINGS_ENV_VAR))
-        .isNotEmpty()
-    }.getOrDefault(false)
+      MultiDeviceConfigurationResolver.parseDeviceBindings(System.getenv(DEVICE_BINDINGS_ENV_VAR)).keys
+    }.getOrDefault(emptySet())
+  }
 
   /**
    * Returns the resolved `--memory KEY=VAL` map for the in-flight [call]. Walks the raw
@@ -3343,6 +3488,18 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         "run this trail without comparing its snapshots to any baseline"
     }
 
+    /** Refuses delegating `loop --reuse-trailhead` to a daemon that would discard its reuse answer. */
+    internal fun trailheadReuseRejection(
+      requestsTrailheadReuse: Boolean,
+      daemonCapabilities: () -> Set<String>?,
+    ): String? {
+      if (!requestsTrailheadReuse) return null
+      val capabilities = daemonCapabilities() ?: return null
+      if (CliDaemonCapabilities.TRAILHEAD_REUSE in capabilities) return null
+      return "the running daemon predates --reuse-trailhead, so it would ignore it: passes would " +
+        "never reuse a setup, or reuse one from before a failed pass"
+    }
+
     /** Refuses silent delegation to a daemon that would discard `--device-classifier`. */
     internal fun deviceClassifierRejection(
       requestsDeviceClassifier: Boolean,
@@ -3353,6 +3510,21 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       if (CliDaemonCapabilities.DEVICE_CLASSIFIER in capabilities) return null
       return "the running daemon predates --device-classifier, so it would ignore the flag and " +
         "select recordings using only the connected device's physical classifiers"
+    }
+
+    /**
+     * Refuses delegating from a workspace with its own trailmaps to a daemon that predates the
+     * check keeping them in use: it drops the caller's workspace and runs whatever copy it loaded.
+     */
+    internal fun workspaceTrailmapsRejection(
+      callerHasWorkspaceTrailmaps: Boolean,
+      daemonCapabilities: () -> Set<String>?,
+    ): String? {
+      if (!callerHasWorkspaceTrailmaps) return null
+      val capabilities = daemonCapabilities() ?: return null
+      if (CliDaemonCapabilities.WORKSPACE_TRAILMAPS in capabilities) return null
+      return "the running daemon predates the check that runs this workspace's own trailmaps, so " +
+        "it could run a bundled or another checkout's copy instead"
     }
 
     /**
@@ -3415,16 +3587,19 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
     /**
      * The companion bindings a DELEGATED run of [yamlContent] carries: `--bind` when passed, and
-     * otherwise, for a mixed trail only, this shell's `TRAILBLAZE_DEVICE_BINDINGS`.
+     * otherwise, for a mixed trail or one declaring several configurations, this shell's
+     * `TRAILBLAZE_DEVICE_BINDINGS`.
      *
-     * The planner judges a mixed trail's `skip:` by whether this shell binds companions
-     * ([bindsCompanionDevices]), but a delegated run executes with the daemon's own startup
-     * environment. Without forwarding, a daemon started without bindings would run single-device
-     * the trail this shell planned as its configuration. Only a mixed trail needs it: a
-     * configuration-only trail binds its configuration either way and still resolves members from
-     * the daemon's env, and on a trail declaring no configuration a request binding is a hard error
-     * where the env var is ignored. An unparseable value forwards nothing, as the planner counted
-     * none; the daemon reports its own.
+     * The planner judges those trails' `skip:` by which devices this shell binds
+     * ([boundDeviceNames]), but a delegated run executes with the daemon's own startup environment.
+     * Without forwarding, a daemon started with other bindings or none would run a different cast
+     * than this shell planned: single-device for a mixed trail, another configuration (or a
+     * refusal) for a multi-configuration one. These are exactly the trails the runtime reads
+     * bindings for when selecting a configuration. A trail with one configuration and no
+     * single-device entries binds it either way and still resolves members from the daemon's env,
+     * and on a trail declaring no configuration a request binding is a hard error where the env
+     * var is ignored. An unparseable value forwards nothing, as the planner counted none; the
+     * daemon reports its own.
      */
     /**
      * Whether any of [runFiles] would carry this shell's `TRAILBLAZE_DEVICE_BINDINGS` on its delegated
@@ -3451,13 +3626,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       rawEnvironmentBindings: String?,
     ): Map<String, String> {
       if (explicitBindings.isNotEmpty()) return explicitBindings
-      val mixed = runCatching {
+      val selectsByBindings = runCatching {
         TrailRecordings.isUnifiedTrailContent(yamlContent) &&
           createTrailblazeYaml().decodeUnifiedTrailConfig(yamlContent).let {
-            it.declaresSingleDeviceEntries && it.multiDeviceConfigurationNames.isNotEmpty()
+            val configurations = it.multiDeviceConfigurationNames
+            configurations.size > 1 || (it.declaresSingleDeviceEntries && configurations.isNotEmpty())
           }
       }.getOrDefault(false)
-      if (!mixed) return emptyMap()
+      if (!selectsByBindings) return emptyMap()
       return runCatching { MultiDeviceConfigurationResolver.parseDeviceBindings(rawEnvironmentBindings) }
         .getOrDefault(emptyMap())
     }
@@ -3469,8 +3645,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * needs to inspect config metadata before the runner takes over: the runner itself parses
      * the same resolved YAML, so pre-pass decisions stay consistent with what actually executes.
      *
-     * [deviceConfiguration] and [bindsCompanionDevices] are the run's `--device-configuration` and
-     * whether it binds companions. Together they decide which multi-device configuration the run
+     * [deviceConfiguration], [bindsCompanionDevices] and [boundDeviceNames] are the run's
+     * `--device-configuration`, whether it binds companions, and which. Together they decide which multi-device configuration the run
      * binds (`UnifiedTrailConfig.implicitMultiDeviceConfigurationName`), and so whether a `skip:`
      * keyed by that configuration applies. Without them a mixed trail run with `--bind` would be
      * judged as the single-device run it isn't, and a trail its author disabled for the pair runs.
@@ -3485,6 +3661,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       deviceConfiguration: String? = null,
       bindsCompanionDevices: Boolean = false,
+      boundDeviceNames: Set<String> = emptySet(),
     ): TrailConfig? = try {
       val rawYaml = file.readText()
       val resolvedYaml = TrailYamlTemplateResolver.resolve(rawYaml, file)
@@ -3500,7 +3677,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           requestConfigurationName = deviceConfiguration,
           environmentConfigurationName = System.getenv(DEVICE_CONFIGURATION_ENV_VAR),
         )?.takeIf { unified.multiDeviceConfigurationNames.isNotEmpty() }
-          ?: unified.implicitMultiDeviceConfigurationName(bindsCompanionDevices)
+          ?: unified.implicitMultiDeviceConfigurationName(bindsCompanionDevices, boundDeviceNames)
       } else {
         null
       }
@@ -3580,10 +3757,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * Results are sorted by absolute path for stable run order and de-duplicated so passing
      * both a directory and a file under it (or two overlapping globs) doesn't run the same
      * trail twice.
+     *
+     * [readText] reads a file for scenario detection; tests pass a failing one to reach the
+     * unreadable-file branch, which a permission bit can't reach when tests run as root.
      */
     fun expandTrailFiles(
       files: List<File>,
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      readText: (File) -> String = File::readText,
     ): List<File> {
       val expanded = mutableListOf<File>()
       for (arg in files) {
@@ -3640,7 +3821,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // the legacy bucket — NL definitions, the unified `trail.yaml`, and classifier-variant
             // recordings of ONE trail — collapses to a single classifier-priority pick.
             val (namedScenarioFiles, legacyFiles) = byParent.getValue(dir)
-              .partition { isDistinctNamedScenario(it) }
+              .partition { isDistinctNamedScenario(it, readText) }
             // Each named scenario is a self-contained trail; run every one (sorted for stable
             // order). No classifier resolution or device-mismatch warning: a unified file lowers
             // its own per-classifier recording at run time, and its name is not classifier-derived.
@@ -3680,7 +3861,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * runner then surfaces the decode error against that file, rather than the expander silently
      * folding it into the legacy bucket. Unreadable files fall through to the legacy bucket.
      */
-    private fun isDistinctNamedScenario(file: File): Boolean {
+    private fun isDistinctNamedScenario(file: File, readText: (File) -> String): Boolean {
       // NL definitions are guarded by name as well as the bare `trail.yaml`: both are
       // single-trail representatives whatever their content, so neither may bypass the
       // legacy bucket's classifier resolution (an NL file that somehow carried a root
@@ -3688,7 +3869,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       // double-billing the trail).
       if (TrailRecordings.isUnifiedTrailFile(file.name)) return false
       if (TrailRecordings.isNlDefinitionFile(file.name)) return false
-      return runCatching { TrailRecordings.isUnifiedTrailContent(file.readText()) }
+      return runCatching { TrailRecordings.isUnifiedTrailContent(readText(file)) }
         .getOrDefault(false)
     }
 
@@ -3809,6 +3990,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       deviceConfiguration: String? = null,
       bindsCompanionDevices: Boolean = false,
+      boundDeviceNames: Set<String> = emptySet(),
     ): TrailExecutionPlan {
       val expanded = expandTrailFiles(files, deviceClassifiers)
       // [configClassifiers] resolves per-classifier `skip:`/`tags:`; it's the device classifiers,
@@ -3832,6 +4014,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           skipTagClassifiers,
           deviceConfiguration = deviceConfiguration,
           bindsCompanionDevices = bindsCompanionDevices,
+          boundDeviceNames = boundDeviceNames,
         )
         val tags = config?.tags.orEmpty()
 
@@ -3854,6 +4037,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             target = config.target?.takeIf { it.isNotBlank() },
             trailSource = config.source?.type?.name ?: SOURCE_TYPE_GENERATED,
             metadata = config.metadata,
+            context = config.context?.takeIf { it.isNotBlank() },
           )
         } else {
           TrailExecutionItem.Run(file)
@@ -3916,6 +4100,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       device_classifier = classifiers.joinToString("-") { it.classifier }.takeIf { it.isNotEmpty() },
       trail_source = item.trailSource,
       metadata = item.metadata,
+      context = item.context,
       recorded_at_epoch_ms = System.currentTimeMillis(),
     )
   }
@@ -3947,6 +4132,8 @@ internal sealed class TrailExecutionItem {
     val trailSource: String,
     /** `config.metadata`, carried so the skip row keeps the trail's durable TestRail case id. */
     val metadata: Map<String, TrailMetadataValue>? = null,
+    /** `config.context`, carried so a skipped row stays searchable by it. */
+    val context: String? = null,
   ) : TrailExecutionItem()
 }
 

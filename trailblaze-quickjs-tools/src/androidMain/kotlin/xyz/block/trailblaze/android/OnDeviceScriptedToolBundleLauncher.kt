@@ -66,6 +66,9 @@ object OnDeviceScriptedToolBundleLauncher {
     engineExtension: QuickJsEngineExtension?,
     assetManager: AssetManager = resolveDefaultAssetManager(),
   ): LaunchedQuickJsToolRuntime? {
+    // `ctx.surveys` in any tool launched here loads the surveys this APK packaged.
+    AndroidAssetSurveyBundles.installIfAbsent(assetManager)
+
     // Already-registered names are skipped on both routes: re-registering hard-fails
     // `addDynamicTools`'s collision guard, and target-declared tools win over toolset-delivered
     // ones on a name collision (the host-side precedence).
@@ -131,7 +134,7 @@ object OnDeviceScriptedToolBundleLauncher {
     // tool that bundle's `listTools()` advertises.
     if (plan.bundlePaths.isEmpty()) return null
 
-    return QuickJsToolBundleLauncher.launchAll(
+    val runtime = QuickJsToolBundleLauncher.launchAll(
       bundles = plan.bundlePaths.map { McpServerConfig(script = it) },
       deviceInfo = deviceInfo,
       sessionId = sessionId,
@@ -146,6 +149,14 @@ object OnDeviceScriptedToolBundleLauncher {
       declaredToolNames = plan.declaredToolNames,
       engineExtension = engineExtension,
     )
+    toolRepo.hideScriptedToolsFromLlm(
+      OnDeviceScriptedToolBundlePlan.targetExclusionsToHide(
+        target = target,
+        driverType = deviceInfo.trailblazeDriverType,
+        registeredNow = toolRepo.getRegisteredDynamicTools().keys - alreadyRegistered,
+      ),
+    )
+    return runtime
   }
 
   /**

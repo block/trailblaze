@@ -117,6 +117,62 @@ class ResolvedTargetReportEmitterTest {
   }
 
   @Test
+  fun `always_shown_tools is attributed to the trailmap that set it, inherited or declared`() {
+    val frameworkTrailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "trailblaze",
+        defaults = mapOf(
+          "web" to PlatformConfig(alwaysShownTools = listOf("web_scroll")),
+          "ios" to PlatformConfig(alwaysShownTools = listOf("framework_swipe")),
+        ),
+      ),
+      source = TrailmapSource.Classpath(resourceDir = "trails/config/trailmaps/trailblaze"),
+      target = null,
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val ownPlatforms = mapOf(
+      "web" to PlatformConfig(appIds = listOf("com.example.consumer")),
+      "ios" to PlatformConfig(appIds = listOf("com.example.consumer"), alwaysShownTools = listOf("app_swipe")),
+    )
+    val consumerTrailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "consumer",
+        target = TrailmapTargetConfig(displayName = "Consumer", platforms = ownPlatforms),
+        dependencies = listOf("trailblaze"),
+      ),
+      source = TrailmapSource.Filesystem(newDir("consumer")),
+      target = AppTargetYamlConfig(
+        id = "consumer",
+        displayName = "Consumer",
+        platforms = mapOf(
+          "web" to PlatformConfig(appIds = listOf("com.example.consumer"), alwaysShownTools = listOf("web_scroll")),
+          "ios" to ownPlatforms.getValue("ios"),
+        ),
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val outDir = newDir("out")
+    ResolvedTargetReportEmitter.emit(
+      resolvedTargets = listOf(consumerTrailmap.target!!),
+      resolvedTrailmaps = listOf(frameworkTrailmap, consumerTrailmap),
+      outputDir = outDir,
+    )
+    val traced = File(outDir, "consumer.report.md").readLines().filter { "always_shown_tools" in it }
+
+    assertTrue("expected web's always_shown_tools inherited from `trailblaze`, got:\n$traced") {
+      traced.any { "web_scroll" in it && "inherited from `trailblaze`" in it }
+    }
+    assertTrue("expected ios's always_shown_tools declared by the consumer, got:\n$traced") {
+      traced.any { "app_swipe" in it && "declared by `consumer/trailmap.yaml`" in it }
+    }
+  }
+
+  @Test
   fun `target overriding platforms_web_tool_sets attributes to own trailmap`() {
     val frameworkTrailmap = ResolvedTrailmap(
       manifest = TrailblazeTrailmapManifest(
@@ -599,7 +655,7 @@ class ResolvedTargetReportEmitterTest {
       "tap", "tapOnPoint", "swipe", "launchApp", "inputText", "hideKeyboard",
       "android_adbShell", "android_sendBroadcast", "mobile_listInstalledApps",
       "mobile_pasteClipboard", "mobile_setClipboard", "scrollUntilTextIsVisible",
-      "networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
+      "mobile_networkConnection", "networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
     )
     for (leaked in mustNotLeak) {
       assertFalse(
@@ -613,8 +669,6 @@ class ResolvedTargetReportEmitterTest {
           val t = line.trim()
           t == "- `$leaked`" ||
             t == "- [`$leaked`](weblike/tools/$leaked.md)" ||
-            t == "- `$leaked` (YAML-defined)" ||
-            t == "- [`$leaked`](weblike/tools/$leaked.md) (YAML-defined)" ||
             t == "- `$leaked` (individual `tools:` addition)" ||
             t == "- [`$leaked`](weblike/tools/$leaked.md) (individual `tools:` addition)"
         }
@@ -633,9 +687,7 @@ class ResolvedTargetReportEmitterTest {
         toolboxSection.lineSequence().any { line ->
           val t = line.trim()
           t == "- `$expected`" ||
-            t == "- [`$expected`](weblike/tools/$expected.md)" ||
-            t == "- `$expected` (YAML-defined)" ||
-            t == "- [`$expected`](weblike/tools/$expected.md) (YAML-defined)"
+            t == "- [`$expected`](weblike/tools/$expected.md)"
         }
       }
     }
@@ -788,58 +840,6 @@ class ResolvedTargetReportEmitterTest {
     // Resolved-platforms header must also mention `web`.
     assertTrue("expected resolved platform `web` listed in header, got:\n$report") {
       report.contains("Resolved platforms: `web`")
-    }
-  }
-
-  @Test
-  fun `YAML-defined tool added directly via tools list gets a linkified sidecar`() {
-    // Regression for the codex-bot finding on PR #3318: pre-fix, `collectToolDetails` only
-    // emitted a YAML sidecar when the tool name was also listed in some catalog toolset's
-    // `yamlToolNames`. A YAML-defined tool added directly via `platforms.<p>.tools:` (which
-    // the runtime resolver accepts via `ToolNameResolver.resolveYamlNameOrNull`) was left
-    // un-linkified in the matrix and never got a sidecar — the report would name the tool
-    // but offer no detail page, even though the YAML config is right there. `eraseText` is
-    // a real framework YAML-defined tool (see trails/config/tools/eraseText.tool.yaml)
-    // that ships in `core_interaction` only on mobile; if a target adds it to a web
-    // platform's `tools:` directly (rare but legal), the sidecar must still be emitted.
-    val platforms = mapOf(
-      "web" to PlatformConfig(
-        appIds = listOf("com.example.yaml-direct"),
-        tools = listOf("eraseText"),
-        drivers = listOf("playwright-native"),
-      ),
-    )
-    val trailmap = ResolvedTrailmap(
-      manifest = TrailblazeTrailmapManifest(
-        id = "yamldirect",
-        target = TrailmapTargetConfig(displayName = "YamlDirect", platforms = platforms),
-      ),
-      source = TrailmapSource.Filesystem(newDir("yamldirect")),
-      target = AppTargetYamlConfig(id = "yamldirect", displayName = "YamlDirect", platforms = platforms),
-      toolsets = emptyList(),
-      tools = emptyList(),
-      waypoints = emptyList(),
-    )
-
-    val outDir = newDir("out")
-    ResolvedTargetReportEmitter.emit(
-      resolvedTargets = listOf(trailmap.target!!),
-      resolvedTrailmaps = listOf(trailmap),
-      outputDir = outDir,
-    )
-    val report = File(outDir, "yamldirect.report.md").readText()
-
-    // The `tools:` addition row must be linkified — not the bare backtick form that signals
-    // "no metadata available."
-    assertTrue("expected linkified eraseText cell, got:\n$report") {
-      report.contains("[`eraseText`](yamldirect/tools/eraseText.md) (individual `tools:` addition)")
-    }
-    // And the sidecar file itself must exist with the YAML-defined source metadata.
-    val sidecar = File(outDir, "yamldirect/tools/eraseText.md")
-    assertTrue("expected sidecar for direct YAML addition at $sidecar") { sidecar.exists() }
-    val sidecarText = sidecar.readText()
-    assertTrue("sidecar should declare YAML-defined source, got:\n$sidecarText") {
-      sidecarText.contains("- Kind: YAML-defined") && sidecarText.contains("- Tool id: `eraseText`")
     }
   }
 
@@ -1397,7 +1397,7 @@ class ResolvedTargetReportEmitterTest {
   @Test
   fun `availability matrix renders bare backticks for tools without sidecar metadata`() {
     // Regression for the lead-dev review finding (LR#5): if a tool name is added via
-    // `platforms.<p>.tools:` but isn't in any toolset and has no class-backed / yaml-defined
+    // `platforms.<p>.tools:` but isn't in any toolset and has no class-backed or scripted
     // config (e.g. a future tool source the matrix surfaces but `collectToolDetails`
     // doesn't classify), the matrix should render the bare backtick form rather than a
     // broken link. Pin both shapes so a `toolCell()` regression that always emits links

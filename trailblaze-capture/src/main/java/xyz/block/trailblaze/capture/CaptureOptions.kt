@@ -3,9 +3,10 @@ package xyz.block.trailblaze.capture
 /**
  * Options for capture, controlled by CLI flags or desktop app settings.
  *
- * Video capture is off by default — it writes large files and its timing signatures drift on some
- * hosts. Opt in per run with `--capture-video` on the CLI (or the desktop app's "Capture video"
- * toggle).
+ * Video capture is off by default here — it writes large files, and an interactive session can run
+ * for hours. `trailblaze run` turns it on for every trail run (`--no-capture-video` to skip);
+ * elsewhere opt in with [ENV_CAPTURE_VIDEO], `trailblaze config capture-video`, or the Trail
+ * Runner "Capture video" toggle.
  */
 data class CaptureOptions(
   val captureVideo: Boolean = false,

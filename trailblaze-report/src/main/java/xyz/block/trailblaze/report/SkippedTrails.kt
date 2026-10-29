@@ -182,6 +182,8 @@ fun SkippedTrail.toSessionResult(): SessionResult = SessionResult(
   // consumer that resolves a case id prefers this map over parsing `test_key`, so a skipped row
   // without it joins to nothing while the same trail's runs join to their case.
   metadata = metadata,
+  // Searched by the index like a run's, so a context-only search still finds this trail's skips.
+  context = context,
   duration_ms = 0,
   // When the runner made the decision. Not a run time - nothing ran - but the report's ordering
   // field, and the row has to carry one: the viewer groups a trail's rows per device into attempts

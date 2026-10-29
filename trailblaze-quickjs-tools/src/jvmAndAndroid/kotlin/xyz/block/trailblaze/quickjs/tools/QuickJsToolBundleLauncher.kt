@@ -1,5 +1,13 @@
 package xyz.block.trailblaze.quickjs.tools
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import java.util.Collections
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
@@ -26,10 +34,13 @@ import xyz.block.trailblaze.util.Console
  *
  * @param descriptor the LLM-facing descriptor (`buildScriptedToolDescriptor(config)`).
  * @param meta the `_meta` registration gate (`QuickJsToolMeta` from the descriptor's `_meta`).
+ * @param declaredArgNames the only argument names a call may carry; others are dropped before the
+ *   tool runs or is recorded. Null keeps every key.
  */
 data class QuickJsToolAdvertisement(
   val descriptor: TrailblazeToolDescriptor,
   val meta: QuickJsToolMeta,
+  val declaredArgNames: Set<String>? = null,
 ) {
   companion object {
     /**
@@ -45,6 +56,7 @@ data class QuickJsToolAdvertisement(
       QuickJsToolAdvertisement(
         descriptor = LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config),
         meta = QuickJsToolMeta.fromSpec(buildJsonObject { config.meta?.let { put("_meta", it) } }),
+        declaredArgNames = LazyYamlScriptedToolRegistration.declaredArgNames(config),
       )
   }
 }
@@ -232,8 +244,12 @@ object QuickJsToolBundleLauncher {
     }
 
     try {
-      bundleable.forEachIndexed { index, entry ->
-        val source = bundleSourceResolver(entry)
+      // Each bundle gets its own engine on its own thread, so starting them is independent work;
+      // done one after another it was most of a session's setup for a target with dozens of
+      // bundles. They start [BUNDLE_START_PARALLELISM] at a time, and registration below still
+      // walks them in declaration order, so what registers and how collisions read is unchanged.
+      val startedBundles = startBundlesConcurrently(bundleable.size) { index ->
+        val source = bundleSourceResolver(bundleable[index])
         // Per-bundle progress log so a tester watching device-farm logs can see which
         // bundle is loading when session startup stalls. Without this, a slow
         // `QuickJsToolHost.connect(...)` is silent until the post-success REGISTERED
@@ -257,10 +273,16 @@ object QuickJsToolBundleLauncher {
         // Give the binding its own host so it can refuse a same-bundle compose (which would
         // deadlock the shared evalMutex) instead of hanging the session.
         binding.ownHost = host
-        started += host
-        startedFilenames += source.filename
+        try {
+          StartedBundle(source, binding, host, host.listTools())
+        } catch (t: Throwable) {
+          runCatching { host.shutdown() }
+          throw t
+        }
+      }
+      startedBundles.forEach { started += it.host; startedFilenames += it.source.filename }
 
-        val registered = host.listTools()
+      for ((source, binding, host, registered) in startedBundles) {
         for (spec in registered) {
           // Prefer the YAML-descriptor-derived advertisement (description / inputSchema / _meta)
           // when supplied — a handler-only typed-tool wrapper carries no `spec`, so the bundle's
@@ -275,8 +297,14 @@ object QuickJsToolBundleLauncher {
           // it by name — it just stays out of the tool array.
           val isDeclaredTool = declaredNames?.contains(ToolName(spec.name)) ?: true
           if (!isDeclaredTool) suppressedAsUndeclared += spec.name
-          if (!meta.shouldRegister(driver = deviceInfo.trailblazeDriverType, preferHostAgent = preferHostAgent)) {
-            // requiresHost / driver / platform mismatch — drop at registration so the LLM
+          if (
+            !meta.shouldRegister(
+              driver = deviceInfo.trailblazeDriverType,
+              preferHostAgent = preferHostAgent,
+              classifiers = deviceInfo.classifiers,
+            )
+          ) {
+            // requiresHost / driver / platform / classifier mismatch — drop at registration so the LLM
             // never sees a tool it can't actually run in this session. The legacy
             // MCP-shaped runtime hard-codes preferHostAgent=false because
             // `:trailblaze-scripting-bundle` is only consumed on-device today; this
@@ -294,6 +322,7 @@ object QuickJsToolBundleLauncher {
             surfaceToLlm = meta.surfaceToLlm && isDeclaredTool,
             isRecordable = meta.isRecordable,
             sensitiveArgs = meta.sensitiveArgs,
+            declaredArgNames = override?.declaredArgNames,
           )
         }
       }
@@ -338,11 +367,64 @@ object QuickJsToolBundleLauncher {
         bundleFilenames = startedFilenames.toList(),
       )
     } catch (t: Throwable) {
-      for (host in started) {
-        runCatching { host.shutdown() }
+      // NonCancellable: on a cancelled launch, shutdown's own suspension would otherwise throw at
+      // once and leave every engine open.
+      withContext(NonCancellable) {
+        for (host in started) {
+          runCatching { host.shutdown() }
+        }
       }
       throw t
     }
+  }
+
+  /** How many bundles start at once. Each start is mostly one engine evaluating its bundle. */
+  internal const val BUNDLE_START_PARALLELISM: Int = 4
+
+  /** One bundle whose engine is up, with the tools it registered. */
+  private data class StartedBundle(
+    val source: BundleSource,
+    val binding: SessionScopedHostBinding,
+    val host: QuickJsToolHost,
+    val registered: List<RegisteredToolSpec>,
+  )
+
+  /**
+   * Runs [start] for every index, [BUNDLE_START_PARALLELISM] at a time, and returns the results in
+   * index order.
+   *
+   * Every start runs to its end even when another fails. Cancelling a start whose engine had just
+   * come up would drop the host it returned and leave that engine open. Once all are done, a
+   * failure shuts down every bundle that did start, and the first failure in declaration order is
+   * thrown — the same one a one-at-a-time launch would have stopped at.
+   *
+   * A launch cancelled while starts are in flight never sees their results, so each host is also
+   * recorded the moment its start returns, and those are shut down before the cancellation
+   * propagates.
+   */
+  private suspend fun startBundlesConcurrently(
+    count: Int,
+    start: suspend (index: Int) -> StartedBundle,
+  ): List<StartedBundle> {
+    val permits = Semaphore(BUNDLE_START_PARALLELISM)
+    val startedHosts = Collections.synchronizedList(mutableListOf<QuickJsToolHost>())
+    val outcomes = try {
+      supervisorScope {
+        (0 until count).map { index ->
+          async {
+            permits.withPermit { runCatching { start(index) }.onSuccess { startedHosts += it.host } }
+          }
+        }.awaitAll()
+      }
+    } catch (t: Throwable) {
+      withContext(NonCancellable) {
+        startedHosts.toList().forEach { runCatching { it.shutdown() } }
+      }
+      throw t
+    }
+    val firstFailure = outcomes.firstNotNullOfOrNull { it.exceptionOrNull() } ?: return outcomes.map { it.getOrThrow() }
+    outcomes.forEach { outcome -> outcome.getOrNull()?.let { runCatching { it.host.shutdown() } } }
+    throw firstFailure
   }
 
   /**

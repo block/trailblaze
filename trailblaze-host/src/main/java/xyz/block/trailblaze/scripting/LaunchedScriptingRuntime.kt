@@ -41,6 +41,8 @@ class LaunchedScriptingRuntime internal constructor(
    * directory and outlive this handle.
    */
   private val tempWorkDir: File? = null,
+  /** Releases what the launch registered for this session outside the repo (its survey source). */
+  private val onShutdown: () -> Unit = {},
 ) {
 
   /**
@@ -85,6 +87,9 @@ class LaunchedScriptingRuntime internal constructor(
       if (!dir.deleteRecursively()) {
         Console.log("[LaunchedScriptingRuntime] SHUTDOWN_FAIL kind=tempdir path=${dir.absolutePath}")
       }
+    }
+    runCatching(onShutdown).onFailure { e ->
+      Console.log("[LaunchedScriptingRuntime] SHUTDOWN_FAIL kind=onShutdown reason=${e::class.simpleName}: ${e.message}")
     }
     subprocessFailure?.let { throw it }
   }

@@ -18,10 +18,12 @@ import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
+import maestro.TapRepeat
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.WaitForAnimationToEndCommand
 import org.junit.Test
@@ -47,6 +49,18 @@ class MaestroCommandToIosDriverActionConverterTest {
     val action = assertIs<IosDriverAction.Tap>(out.single())
     assertEquals(120, action.x)
     assertEquals(240, action.y)
+  }
+
+  @Test
+  fun `TapOnPointV2 with repeat 2 maps to a double Tap`() {
+    val out = convert(TapOnPointV2Command(point = "100,65", repeat = TapRepeat(2, 0)))
+    assertEquals(IosDriverAction.Tap(100, 65, repeat = 2), out.single())
+  }
+
+  @Test
+  fun `TapOnPointV2 with percent coords and repeat 2 maps to a double TapRelative`() {
+    val out = convert(TapOnPointV2Command(point = "50%,26%", repeat = TapRepeat(2, 0)))
+    assertEquals(IosDriverAction.TapRelative(50.0, 26.0, repeat = 2), out.single())
   }
 
   @Test
@@ -291,6 +305,17 @@ class MaestroCommandToIosDriverActionConverterTest {
     val cmd = KillAppCommand(appId = "com.example.app")
     val action = assertIs<IosDriverAction.StopApp>(convert(cmd).single())
     assertEquals("com.example.app", action.bundleId)
+  }
+
+  @Test
+  fun `SetPermissionsCommand maps to SetPermissions with its map intact`() {
+    // ios_setPermissions hands the notifications answer to the driver as this command; failing
+    // the batch here would leave the AXe driver unable to answer the alert.
+    val permissions = mapOf("notifications" to "allow", "microphone" to "deny")
+    val cmd = SetPermissionsCommand(appId = "com.example.app", permissions = permissions)
+    val action = assertIs<IosDriverAction.SetPermissions>(convert(cmd).single())
+    assertEquals("com.example.app", action.bundleId)
+    assertEquals(permissions, action.permissions)
   }
 
   @Test

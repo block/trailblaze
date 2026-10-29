@@ -1,26 +1,26 @@
 package xyz.block.trailblaze.host
 
+import xyz.block.trailblaze.bundle.SurveyDts
+import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
+import xyz.block.trailblaze.surveys.SurveyBundles
 import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.ToolParameterType
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.bundle.HostFunctionDts
 import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.codegen.SerialDescriptorTsCodegen
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
@@ -28,6 +28,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.toolcalls.HandCuratedRecordableTools
 import xyz.block.trailblaze.toolcalls.SelectorParamTs
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -123,6 +124,7 @@ object PerTrailmapClientDtsEmitter {
      * one named argument and makes "no workspace" a decision rather than an omission.
      */
     workspaceRoot: Path?,
+    hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
   ): List<Path> {
     if (resolvedTrailmaps.isEmpty()) return emptyList()
     val trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id }
@@ -185,6 +187,8 @@ object PerTrailmapClientDtsEmitter {
         typedToolOverrides = typedOverrides,
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
         extraParamsByToolName = kotlinTools.selectorParamsByName,
+        hostFunctions = hostFunctionDtsFor(dependencyClosureIds(trailmap, trailmapsById), hostFunctions),
+        surveys = midTrailSurveys(trailmapDir),
       )
       // Emit the machine-readable arg-type sidecar next to the .d.ts so the trail-recording
       // validator can coerce recorded args to their declared types (see
@@ -256,7 +260,7 @@ object PerTrailmapClientDtsEmitter {
    *
    * **Class-backed tools are fully typed** — [resolveKotlinToolDescriptorsForTrailmap] resolves
    * them through [TrailblazeToolSetCatalog] via classpath reflection. These are the bulk of what
-   * recorded trails actually call (`tapOnElementWithText`, …). **Scripted (`.ts`) tools carry the
+   * recorded trails actually call (`tapOnElementBySelector`, …). **Scripted (`.ts`) tools carry the
    * baked target's schema** but are NOT re-run through the analyzer here (no on-disk `.ts` in a
    * JAR), so any residual gap between the baked schema and a precise typed shape reads as a
    * finding to curate rather than a silent gap — a surfaced finding beats a silent hole.
@@ -386,6 +390,70 @@ object PerTrailmapClientDtsEmitter {
   }
 
   /**
+   * The trailmap's own surveys that can run mid-trail, for `ctx.surveys.<name>`. A survey that sets
+   * `requiresFinishedSession` runs only after the session, so it is left out.
+   */
+  internal fun midTrailSurveys(trailmapDir: File): List<SurveyDts> =
+    WorkspaceSurveyBundleSource.surveyFiles(trailmapDir).flatMap { file ->
+      val relative = file.relativeTo(trailmapDir).invariantSeparatorsPath
+      SurveyBundles.exportedSurveys(file.readText())
+        .filterNot { it.requiresFinishedSession }
+        .map { SurveyDts(name = it.name, feature = it.feature, file = relative) }
+    }
+
+  /** [trailmap]'s id plus every id reachable through `dependencies:`, resolved or not. */
+  private fun dependencyClosureIds(
+    trailmap: ResolvedTrailmap,
+    trailmapsById: Map<String, ResolvedTrailmap>,
+  ): Set<String> {
+    val closure = linkedSetOf(trailmap.manifest.id)
+    val frontier = ArrayDeque(trailmap.manifest.dependencies)
+    while (frontier.isNotEmpty()) {
+      val depId = frontier.removeFirst()
+      if (!closure.add(depId)) continue
+      trailmapsById[depId]?.manifest?.dependencies?.let(frontier::addAll)
+    }
+    return closure
+  }
+
+  /**
+   * The `ctx.host.<name>` bindings for scripts in a trailmap whose dependency closure is
+   * [closureIds]: every host function a trailmap in the closure registers, typed from its Kotlin
+   * args and result classes. Non-fatal — a failure drops the host bindings, never the tool surface.
+   */
+  private fun hostFunctionDtsFor(
+    closureIds: Set<String>,
+    registry: TrailblazeHostFunctionRegistry,
+  ): HostFunctionDts = try {
+    val functions = registry.all.values.filter { entry -> entry.trailmapIds.any { it in closureIds } }
+    if (functions.isEmpty()) {
+      HostFunctionDts.NONE
+    } else {
+      val roots = functions.flatMap { listOf(it.argsSerializer.descriptor, it.resultSerializer.descriptor) }
+      val generated = SerialDescriptorTsCodegen.generateWithRootTypes(roots, header = "")
+      HostFunctionDts(
+        entries = functions.mapIndexed { index, function ->
+          HostFunctionDts.Entry(
+            name = function.name,
+            description = function.annotation.description,
+            argsTsType = generated.rootTypes[index * 2],
+            resultTsType = generated.rootTypes[index * 2 + 1],
+          )
+        },
+        typeDeclarations = generated.source,
+        declaredTypeNames = DECLARED_TS_TYPE.findAll(generated.source).map { it.groupValues[1] }.toSet(),
+      )
+    }
+  } catch (e: Exception) {
+    Console.error(
+      "[PerTrailmapClientDtsEmitter] skipped ctx.host bindings: ${e::class.simpleName}: ${e.message}",
+    )
+    HostFunctionDts.NONE
+  }
+
+  private val DECLARED_TS_TYPE = Regex("""^export (?:interface|type) ([A-Za-z_$][A-Za-z0-9_$]*)""", RegexOption.MULTILINE)
+
+  /**
    * Build the typed-tool override map for [trailmap]'s emitted `trailblaze-client.d.ts`. The map is the
    * union of:
    *
@@ -494,10 +562,10 @@ object PerTrailmapClientDtsEmitter {
     )
 
   /**
-   * Resolve the class-backed + YAML-defined tool surface for [trailmap], DERIVED FROM `isRecordable`
-   * so the trail-recording validator can type-check every recordable tool. Three sources, merged
+   * Resolve the class-backed tool surface for [trailmap], DERIVED FROM `isRecordable` so the
+   * trail-recording validator can type-check every recordable tool. Two sources, merged
    * first-write-wins (a `tool_sets:` entry wins over the same tool in the recordable union — richer,
-   * authoritative — and a name-colliding YAML tool loses to either):
+   * authoritative):
    *
    *  1. **The trailmap's OWN `tool_sets:` tools** (via [TrailblazeToolSetCatalog.resolve]) — the
    *     authoring surface; every class-backed tool the trailmap declares, recordable or not, so a
@@ -509,8 +577,6 @@ object PerTrailmapClientDtsEmitter {
    *     each to `built-in-tools.ts` inevitably drifts (it missed `assertNotVisibleBySelector`).
    *     Sourcing from the recordable registry — the same set replay decodes against — means the
    *     surface can't silently miss a recordable tool.
-   *  3. **YAML-defined (`tools:` mode) recordable tools** ([TrailblazeSerializationInitializer.buildYamlDefinedTools],
-   *     e.g. `eraseText` / `pressBack`) — no Kotlin class, so params come straight from the config.
    *
    * **Selector args re-injected.** [selectorParamsForTs] recovers the `TrailblazeNodeSelector` /
    * legacy `selector` params that [toScriptedToolDescriptor] strips (they overflow Koog's lowering),
@@ -530,7 +596,7 @@ object PerTrailmapClientDtsEmitter {
     val metadataByName = mutableMapOf<String, ToolFrameworkMetadata>()
     val selectorParamsByName = mutableMapOf<String, List<WorkspaceClientDtsGenerator.ToolParam>>()
 
-    // First-write-wins across the three sources: once a name has a metadata entry it's skipped.
+    // First-write-wins across the two sources: once a name has a metadata entry it's skipped.
     fun addClassTool(kClass: KClass<out TrailblazeTool>) {
       val descriptor = kClass.toScriptedToolDescriptor() ?: return
       if (descriptor.name in HandCuratedRecordableTools.NAMES) return
@@ -571,19 +637,6 @@ object PerTrailmapClientDtsEmitter {
       .filter { it.trailblazeToolClassAnnotation().isRecordable }
       .forEach(::addClassTool)
 
-    // 3. YAML-defined recordable tools (`tools:` mode, e.g. eraseText / pressBack).
-    TrailblazeSerializationInitializer.buildYamlDefinedTools().forEach { (toolName, config) ->
-      val name = toolName.toolName
-      if (config.isRecordable == false) return@forEach
-      if (name in HandCuratedRecordableTools.NAMES || metadataByName.containsKey(name)) return@forEach
-      descriptors += config.toRecordableToolDescriptor()
-      metadataByName[name] = ToolFrameworkMetadata(
-        surfaceToLlm = config.surfaceToLlm ?: true,
-        isRecordable = true,
-        requiresHost = config.requiresHost ?: false,
-      )
-    }
-
     return KotlinToolResolution(
       descriptors = descriptors,
       frameworkMetadataByName = metadataByName,
@@ -598,39 +651,6 @@ object PerTrailmapClientDtsEmitter {
       description = description,
       optional = optional,
     )
-
-  /**
-   * Build a koog [ToolDescriptor] for a YAML-defined (`tools:` mode) recordable tool from its
-   * declared [TrailblazeToolParameterConfig]s. The validator only needs the arg shape (name / type /
-   * required), so the composition body (`tools:`) is irrelevant here.
-   */
-  private fun ToolYamlConfig.toRecordableToolDescriptor(): ToolDescriptor {
-    fun TrailblazeToolParameterConfig.toParamDescriptor() = ToolParameterDescriptor(
-      name = name,
-      description = description?.trim().orEmpty(),
-      type = yamlParamTypeToToolParameterType(type),
-    )
-    return ToolDescriptor(
-      name = id,
-      description = description?.trim().orEmpty(),
-      requiredParameters = parameters.filter { it.required }.map { it.toParamDescriptor() },
-      optionalParameters = parameters.filterNot { it.required }.map { it.toParamDescriptor() },
-    )
-  }
-
-  /**
-   * Map a YAML parameter `type:` string to a koog [ToolParameterType] for descriptor building.
-   * Covers the scalar types YAML-defined recordable tools use today; anything else degrades to
-   * `String` (the validator still checks the arg's presence + name, just not its exact scalar type).
-   */
-  private fun yamlParamTypeToToolParameterType(type: String): ToolParameterType =
-    when (type.trim().lowercase()) {
-      "string" -> ToolParameterType.String
-      "integer", "int", "long" -> ToolParameterType.Integer
-      "number", "float", "double" -> ToolParameterType.Float
-      "boolean", "bool" -> ToolParameterType.Boolean
-      else -> ToolParameterType.String
-    }
 
   /**
    * Bundles the outputs of the tool-resolution pass — the koog [ToolDescriptor] list (args/result
@@ -683,17 +703,6 @@ object PerTrailmapClientDtsEmitter {
    * surfaces tools authored under its `target.tools:` (scripted `.ts` + `.yaml` pairs).
    * Library trailmaps (no `target:` block) get [ResolvedTrailmap.target] = null and therefore
    * cannot export scripted tools through this path today — they have nowhere to put them.
-   * Composed `.tool.yaml` exports from a library trailmap's own `tools/` directory are
-   * separately tracked and surface to consumers via the runtime registry, but they do NOT
-   * land in the typed surface yet (they'd require a `ToolYamlConfig` → `ToolEntry` bridge
-   * that handles composed-tool input schemas, deferred to Phase C/E along with the
-   * `target.tools:` paths → names flip).
-   *
-   * Until then, a library trailmap's `exports:` list is effectively *advisory* for the typed
-   * surface — it filters the runtime registry's view of "what consumers can see," but no
-   * typed entries flow through to consumers' `trailblaze-client.d.ts`. Authoring teams should keep
-   * library exports class-backed (via `tool_sets:` consumed by target trailmaps) until the
-   * later phases land.
    */
   private fun collectTrailmapTypedScriptedTools(
     trailmap: ResolvedTrailmap,
@@ -803,7 +812,7 @@ object PerTrailmapClientDtsEmitter {
    * and a web-only trailmap with any toolset would gain mobile-only names its Playwright session
    * never registers (accepting recordings replay would reject).
    *
-   * Names resolve to configs via [ScriptedToolNameDiscoverer] → [toInlineScriptToolConfigs], the
+   * Names resolve to configs via [ScriptedToolNameDiscoverer.DiscoveredDescriptor.toolConfigs], the
    * same descriptor bridge the launchers dispatch through. A name with no discoverable descriptor
    * is skipped with one warning per emit (see [warnedMissingNames]); the runtime-mode filter is
    * deliberately NOT applied — subprocess-runtime tools are still recordable on the host, so the
@@ -837,7 +846,7 @@ object PerTrailmapClientDtsEmitter {
         }
         return@mapNotNull null
       }
-      val config = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name.toolName }
+      val config = discovered.toolConfigs().firstOrNull { it.name == name.toolName }
       if (config == null && warnedMissingNames.add(name)) {
         Console.error(
           "[PerTrailmapClientDtsEmitter] descriptor '${discovered.relPath}' produced no tool " +

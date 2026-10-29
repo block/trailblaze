@@ -1,9 +1,18 @@
 package xyz.block.trailblaze.toolcalls
 
-import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import xyz.block.trailblaze.yaml.TrailArgTokens
+import xyz.block.trailblaze.maestro.withAuthoredMaestroLaunchArgumentsRedacted
+import xyz.block.trailblaze.maestro.maestroLaunchArgumentSecrets
+import xyz.block.trailblaze.maestro.maestroAuthoredLaunchLiterals
+import xyz.block.trailblaze.maestro.withKnownMaestroLaunchValuesRedacted
+import xyz.block.trailblaze.maestro.withMaestroLaunchArgumentsRedacted
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
@@ -11,19 +20,12 @@ import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 
 object TrailblazeTools {
-  const val REQUIRED_TEXT_DESCRIPTION = """
-The text to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
-      """
+  const val REQUIRED_TEXT_DESCRIPTION =
+    "Text to match; may be a regex. If several elements match, set the other fields to disambiguate."
 
-  const val REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION = """
-The accessibilityText to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
-      """
+  const val REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION =
+    "Accessibility text to match; may be a regex. If several elements match, set the other " +
+      "fields to disambiguate."
 
 }
 
@@ -48,11 +50,9 @@ fun TrailblazeTool.getToolNameFromAnnotation(): String = when {
  * The name this tool instance answers to — what a reader should see in a log, a trace span or a
  * failure report.
  *
- * An instance that names itself wins over its class annotation. Every `tools:`-authored tool is a
- * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool], so its annotation is the shared reserved
- * `_yaml_defined` for all of them — going by the annotation alone collapses every YAML-defined tool
- * into one indistinguishable name. Same rule the session-log payload applies in
- * `toOtherTrailblazeToolPayload`.
+ * An instance that names itself wins over its class annotation: one implementation class can
+ * back many named tools, and going by the annotation alone would collapse them into one name.
+ * Same rule the session-log payload applies in `toOtherTrailblazeToolPayload`.
  */
 fun TrailblazeTool.resolveToolName(): String =
   (this as? InstanceNamedTrailblazeTool)?.instanceToolName?.takeIf { it.isNotBlank() }
@@ -61,8 +61,7 @@ fun TrailblazeTool.resolveToolName(): String =
 /**
  * Resolves the recordability bit for a tool instance.
  *
- * Per-instance [TrailblazeTool.toolMetadata] (when present) wins — that's the path
- * `YamlDefinedTrailblazeTool` uses to surface its per-config flag. Otherwise, the class-level
+ * Per-instance [TrailblazeTool.toolMetadata] (when present) wins. Otherwise, the class-level
  * [TrailblazeToolClass] annotation is authoritative. Defaults to `true` if neither resolves
  * (to match the annotation default).
  *
@@ -86,9 +85,8 @@ fun TrailblazeTool.getIsRecordableFromAnnotation(): Boolean {
  * Resolves the host-required bit for a tool instance.
  *
  * Instance-level analogue of [requiresHost][xyz.block.trailblaze.toolcalls.requiresHost] (the
- * KClass extension). Per-instance [TrailblazeTool.toolMetadata] (when present) wins —
- * `YamlDefinedTrailblazeTool` uses that path to expose its per-config flag, since the shared
- * implementation class annotation can't carry per-instance data. For everything else the
+ * KClass extension). Per-instance [TrailblazeTool.toolMetadata] (when present) wins, since a
+ * shared implementation class annotation can't carry per-instance data. For everything else the
  * class-level annotation is authoritative; defaults to `false`.
  */
 fun TrailblazeTool.requiresHostInstance(): Boolean {
@@ -111,10 +109,8 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  * Logs persist this shape so that a viewer or downstream parser can identify the tool by name
  * without needing the implementing class on the classpath.
  *
- * The YAML-defined-tool branch (`InstanceNamedTrailblazeTool` with a registered
- * `YamlDefinedToolSerializer`) is handled here because it requires the JVM-side
- * `TrailblazeSerializationInitializer` lookup — everything else delegates to the shared
- * common-main canonical encoder [toOtherTrailblazeToolPayload], which is also what
+ * Everything except an [OtherTrailblazeTool] or [RawArgumentTrailblazeTool] delegates to the
+ * shared common-main canonical encoder [toOtherTrailblazeToolPayload], which is also what
  * [TrailblazeToolJsonSerializer] uses for `@Contextual TrailblazeTool` JSON encoding so
  * both paths produce identical wire formats.
  *
@@ -129,56 +125,94 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  */
 fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted()
   .let { if (this is SensitiveArgsTrailblazeTool) it.withSensitiveArgsRedacted(sensitiveArgNames) else it }
-  .let { if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues) else it }
+  .let {
+    if (this is MaestroTrailblazeTool) it.copy(raw = it.raw.withMaestroLaunchArgumentsRedacted()
+      .withKnownMaestroLaunchValuesRedacted(sensitiveValues, preserveReferences = false))
+    else if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues)
+    else it
+  }
+
+/** Preserve only authored references that demonstrably changed in the executed payload. */
+internal fun TrailblazeTool.toAuthoredLogPayload(executed: TrailblazeTool): OtherTrailblazeTool {
+  val authored = toLogPayloadUnredacted()
+  val resolved = executed.toLogPayloadUnredacted()
+  val maskedNames = (executed as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet()
+  val rawDeclaredValues = if (executed is SensitiveValuesTrailblazeTool) {
+    (authored.raw["secrets"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }
+      ?.filterNot(::isMemoryReference) ?: emptyList()
+  } else emptyList()
+  val maskedValues = rawDeclaredValues +
+    ((this as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList()) +
+    ((executed as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList())
+  return authored.withSensitiveArgsRedacted(maskedNames).withSensitiveValuesRedacted(maskedValues, resolved)
+}
+
+/**
+ * Whether [value] is exactly one memory reference (`{{token}}`, `{{args.path}}`): the name of a
+ * value, not a value, so a tool declaring its strings secret need not mask it.
+ */
+fun isMemoryReference(value: String): Boolean =
+  TrailArgTokens.TOKEN_REGEX.matchEntire(value)?.let { match ->
+    TrailArgTokens.tokenBody(match)?.let { body ->
+      if (TrailArgTokens.isArgsToken(body)) TrailArgTokens.isValidDottedPath(body)
+      else MEMORY_PATH.matches(body)
+    }
+  } == true
+
+private val MEMORY_PATH = Regex("""[A-Za-z_][A-Za-z0-9_.-]*""")
+
+/** The authored form keeps only references that actually changed during memory resolution. */
+internal fun TrailblazeTool.toAuthoredMaestroLogPayload(executed: MaestroTrailblazeTool): OtherTrailblazeTool {
+  val authored = toLogPayloadUnredacted()
+  val resolved = executed.toLogPayloadUnredacted()
+  return authored.copy(raw = authored.raw.withAuthoredMaestroLaunchArgumentsRedacted(resolved.raw)
+    .withKnownMaestroLaunchValuesRedacted(
+      maestroAuthoredLaunchLiterals(authored.raw, resolved.raw), preserveReferences = true, executed = resolved.raw,
+    ))
+}
+
+/**
+ * The text of each arg a [SensitiveArgsTrailblazeTool] declares secret, for masking that value
+ * where it turns up outside the payload (a tool can copy an arg into memory or a message). Every
+ * string or number inside an object or list arg counts, unless it is shorter than
+ * [MIN_NESTED_SECRET_CHARS]: masking a card's `expMonth: 1` would hide every "1" in the text.
+ * Booleans and nulls can't hold a secret. [resolve] adds each value as a scripted tool would resolve
+ * it (a token to what memory holds); the length rule applies to what it resolves to.
+ */
+internal fun TrailblazeTool.sensitiveArgValues(resolve: (String) -> String? = { null }): List<String> {
+  val names = (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames.orEmpty()
+  if (names.isEmpty()) return emptyList()
+  val args = toLogPayloadUnredacted().raw
+  return buildList {
+    fun addTexts(value: JsonElement, nested: Boolean) {
+      when (value) {
+        is JsonObject -> value.values.forEach { addTexts(it, nested = true) }
+        is JsonArray -> value.forEach { addTexts(it, nested = true) }
+        is JsonPrimitive ->
+          if (value != JsonNull && (value.isString || value.booleanOrNull == null)) {
+            listOfNotNull(value.content, resolve(value.content))
+              .filter { it.isNotBlank() && (!nested || it.length >= MIN_NESTED_SECRET_CHARS) }
+              .forEach(::add)
+          }
+      }
+    }
+    names.forEach { name -> args[name]?.let { addTexts(it, nested = false) } }
+  }
+}
+
+/** Shortest value inside an object or list secret arg that [sensitiveArgValues] masks elsewhere. */
+private const val MIN_NESTED_SECRET_CHARS = 3
 
 private fun TrailblazeTool.toLogPayloadUnredacted(): OtherTrailblazeTool {
   if (this is OtherTrailblazeTool) return this
   if (this is RawArgumentTrailblazeTool) {
     return OtherTrailblazeTool(instanceToolName, rawToolArguments)
   }
-  if (this is InstanceNamedTrailblazeTool) {
-    val yamlSerializer =
-      TrailblazeSerializationInitializer.buildYamlDefinedToolSerializers()[ToolName(instanceToolName)]
-    if (yamlSerializer != null) {
-      val encoded = try {
-        @Suppress("UNCHECKED_CAST")
-        val rawJson = TrailblazeJsonInstance.encodeToString(
-          yamlSerializer as KSerializer<TrailblazeTool>,
-          this,
-        )
-        TrailblazeJsonInstance.decodeFromString<JsonObject>(rawJson)
-      } catch (e: kotlin.coroutines.cancellation.CancellationException) {
-        // Re-throw cancellation so the catch-broad below can't swallow it.
-        throw e
-      } catch (e: Exception) {
-        // YAML-defined tool whose serializer failed (param-shape drift, registry mismatch,
-        // reflection error, or other). Catch broadly — the persistence path can never
-        // hard-fail on a tool that simply can't be encoded — but log once per tool name so
-        // the failure is observable without flooding stderr in a high-volume eval.
-        if (yamlEncodeFailureNamesLogged.add(instanceToolName)) {
-          Console.error(
-            "[toLogPayload] YAML-defined tool '$instanceToolName' serializer failed " +
-              "(${e::class.simpleName}: ${e.message}). Persisting with empty raw payload. " +
-              "Subsequent failures for this tool name will be suppressed.",
-          )
-        }
-        JsonObject(emptyMap())
-      }
-      return OtherTrailblazeTool(instanceToolName, encoded)
-    }
-  }
-  // Class-backed (`@TrailblazeToolClass`), or anything else without a YAML serializer —
-  // delegate to the shared canonical encoder. It handles the class.serializer() lookup,
-  // the @TrailblazeToolClass name fallback, and the diagnostic logging on failure.
+  // Class-backed (`@TrailblazeToolClass`) — delegate to the shared canonical encoder. It handles
+  // the class.serializer() lookup, the @TrailblazeToolClass name fallback, and the diagnostic
+  // logging on failure.
   return toOtherTrailblazeToolPayload()
 }
-
-/**
- * Tracks YAML-defined tool names whose encode has already produced a failure log so each
- * offending name logs at most once per process. Same throttling rationale as
- * `encodeFailureKeysLogged` in `TrailblazeToolPayload.kt`.
- */
-private val yamlEncodeFailureNamesLogged: MutableSet<String> = mutableSetOf()
 
 /**
  * Convenience over [toLogPayload] for collections — maps every element through the wrapper.
@@ -192,12 +226,11 @@ fun List<TrailblazeTool>.toLogPayloads(): List<OtherTrailblazeTool> = map { it.t
  * Resolves the verification bit for a tool instance.
  *
  * Verification tools are read-only assertions whose successful execution is itself the
- * verify verdict (e.g. `assertVisible`, `web_verifyTextVisible`). Used by
+ * verify verdict (e.g. `assertVisible`, `web_verifyElementVisible`). Used by
  * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute — non-verification
  * tools could side-effect the device and their success is unrelated to the assertion.
  *
- * Per-instance [TrailblazeTool.toolMetadata] (when present) wins — same path
- * `YamlDefinedTrailblazeTool` uses for the other flags. Otherwise the class-level
+ * Per-instance [TrailblazeTool.toolMetadata] (when present) wins. Otherwise the class-level
  * [TrailblazeToolClass] annotation is authoritative; defaults to `false`.
  *
  * Class-only lookups (when only a name is in hand) should use

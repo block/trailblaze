@@ -134,6 +134,7 @@ class TrailblazeSessionManager(
    * @param trailblazeDeviceInfo Device info including classifiers
    * @param trailblazeDeviceId Optional device ID
    * @param rawYaml Optional raw YAML content
+   * @param trailSourceUrl Immutable GitHub permalink for the source trail YAML
    */
   fun emitSessionStartLog(
     session: TrailblazeSession,
@@ -145,6 +146,7 @@ class TrailblazeSessionManager(
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
     trailblazeDeviceId: TrailblazeDeviceId? = null,
     rawYaml: String? = null,
+    trailSourceUrl: String? = null,
   ) {
     // Fall back to session metadata when explicit params are blank (e.g. when the
     // caller doesn't have test context but TrailblazeLoggingRule stored it on the session).
@@ -160,6 +162,7 @@ class TrailblazeSessionManager(
       trailblazeDeviceInfo = trailblazeDeviceInfo,
       trailblazeDeviceId = trailblazeDeviceId,
       rawYaml = rawYaml,
+      trailSourceUrl = trailSourceUrl,
     )
 
     val startLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -252,6 +255,7 @@ class TrailblazeSessionManager(
         durationMs = session.calculateDuration(),
         maxCalls = exception.maxCalls,
         objectivePrompt = exception.objectivePrompt,
+        message = exception.message,
       )
     }
 
@@ -307,10 +311,9 @@ class TrailblazeSessionManager(
     private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
     /**
-     * Random number generator for unique session ID suffixes.
-     * Seeded with 0 for deterministic behavior in tests.
+     * Do not seed this generator: separate test processes must not replay the same random sequence.
      */
-    private val random = Random(0)
+    private val random = Random.Default
 
     /**
      * Generates a session ID with timestamp and random suffix.

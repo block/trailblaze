@@ -116,7 +116,7 @@ class DeviceStreamScreenshotSource private constructor(
     /**
      * Android: attach to the same per-device screenrecord tee the `/devices` viewer uses
      * (same size/bitrate → one shared `screenrecord`). Android trees are stamped on the
-     * *device* clock, so [start] measures `deviceEpoch - hostEpoch` once via `adb shell date`.
+     * *device* clock, so [start] measures `deviceEpoch - hostEpoch` once via [DeviceClock.measure].
      * screenrecord is damage-driven — a static screen emits no frames — so the drain loop's
      * liveness pings keep the gate from misreading quiet as a dead stream.
      */
@@ -127,7 +127,16 @@ class DeviceStreamScreenshotSource private constructor(
     ): DeviceStreamScreenshotSource = DeviceStreamScreenshotSource(
       streamDescription = "Android screenrecord stream for ${deviceId.instanceId}",
       treeClockOffsetMs = {
-        DeviceClock.nowMs(deviceId.instanceId) - System.currentTimeMillis()
+        when (val measurement = DeviceClock.measure(deviceId.instanceId)) {
+          is DeviceClock.Measurement.Measured -> measurement.best.deviceAheadMs
+          is DeviceClock.Measurement.Failed -> {
+            Console.log(
+              "[stream-screenshot] device clock unmeasured, pairing frames with NO skew " +
+                "correction: ${measurement.error}"
+            )
+            0L
+          }
+        }
       },
       attachFeed = { monitor, _ ->
         val tee = H264Tee.forDevice(

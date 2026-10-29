@@ -225,7 +225,9 @@ const groupSpan = (group: ReportTraceGroup): { start: number | null; end: number
   let start: number | null = null;
   let end: number | null = null;
   for (const row of groupRows(group)) {
-    if (row.ts == null) continue;
+    // End-of-run rows (the failure screenshot, the error) are logged after any teardown: they mark
+    // the run's end, not this step's, so they would stretch the step across the cleanup.
+    if (row.ts == null || row.endOfRun) continue;
     if (start == null || row.ts < start) start = row.ts;
     const rowEnd = row.ts + (row.ms || 0);
     if (end == null || rowEnd > end) end = rowEnd;
@@ -306,6 +308,9 @@ export function buildTrailMatrix(
     // them as it walks that lane's trace), so both joins put a lane's k-th step on row k. What the
     // join changes is what a row is allowed to SAY about the cells that land on it.
     for (const group of model.groups) {
+      // Teardown runs after the verdict and is no trail step; it would otherwise land on (and
+      // could paint red) the Trailhead row, the other group numbered 0.
+      if (group.header && group.header.teardown) continue;
       const num = group.header && !group.header.trailhead ? group.num : 0;
       if (!byNum.has(num)) byNum.set(num, []);
       (byNum.get(num) as ReportTraceGroup[]).push(group);

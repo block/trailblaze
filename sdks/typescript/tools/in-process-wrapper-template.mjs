@@ -8,7 +8,11 @@ const __client = {
     const resultJson = await __trailblazeCall(name, argsJson);
     const result = JSON.parse(resultJson);
     if (result && result.isError === true) {
-      throw new Error("client.callTool('" + name + "') failed: " + (result.error || result.errorMessage || "(no error message)"));
+      const err = new Error("client.callTool('" + name + "') failed: " + (result.error || result.errorMessage || "(no error message)"));
+      // The call never reached the tool (unknown name, bad arguments, a cycle), as opposed to the
+      // tool running and failing. `runIf` treats the first as an authoring error.
+      if (result.dispatchFailed === true) err.dispatchFailed = true;
+      throw err;
     }
     if (result && typeof result.type === "string" && result.type.indexOf("Error") >= 0) {
       throw new Error("client.callTool('" + name + "') failed: " + (result.errorMessage || result.message || result.type));
@@ -38,6 +42,29 @@ __client.tools = new Proxy({}, {
   },
 });
 
+// `ctx.host.<name>(args)`: a host function, which is not a tool. `__trailblazeHost` returns
+// `{"ok":true,"value":…}` or `{"ok":false,"error":"…"}` and never throws.
+__client.host = new Proxy({}, {
+  get: (_t, name) => {
+    if (typeof name !== 'string') return undefined;
+    if (name === 'then' || name === 'catch' || name === 'finally' ||
+        name === 'constructor' || name === 'prototype' || name === '__proto__' ||
+        name === 'toString' || name === 'valueOf' || name === 'toJSON') {
+      return undefined;
+    }
+    return async (args) => {
+      if (typeof __trailblazeHost !== 'function') {
+        throw new Error("ctx.host." + name + " failed: host functions are not available in this runtime");
+      }
+      const envelope = JSON.parse(__trailblazeHost(name, JSON.stringify(args == null ? {} : args)));
+      if (!envelope || envelope.ok !== true) {
+        throw new Error("ctx.host." + name + " failed: " + ((envelope && envelope.error) || "(no error message)"));
+      }
+      return envelope.value;
+    };
+  },
+});
+
 function __normalizeResult(result) {
   if (result == null) return { content: [] };
   // Author hand-rolled an MCP envelope — pass through, structuredContent included or not.
@@ -50,6 +77,17 @@ function __normalizeResult(result) {
   // the JSON *string* cast as the declared type and read `undefined` off every field — and only
   // when running in-process, which is the on-device runtime.
   return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+}
+
+// A trailhead's `trailhead.teardown`, which the typed authoring surface attaches to the tool
+// definition. The host calls it as the tool's `teardown` member (QuickJsToolHost.callToolMember)
+// with `(args, ctx, trailRun)`; its result rides back as structuredContent.
+function __teardownMember(def) {
+  if (typeof def.teardown !== 'function') return undefined;
+  return async (args, ctx, trailRun) => {
+    const result = await def.teardown(args, ctx, __client, trailRun);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+  };
 }
 
 globalThis.__trailblazeTools = globalThis.__trailblazeTools || {};
@@ -66,6 +104,7 @@ for (const __exportName of Object.keys(__userModule)) {
       const result = await __def(args, ctx, __client);
       return __normalizeResult(result);
     },
+    teardown: __teardownMember(__def),
   };
 }
 // __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__

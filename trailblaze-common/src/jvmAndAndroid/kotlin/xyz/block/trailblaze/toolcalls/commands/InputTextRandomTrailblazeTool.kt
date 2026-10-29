@@ -10,35 +10,34 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
 
+/**
+ * Generates a unique random value (prefix + random digits + suffix) and types it into the focused
+ * field, optionally remembering it so a later step can confirm the entity THIS run created rather
+ * than a leftover from a previous run. It generates and types in a single step with no LLM call, so
+ * it replays deterministically and never leaves the field empty.
+ */
 @Serializable
 @TrailblazeToolClass("inputTextRandom")
 @LLMDescription(
   """
-Generate a unique random value — an optional prefix, then random digits, then an optional suffix
-(e.g. "TBZ-481732" or "3f9a1c@example.com") — and type it into the currently focused text field.
-Optionally remember it under a variable name so later steps can reference it as
-{{variable}} / ${'$'}{variable} (a search field, an assertVisibleWithText, etc.).
-
-Use this to enter a fresh unique value (a name, note, order/ticket label, email, phone digits) that
-each run needs to be distinct, optionally recalling it later to confirm the entity THIS run created
-rather than a leftover from a previous run. It generates and types in a single step with no LLM
-call, so it replays deterministically and never leaves the field empty.
-- NOTE: This does nothing unless an editable text field is focused. If the field isn't focused, tap it first.
-- NOTE: After typing, the soft keyboard is dismissed by default (like inputText); pass hideKeyboardAfter=false to keep it.
-- NOTE: For a unique email, set hex=true and suffix to the domain (e.g. suffix="@example.com").
+Type a unique random value (prefix + random digits + suffix, e.g. "TBZ-481732") into the focused
+text field; does nothing if no field is focused. Optionally remembers it as {{variable}} /
+${'$'}{variable} for later steps. Use when each run needs a distinct value. For a unique email, set
+hex=true and suffix="@example.com".
 """,
 )
 data class InputTextRandomTrailblazeTool(
-  @param:LLMDescription("Text placed before the random digits. Defaults to \"TBZ-\".")
+  @param:LLMDescription("Text before the digits. Default \"TBZ-\".")
   val prefix: String = "TBZ-",
-  @param:LLMDescription("How many random digits to generate after the prefix. Defaults to 6.")
+  @param:LLMDescription("Number of random digits. Default 6.")
   val digitCount: Int = 6,
-  @param:LLMDescription("Text placed after the random digits (e.g. an email domain like \"@example.com\"). Defaults to empty.")
+  @param:LLMDescription("Text after the digits, e.g. \"@example.com\". Default empty.")
   val suffix: String = "",
-  @param:LLMDescription("Generate hexadecimal digits (0-9a-f) instead of decimal digits. Defaults to false.")
+  @param:LLMDescription("Use hex digits (0-9a-f) instead of decimal. Default false.")
   val hex: Boolean = false,
-  @param:LLMDescription("Optional memory variable to store the generated value under (recall via {{variable}} / \${variable}). Omit to type without remembering.")
+  @param:LLMDescription("Memory variable to store the value under. Omit to not remember it.")
   val variable: String = "",
+  @param:LLMDescription("Close the soft keyboard after typing. Default true.")
   val hideKeyboardAfter: Boolean = true,
 ) : ExecutableTrailblazeTool {
 

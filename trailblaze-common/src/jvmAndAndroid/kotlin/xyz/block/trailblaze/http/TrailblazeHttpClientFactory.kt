@@ -7,7 +7,6 @@ import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.websocket.WebSockets
-import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.net.Proxy
 import java.security.SecureRandom
@@ -16,6 +15,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Factory for creating a Trailblaze HttpClient.
@@ -35,15 +35,23 @@ object TrailblazeHttpClientFactory {
     addInterceptor(CachedTokenCaptureInterceptor)
   }
 
+  /**
+   * Verifies certificates against the JVM's CAs plus the OS CA bundle ([SystemCaBundleTrust]), so a
+   * host curl reaches through a corporate or proxy CA is reachable here too.
+   */
   fun createDefaultHttpClient(
     timeoutInSeconds: Long,
-  ) = HttpClient(OkHttp) {
+  ) = createDefaultHttpClient(timeoutInSeconds, SystemCaBundleTrust.trustManager)
+
+  internal fun createDefaultHttpClient(
+    timeoutInSeconds: Long,
+    trustManager: X509TrustManager?,
+  ) = TransportHttpClientFactory.createDefaultHttpClient(timeoutInSeconds, trustManager) {
     enablePerfettoTracing()
     enableNetworkLogging()
     engine {
-      config {
-        configureOkHttpClient(timeoutInSeconds, false)
-      }
+      dispatcher = TrailblazeDispatchers.IO
+      config { addInterceptor(CachedTokenCaptureInterceptor) }
     }
   }
   fun HttpClientConfig<*>.enablePerfettoTracing() {
@@ -89,6 +97,8 @@ object TrailblazeHttpClientFactory {
     enableNetworkLogging()
     enableWebSockets()
     engine {
+      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
+      dispatcher = TrailblazeDispatchers.IO
       config {
         configureOkHttpClient(timeoutInSeconds, true)
         if (bypassSystemProxy) {
@@ -112,78 +122,11 @@ object TrailblazeHttpClientFactory {
       }
     }
     engine {
+      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
+      dispatcher = TrailblazeDispatchers.IO
       config {
         configureOkHttpClient(timeoutInSeconds, true)
       }
-    }
-  }
-
-  /**
-   * Creates an HttpClient with a [DiagnosticInterceptor] that captures full HTTP request/response
-   * details (URL, headers, status, body) for debugging connectivity issues.
-   */
-  fun createDiagnosticHttpClient(timeoutInSeconds: Long): DiagnosticHttpClient {
-    val interceptor = DiagnosticInterceptor()
-    val httpClient =
-      HttpClient(OkHttp) {
-        enablePerfettoTracing()
-        enableNetworkLogging()
-        engine {
-          config {
-            configureOkHttpClient(timeoutInSeconds, true)
-            addInterceptor(interceptor)
-          }
-        }
-      }
-    return DiagnosticHttpClient(httpClient, interceptor)
-  }
-
-  /**
-   * Holds an [HttpClient] paired with the [DiagnosticInterceptor] that captures HTTP details
-   * from requests made through it.
-   */
-  data class DiagnosticHttpClient(
-    val httpClient: HttpClient,
-    val interceptor: DiagnosticInterceptor,
-  )
-
-  /**
-   * OkHttp interceptor that captures full HTTP request/response details for diagnostic reporting.
-   * Sensitive header values (Authorization, API keys, tokens) are automatically masked.
-   */
-  class DiagnosticInterceptor : Interceptor {
-    val requestLog = StringBuilder()
-    val responseLog = StringBuilder()
-
-    override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
-      val request = chain.request()
-      requestLog.appendLine("${request.method} ${request.url}")
-      request.headers.forEach { (name, value) ->
-        requestLog.appendLine("  $name: ${maskIfSensitive(name, value)}")
-      }
-
-      val response = chain.proceed(request)
-      responseLog.appendLine("HTTP ${response.code} ${response.message}")
-      response.headers.forEach { (name, value) ->
-        responseLog.appendLine("  $name: $value")
-      }
-      try {
-        val body = response.peekBody(2048)
-        responseLog.appendLine(body.string())
-      } catch (_: Exception) {}
-
-      return response
-    }
-
-    private fun maskIfSensitive(headerName: String, value: String): String {
-      val lower = headerName.lowercase()
-      val isSensitive =
-        lower.contains("auth") ||
-          lower.contains("key") ||
-          lower.contains("token") ||
-          lower.contains("secret")
-      if (!isSensitive) return value
-      return if (value.length > 8) "${value.take(4)}...${value.takeLast(4)}" else "****"
     }
   }
 

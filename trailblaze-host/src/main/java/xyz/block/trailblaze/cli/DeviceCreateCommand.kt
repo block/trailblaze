@@ -85,8 +85,7 @@ class DeviceCreateWebCommand : Callable<Int> {
     paramLabel = "<id>",
     description = [
       "Slot name. Subsequent commands address this slot as `--device web/<id>`. " +
-        "Defaults to the singleton `playwright-native` when omitted (the same slot the " +
-        "desktop app's Launch Browser button operates on).",
+        "Defaults to the singleton `playwright-native` when omitted (the default web device).",
     ],
   )
   var instanceId: String? = null

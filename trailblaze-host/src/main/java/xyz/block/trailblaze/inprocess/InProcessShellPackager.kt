@@ -5,8 +5,10 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.inprocess.apk.ApkReadException
 import xyz.block.trailblaze.inprocess.apk.AppManifestProviders
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
+import xyz.block.trailblaze.surveys.SurveyBundles
 import java.io.File
 import java.security.MessageDigest
 
@@ -65,6 +67,12 @@ object InProcessShellPackager {
    * `inprocess-shell/build.gradle.kts`. SISTER-IMPL-TAG: runtime-tool-source-shell-capability.
    */
   private const val RUNTIME_TOOL_SOURCE_CAPABILITY_KEY = "runtimeToolSource"
+
+  /**
+   * Shell-properties key attesting the shell installs the packaged-survey source on the device.
+   * Written by `inprocess-shell/build.gradle.kts`. SISTER-IMPL-TAG: packaged-surveys-shell-capability.
+   */
+  private const val PACKAGED_SURVEYS_CAPABILITY_KEY = "packagedSurveys"
 
   /** The key as a top-level line, for telling "the caller wrote it" from "we appended it". */
   private val ALLOW_RUNTIME_TOOL_SOURCE_KEY_LINE =
@@ -144,11 +152,22 @@ object InProcessShellPackager {
     val injectedTargetConfig =
       request.targetConfig?.let { readTargetConfig(it, request.allowRuntimeToolSource) }
     val toolBundles = collectToolBundles(request)
+    // A shell built before packaged surveys would carry them and still fail every ctx.surveys call,
+    // so they are left out and the reason named. Not a failure: a trailmap's surveys are packaged
+    // implicitly, and an APK whose trails never ask for one is still a good APK.
+    val shellLoadsSurveys = shellProperties[PACKAGED_SURVEYS_CAPABILITY_KEY] == "true"
+    if (!shellLoadsSurveys && request.trailmapDirs.any { surveyFiles(File(it, "surveys")).isNotEmpty() }) {
+      warnings += "Surveys not packaged: ${request.shellApk} does not record that it loads them " +
+        "($PACKAGED_SURVEYS_CAPABILITY_KEY in $SHELL_VERSION_ENTRY), so ctx.surveys fails on the device. " +
+        "Rebuild the shell with scripts/build-inprocess-shell.sh."
+    }
+    val surveys = if (shellLoadsSurveys) collectSurveys(request, warnings) else emptyMap()
     val trailAssets = collectTrails(request.trails)
 
     val additions = LinkedHashMap<String, ByteArray>()
     injectedTargetConfig?.let { additions["$TARGETS_ASSET_DIR/${it.id}.yaml"] = it.bytes }
     additions += toolBundles
+    additions += surveys
     additions += trailAssets
 
     val staged = stagedFileFor(request.outputApk)
@@ -181,7 +200,7 @@ object InProcessShellPackager {
         signingCertificateSha256 = evidence.signingCertificateSha256,
         releaseMode = request.release,
         targetConfigId = injectedTargetConfig?.id,
-        trailmapRevision = toolBundles.takeIf { it.isNotEmpty() }?.let { contentDigest(it) },
+        trailmapRevision = (toolBundles + surveys).takeIf { it.isNotEmpty() }?.let { contentDigest(it) },
         injectedTrails = trailAssets.keys.toList(),
         injectedToolBundles = toolBundles.keys.toList(),
         // Read back out of the bytes that were injected, never from the flag a second time.
@@ -575,6 +594,67 @@ object InProcessShellPackager {
     return out
   }
 
+  /**
+   * Packages each trailmap's `surveys/` for `ctx.surveys` on the device, laid out as
+   * [SurveyBundles.PACKAGED_DIR] describes: every survey file, and beside it its bundle or why it
+   * could not be bundled. SISTER-IMPL-TAG: packaged-survey-layout — the Android Gradle plugin's
+   * `registerTrailmapSurveyBundles` writes the same layout.
+   *
+   * Never fails the run: a survey that runs only after the session may import what the sandbox
+   * lacks, and is skipped here; any other that cannot be bundled is reported to a trail that asks
+   * for it, and named in [warnings].
+   */
+  private fun collectSurveys(request: Request, warnings: MutableList<String>): Map<String, ByteArray> {
+    val out = LinkedHashMap<String, ByteArray>()
+    val bundler by lazy {
+      request.esbuildBinary?.let {
+        DaemonScriptedToolBundler(it, inProcessSdkEntryOverride = request.inProcessSdkEntry, allowLegacyEsbuildWalkup = false)
+      }
+    }
+    for (trailmapDir in request.trailmapDirs) {
+      val id = trailmapDir.canonicalFile.name
+      val surveysDir = File(trailmapDir, "surveys")
+      for (survey in surveyFiles(surveysDir)) {
+        val rel = survey.relativeTo(surveysDir).invariantSeparatorsPath
+        require(rel.split('/').none { it == ".." || it == "." }) {
+          "Survey file '$rel' in trailmap '$id' escapes surveys/. An entry path with a traversal segment inside a signed APK is not something this command emits."
+        }
+        val asset = "assets/${SurveyBundles.PACKAGED_DIR}/trailmaps/$id/surveys/$rel"
+        require(asset !in out) {
+          "Two inputs both map to $asset (the second is $survey). Trailmap ids come from the " +
+            "directory name, so passing the same trailmap twice does this."
+        }
+        val text = survey.readText()
+        out[asset] = text.toByteArray()
+        val exported = SurveyBundles.exportedSurveys(text)
+        // The device answers for a survey that runs only after the session without a bundle.
+        if (exported.isNotEmpty() && exported.all { it.requiresFinishedSession }) continue
+        val failure = when (val b = bundler) {
+          null -> "esbuild was not available when this test APK was made, so the survey file was not bundled. Pass --esbuild to make-test-apk."
+          else -> try {
+            out[asset + SurveyBundles.PACKAGED_BUNDLE_SUFFIX] = runBlocking { b.bundleSurvey(survey) }.readBytes()
+            null
+          } catch (e: Exception) {
+            e.message.orEmpty()
+          }
+        } ?: continue
+        out[asset + SurveyBundles.PACKAGED_ERROR_SUFFIX] = failure.toByteArray()
+        warnings += "Survey file $id/surveys/$rel cannot run mid-trail on the device: ${failure.lineSequence().first()}"
+      }
+    }
+    return out
+  }
+
+  /** Every survey file under [surveysDir], in path order. Mirrors the Android Gradle plugin's `surveyFiles`. */
+  private fun surveyFiles(surveysDir: File): List<File> {
+    if (!surveysDir.isDirectory) return emptyList()
+    return surveysDir.walkTopDown()
+      .onEnter { it == surveysDir || !(it.name.startsWith(".") || it.name == "node_modules") }
+      .filter { it.isFile && SurveyBundles.isSurveyFile(it.name) }
+      .sortedBy { it.relativeTo(surveysDir).invariantSeparatorsPath }
+      .toList()
+  }
+
   private fun putBundle(
     out: MutableMap<String, ByteArray>,
     trailmapId: String,
@@ -609,24 +689,149 @@ object InProcessShellPackager {
    * the same runtime resolver.
    */
   private fun inProcessToolSources(toolsDir: File): List<File> {
-    val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
-    val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
+    val toolExport = Regex("""trailblaze\s*\.\s*(?:tool|trailhead)\s*[<(]""")
+    // Per `.ts`, whether every descriptor YAML for it (the one whose `script:` names it, or its
+    // same-basename sibling when that names none) runs it as a subprocess.
+    val allOwnersSubprocess = mutableMapOf<File, Boolean>()
+    toolsDir.walkTopDown()
+      .filter { f -> f.isFile && f.name.endsWith(".yaml") && OPERATIONAL_TOOL_YAML_SUFFIXES.none { f.name.endsWith(it) } }
+      .forEach { yaml ->
+        val keys = topLevelYamlValues(yaml.readText())
+        // A YAML the loader can't decode as a descriptor describes nothing, so it claims no script.
+        if (!isToolDescriptor(keys)) return@forEach
+        val script = keys["script"]?.let(::yamlScalar) ?: (yaml.name.removeSuffix(".yaml") + ".ts")
+        val ts = (File(script).takeIf { it.isAbsolute } ?: File(yaml.parentFile, script)).canonicalFile
+        val subprocess = keys["runtime"]?.let(::yamlScalar) == "subprocess"
+        allOwnersSubprocess[ts] = (allOwnersSubprocess[ts] ?: true) && subprocess
+      }
     return toolsDir.walkTopDown()
       .filter { f ->
         f.isFile &&
           f.name.endsWith(".ts") &&
           !f.name.endsWith(".test.ts") &&
           !f.name.endsWith(".d.ts") &&
-          File(f.parentFile, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
-            if (yaml.isFile) {
-              !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
-            } else {
-              toolExport.containsMatchIn(f.readText())
-            }
-          }
+          (allOwnersSubprocess[f.canonicalFile]?.not() ?: toolExport.containsMatchIn(f.readText()))
       }
       .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
       .toList()
+  }
+
+  /** Tool-directory YAMLs that are not tool descriptors. */
+  private val OPERATIONAL_TOOL_YAML_SUFFIXES = TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES
+
+  private val TOP_LEVEL_YAML_KEY = Regex("""^([A-Za-z_][\w-]*):(?:\s+(.*?))?\s*$""")
+  private val DOUBLE_QUOTED_YAML = Regex("""^"((?:[^"\\]|\\.)*)"""")
+  private val SINGLE_QUOTED_YAML = Regex("""^'((?:[^']|'')*)'""")
+
+  private val BLOCK_SCALAR_HEADER = Regex("""^([|>])([1-9]?)([-+]?)([1-9]?)(?:\s+#.*)?$""")
+
+  /**
+   * Each top-level key of a YAML [text], mapped to its raw inline value with any trailing comment
+   * dropped — `""` when the value is a nested block. A `|` or `>` block scalar maps to its decoded
+   * content, re-quoted so [yamlScalar] reads it like any quoted value.
+   */
+  private fun topLevelYamlValues(text: String): Map<String, String> {
+    val lines = text.lines()
+    val values = mutableMapOf<String, String>()
+    lines.forEachIndexed { index, line ->
+      val match = TOP_LEVEL_YAML_KEY.matchEntire(line) ?: return@forEachIndexed
+      val raw = match.groupValues[2]
+      val quoted = raw.startsWith('"') || raw.startsWith('\'')
+      val block = BLOCK_SCALAR_HEADER.matchEntire(raw)
+      values[match.groupValues[1]] = when {
+        quoted -> raw
+        block != null -> "'" + blockScalar(block, lines.drop(index + 1)).replace("'", "''") + "'"
+        else -> raw.substringBefore(" #").takeUnless { it.startsWith("#") }.orEmpty().trim()
+      }
+    }
+    return values
+  }
+
+  /**
+   * The content of the top-level block scalar whose [header] (`|`, `>-`, `|2+`, ...) precedes [following],
+   * decoded per the YAML spec: `|` keeps line breaks, `>` folds them into spaces, and the chomping
+   * indicator strips (`-`), keeps (`+`), or clips to one (default) the trailing breaks.
+   */
+  private fun blockScalar(header: MatchResult, following: List<String>): String {
+    val (style, indentBefore, chomping, indentAfter) = header.destructured
+    val explicitIndent = (indentBefore + indentAfter).toIntOrNull()
+    val indent = explicitIndent
+      ?: following.firstOrNull { it.isNotBlank() }?.let { it.length - it.trimStart(' ').length }?.takeIf { it > 0 }
+      ?: return ""
+    val body = following
+      .takeWhile { it.isBlank() || it.length - it.trimStart(' ').length >= indent }
+      .map { if (it.isBlank() && it.length <= indent) "" else it.substring(indent) }
+    val content = body.dropLastWhile { it.isEmpty() }
+    if (content.isEmpty()) return if (chomping == "+") "\n".repeat(body.size) else ""
+    val text = if (style == "|") content.joinToString("\n") else foldBlockLines(content)
+    return text + when (chomping) {
+      "-" -> ""
+      "+" -> "\n".repeat(body.size - content.size + 1)
+      else -> "\n"
+    }
+  }
+
+  /** Folded (`>`) block [lines] joined: a break between two plain lines is a space, a blank line a break. */
+  private fun foldBlockLines(lines: List<String>): String {
+    val folded = StringBuilder()
+    var previous: String? = null
+    var blankRun = 0
+    fun moreIndented(line: String) = line.startsWith(' ') || line.startsWith('\t')
+    for (line in lines) {
+      if (line.isEmpty()) {
+        blankRun++
+        continue
+      }
+      folded.append(
+        when {
+          previous == null -> "\n".repeat(blankRun)
+          moreIndented(previous) || moreIndented(line) -> "\n".repeat(blankRun + 1)
+          blankRun == 0 -> " "
+          else -> "\n".repeat(blankRun)
+        },
+      )
+      folded.append(line)
+      previous = line
+      blankRun = 0
+    }
+    return folded.toString()
+  }
+
+  /** [raw] as a YAML string scalar, unquoted and without its comment; `null` for a list, map, block, or null. */
+  private fun yamlScalar(raw: String): String? {
+    DOUBLE_QUOTED_YAML.find(raw)?.let { return unescapeDoubleQuotedYaml(it.groupValues[1]) }
+    SINGLE_QUOTED_YAML.find(raw)?.let { return it.groupValues[1].replace("''", "'") }
+    val plain = raw.substringBefore(" #").trim()
+    return plain.takeUnless { it.isEmpty() || it == "~" || it == "null" || it.first() in "[{|>&*!\"'" }
+  }
+
+  private val DOUBLE_QUOTED_YAML_ESCAPE = Regex("""\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)""")
+  private val SIMPLE_YAML_ESCAPES = mapOf(
+    '0' to "\u0000", 'a' to "\u0007", 'b' to "\b", 't' to "\t", 'n' to "\n", 'v' to "\u000B", 'f' to "\u000C",
+    'r' to "\r", 'e' to "\u001B", ' ' to " ", '"' to "\"", '/' to "/", '\\' to "\\", 'N' to "\u0085",
+    '_' to "\u00A0", 'L' to "\u2028", 'P' to "\u2029",
+  )
+
+  /** A double-quoted YAML scalar's [body] with its escapes (`\\`, `\"`, `\t`, `\u0020`, ...) decoded. */
+  private fun unescapeDoubleQuotedYaml(body: String): String =
+    DOUBLE_QUOTED_YAML_ESCAPE.replace(body) { match ->
+      val escape = match.groupValues[1]
+      when (escape[0]) {
+        'x', 'u', 'U' -> String(Character.toChars(escape.substring(1).toInt(16)))
+        else -> SIMPLE_YAML_ESCAPES[escape[0]] ?: match.value
+      }
+    }
+  private val YAML_NULLS = setOf("~", "null", "Null", "NULL")
+
+  /**
+   * Whether top-level [keys] decode as a scripted-tool descriptor: `script:` and `name:`, when set, are non-empty
+   * string scalars, and `tools:`, when set, is a non-empty list. A YAML like `name: []` describes no tool. An
+   * optional field set to null (`tools: null`, `name: ~`) is absent, as in the loader; `script:` is required.
+   */
+  private fun isToolDescriptor(keys: Map<String, String>): Boolean {
+    val present = keys.filter { (key, value) -> key == "script" || value !in YAML_NULLS }
+    return listOf("script", "name").all { key -> present[key]?.let { !yamlScalar(it).isNullOrEmpty() } ?: true } &&
+      (present["tools"]?.let { it.isEmpty() || (it.startsWith("[") && it != "[]") } ?: true)
   }
 
   /**
@@ -642,7 +847,8 @@ object InProcessShellPackager {
    */
   internal fun carriesTypeScriptToolSource(trailmapDirs: List<File>): Boolean =
     trailmapDirs.any { dir ->
-      File(dir, "tools").let { it.isDirectory && inProcessToolSources(it).isNotEmpty() }
+      File(dir, "tools").let { it.isDirectory && inProcessToolSources(it).isNotEmpty() } ||
+        surveyFiles(File(dir, "surveys")).isNotEmpty()
     }
 
   // --- record ---------------------------------------------------------------------------------

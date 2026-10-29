@@ -4,8 +4,7 @@
 
 # `web_verifyListVisible`
 
-Verify that a list or group of elements contains the expected items.
-Checks that each expected item text is visible within the container element.
+Assert each expected item's text is visible inside a container element, e.g. a list.
 
 ## Source
 
@@ -23,12 +22,12 @@ Checks that each expected item text is visible within the container element.
 ### Required parameters
 
 - `items` — `array<String>`
-  The expected item texts that should be visible in the list.
+  Item texts expected in the container; case-insensitive substring match.
 
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), or CSS selector with css= prefix (e.g., 'css=#my-list').
+  Container: element ID ('e5'), ARIA descriptor ('list "Results"'), or 'css=<selector>'.
 - `reasoning` — `String`
 
 ## Output

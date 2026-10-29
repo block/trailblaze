@@ -85,16 +85,58 @@ class PlaywrightAriaSnapshotAiRefTest {
   }
 
   @Test
-  fun `lines without a ref annotation are ignored`() {
+  fun `a line without a ref keeps its slot so later same-key refs keep their index`() {
+    // AI mode gives no ref to an element that cannot take a click (covered, say), but the
+    // element list still counts it, so the second checkbox there is nth 1 here too.
     val yaml = """
       - document:
-        - button "Submit" [ref=e2]:
+        - checkbox
+        - checkbox [ref=e3]
     """.trimIndent()
 
     val refs = PlaywrightAriaSnapshot.buildAiRefsByRoleName(yaml)
 
-    assertNull(refs["document"])
-    assertEquals(listOf("e2"), refs[PlaywrightAriaSnapshot.roleNameCorrelationKey("button", "Submit")])
+    assertEquals(listOf(null), refs["document"])
+    assertEquals(listOf(null, "e3"), refs[PlaywrightAriaSnapshot.roleNameCorrelationKey("checkbox", null)])
+  }
+
+  @Test
+  fun `frame-prefixed main-frame refs are read`() {
+    // After the main frame navigates cross-site, Playwright prefixes its refs too.
+    val yaml = """
+      - document [ref=f25e1]:
+        - button "Submit" [ref=f25e11] [cursor=pointer]
+    """.trimIndent()
+
+    val refs = PlaywrightAriaSnapshot.buildAiRefsByRoleName(yaml)
+
+    assertEquals(listOf("f25e11"), refs[PlaywrightAriaSnapshot.roleNameCorrelationKey("button", "Submit")])
+  }
+
+  @Test
+  fun `an aria-hidden node and its subtree are skipped`() {
+    // The element list omits aria-hidden content; AI mode shows it when visible.
+    val yaml = """
+      - document [ref=e1]:
+        - generic [aria-hidden] [ref=e2]:
+          - button "Submit" [ref=e3]
+        - button "Submit" [ref=e4]
+    """.trimIndent()
+
+    val refs = PlaywrightAriaSnapshot.buildAiRefsByRoleName(yaml)
+
+    assertEquals(listOf("e4"), refs[PlaywrightAriaSnapshot.roleNameCorrelationKey("button", "Submit")])
+  }
+
+  @Test
+  fun `an aria-hidden literal inside a name does not skip the node`() {
+    val yaml = """
+      - button "Toggle [aria-hidden]" [ref=e2]
+    """.trimIndent()
+
+    val refs = PlaywrightAriaSnapshot.buildAiRefsByRoleName(yaml)
+
+    assertEquals(listOf("e2"), refs[PlaywrightAriaSnapshot.roleNameCorrelationKey("button", "Toggle [aria-hidden]")])
   }
 
   @Test
@@ -176,14 +218,12 @@ class PlaywrightAriaSnapshotAiRefTest {
 
   @Test
   fun `frame-nested refs are excluded from the correlation map`() {
-    // AriaSnapshotMode.AI expands <iframe> content inline and prefixes those refs with the
-    // owning frame's sequence number (e.g. "f1e2"), unlike main-frame refs ("e2"). The
-    // default-mode snapshot used to build the compact list / viewHierarchy tree never
-    // descends into iframes at all (it shows a leaf "- iframe" node), so a frame-nested ref
-    // must never enter this correlation map -- if it did, an (role, name, nth) lookup could
-    // resolve to content inside the iframe instead of the intended main-frame element.
-    // REF_PATTERN's `e\d+` (not `\w+`) is what enforces this: it only matches bare "eN"
-    // refs, never "f<N>eN"-shaped frame-nested ones.
+    // AriaSnapshotMode.AI expands <iframe> content inline. The default-mode snapshot used to
+    // build the compact list / viewHierarchy tree never descends into iframes (it shows a
+    // leaf "- iframe" node), so iframe content must never enter this correlation map -- if
+    // it did, an (role, name, nth) lookup could resolve to content inside the iframe instead
+    // of the intended main-frame element. The iframe's subtree is skipped by indent, since
+    // a frame prefix cannot tell the two apart once the main frame is prefixed too.
     val yaml = """
       - document [ref=e1]:
         - button "Submit" [ref=e3]

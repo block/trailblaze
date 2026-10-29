@@ -4,8 +4,7 @@
 
 # `web_selectOption`
 
-Select one or more options from a <select> dropdown element identified by its element ID, ARIA descriptor, or CSS selector.
-Provide the option values or labels to select.
+Select one or more options in a <select> dropdown.
 
 ## Source
 
@@ -23,12 +22,12 @@ Provide the option values or labels to select.
 ### Required parameters
 
 - `values` — `array<String>`
-  The option values or visible text labels to select.
+  Option values or visible labels to select.
 
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'combobox "Category"'), or CSS selector with css= prefix (e.g., 'css=#my-select').
+  Element ID ('e5'), ARIA descriptor ('combobox "Category"'), or 'css=<selector>'.
 - `reasoning` — `String`
 
 ## Output

@@ -13,17 +13,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_verifyElementVisible", isVerification = true)
-@LLMDescription(
-  """
-Verify that an element identified by its element ID, ARIA descriptor, or CSS selector is visible on the page.
-This is a test assertion — it will fail the test if the element is not visible.
-""",
-)
+@LLMDescription("Assert an element is visible on the page.")
 data class PlaywrightNativeVerifyElementVisibleTool(
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button \"Submit\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#my-element').",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('button \"Submit\"'), or 'css=<selector>'.")
   val ref: String? = null,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

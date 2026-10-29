@@ -38,8 +38,12 @@ $yaml
     val tempFlowFile = File.createTempFile("maestro", ".yaml").apply {
       writeText(yamlString)
     }
-    val commands: List<MaestroCommand> = YamlCommandReader.readCommands(Path(tempFlowFile.absolutePath))
-    tempFlowFile.delete()
+    val commands: List<MaestroCommand> = try {
+      YamlCommandReader.readCommands(Path(tempFlowFile.absolutePath))
+    } finally {
+      // Launch arguments may carry credentials; a parse failure must not leave its flow behind.
+      tempFlowFile.delete()
+    }
     return commands.mapNotNull { it.asCommand() }
   }
 }

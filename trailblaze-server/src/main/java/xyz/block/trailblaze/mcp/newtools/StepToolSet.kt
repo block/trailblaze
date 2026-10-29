@@ -15,9 +15,8 @@ import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.RecommendationContext
 import xyz.block.trailblaze.agent.ScreenAnalyzer
 import xyz.block.trailblaze.agent.UiActionExecutor
-import xyz.block.trailblaze.api.AndroidCompactElementList
+import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.DriverNodeDetail
-import xyz.block.trailblaze.api.IosCompactElementList
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.logs.client.LogEmitter
@@ -35,7 +34,6 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValida
 import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -56,6 +54,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.waypoint.SessionLogScreenState
 
 /**
  * Primary MCP tools for UI automation:
@@ -176,31 +175,9 @@ class StepToolSet(
     screenState: ScreenState,
     details: Set<SnapshotDetail> = emptySet(),
   ): String? {
-    // If we have a TrailblazeNode tree, build or rebuild the compact element list.
-    // This handles: detail enrichment (BOUNDS, OFFSCREEN) and cases where
-    // viewHierarchyTextRepresentation is null (e.g., Android HOST mode).
-    val tree = screenState.trailblazeNodeTree
-    if (tree != null) {
-      val platform = detectPlatformFromTree(tree)
-      if (platform != null && (details.isNotEmpty() || screenState.viewHierarchyTextRepresentation == null)) {
-        val elements = when (platform) {
-          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
-          "ios" -> if (tree.driverDetail is DriverNodeDetail.IosAxe ||
-            tree.children.firstOrNull()?.driverDetail is DriverNodeDetail.IosAxe
-          ) {
-            xyz.block.trailblaze.api.IosAxeCompactElementList.build(
-              tree, details, screenState.deviceHeight, screenState.deviceWidth,
-            ).text
-          } else {
-            IosCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
-          }
-          else -> null
-        }
-        if (elements != null) {
-          val pageContext = screenState.pageContextSummary
-          return if (pageContext != null) "$pageContext\n\n$elements" else elements
-        }
-      }
+    rebuiltCompactElements(screenState, details)?.let { elements ->
+      val pageContext = screenState.pageContextSummary
+      return if (pageContext != null) "$pageContext\n\n${elements.text}" else elements.text
     }
 
     // Web/Playwright: re-render the platform's text with the requested details.
@@ -209,6 +186,53 @@ class StepToolSet(
     // is the canonical detail handler.
     return screenState.viewHierarchyTextRepresentation(details)
   }
+
+  /**
+   * The compact element list a snapshot with [details] prints, rebuilt from the
+   * [ScreenState.trailblazeNodeTree]. This handles detail enrichment (BOUNDS, OFFSCREEN,
+   * ALL_ELEMENTS) and cases where viewHierarchyTextRepresentation is null (e.g., Android HOST
+   * mode). Null when the screen state's own text and refs stand as captured.
+   *
+   * [describeScreenState] prints its refs and [snapshotScreenJson] stamps them onto the tree,
+   * which is what makes `selector suggest --live --ref` resolve the refs `snapshot` printed.
+   */
+  private fun rebuiltCompactElements(
+    screenState: ScreenState,
+    details: Set<SnapshotDetail>,
+  ): CompactScreenElements? {
+    val tree = screenState.trailblazeNodeTree ?: return null
+    val platform = detectPlatformFromTree(tree) ?: return null
+    if (details.isEmpty() && screenState.viewHierarchyTextRepresentation != null) return null
+    val height = screenState.deviceHeight
+    val width = screenState.deviceWidth
+    return when (platform) {
+      "android" -> CompactScreenElements.buildForAndroid(tree, details, height, width)
+      "ios" -> if (tree.driverDetail is DriverNodeDetail.IosAxe ||
+        tree.children.firstOrNull()?.driverDetail is DriverNodeDetail.IosAxe
+      ) {
+        CompactScreenElements.buildForIosAxe(tree, details, height, width)
+      } else {
+        CompactScreenElements.buildForIos(tree, details, height, width)
+      }
+      else -> null
+    }
+  }
+
+  /**
+   * [screenState] as a screen-state log would record it (see [SessionLogScreenState.encode]),
+   * its tree carrying the refs a snapshot with [details] prints.
+   */
+  private fun snapshotScreenJson(screenState: ScreenState, details: Set<SnapshotDetail>): String {
+    val tree = screenState.trailblazeNodeTree?.let { tree ->
+      // Only the snapshot's refs: a capture ref left on a node the rebuild omits could name a
+      // different node than the same ref does in the snapshot.
+      rebuiltCompactElements(screenState, details)?.applyRefsToTree(tree.withoutRefs()) ?: tree
+    }
+    return SessionLogScreenState.encode(screenState, trailblazeNodeTree = tree)
+  }
+
+  private fun xyz.block.trailblaze.api.TrailblazeNode.withoutRefs(): xyz.block.trailblaze.api.TrailblazeNode =
+    copy(ref = null, children = children.map { it.withoutRefs() })
 
   /** Detects platform from the TrailblazeNode tree by checking root and first child. */
   private fun detectPlatformFromTree(tree: xyz.block.trailblaze.api.TrailblazeNode): String? {
@@ -310,6 +334,8 @@ class StepToolSet(
     fast: Boolean = false,
     @LLMDescription("Save a screenshot to disk and return the file path. Works with fast mode.")
     screenshot: Boolean = false,
+    @LLMDescription("For CLI tooling, not agents. With tools=takeSnapshot, return the captured screen as one JSON object (UI tree carrying the snapshot's refs, view hierarchy, device size) instead of a summary.")
+    screenJson: Boolean = false,
   ): String {
     val traceOrigin = if (tools != null) TraceId.Companion.TraceOrigin.MCP else TraceId.Companion.TraceOrigin.LLM
     val traceId = TraceId.generate(traceOrigin)
@@ -358,7 +384,6 @@ class StepToolSet(
     suspend fun runDirectTools(validated: DirectToolsValidation.Valid) = executeDirectTools(
       objective = objective,
       validated = validated,
-      traceId = traceId,
       deviceName = deviceName,
       fast = isFast,
       snapshotDetails = parsedSnapshotDetails,
@@ -380,7 +405,7 @@ class StepToolSet(
       ?: return StepResult(
         executed = false,
         error = noScreenStateError(),
-      ).toMarkdown()
+      ).let { if (screenJson) it.toJson() else it.toMarkdown() }
 
     // Snapshot short-circuit: skip tool execution entirely and return the
     // view hierarchy text from the already-captured screen state. Avoids a second
@@ -388,6 +413,8 @@ class StepToolSet(
     // Also used for non-fast snapshot when screenshot/bounds/offscreen are requested,
     // since the screen state was already captured with full detail above.
     if (tools != null && "takeSnapshot" in tools) {
+      if (screenJson) return snapshotScreenJson(screenState, parsedSnapshotDetails)
+
       // Try to build screen summary from the already-captured screen state.
       // Falls back to screenSummaryProvider for platforms where the screen state
       // doesn't carry a pre-built text representation (e.g., Android HOST/Maestro).
@@ -759,7 +786,7 @@ class StepToolSet(
 
     // Arg-shape gate for dynamic/scripted tools — the same unknown-key + missing-required
     // check the scripted-tool callback path runs (`JsScriptingCallbackArgumentValidator`).
-    // Class-backed and YAML-defined tools already fail the YAML decode above on a missing
+    // Class-backed tools already fail the YAML decode above on a missing
     // required field, but a dynamic tool's args ride through as a raw JsonObject and would
     // otherwise reach the tool's implementation unchecked — where a missing required arg
     // surfaces as a deep, misleading error (e.g. a launch tool invoked with a sibling tool's
@@ -816,7 +843,6 @@ class StepToolSet(
   private suspend fun executeDirectTools(
     objective: String,
     validated: DirectToolsValidation.Valid,
-    traceId: TraceId,
     deviceName: String?,
     fast: Boolean = false,
     snapshotDetails: Set<SnapshotDetail> = emptySet(),
@@ -848,16 +874,19 @@ class StepToolSet(
     val recordedToolCalls = mutableListOf<RecordedToolCall>()
     val toolOutputs = mutableListOf<Pair<String, String>>()
     for (wrapper in resolvedToolWrappers) {
+      // A batch can invoke the same tool more than once. Give each dispatch a trace so its
+      // executor log and outer MCP log identify the same invocation without clock heuristics.
+      val invocationTraceId = TraceId.generate(TraceId.Companion.TraceOrigin.MCP)
       val toolStartTime = Clock.System.now()
       try {
         val output = TrailblazeTracer.traceSuspend("executeTool", "tool", mapOf("tool" to wrapper.name)) {
-          toolExecutor(wrapper.trailblazeTool, traceId)
+          toolExecutor(wrapper.trailblazeTool, invocationTraceId)
         }
         toolOutputs.add(wrapper.name to output)
         emitDirectToolLog(
           tool = wrapper.trailblazeTool,
           toolName = wrapper.name,
-          traceId = traceId,
+          traceId = invocationTraceId,
           startTime = toolStartTime,
           deviceName = deviceName,
           successful = true,
@@ -868,7 +897,7 @@ class StepToolSet(
         emitDirectToolLog(
           tool = wrapper.trailblazeTool,
           toolName = wrapper.name,
-          traceId = traceId,
+          traceId = invocationTraceId,
           startTime = toolStartTime,
           deviceName = deviceName,
           successful = false,
@@ -1085,7 +1114,7 @@ class StepToolSet(
    * execute under `blaze(hint=VERIFY)`. Determined by the
    * [TrailblazeToolClass.isVerification] annotation on the registered tool class, so the
    * source of truth lives next to the tool definition (e.g. `assertVisible`,
-   * `web_verifyTextVisible`) and individual targets can opt new tools in by setting the
+   * `web_verifyElementVisible`) and individual targets can opt new tools in by setting the
    * flag — no central allowlist to keep in sync.
    *
    * Scans every class-backed tool reachable from the active session:
@@ -1095,11 +1124,6 @@ class StepToolSet(
    *     registered at runtime that aren't part of
    *     [TrailblazeToolSet.DefaultLlmTrailblazeTools].
    *  3. [ToolSetCategory.ALL] — the framework-level superset of every default class subset.
-   *
-   * YAML-defined verification tools aren't surfaced here yet — none exist in the catalog
-   * today (the `verification.yaml` toolset only references class-backed tools by name) —
-   * and adding them later is a strict superset change once a YAML tool wants to opt in
-   * via `is_verification: true`.
    *
    * All reflection is wrapped defensively: if annotation reads fail at runtime (extreme
    * classpath corner cases), the call returns `false` rather than crashing the verify
@@ -1133,8 +1157,8 @@ class StepToolSet(
    * 1. If [toolClassesOverrideProvider] returns a non-null class set, use those classes
    *    (driver-specific override, e.g. Compose tools).
    * 2. Otherwise, prefer the device-specific [availableToolsProvider] which already
-   *    accounts for driver + YAML catalog.
-   * 3. Fallback (no device connected yet): full ALL-category class + YAML descriptor list.
+   *    accounts for driver + toolset catalog.
+   * 3. Fallback (no device connected yet): full ALL-category class descriptor list.
    */
   private fun selectInnerAgentTools(): List<TrailblazeToolDescriptor> {
     val overrideClasses = toolClassesOverrideProvider?.invoke()
@@ -1146,14 +1170,8 @@ class StepToolSet(
       return tools
     }
     // Fallback when no device-specific tools are available (e.g. no device connected yet).
-    // Must include YAML-defined tools (e.g. pressBack) alongside class-backed ones so the
-    // LLM sees the full toolset even in the no-device state.
-    val classDescriptors = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+    return ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
       .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
-      ToolSetCategoryMapping.getYamlToolNames(ToolSetCategory.ALL),
-    ).map { it.toTrailblazeToolDescriptor() }
-    return classDescriptors + yamlDescriptors
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

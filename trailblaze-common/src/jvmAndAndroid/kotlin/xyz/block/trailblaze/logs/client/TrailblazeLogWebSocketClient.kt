@@ -13,7 +13,6 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -24,6 +23,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.ondevice.rpc.proto.LogUploadAck
 import xyz.block.trailblaze.ondevice.rpc.proto.LogUploadEnvelope
 import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /** Persistent device-to-host protobuf upload channel. */
 internal class TrailblazeLogWebSocketClient(
@@ -53,7 +53,7 @@ internal class TrailblazeLogWebSocketClient(
   private val pending = ConcurrentHashMap<Long, CompletableDeferred<LogUploadAck>>()
   private val connectionMutex = Mutex()
   private val sendMutex = Mutex()
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val scope = CoroutineScope(SupervisorJob() + TrailblazeDispatchers.IO)
 
   @Volatile private var session: WebSocketSession? = null
   @Volatile private var readerJob: Job? = null

@@ -160,7 +160,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       // `adb push` does not reliably create missing parent dirs; create them first. The path is
       // single-quote-escaped (execAdbShellCommand joins args with spaces and hands them to the
       // device shell unescaped) so a path with spaces/metacharacters can't split or inject.
-      File(devicePath).parent?.let { parent ->
+      deviceParentDir(devicePath)?.let { parent ->
         shellCommand("mkdir", "-p", parent.shellEscape())
       }
       val pushed = AndroidHostAdbUtils.pushFile(deviceId, tempFile, devicePath)
@@ -380,9 +380,8 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       }
 
       // Ensure parent directory exists on device
-      val parentDir = File(devicePath).parent
-      if (parentDir != null) {
-        shellCommand("mkdir", "-p", parentDir)
+      deviceParentDir(devicePath)?.let { parent ->
+        shellCommand("mkdir", "-p", parent.shellEscape())
       }
 
       // Push file to device via dadb (over the adb wire protocol)
@@ -437,3 +436,11 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     private val ID_PATTERN = Regex("""_id=(\d+)""")
   }
 }
+
+/**
+ * The directory part of a path ON THE DEVICE, or null when it has none. Device paths are always
+ * `/`-separated; `File(devicePath).parent` would split them with the HOST's separator, which on a
+ * Windows host turns `/sdcard/a/b.txt` into `\sdcard\a`.
+ */
+internal fun deviceParentDir(devicePath: String): String? =
+  devicePath.substringBeforeLast('/', missingDelimiterValue = "").takeIf { it.isNotEmpty() }

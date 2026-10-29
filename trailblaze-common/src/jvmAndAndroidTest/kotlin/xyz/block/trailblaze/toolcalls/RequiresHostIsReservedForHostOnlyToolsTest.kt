@@ -2,6 +2,8 @@ package xyz.block.trailblaze.toolcalls
 
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -10,6 +12,11 @@ import kotlin.test.fail
  * Structural gate: **`@TrailblazeToolClass(requiresHost = true)` is an allowlist.** Only the
  * low-level framework tools in [HOST_ONLY_BY_DESIGN] may declare it; any other class-backed tool
  * that takes the flag fails this test and has to argue its way onto the list in a diff.
+ *
+ * A repo that vendors the framework lists its own host-only tools in a
+ * [DOWNSTREAM_ALLOWLIST_FILE_NAME] file outside the framework subtree, one `toolName # reason` per
+ * line, so its tool names never enter framework source. The reason is required, and the same rot
+ * check applies.
  *
  * This lives in the framework's own test source set, not in a downstream module, so it ships with
  * the subtree it guards. The scan itself is repo-wide rather than framework-only, so wherever this
@@ -85,9 +92,10 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
         "repo-wide). Did the walk stop reaching source, or the annotation change shape?",
     )
 
+    val allowed = HOST_ONLY_BY_DESIGN + downstreamAllowlist()
     val flagged = declarations.filter { it.requiresHost }
-    val unexpected = flagged.filterNot { it.name in HOST_ONLY_BY_DESIGN }
-    val missing = HOST_ONLY_BY_DESIGN - flagged.mapNotNull { it.name }.toSet()
+    val unexpected = flagged.filterNot { it.name in allowed }
+    val missing = allowed - flagged.mapNotNull { it.name }.toSet()
 
     if (unexpected.isNotEmpty()) {
       fail(
@@ -102,18 +110,32 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
           "only meant \"don't route this through the device driver\", declare " +
           "`: HostLocalExecutableTrailblazeTool` instead; that runs in whichever JVM holds the " +
           "session, on-device included. If the tool really is host-only, add it to " +
-          "HOST_ONLY_BY_DESIGN with a one-line reason so the next reader can see why."
+          "HOST_ONLY_BY_DESIGN (framework tools) or a $DOWNSTREAM_ALLOWLIST_FILE_NAME file (any " +
+          "other module) with a one-line reason so the next reader can see why."
       )
     }
 
     if (missing.isNotEmpty()) {
       fail(
-        "HOST_ONLY_BY_DESIGN lists ${missing.sorted()}, but no class-backed tool declares " +
+        "The host-only allowlist lists ${missing.sorted()}, but no class-backed tool declares " +
           "requiresHost under that name. Either the tool was renamed, or the flag was " +
           "dropped — if dropped, confirm the tool really can run off a host machine and remove the " +
           "allowlist entry too, so the list cannot rot into a no-op."
       )
     }
+  }
+
+  @Test
+  fun `a downstream allowlist entry needs a reason`() {
+    assertEquals(
+      setOf("a_tool", "b_tool"),
+      parseDownstreamAllowlist(
+        "# header comment\n\na_tool  # forks a host process\nb_tool # reads host files\n",
+        "x.txt",
+      ),
+    )
+    assertFailsWith<AssertionError> { parseDownstreamAllowlist("a_tool\n", "x.txt") }
+    assertFailsWith<AssertionError> { parseDownstreamAllowlist("a_tool #  \n", "x.txt") }
   }
 
   /**
@@ -292,6 +314,41 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
       }
     }
   }
+
+  /**
+   * Tool ids from every [DOWNSTREAM_ALLOWLIST_FILE_NAME] outside the framework subtree. One inside
+   * it is ignored: framework tools belong in [HOST_ONLY_BY_DESIGN], next to the reasons above.
+   */
+  private fun downstreamAllowlist(): Set<String> {
+    val repoRoot = findRepoRoot()
+    val frameworkRoot = findFrameworkRoot(repoRoot)
+    // The framework repo itself has nothing outside the framework.
+    if (frameworkRoot == repoRoot) return emptySet()
+    return repoRoot
+      .walkTopDown()
+      .onEnter {
+        it == repoRoot ||
+          it != frameworkRoot && it.name !in PRUNED_DIRECTORY_NAMES && !it.name.startsWith(".")
+      }
+      .filter { it.isFile && it.name == DOWNSTREAM_ALLOWLIST_FILE_NAME }
+      .flatMap { parseDownstreamAllowlist(it.readText(), it.toRelativeString(repoRoot)) }
+      .toSet()
+  }
+
+  private fun parseDownstreamAllowlist(text: String, path: String): Set<String> =
+    text
+      .lines()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() && !it.startsWith("#") }
+      .map { line ->
+        val name = line.substringBefore('#').trim()
+        val reason = line.substringAfter('#', missingDelimiterValue = "").trim()
+        if (reason.isEmpty()) {
+          fail("$path: '$name' needs a reason after '#' saying why it cannot run on-device.")
+        }
+        name
+      }
+      .toSet()
 
   /** Blanks out `//` and `/* … */` comments, preserving length so nothing else shifts. */
   private fun stripComments(body: String): String =
@@ -490,6 +547,9 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
      * of them passed the gate. A gate that has to be taught about each new module is a gate that is
      * wrong by default; this one is wrong only if someone prunes a directory below.
      */
+    /** Where a module outside the framework lists its own host-only tools. */
+    private const val DOWNSTREAM_ALLOWLIST_FILE_NAME = "requires-host-tools.txt"
+
     private val PRUNED_DIRECTORY_NAMES = setOf("build", "node_modules", "out", "vendor")
     private val TEST_SOURCE_SET = Regex("/src/[^/]*[Tt]est[^/]*/")
     private const val ANNOTATION_OPEN = "@TrailblazeToolClass("

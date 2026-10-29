@@ -4,10 +4,12 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import org.junit.Test
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool.LaunchMode
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import kotlin.test.assertEquals
 import xyz.block.trailblaze.util.Console
 
@@ -56,7 +58,7 @@ class TrailSerializerTest {
 
   @Test
   fun singleToolTest() {
-    val trailblazeTool = TapOnElementWithTextTrailblazeTool("Email")
+    val trailblazeTool = tapOnText("Email")
     val toolWrapperSerializer = trailblazeYamlInstance.serializersModule.getContextual(TrailblazeToolYamlWrapper::class)
       ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
     val yaml = trailblazeYamlInstance.encodeToString(
@@ -82,8 +84,8 @@ class TrailSerializerTest {
     val listOfToolsSerializer = ListSerializer(toolWrapperSerializer)
 
     val trailblazeTools = listOf(
-      TapOnElementWithTextTrailblazeTool("ONE"),
-      TapOnElementWithTextTrailblazeTool("TWO"),
+      tapOnText("ONE"),
+      tapOnText("TWO"),
     )
     val yaml = trailblazeYamlInstance.encodeToString(
       listOfToolsSerializer,
@@ -97,5 +99,11 @@ class TrailSerializerTest {
     )
     Console.log(deserialized.toString())
   }
+
+  private fun tapOnText(text: String): TapOnByElementSelector = TapOnByElementSelector(
+    nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "(?is).*${Regex.escape(text)}.*"),
+    ),
+  )
 
 }

@@ -8,14 +8,15 @@ kotlin {
   compilerOptions {
     freeCompilerArgs.addAll(
       "-opt-in=androidx.compose.ui.test.ExperimentalTestApi",
-      "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi",
     )
   }
 }
 
 dependencies {
-  // Interface depends on compose-ui (SemanticsNode, SemanticsActions, ImageBitmap)
-  api(compose.desktop.currentOs)
+  // Interface depends on compose-ui (SemanticsNode, ImageBitmap). Just `ui`, not the
+  // `compose.desktop.currentOs` aggregator: that one adds foundation, material and animation, which
+  // a driver never touches, and every one of them lands in the CLI JAR.
+  api(compose.ui)
 
   // DriverDispatch marker — ComposeTestTarget implements it to declare the
   // "dispatch action, then settle" contract shared with the other driver managers.

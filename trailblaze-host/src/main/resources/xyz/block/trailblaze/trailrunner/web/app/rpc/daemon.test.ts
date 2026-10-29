@@ -71,6 +71,104 @@ describe("createDaemonRpc", () => {
     expect(await rpc.connectToDevice({ instanceId: "x", trailblazeDevicePlatform: "ANDROID" })).toBe(false);
   });
 
+  test("connectToDeviceDetailed hands back the screen size a mirror maps pointer coordinates against", async () => {
+    const { impl } = fakeFetch(200, { deviceWidth: 1080, deviceHeight: 2400 });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.connectToDeviceDetailed({ instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" }, "alpha-app");
+
+    expect(r).toEqual({ ok: true, error: null, deviceWidth: 1080, deviceHeight: 2400, logSessionId: null });
+  });
+
+  test("connectToDeviceDetailed passes on the session the connection logs into", async () => {
+    // An Android connection's session has no start record, so the session list never shows it and
+    // this id is the only way the device's activity can be followed.
+    const { impl } = fakeFetch(200, { deviceWidth: 1080, deviceHeight: 2400, logSessionId: "recording_42" });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.connectToDeviceDetailed({ instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" });
+
+    expect(r.logSessionId).toBe("recording_42");
+  });
+
+  test("connectToDeviceDetailed keeps the daemon's refusal as the error", async () => {
+    const { impl } = fakeFetch(500, { message: "Device is in use by another target" });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.connectToDeviceDetailed({ instanceId: "x", trailblazeDevicePlatform: "ANDROID" });
+
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("in use by another target");
+  });
+
+  test("deviceInteraction posts the gesture to its endpoint, wrapped with the device id", async () => {
+    // That the daemon decodes this body (keyed on `type`) is pinned on the Kotlin side, in
+    // DeviceInteractionWireTest; this only checks the client sends what it was given.
+    const { impl, calls } = fakeFetch(200, { success: true });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.deviceInteraction({ instanceId: "e", trailblazeDevicePlatform: "ANDROID" }, { type: "tap", x: 10, y: 20 });
+
+    expect(r).toEqual({ ok: true, error: null });
+    expect(calls[0].url).toBe("http://daemon/rpc/DeviceInteractionRequest");
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({
+      trailblazeDeviceId: { instanceId: "e", trailblazeDevicePlatform: "ANDROID" },
+      interaction: { type: "tap", x: 10, y: 20 },
+    });
+  });
+
+  test("deviceInteraction reports a 2xx that the device refused as an error", async () => {
+    const { impl } = fakeFetch(200, { success: false, errorMessage: "Device not connected: android/e" });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.deviceInteraction({ instanceId: "e", trailblazeDevicePlatform: "ANDROID" }, { type: "pressKey", key: "Back" });
+
+    expect(r).toEqual({ ok: false, error: "Device not connected: android/e" });
+  });
+
+  test("getToolCatalog asks for the device's driver and returns its tools", async () => {
+    const { impl, calls } = fakeFetch(200, { tools: [{ name: "tapOnPoint", requiredParameters: [{ name: "x", type: "Int" }] }] });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const tools = await rpc.getToolCatalog("PLAYWRIGHT_NATIVE");
+
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({ trailblazeDriverType: "PLAYWRIGHT_NATIVE" });
+    expect(tools?.map((t) => t.name)).toEqual(["tapOnPoint"]);
+  });
+
+  test("getToolCatalog names the device so its classifiers gate the list", async () => {
+    const { impl, calls } = fakeFetch(200, { tools: [] });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+    const device = { instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" } as const;
+
+    await rpc.getToolCatalog("ANDROID_ONDEVICE_ACCESSIBILITY", device);
+
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({
+      trailblazeDriverType: "ANDROID_ONDEVICE_ACCESSIBILITY",
+      trailblazeDeviceId: device,
+    });
+  });
+
+  test("runTrailYaml surfaces the daemon's failure reason", async () => {
+    const { impl, calls } = fakeFetch(500, { message: "Trail run failed: element not found" });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.runTrailYaml({ instanceId: "w", trailblazeDevicePlatform: "WEB" }, "- tools: []\n");
+
+    expect(calls[0].url).toBe("http://daemon/rpc/RunTrailYamlRequest");
+    expect(r).toEqual({ ok: false, error: "Trail run failed: element not found" });
+  });
+
+  test("navigateWebUrl posts the url for the device", async () => {
+    const { impl, calls } = fakeFetch(200, { success: true });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const r = await rpc.navigateWebUrl({ instanceId: "w", trailblazeDevicePlatform: "WEB" }, "https://example.com");
+
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(calls[0].init!.body as string).url).toBe("https://example.com");
+  });
+
   test("setCurrentTargetApp wraps the id in the request body", async () => {
     const { impl, calls } = fakeFetch(200, { success: true });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
@@ -271,7 +369,6 @@ describe("createDaemonRpc", () => {
       showWebBrowser: true,
       showTrailsTab: true,
       showDevicesTab: true,
-      showWaypointsTab: false,
       llm: { provider: "anthropic", model: "claude" },
       selfHealEnabled: true,
       requireSteps: false,
@@ -696,7 +793,6 @@ describe("createDaemonRpc", () => {
       showWebBrowser: true,
       showTrailsTab: true,
       showDevicesTab: true,
-      showWaypointsTab: false,
       llm: { provider: "anthropic", model: "claude" },
       selfHealEnabled: true,
       requireSteps: false,

@@ -1,15 +1,15 @@
 // Public data model for session surveys.
 //
-// A survey reads one finished session — its Trailblaze log records plus every captured sidecar
-// (network requests, analytics streams, device log, visible screen text) — and reports which known
-// features that session exercised, each backed by the concrete records that prove it. This file
-// holds only the shapes; `session.ts` loads them and `survey.ts` defines the authoring surface.
+// A survey is a named check over one session — its Trailblaze log records plus every captured
+// sidecar (network requests, analytics streams, device log, visible screen text). It reports
+// whatever it finds, each finding backed by the concrete records that prove it. This file holds
+// only the shapes; `session.ts` loads them and `survey.ts` defines the authoring surface.
 
 import type { TrailblazeLog, TrailblazeToolLog } from "../generated/trailrunner-dtos.js";
 
-/** Where a piece of evidence came from. Drives how a report renders it. */
-import type { FootprintSpec } from "./survey.js";
+import type { FindingSpec, LabelBatch, LabelResult, SurveyDefinition, SurveyHandler } from "./survey.js";
 
+/** Where a piece of evidence came from. Drives how a report renders it. */
 export type RecordKind =
   | "network"
   | "analytics"
@@ -94,11 +94,14 @@ export interface AnalyticsEvent extends SessionRecord {
   raw: unknown;
 }
 
-/** One row of any `events/<stream>.ndjson` sidecar, undecoded. */
-export interface StreamEvent extends SessionRecord {
+/**
+ * One row of any `events/<stream>.ndjson` sidecar, undecoded. `T` is the shape its reader says the
+ * row has (see `SurveySession.stream`); nothing checks it.
+ */
+export interface StreamEvent<T = unknown> extends SessionRecord {
   kind: "event";
   stream: string;
-  data: unknown;
+  data: T;
 }
 
 /** One Trailblaze log record with its parsed payload. */
@@ -202,53 +205,93 @@ export interface SessionSummary {
   hasDeviceLog: boolean;
 }
 
-/** What a survey hands back for one match. The runner fills in `survey` and `session`. */
-export interface FindingInput {
-  /**
-   * Which feature this finding belongs to. Defaults to the survey's `feature`; a survey that
-   * recognizes many features sets it per finding.
-   */
-  feature?: string;
-  /**
-   * What kind of thing `feature` names. Defaults to the survey's `kind`, then `"feature"`. A
-   * survey can also place a session on another axis, such as `"job"` or `"gap"`. `diagnosis`,
-   * `signal` and `measure` mark a finding about how the run went rather than what it exercised
-   * (see `purposeOf`).
-   */
-  kind?: string;
+/**
+ * What a survey hands back for one match. The runner fills in `survey` and `session`. A finding is
+ * a one-line `summary`, the `evidence` that proves it, and whatever `data` its survey chooses to
+ * carry: like an event stream's rows, its shape is the survey's own, and the readers that know the
+ * survey know what to expect in it.
+ */
+export interface SurveyFinding<D extends object = Record<string, unknown>> {
   /** One line: what happened in this session. */
   summary: string;
   /** The records that prove it. Query results can be passed straight through. */
   evidence: SessionRecord[];
-  confidence?: "high" | "medium" | "low";
-  /** Anything else worth carrying into the report (an amount, an id, a variant). */
-  data?: Record<string, unknown>;
+  /** Anything else worth carrying into the report (an id, an amount, a variant), in any shape. */
+  data?: D;
 }
 
-/** A finding as it appears in a report: one feature a session exercised, with the records that prove it. */
-export interface Finding extends FindingInput {
-  feature: string;
-  kind: string;
+/** @deprecated Use SurveyFinding. */
+export type FindingInput<D extends object = Record<string, unknown>> = SurveyFinding<D>;
+
+/** A finding as it appears in a report: what one survey found in one session, with the records that prove it. */
+export interface Finding<D extends object = Record<string, unknown>> extends SurveyFinding<D> {
+  /** The survey that found it: its export name. */
   survey: string;
   session: string;
+  /** The survey's version when it found this: a hash of the file that defines it and its local imports. Absent for a survey built in code. */
+  version?: string;
 }
 
-/** Declares what a survey detects and which sessions it applies to. */
-export interface SurveySpec {
-  /**
-   * Stable id of the feature this survey detects, e.g. `payments.checkout.gift-card`. Reports
-   * group by it, so several surveys may share one feature. A survey that recognizes many features
-   * (`footprints`, or a handler that sets `feature` per footprint) uses it as the family name.
-   */
-  feature: string;
-  /** Default `kind` of this survey's findings. `"feature"` when unset. */
-  kind?: string;
-  /**
-   * Every feature id a handler may report, when that is more than `feature`. Declared features are
-   * report rows even when no session matched; `footprints` keys declare themselves.
-   */
-  features?: ReadonlyArray<string>;
-  /** What the feature is, for readers of the report. */
+/**
+ * What a survey's label phase hands back: a conclusion its findings add up to across a batch of
+ * runs, backed by the findings that prove it. `type` is the survey's own vocabulary, like an event
+ * type: the framework knows none. A label's runs are the sessions of its findings.
+ */
+export interface LabelInput<LD extends object = Record<string, unknown>> {
+  /** What kind of label it is (`job`, `journey`, ...). The survey that emits a type owns it. */
+  type?: string;
+  /** Which one. Labels of one survey with the same type and name are one label, their findings combined. */
+  name: string;
+  /** One line on why the findings add up to this label. */
+  reasoning?: string;
+  /** Anything else the label carries, in any shape. */
+  data?: LD;
+  /** The findings that prove it. At least one: a label nothing proves is unexplainable. */
+  findings: ReadonlyArray<Finding<object>>;
+}
+
+/** A label as another survey's label phase reads it: `dependsOn.<name>.labels`. */
+export type Label<L extends LabelInput<object> = LabelInput> = L & {
+  /** The survey whose label phase emitted it. */
+  survey: string;
+  version?: string;
+  /** Ids of the sessions its findings came from, in batch order. */
+  runs: string[];
+};
+
+/** Names one finding in a report: which survey found it, in which run, and what it said. */
+export interface FindingRef {
+  survey: string;
+  session: string;
+  /** Which of the survey's findings in that session, in the order the session's findings list them. */
+  index: number;
+  summary: string;
+}
+
+/** A label as a report carries it: its findings by reference rather than in full. */
+export interface LabelRecord {
+  survey: string;
+  version?: string;
+  type?: string;
+  name: string;
+  reasoning?: string;
+  data?: object;
+  runs: string[];
+  findings: FindingRef[];
+}
+
+/**
+ * Declares a survey: which sessions it applies to, its find phase (per session), and its label
+ * phase (per batch). The survey's name is the name it is exported under. Write `find` before
+ * `label`: TypeScript reads the object top to bottom, so that order is what types `label`'s
+ * findings by what `find` returns.
+ */
+export interface SurveySpec<
+  D extends object = Record<string, unknown>,
+  L extends LabelInput<object> = LabelInput,
+  U extends Record<string, SurveyDefinition> = {},
+> {
+  /** What the survey checks, for readers of the report. */
   description?: string;
   /** Only run on sessions whose platform is listed. Unset runs everywhere. */
   platforms?: ReadonlyArray<string>;
@@ -256,17 +299,35 @@ export interface SurveySpec {
   appIds?: ReadonlyArray<string>;
   /** Only run on sessions of these trail targets. */
   targets?: ReadonlyArray<string>;
-  /** Free-form tags for filtering which surveys a run includes. */
-  tags?: ReadonlyArray<string>;
   /**
-   * Declarative form: what this feature's footprint looks like. Give this instead of a handler
-   * when the feature is "these records were observed" and nothing needs computing.
+   * True when the survey needs the finished session: its outcome or duration, logs, tool calls,
+   * screen text, the device log, the trace, or any file. Such a survey runs only after the run, on
+   * the host under Bun, where it may import anything.
+   *
+   * Default false: the survey also runs while the trail is running, from a tool
+   * (`ctx.surveys`), on the host or on a device. It then sees only what is captured
+   * so far in the session's event streams (`network`, `analytics`, `events`) and runs under the
+   * same rules as a scripted tool, so it cannot import `node:*` or Bun APIs.
    */
-  footprint?: FootprintSpec;
+  requiresFinishedSession?: boolean;
   /**
-   * Declarative form for many features at once: each key is a feature id and its value is that
-   * feature's footprint. One finding is reported per key that matches, so one survey can place a
-   * session against a whole catalog.
+   * The find phase: runs once per session and returns what it found there. A function of the
+   * session, or a declarative finding: the queries that prove it, when nothing needs computing.
    */
-  footprints?: Readonly<Record<string, FootprintSpec>>;
+  find?: SurveyHandler<D> | FindingSpec<D>;
+  /** The declarative finding, as `find` also takes it. Kept for surveys written before `find`. */
+  finding?: FindingSpec<D>;
+  /**
+   * The surveys this survey's label phase reads, by the name it reads them under:
+   * `dependsOn: { journeys }`, then `label: ({ dependsOn }) => dependsOn.journeys.labels`. Their
+   * label phases run first; a cycle fails when the surveys load. Running this survey alone still
+   * runs them, reusing a session's stored findings when they are current.
+   */
+  dependsOn?: U;
+  /**
+   * The label phase: runs once, after the find phase has run over every session of the batch, and
+   * turns findings into labels. Only after runs, never mid-trail. A survey may have only a label
+   * phase, reading the surveys in its `dependsOn`.
+   */
+  label?(batch: LabelBatch<D, U>): LabelResult<L> | Promise<LabelResult<L>>;
 }

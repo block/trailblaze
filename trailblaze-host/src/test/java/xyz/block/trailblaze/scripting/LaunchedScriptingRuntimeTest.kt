@@ -46,7 +46,6 @@ class LaunchedScriptingRuntimeTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "launched-scripting-runtime-test-set",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 

@@ -12,6 +12,10 @@ import Zip from "./zip-report-core.js";
 // The frame walk is the real shared one (run-report-core) even where the extractors are faked:
 // which files a report gathers is exactly the behavior these tests pin.
 import { REPORT_DERIVE } from "./run-report-shell";
+import { isLlmTurnRow, slimTraceForShare } from "./run-report-extract";
+import { buildReportTraceModel } from "./run-report-trace-model";
+import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes } from "./run-report-trail-model";
+import { buildReplayTimeline } from "./run-report-trail-replay";
 
 const inflateRaw = (data: Uint8Array) => new Uint8Array(inflateRawSync(data));
 const encoder = new TextEncoder();
@@ -283,6 +287,17 @@ describe("a session read straight off disk is put on one clock before it is orde
     expect(session.logs[1].hostReceivedAt).toBe("2026-06-30T20:05:01.000Z");
   });
 
+  test("a whole report built from the archive measures the run on that one clock", async () => {
+    // The renderer is handed to the full assembly, not to the reader underneath it, so the
+    // assembly must pass it on. Left raw, the device log's 20:00 opens the run and the five-minute
+    // skew lands in the run's duration.
+    const dir = SESSION_ID + "/";
+    const logs = [hostLog("2026-06-30T20:02:00.000Z"), deviceToolLog(), hostLog("2026-06-30T20:06:00.000Z")];
+    const zip = buildZip(logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })));
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].meta.duration).toBe("4m 0s");
+  });
+
   test("a session with no anchored device log keeps its raw timestamps", async () => {
     // No offset is derivable, so nothing is invented. A pre-marker archive must read the same as
     // it did before this normalization existed.
@@ -330,6 +345,60 @@ describe("a session read straight off disk is put on one clock before it is orde
       "2026-06-30T20:07:00.000Z",
     ]);
   });
+
+  test("a screenshot from a device that names no binding lands in that device's Replay lane", async () => {
+    // Device-dispatched logs carry no deviceName — the device never learns its binding — so the
+    // only thing telling two devices apart is which one the host had handed over to when each log
+    // arrived. Here `back` runs 200ms ahead of the host and `front` keeps time. Blending their
+    // samples into one offset shifts front's tap 195ms early: before the handover that started
+    // it, into back's step, and so into back's lane.
+    const at = (ms: number) => new Date(Date.UTC(2026, 5, 30, 20, 0, 10) + ms).toISOString();
+    const T = "xyz.block.trailblaze.logs.client.TrailblazeLog";
+    const step = (cls: string, text: string, ms: number) => ({
+      class: `${T}.${cls}`, clock: "host", timestamp: at(ms),
+      promptStep: { class: "xyz.block.trailblaze.yaml.DirectionStep", step: text },
+      ...(cls === "ObjectiveCompleteLog" ? { objectiveResult: { class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete" } } : {}),
+    });
+    const switchTo = (name: string, traceId: string, ms: number) => ({
+      class: `${T}.TrailblazeToolLog`, clock: "host", toolName: "switchDevice", traceId, successful: true,
+      durationMs: 2, trailblazeTool: { raw: { name } }, deviceName: name, timestamp: at(ms),
+    });
+    // One device tool and the driver action that captured its screen, both device-stamped.
+    const deviceTool = (traceId: string, skewMs: number, ranAtMs: number, shot: string) => [
+      {
+        class: `${T}.TrailblazeToolLog`, clock: "device", toolName: "tapOnElement", traceId, successful: true,
+        durationMs: 100, trailblazeTool: { raw: {} }, timestamp: at(ranAtMs + skewMs), hostReceivedAt: at(ranAtMs + 105),
+      },
+      {
+        class: `${T}.MaestroDriverLog`, clock: "device", traceId, screenshotFile: shot,
+        action: { class: "xyz.block.trailblaze.api.AgentDriverAction.TapPoint", x: 10, y: 10 },
+        durationMs: 10, timestamp: at(ranAtMs + 50 + skewMs), hostReceivedAt: at(ranAtMs + 106),
+      },
+    ];
+    const session = await sessionOf([
+      step("ObjectiveStartLog", "Show the code on the back screen", 0),
+      switchTo("back", "s1", 5),
+      ...deviceTool("t1", 200, 100, "back-code.webp"),
+      step("ObjectiveCompleteLog", "Show the code on the back screen", 300),
+      step("ObjectiveStartLog", "Scan the code on the front screen", 400),
+      switchTo("front", "s2", 405),
+      ...deviceTool("t2", 0, 450, "front-scan.webp"),
+      step("ObjectiveCompleteLog", "Scan the code on the front screen", 700),
+    ]);
+
+    // The Replay tab's own projection: one lane per device, captures placed on the shared clock.
+    const trace = slimTraceForShare(REPORT_DERIVE.extractTrace(session.logs as never));
+    const lanes = traceDeviceLanes(trace);
+    const t0 = buildReportTraceModel(trace, 0).traceT0;
+    const matrix = pruneIdleTrailCells(buildTrailMatrix(
+      lanes.map((lane) => ({ ...buildReportTraceModel(lane.trace, 0), traceT0: t0 })),
+      () => true,
+      isLlmTurnRow,
+    ));
+    const shotsByLane = Object.fromEntries(buildReplayTimeline(matrix).lanes.map((lane, i) =>
+      [lanes[i].device, lane.captures.map((capture) => capture.file)]));
+    expect(shotsByLane).toEqual({ back: ["back-code.webp"], front: ["front-scan.webp"] });
+  });
 });
 
 describe("trail names and status labels", () => {
@@ -352,6 +421,14 @@ describe("trail names and status labels", () => {
 });
 
 describe("run meta derivation", () => {
+  test("retains the initiating source URL when building a report only from saved logs", () => {
+    const url = `https://github.com/example/trails/blob/${"a".repeat(40)}/cases/trail.yaml`;
+    const started = startedLog();
+    started.sessionStatus.trailSourceUrl = url;
+    started.sessionStatus.trailFilePath = null;
+    expect(Zip.buildRunMeta([started, endedLog("Ended.Succeeded")], {}).trailSourceUrl).toBe(url);
+    expect(Zip.buildRunMeta([startedLog()], {}).trailSourceUrl).toBeUndefined();
+  });
   test("derives the full meta from a passing session's logs", () => {
     const logs = [startedLog(), endedLog("Ended.Succeeded", {}, "2026-06-30T20:22:58.048796Z")];
     const meta = Zip.buildRunMeta(logs, { recordingYaml: "- config: {}\n", generatedAt: "test-time" });
@@ -375,6 +452,13 @@ describe("run meta derivation", () => {
     expect(meta.generatedAt).toBe("test-time");
     expect(meta.error).toBeUndefined();
     expect(meta.selfHeal).toBeUndefined();
+    // No authored context in this fixture, and `title` above isn't re-emitted as one.
+    expect(meta.context).toBeUndefined();
+  });
+  test("carries the trail's authored context, in parity with sessionMetaJson", () => {
+    const trailConfig = { id: "suites/suite_1/case_2", title: "Remove item from cart", context: "Cart must update.\n\nSetup:\nOne item." };
+    const meta = Zip.buildRunMeta([startedLog({}, { trailConfig }), endedLog("Ended.Succeeded")], { generatedAt: "test-time" });
+    expect(meta.context).toBe("Cart must update.\n\nSetup:\nOne item.");
   });
 
   test("the classifier is the whole compound identity, not the platform-stripped tail", () => {
@@ -448,6 +532,13 @@ describe("run meta derivation", () => {
     );
     expect(maxCalls.error).toContain("25");
     expect(maxCalls.error).toContain("Tap Save");
+
+    // The status's own message, when it has one, says which limit ended the step.
+    const engineLimit = Zip.buildRunMeta(
+      [startedLog(), endedLog("Ended.MaxCallsLimitReached", { maxCalls: 25, objectivePrompt: "Tap Save", message: "Decision engine move limit of 25 reached for objective: Tap Save" })],
+      {},
+    );
+    expect(engineLimit.error).toContain("Decision engine");
   });
 
   test("a heal the run recovered from cleanly still reports the self-heal", () => {

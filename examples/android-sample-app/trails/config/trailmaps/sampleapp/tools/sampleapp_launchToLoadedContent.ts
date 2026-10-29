@@ -31,11 +31,11 @@ const CONTENT_LOADED_WAIT_MS = 30_000;
 
 /**
  * Launch the Sample App, open the Loading demo, start the load, and wait for "Content Loaded" to
- * appear. Lands the trail on the loaded-content screen regardless of which delay (1s / 3s / 6s) is
- * selected, because it waits for the result rather than sleeping a fixed amount of time.
+ * appear, whichever load delay is selected.
  */
+// Waits for the result rather than sleeping, so it works for every delay chip (1s / 3s / 6s).
 export const sampleapp_launchToLoadedContent = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  { supportedPlatforms: ["android"] },
   async (_input, ctx) => {
     if (ctx.device?.driverType && ctx.device.driverType !== ACCESSIBILITY_DRIVER_TYPE) {
       throw new Error(

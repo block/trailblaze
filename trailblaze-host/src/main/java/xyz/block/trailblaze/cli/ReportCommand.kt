@@ -12,6 +12,7 @@ import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Generate reports from session recordings.
@@ -304,6 +305,23 @@ class ReportCommand : Callable<Int> {
   )
   var verbose: Boolean = false
 
+  @Option(
+    names = ["--surveys"],
+    arity = "0..1",
+    fallbackValue = "",
+    split = ",",
+    paramLabel = "<names>",
+    description = [
+      "Also run surveys over the report's sessions, and write what they found beside the report: " +
+        "surveys.md (labels, the findings behind each, and the runs they came from) and " +
+        "surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated " +
+        "(--surveys=journeys,jobs). Each session's findings and labels are stored in its " +
+        "surveys.json too. Surveys never run unless asked. Put a session id before this flag, or " +
+        "it is read as a survey name.",
+    ],
+  )
+  var surveys: List<String>? = null
+
   override fun call(): Int {
     if (positionalId != null && id != null) {
       Console.error("Positional <session-id> and --id are two ways to spell the same thing — pass only one.")
@@ -420,6 +438,7 @@ class ReportCommand : Callable<Int> {
       shareUrl = trimmedShareUrl,
       fullEventPayloads = fullReportPayloads,
       verbose = verbose,
+      surveys = surveys?.filter { it.isNotBlank() },
     )
     // Exit for every outcome, not just the successful one. `TrailblazeCli.run` force-exits on
     // non-zero codes but returns normally on 0, so a non-daemon thread left running anywhere in
@@ -485,6 +504,34 @@ class ReportCommand : Callable<Int> {
 }
 
 /**
+ * Runs [names] (every survey when empty) over [sessionDirs] — session directories, or a directory of them — and writes the markdown report to
+ * [markdown] and the JSON one to [json], printing both paths. The interactive HTML does not render
+ * survey results, so they sit beside it. Returns the surveys CLI's exit code.
+ */
+internal fun writeSurveyReport(sessionDirs: List<File>, names: List<String>, markdown: File, json: File): Int {
+  // Refused before anything is removed below: that file is the session's stored results, not an earlier report.
+  if (sessionDirs.any { File(it, "surveys.json").canonicalFile == json.canonicalFile }) {
+    Console.error("Error: ${json.path} is where a session stores its survey results; write the report somewhere else.")
+    return TrailblazeExitCode.MISUSE.code
+  }
+  // Gone first, so a run that fails early leaves no earlier run's results beside this report.
+  markdown.delete()
+  json.delete()
+  val args = buildList {
+    add("--write")
+    add("--format"); add("markdown")
+    add("--out"); add(json.absolutePath)
+    sessionDirs.forEach { add("--sessions"); add(it.absolutePath) }
+    names.forEach { add("--survey"); add(it) }
+  }
+  val exit = SurveyCli.run(args, CliCallerContext.callerCwd().toAbsolutePath().toFile(), stdout = markdown)
+  if (markdown.isFile && markdown.length() > 0) Console.info("Surveys: ${markdown.fileUrl()}")
+  if (json.isFile) Console.info("Surveys JSON: ${json.fileUrl()}")
+  if (exit != TrailblazeExitCode.SUCCESS.code) Console.error("Surveys did not all run cleanly (exit $exit); see above.")
+  return exit
+}
+
+/**
  * Generate HTML + JSON reports for one or all sessions.
  *
  * @param sessionId When non-null, narrows to a single session. Prefix matching is
@@ -510,6 +557,8 @@ class ReportCommand : Callable<Int> {
  * @param verbose When true (`-v`/`--verbose`), the generator's own progress logs reach the
  *   terminal instead of being swallowed. Off by default: those lines are one-per-session
  *   breadcrumbs, and the report paths are what the person asked for.
+ * @param surveys When non-null (`--surveys`), the surveys to run over the report's sessions —
+ *   empty for all of them. What they found is written beside the HTML; see [writeSurveyReport].
  * @return the exit code for the run. Every path returns rather than exiting the process — the
  *   caller ([ReportCommand.call]) owns process termination, so one force-exit covers all of them.
  */
@@ -531,6 +580,7 @@ internal fun generateSessionReport(
   shareUrl: String? = null,
   fullEventPayloads: Boolean = false,
   verbose: Boolean = false,
+  surveys: List<String>? = null,
 ): Int {
   val logsRepo = app.deviceManager.logsRepo
   val allIds = logsRepo.getSessionIds()
@@ -601,15 +651,27 @@ internal fun generateSessionReport(
   }
 
   Console.info("")
-  Console.info("HTML: file://${htmlFile.absolutePath}")
-  if (jsonFile != null) Console.info("JSON: file://${jsonFile.absolutePath}")
+  Console.info("HTML: ${htmlFile.fileUrl()}")
+  if (jsonFile != null) Console.info("JSON: ${jsonFile.fileUrl()}")
+  // A survey's failure is reported after the exports below, so it never costs the ones asked for.
+  var surveyExit = TrailblazeExitCode.SUCCESS.code
+  if (surveys != null) {
+    surveyExit = writeSurveyReport(
+      // The sessions the HTML covers, not the logs directory, whose zips and nested directories the
+      // surveys CLI would also read.
+      sessionDirs = sessionIds.map { File(logsRepo.logsDir, it.value) },
+      names = surveys,
+      markdown = File(htmlFile.parentFile, if (outputDir != null) "surveys.md" else "${htmlFile.nameWithoutExtension}.surveys.md"),
+      json = File(htmlFile.parentFile, if (outputDir != null) "surveys.json" else "${htmlFile.nameWithoutExtension}.surveys.json"),
+    )
+  }
 
   // The animated timeline exports (--video/--gif/--webp) drive headless Playwright over the
   // report's autoplay timeline: --video screen-records `?autoplay=1` playing in real time, and
   // --gif/--webp step `?autoplay=step` one frame at a time (see PlaywrightReportCapture).
   // (--storyboard builds its own grid HTML from logs and only needs a path anchor.)
   if (videoSpec != null || gifSpec != null || webpSpec != null) {
-    Console.log("Recording the report's timeline: file://${htmlFile.absolutePath}")
+    Console.log("Recording the report's timeline: ${htmlFile.fileUrl()}")
   }
 
   val (effectiveGifSpec, effectiveWebpSpec) =
@@ -783,10 +845,10 @@ internal fun generateSessionReport(
   }
 
   if (open) {
-    TrailblazeDesktopUtil.openInDefaultBrowser("file://${htmlFile.absolutePath}")
+    TrailblazeDesktopUtil.openInDefaultBrowser("${htmlFile.fileUrl()}")
   }
 
-  return TrailblazeExitCode.SUCCESS.code
+  return surveyExit
 }
 
 private data class ExportDefaults(

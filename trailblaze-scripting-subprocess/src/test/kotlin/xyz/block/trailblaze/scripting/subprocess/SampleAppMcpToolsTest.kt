@@ -29,15 +29,16 @@ import kotlin.test.Test
  * CI coverage for the **reference** subprocess MCP tools shipped with the
  * android-sample-app example (`examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/mcp/tools.ts`).
  *
- * `SubprocessRuntimeEndToEndTest` exercises the runtime via dedicated `fixture.js` / `fixture.ts`
- * under this module's own test resources — those catch regressions in the runtime, not in the
+ * `SubprocessRuntimeEndToEndTest` exercises the runtime via a dedicated `fixture.js` under this
+ * module's own test resources — it catches regressions in the runtime, not in the
  * public-facing example. This test plugs the same spawn/handshake/dispatch pipeline into the
  * actual `tools.ts` a Trailblaze user would copy, so CI notices the moment the reference
  * example stops working.
  *
- * Gating mirrors `fixture.ts` in the sibling test: skip when bun isn't on
- * PATH or when `node_modules/` hasn't been installed. The Gradle `installSampleAppMcpTools`
- * task runs `bun install` in the sample-app's `mcp/` directory (bun-only; no npm fallback —
+ * It is also the only test here of a server built on the real `@modelcontextprotocol/sdk`.
+ *
+ * Gating: skip when bun isn't on PATH or when `node_modules/` hasn't been installed. The Gradle
+ * `installSampleAppMcpTools` task runs `bun install` in the sample-app's `mcp/` directory (bun-only; no npm fallback —
  * see root CLAUDE.md / PR #3503), so CI with bun installed runs through — elsewhere the
  * test skips cleanly instead of blocking the build.
  */

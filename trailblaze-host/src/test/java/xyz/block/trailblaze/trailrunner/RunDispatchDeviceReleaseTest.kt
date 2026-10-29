@@ -20,8 +20,6 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -90,8 +88,6 @@ class RunDispatchDeviceReleaseTest {
         )
       },
       initialAppTargets = emptySet(),
-      appIconProvider = AppIconProvider.DefaultAppIconProvider,
-      deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
       runYamlLambda = runYaml,
       installedAppIdsProviderBlocking = { emptySet() },
       appVersionInfoProviderBlocking = { _, _ -> null },

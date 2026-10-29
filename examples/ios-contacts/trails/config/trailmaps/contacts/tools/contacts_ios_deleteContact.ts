@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { LABELS, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
+import { LABELS, nonEmptyString, tapOnText, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_CONTACT_NAME = "Trailblaze Demo";
 
@@ -9,12 +9,9 @@ export interface DeleteContactArgs {
 }
 
 /**
- * Delete a contact from the iOS Contacts app, by name. Use this whenever the
- * task is to delete a contact, remove a person from Contacts, or clean up a
- * contact created by a previous step. Idempotent — if the contact doesn't
- * exist the tool returns successfully without doing anything, so it's safe to
- * use as a teardown step. Confirms the action-sheet "Delete Contact" prompt
- * automatically.
+ * Delete an iOS contact by name, confirming the delete prompt. Succeeds
+ * without doing anything if the contact doesn't exist, so it is safe as a
+ * teardown step.
  */
 // Implementation notes:
 // Destructive flow: opens the named contact, enters edit mode, scrolls to the
@@ -28,7 +25,7 @@ export interface DeleteContactArgs {
 // to a swipe-to-delete: that affordance is locale-dependent and doesn't work on
 // the contact-detail screen, only on the list.
 export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
-  { supportedPlatforms: ["ios"], requiresContext: true },
+  { supportedPlatforms: ["ios"] },
   async (input, ctx) => {
     const name = nonEmptyString(input?.name, DEFAULT_CONTACT_NAME);
 
@@ -39,14 +36,12 @@ export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
       return `Contact "${name}" not found — nothing to delete.`;
     }
 
-    await ctx.tools.tapOnElementWithText({
-      text: LABELS.editButton,
-    });
+    await tapOnText(ctx, LABELS.editButton);
 
     // Delete Contact is at the bottom of the (long) edit form. `scrollUntilTextIsVisible`
     // is the safest way to surface it on devices with very small viewports.
     await ctx.tools.scrollUntilTextIsVisible({ text: LABELS.deleteContactRow });
-    await ctx.tools.tapOnElementWithText({ text: LABELS.deleteContactRow });
+    await tapOnText(ctx, LABELS.deleteContactRow);
 
     // The action sheet that confirms the deletion shows the same "Delete Contact"
     // string as the row that opened it — tap it again to commit. If any step in
@@ -57,7 +52,7 @@ export const contacts_ios_deleteContact = trailblaze.tool<DeleteContactArgs>(
     // false-positive on the residual search input. A negative-by-absence probe
     // would be similarly unreliable on long contact lists where the row may
     // simply be off-screen rather than absent.
-    await ctx.tools.tapOnElementWithText({ text: LABELS.deleteContactRow });
+    await tapOnText(ctx, LABELS.deleteContactRow);
 
     return `Deleted contact "${name}".`;
   },

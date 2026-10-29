@@ -4,10 +4,7 @@
 
 # `web_verifyValue`
 
-Verify the value of an element on the page. Supports checking:
-- TEXT: the text content of any element
-- VALUE: the input value of a form field (input, textarea, select)
-- ATTRIBUTE: the value of an HTML attribute
+Assert an element's text, form-field value, or HTML attribute value.
 
 ## Source
 
@@ -25,16 +22,16 @@ Verify the value of an element on the page. Supports checking:
 ### Required parameters
 
 - `expected` — `String`
-  The expected value to verify against.
+  Expected value.
 
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
+  Element ID ('e5'), ARIA descriptor ('textbox "Email"'), or 'css=<selector>'.
 - `type` — `enum(TEXT | VALUE | ATTRIBUTE)`
-  What property of the element to verify. TEXT checks visible text content, VALUE checks form field input values, ATTRIBUTE checks a specific HTML attribute.
+  TEXT: element text contains expected (falls back to the field value). VALUE: input/textarea/select value equals it. ATTRIBUTE: the named attribute equals it.
 - `attribute` — `String`
-  The attribute name to check (required when type is ATTRIBUTE).
+  Attribute name, when type is ATTRIBUTE.
 - `reasoning` — `String`
 
 ## Output

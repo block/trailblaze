@@ -5,6 +5,7 @@ import assertk.assertions.contains
 import assertk.assertions.containsAtLeast
 import assertk.assertions.containsExactly
 import assertk.assertions.containsOnly
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotEmpty
@@ -12,14 +13,21 @@ import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNull
 import kotlin.reflect.KClass
 import org.junit.Test
+import xyz.block.trailblaze.config.AppTargetYamlLoader
+import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.toSessionToolRepo
+import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -65,6 +73,72 @@ class MultiDeviceTargetBindingTest {
   }
 
   @Test
+  fun `a step recorded on a companion of another kind decodes against that kind's tools`() {
+    // An iOS launch device beside an Android companion: the Android step names a tool the target
+    // declares for the Android driver only.
+    val target = object : TrailblazeHostAppTarget(id = "pos", displayName = "pos") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String> =
+        listOf("com.example.pos")
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> =
+        if (driverType == TrailblazeDriverType.DEFAULT_ANDROID) setOf(RememberTextTrailblazeTool::class) else setOf(InputTextTrailblazeTool::class)
+    }
+    val companionRecordedStep = """
+      - rememberText:
+          prompt: the network label
+          variable: label
+    """.trimIndent()
+    val launchTools = MultiDeviceTargetBinding.customToolClasses(listOf(target), TrailblazeDriverType.IOS_HOST)
+
+    val withCompanion = launchTools + MultiDeviceTargetBinding
+      .companionDriverToolboxes(listOf(target), setOf(TrailblazeDriverType.DEFAULT_ANDROID))
+      .flatMap { it.toolClasses }
+    assertThat(createTrailblazeYamlFromAllTools(withCompanion).decodeTools(companionRecordedStep).map { it.trailblazeTool })
+      .containsExactly(RememberTextTrailblazeTool(prompt = "the network label", variable = "label"))
+    assertThat(createTrailblazeYamlFromAllTools(launchTools).decodeTools(companionRecordedStep).map { it.trailblazeTool::class })
+      .containsExactly(OtherTrailblazeTool::class)
+    assertThat(
+      MultiDeviceTargetBinding.companionDriverToolboxes(listOf(target), setOf(TrailblazeDriverType.PLAYWRIGHT_NATIVE)),
+    ).isEmpty()
+  }
+
+  @Test
+  fun `a browser launch advertises its phone companion's catalog scripted tools, minus exclusions`() {
+    // `openUrl` is in the iOS catalog, not the web one, so only the companion's surface can carry it.
+    // Read from the LLM's tool list once the companion's driver is widened and `openUrl` registered.
+    fun advertised(iosPlatform: String): List<String> {
+      val target = AppTargetYamlLoader.loadFromYaml(
+        "id: shop\ndisplay_name: Shop\nplatforms:\n  ios:\n    app_ids: [com.example.shop]\n$iosPlatform",
+        toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
+      )
+      val companion = MultiDeviceTargetBinding.companionDriverToolboxes(listOf(target), setOf(TrailblazeDriverType.IOS_HOST))
+      val repo = target.toSessionToolRepo(TrailblazeDriverType.PLAYWRIGHT_NATIVE, additional = companion.single())
+      repo.widenCatalogToDriver(TrailblazeDriverType.IOS_HOST)
+      repo.addDynamicTools(listOf(stubRegistration("openUrl")))
+      return repo.getCurrentToolDescriptors().map { it.name }
+    }
+
+    assertThat(advertised(iosPlatform = "")).contains("openUrl")
+    assertThat(advertised(iosPlatform = "    excluded_tools: [openUrl]\n")).doesNotContain("openUrl")
+  }
+
+  @Test
+  fun `a companion's always-shown tools stay shown, for each of the session's drivers`() {
+    val web = TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    val bound = MultiDeviceTargetBinding.boundTargets(
+      startDeviceTarget = fakeTarget("seller", alwaysShown = mapOf(driverType to setOf("seller_swipe"))),
+      companionTargets = listOf(fakeTarget("buyer", alwaysShown = mapOf(driverType to setOf("buyer_swipe"), web to setOf("buyer_scroll")))),
+    )
+
+    assertThat(MultiDeviceTargetBinding.alwaysShownTools(bound, listOf(driverType)))
+      .containsOnly("seller_swipe", "buyer_swipe")
+    assertThat(MultiDeviceTargetBinding.alwaysShownTools(bound, listOf(driverType, web)))
+      .containsOnly("seller_swipe", "buyer_swipe", "buyer_scroll")
+  }
+
+  @Test
   fun `bound targets keep the start device first`() {
     val start = fakeTarget("seller")
     val companion = fakeTarget("buyer")
@@ -102,8 +176,9 @@ class MultiDeviceTargetBindingTest {
   fun `each distinct target launches its own scripted-tool runtime with that device's context`() {
     val plan = MultiDeviceTargetBinding.scriptedToolLaunchPlan(
       startDeviceTarget = fakeTarget("seller"),
+      startDeviceDriver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       startDeviceContext = "start-device",
-      companions = listOf(fakeTarget("buyer") to "companion-device"),
+      companions = listOf(Triple(fakeTarget("buyer"), TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "companion-device")),
     )
 
     assertThat(plan.map { (target, context) -> target?.id to context })
@@ -111,21 +186,90 @@ class MultiDeviceTargetBindingTest {
   }
 
   /**
-   * A companion that inherits the session target shares the start device's runtime. Launching a
-   * second runtime for the same target would register the same tool names twice.
+   * A companion that inherits the session target on the start device's driver shares the start
+   * device's runtime: a second launch would register nothing the first did not.
    */
   @Test
-  fun `a companion inheriting the session target adds no launch`() {
+  fun `a companion inheriting the session target on the same driver adds no launch`() {
     val shared = fakeTarget("seller")
 
     val plan = MultiDeviceTargetBinding.scriptedToolLaunchPlan(
       startDeviceTarget = shared,
+      startDeviceDriver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       startDeviceContext = "start-device",
-      companions = listOf(shared to "companion-device"),
+      companions = listOf(Triple(shared, TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "companion-device")),
     )
 
     assertThat(plan.map { (target, context) -> target?.id to context })
       .containsExactly("seller" to "start-device")
+  }
+
+  /**
+   * A target's inline scripted tools register per driver, so a launch for the start device's
+   * driver leaves out the target's tools for a companion's other platform, e.g. its iOS sign-in.
+   */
+  @Test
+  fun `a companion sharing the session target on another driver launches it with its own context`() {
+    val shared = fakeTarget("seller")
+
+    val plan = MultiDeviceTargetBinding.scriptedToolLaunchPlan(
+      startDeviceTarget = shared,
+      startDeviceDriver = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      startDeviceContext = "browser",
+      companions = listOf(Triple(shared, TrailblazeDriverType.IOS_HOST, "iphone")),
+    )
+
+    assertThat(plan.map { (target, context) -> target?.id to context })
+      .containsExactly("seller" to "browser", "seller" to "iphone")
+  }
+
+  /**
+   * A target's `excluded_tools:` are judged on the drivers of the devices that run it. A browser
+   * companion inheriting the session target runs the session target, not a second target bound to
+   * an Android companion, so its driver must not unhide a tool that second target excludes.
+   */
+  @Test
+  fun `each target is run only by its own devices, and an untargeted companion runs the session's`() {
+    val seller = fakeTarget("seller")
+    val buyer = fakeTarget("buyer")
+    val companions = listOf(buyer to "buyer-device", null to "browser")
+
+    fun devicesRunning(target: TrailblazeHostAppTarget) = MultiDeviceTargetBinding.devicesRunning(
+      target = target,
+      startDeviceTarget = seller,
+      startDeviceContext = "start-device",
+      companions = companions,
+    )
+
+    assertThat(devicesRunning(seller)).containsExactly("start-device", "browser")
+    assertThat(devicesRunning(buyer)).containsExactly("buyer-device")
+  }
+
+  /**
+   * The launch plan and `excluded_tools:` judgement read one companion list, so for each bound
+   * target the drivers its runtimes launch on are the drivers of the devices that run it.
+   */
+  @Test
+  fun `each target launches on exactly the drivers of the devices that run it`() {
+    val seller = fakeTarget("seller")
+    val buyer = fakeTarget("buyer")
+    val web = TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    val ios = TrailblazeDriverType.IOS_HOST
+    val android = TrailblazeDriverType.DEFAULT_ANDROID
+    val companions = listOf(Triple(seller, ios, ios), Triple(buyer, android, android), Triple(buyer, android, android))
+
+    val plan = MultiDeviceTargetBinding.scriptedToolLaunchPlan(seller, web, web, companions)
+
+    listOf(seller, buyer).forEach { target ->
+      val running = MultiDeviceTargetBinding.devicesRunning(
+        target = target,
+        startDeviceTarget = seller,
+        startDeviceContext = web,
+        companions = companions.map { (companionTarget, _, driver) -> companionTarget to driver },
+      )
+      assertThat(plan.filter { (planTarget, _) -> planTarget?.id == target.id }.map { it.second })
+        .containsExactly(*running.distinct().toTypedArray())
+    }
   }
 
   /**
@@ -136,8 +280,9 @@ class MultiDeviceTargetBindingTest {
   fun `a session with no target still launches the start device's runtime`() {
     val plan = MultiDeviceTargetBinding.scriptedToolLaunchPlan(
       startDeviceTarget = null,
+      startDeviceDriver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       startDeviceContext = "start-device",
-      companions = emptyList(),
+      companions = emptyList<Triple<TrailblazeHostAppTarget?, TrailblazeDriverType, String>>(),
     )
 
     assertThat(plan.map { (target, context) -> target?.id to context })
@@ -193,7 +338,6 @@ class MultiDeviceTargetBindingTest {
       MultiDeviceTargetBinding.companionToolAdditions(boundTargets, shared, driverType)
 
     assertThat(additions.toolClasses).isEmpty()
-    assertThat(additions.yamlToolNames).isEmpty()
     assertThat(additions.scriptedToolNames).isEmpty()
   }
 
@@ -255,7 +399,6 @@ class MultiDeviceTargetBindingTest {
 
     val singleDevice = MultiDeviceTargetBinding.handoverToolSurface(isMultiDeviceSession = false)
     assertThat(singleDevice.toolClasses).isEmpty()
-    assertThat(singleDevice.yamlToolNames).isEmpty()
     assertThat(singleDevice.scriptedToolNames).isEmpty()
   }
 
@@ -276,10 +419,10 @@ class MultiDeviceTargetBindingTest {
   }
 
   /**
-   * All three name kinds come from the entry, not just the class-backed one. `multi_device.yaml`
-   * declares only `switchDevice` today, so this drives a catalog that also carries a YAML-defined
-   * and a scripted tool — against the real catalog the scripted assertion would hold on an empty
-   * set whether the surface read it or not.
+   * Both name kinds come from the entry, not just the class-backed one. `multi_device.yaml`
+   * declares only `switchDevice` today, so this drives a catalog that also carries a scripted
+   * tool — against the real catalog the scripted assertion would hold on an empty set whether
+   * the surface read it or not.
    */
   @Test
   fun `every kind of tool the handover toolset declares reaches the surface`() {
@@ -287,7 +430,6 @@ class MultiDeviceTargetBindingTest {
       id = SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
       description = "handover toolset carrying one tool of each kind",
       toolClasses = setOf(SwitchDeviceTrailblazeTool::class),
-      yamlToolNames = setOf(ToolName("multi_device_yaml_tool")),
       scriptedToolNames = setOf(ToolName("multi_device_scripted_tool")),
     )
 
@@ -297,7 +439,6 @@ class MultiDeviceTargetBindingTest {
     )
 
     assertThat(surface.toolClasses).containsOnly(SwitchDeviceTrailblazeTool::class)
-    assertThat(surface.yamlToolNames).containsOnly(ToolName("multi_device_yaml_tool"))
     assertThat(surface.scriptedToolNames).containsOnly(ToolName("multi_device_scripted_tool"))
   }
 
@@ -310,7 +451,11 @@ class MultiDeviceTargetBindingTest {
     id: String,
     vararg customTools: KClass<out TrailblazeTool>,
     toolSetIds: List<String> = emptyList(),
+    alwaysShown: Map<TrailblazeDriverType, Set<String>> = emptyMap(),
   ): TrailblazeHostAppTarget = object : TrailblazeHostAppTarget(id = id, displayName = id) {
+    override fun getAlwaysShownToolNamesForDriver(driverType: TrailblazeDriverType): Set<String> =
+      alwaysShown[driverType].orEmpty()
+
     override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String> =
       listOf("com.example.$id")
 
@@ -323,4 +468,16 @@ class MultiDeviceTargetBindingTest {
     override fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> =
       toolSetIds
   }
+
+  private fun stubRegistration(toolName: String): DynamicTrailblazeToolRegistration =
+    object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName(toolName)
+      override val trailblazeDescriptor = TrailblazeToolDescriptor(name = toolName)
+
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> = error("not built in this test")
+
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = error("not dispatched in this test")
+    }
 }

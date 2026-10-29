@@ -14,14 +14,12 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 
 /**
  * Runs an arbitrary trail YAML against a connected device — the web Tool Palette's
- * "Run on Device" button. Mirrors the **exact** dispatch decisions
- * [xyz.block.trailblaze.ui.tabs.recording.dispatchYamlOnDevice] makes on the desktop, so
- * web parity is real instead of "close enough":
+ * "Run on Device" button. Dispatch depends on the device's screen stream:
  *
  *  - **[OnDeviceRpcDeviceScreenStream] (Android)** → [OnDeviceRpcDeviceScreenStream.dispatchYaml],
  *    a direct on-device RPC that bypasses session bookkeeping. Returns when the on-device runner
- *    accepts the request; the next frame poll picks up the result. Same fast-path the desktop's
- *    Replay button uses to avoid the ~2s session-bookkeeping latency.
+ *    accepts the request; the next frame poll picks up the result. This fast path avoids the ~2s
+ *    session-bookkeeping latency.
  *
  *  - **[PlaywrightDeviceScreenStream] (Web)** → [TrailblazeDeviceManager.runYaml] with
  *    `sendSessionEndLog = false` + `getOrCreateSessionResolution`. Critical: without
@@ -31,6 +29,9 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  *    "Run on Device" succeeded server-side but did nothing visible to the user.
  *
  *  - **Anything else (iOS, …)** → `runYaml` with a fresh session.
+ *
+ * Every path replays the trail's recorded tools. Callers send a tool the user picked, wrapped in
+ * a one-step trail; letting the AI drive would read the step's title as an instruction instead.
  */
 class RunTrailYamlHandler(
   private val deviceManager: TrailblazeDeviceManager,
@@ -51,7 +52,7 @@ class RunTrailYamlHandler(
     return try {
       when (stream) {
         is OnDeviceRpcDeviceScreenStream -> {
-          stream.dispatchYaml(request.yaml)
+          stream.dispatchYaml(request.yaml, useRecordedSteps = true)
           RpcResult.Success(RunTrailYamlResponse(success = true))
         }
 
@@ -73,6 +74,7 @@ class RunTrailYamlHandler(
             sendSessionEndLog = false,
             existingSessionId = resolution.sessionId,
             referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
+            useRecordedSteps = true,
             onComplete = { completion.complete(it) },
           )
           awaitCompletionWithTimeout(completion)
@@ -87,6 +89,9 @@ class RunTrailYamlHandler(
             sendSessionEndLog = true,
             existingSessionId = null,
             referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
+            useRecordedSteps = true,
+            // The action continues on the app's current screen, in the language it is showing.
+            keepDeviceLanguage = true,
             onComplete = { completion.complete(it) },
           )
           awaitCompletionWithTimeout(completion)
