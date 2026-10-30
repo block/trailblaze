@@ -27,22 +27,24 @@ function useTrailheadPicker(target, platform, mirror, onArrived) {
   const selectedTh = availTrailheads.find((t) => t.name === storedThId)
     || (availTrailheads.length === 1 ? availTrailheads[0] : null);
   const setTrailheadId = (id) => setThByScope((m) => ({ ...m, [thScopeKey]: id }));
-  const [thDetail, setThDetail] = React.useState(null); // { description, to, tools, className, name, relPath }
+  const [thDetail, setThDetail] = React.useState(null); // { description, to, className, name, relPath }
   const [thLoading, setThLoading] = React.useState(false);
   const [thRun, setThRun] = React.useState(null); // { running } | { ok, text }
   const [thParams, setThParams] = React.useState([]); // param schema for a CLASS-mode / scripted trailhead
   const [thArgs, setThArgs] = React.useState({});
   const [thMetaByName, setThMetaByName] = React.useState({});
-  const availKey = availTrailheads.map((t) => t.relPath).join('|');
+  const availKey = availTrailheads.map((t) => t.name + '@' + t.relPath).join('|');
   React.useEffect(() => {
     let alive = true;
     Promise.all(availTrailheads.map(async (t) => {
-      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath), t.relPath.endsWith('.ts'));
+      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath), t.relPath.endsWith('.ts'), t.name);
       return [t.name, { to: (p && p.to) || null, description: (p && p.description) || '' }];
     })).then((pairs) => { if (alive) setThMetaByName(Object.fromEntries(pairs)); });
     return () => { alive = false; };
   }, [availKey]);
   const selectedThPath = selectedTh ? selectedTh.relPath : null;
+  // Exports of one .ts file share a path, so the name alone can change the selection.
+  const selectedThName = selectedTh ? selectedTh.name : null;
   React.useEffect(() => {
     if (!selectedThPath) { setThDetail(null); setThParams([]); setThArgs({}); return; }
     let alive = true;
@@ -50,7 +52,7 @@ function useTrailheadPicker(target, platform, mirror, onArrived) {
     const scripted = selectedThPath.endsWith('.ts');
     TB.fetchComponentSource(selectedThPath).then(async (src) => {
       if (!alive) return;
-      const parsed = parseTrailhead(src, scripted) || { description: '', to: null, tools: [], className: null };
+      const parsed = parseTrailhead(src, scripted, selectedThName) || { description: '', to: null, className: null };
       setThDetail({ ...parsed, name: selectedTh.name, relPath: selectedThPath });
       setThLoading(false);
       const applyParams = (params) => {
@@ -67,7 +69,7 @@ function useTrailheadPicker(target, platform, mirror, onArrived) {
       }
     }).catch(() => { if (alive) { setThDetail(null); setThLoading(false); } });
     return () => { alive = false; };
-  }, [selectedThPath]);
+  }, [selectedThPath, selectedThName]);
   const accountParam = trailheadAccountParam(thParams);
   const accountValue = accountParam ? (thArgs[accountParam.name] || '') : '';
   const setAccount = (email) => { if (accountParam) setThArgs((a) => ({ ...a, [accountParam.name]: email })); };
@@ -82,7 +84,7 @@ function useTrailheadPicker(target, platform, mirror, onArrived) {
   async function goToTrailhead() {
     if (!selectedTh || !mirror.conn || (thRun && thRun.running)) return;
     if (thMissingRequired.length) { setThRun({ ok: false, text: 'Fill ' + thMissingRequired.map((p) => p.name).join(', ') + ' first.' }); return; }
-    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs(), platform);
+    const yaml = buildTrailheadRunYaml(selectedTh.name, thFilledArgs(), platform);
     if (!yaml) { setThRun({ ok: false, text: 'Could not build the trailhead run.' }); return; }
     setThRun({ running: true });
     const r = await TB.runToolQuick(yaml, mirror.tbId());

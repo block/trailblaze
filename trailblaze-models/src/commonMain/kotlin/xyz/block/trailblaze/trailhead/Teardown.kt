@@ -21,20 +21,6 @@ enum class TrailOutcome {
   @SerialName("setup-failed") SETUP_FAILED,
 }
 
-/** One `ctx.trailhead.note(...)`. Exactly one of [invalidates] / [created] is set. */
-@Serializable
-data class TrailheadNote(
-  val invalidates: String? = null,
-  val created: Created? = null,
-  /** The tool that wrote it. */
-  val tool: String,
-  /** Epoch milliseconds. */
-  val timestamp: Long,
-) {
-  @Serializable
-  data class Created(val kind: String, val id: String)
-}
-
 /** What `teardown` returned, after the framework's forced-`false` rules. */
 @Serializable
 data class TeardownResult(
@@ -52,17 +38,22 @@ data class PreviousRun(
   val sessionId: String,
   val reason: String,
   val state: JsonObject? = null,
+  /**
+   * The one waypoint the screen matched as that run's trailhead returned; a reused setup must land
+   * on it again. Null when nobody checked (an on-device run). A run whose landing matched no
+   * waypoint, or more than one, hands nothing on.
+   */
+  val trailheadEndWaypoint: String? = null,
 )
 
-/** The `{ outcome, notes }` payload `teardown` receives; the SDK adds `events`. */
+/** The `{ outcome }` payload `teardown` receives; the SDK adds `events`. */
 @Serializable
 data class TrailRunWire(
   val outcome: TrailOutcome,
-  val notes: List<TrailheadNote>,
 )
 
 /**
- * The `trailhead` session event stream (`events/trailhead.ndjson`): notes, the trail markers, what
+ * The `trailhead` session event stream (`events/trailhead.ndjson`): the trail markers, what
  * each trailhead invocation received and did, and what `teardown` returned. The report and
  * surveys read it like any other stream.
  */
@@ -80,13 +71,19 @@ object TrailheadEventStream {
     /** What the handler did with the previous setup; the `setup` field is one of [Setup]. */
     const val SETUP: String = "setup"
 
+    /**
+     * Where a trailhead invocation left the screen: every waypoint it matched as it returned, in
+     * `waypoints`, or `waypoints: null` with a `reason` when nothing checked. A reused invocation
+     * also names the previous run's `trailheadEndWaypoint` it was checked against in `expected`,
+     * and `missing` repeats it when the screen did not match it.
+     */
+    const val TRAILHEAD_END: String = "trailheadEnd"
+
     /** The trailhead returned; trail steps start. */
     const val TRAIL_START: String = "trailStart"
 
     /** The trail's verdict is fixed. */
     const val TRAIL_END: String = "trailEnd"
-
-    const val NOTE: String = "note"
 
     /** What `teardown` returned (after the forced-`false` rules), or why it didn't run cleanly. */
     const val TEARDOWN: String = "teardown"
@@ -107,7 +104,7 @@ object TrailheadEventStream {
 
 /** Wire constants shared with the SDK's `trailhead.ts`. */
 object TeardownWire {
-  /** `_meta.trailblaze.trailhead` on a tool result: `{ notes?, reuse? }`. */
+  /** `_meta.trailblaze.trailhead` on a tool result: `{ reuse? }`. */
   const val META_KEY_TRAILHEAD: String = "trailhead"
 
   /** Reserved host functions behind `trailRun.events`. */

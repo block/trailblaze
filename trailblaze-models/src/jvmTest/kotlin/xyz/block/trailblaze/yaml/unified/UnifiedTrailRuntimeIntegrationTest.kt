@@ -203,6 +203,26 @@ class UnifiedTrailRuntimeIntegrationTest {
   }
 
   @Test
+  fun `a locale-qualified device key selects that device's locale for the on-device runner`() {
+    val unifiedYaml = """
+      config:
+        id: spanish
+        target: app
+        devices:
+          android-phone: { driver: ANDROID_ONDEVICE_ACCESSIBILITY }
+          android-phone-es: { driver: ANDROID_ONDEVICE_ACCESSIBILITY, locale: es }
+      trail:
+        - step: Launch the app
+    """.trimIndent()
+    fun localeFor(vararg classifiers: String) = yaml.extractTrailConfig(
+      yaml.decodeTrail(unifiedYaml, deviceClassifiers = classifiers.map(::TrailblazeDeviceClassifier)),
+    )?.locale
+
+    assertEquals("es", localeFor("android", "phone", "es"))
+    assertNull(localeFor("android", "phone"))
+  }
+
+  @Test
   fun `recordable false unified-format step lowers to LLM-mode DirectionStep for the executor`() {
     val unifiedYaml = """
       config:

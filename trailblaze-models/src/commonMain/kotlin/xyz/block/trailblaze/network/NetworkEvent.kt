@@ -44,6 +44,14 @@ data class NetworkEvent(
    * convention as a session event's `clock` — see `SessionEvents`.
    */
   val clock: TrailblazeClockDomain? = null,
+  /**
+   * The trail phase the exchange started in: `trailhead`, `trail` or `teardown`. Every event of
+   * the exchange carries its start's phase, so a request the trailhead sent is the trailhead's even
+   * when its response arrives during the trail. Null for a trail without a trailhead, for a request
+   * sent before the trailhead started, for a response whose request was not captured, and when the
+   * trail runs in a different process from the capture (an agent running on the device).
+   */
+  val trailPhase: String? = null,
 )
 
 /** Placeholder value substituted for sensitive header values; see [NetworkEvent.requestHeaders]. */

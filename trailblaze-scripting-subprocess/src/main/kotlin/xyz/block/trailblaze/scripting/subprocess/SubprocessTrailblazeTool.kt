@@ -32,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
@@ -76,11 +77,21 @@ class SubprocessTrailblazeTool(
    * against this call's args by [sensitiveArgNames] below.
    */
   private val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
+  /**
+   * 1:1 with the scripted tool's declared `isRecordable`, sourced from the advertised tool's
+   * `_meta` ([xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta.isRecordable]). `false` keeps
+   * the call out of the replayable `.trail.yaml` via [toolMetadata].
+   */
+  private val isRecordable: Boolean = true,
 ) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool, SensitiveArgsTrailblazeTool {
 
   override val advertisedToolName: String get() = advertisedName.toolName
   override val instanceToolName: String get() = advertisedName.toolName
   override val rawToolArguments: JsonObject get() = args
+
+  // `null` when recordable leaves the recording gate on its default; only `false` overrides it.
+  override val toolMetadata: TrailblazeToolMetadata?
+    get() = if (isRecordable) null else TrailblazeToolMetadata(isRecordable = false)
 
   /**
    * Satisfies [SensitiveArgsTrailblazeTool] so the log-encode boundary masks these args' values in
@@ -358,6 +369,8 @@ class SubprocessToolSerializer(
    * declaration masks those args in the persisted session log.
    */
   private val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
+  /** Forwarded onto the decoded [SubprocessTrailblazeTool] so a non-recordable tool stays out of recordings. */
+  private val isRecordable: Boolean = true,
 ) : KSerializer<SubprocessTrailblazeTool> {
 
   override val descriptor: SerialDescriptor = buildClassSerialDescriptor("subprocess:${advertisedName.toolName}")
@@ -373,6 +386,7 @@ class SubprocessToolSerializer(
       args = args,
       callbackContext = callbackContext,
       sensitiveArgs = sensitiveArgs,
+      isRecordable = isRecordable,
     )
   }
 

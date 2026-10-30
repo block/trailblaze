@@ -1211,9 +1211,9 @@ class DaemonScriptedToolBundler(
      * existing content-addressed cache entries (keyed on source + tool name + this fingerprint)
      * invalidate instead of serving a stale bundle. `v2` = the slim `@trailblaze/scripting` alias;
      * `v3` = the sandbox `@trailblaze/scripting/surveys` alias; `v4` = no `node:process` external
-     * in survey bundles.
+     * in survey bundles; `v5` = survey wrappers export `capabilities`.
      */
-    private const val BUNDLER_PROFILE_VERSION = "v4-surveys-no-node-external"
+    private const val BUNDLER_PROFILE_VERSION = "v5-survey-capabilities"
 
     /** Trailmap-relative directory that owns scripted-tool descriptor YAMLs. */
     private const val SCRIPTED_TOOLS_DIR = "tools"

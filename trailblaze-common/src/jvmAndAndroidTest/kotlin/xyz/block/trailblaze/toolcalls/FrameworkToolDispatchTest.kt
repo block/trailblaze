@@ -129,7 +129,6 @@ class FrameworkToolDispatchTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "dispatch-test",
       toolClasses = classes.toSet(),
-      yamlToolNames = emptySet(),
     ),
   )
 

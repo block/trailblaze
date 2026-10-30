@@ -521,6 +521,7 @@ internal class ScriptedToolDefinitionCache(
     val outputSchema: JsonObject,
     val spec: JsonObject? = null,
     val uncapturedSpec: Boolean = false,
+    val uncapturedSpecFields: List<String> = emptyList(),
   ) {
     fun toDefinition(): ScriptedToolDefinition = ScriptedToolDefinition(
       name = name,
@@ -531,6 +532,7 @@ internal class ScriptedToolDefinitionCache(
       outputSchema = outputSchema,
       spec = spec,
       uncapturedSpec = uncapturedSpec,
+      uncapturedSpecFields = uncapturedSpecFields,
     )
 
     companion object {
@@ -543,6 +545,7 @@ internal class ScriptedToolDefinitionCache(
         outputSchema = def.outputSchemaObject,
         spec = def.spec,
         uncapturedSpec = def.uncapturedSpec,
+        uncapturedSpecFields = def.uncapturedSpecFields,
       )
     }
   }

@@ -12,6 +12,7 @@ import xyz.block.trailblaze.history.recordExecution
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
+import xyz.block.trailblaze.toolcalls.toolDecodeFailureReason
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
@@ -303,15 +304,17 @@ object JsScriptingCallbackDispatcher {
       // Throwable, not Exception: `serializer()` on a global class-backed tool that isn't in
       // the session's toolset can raise NoClassDefFoundError, and the HTTP endpoint wrapping
       // this dispatcher doesn't catch around [dispatch]. Include the exception class since
-      // an unchecked throw out of a custom KSerializer often carries a null message.
+      // an unchecked throw out of a custom KSerializer often carries a null message. The
+      // arguments can carry credentials and no tool exists yet to mask them, so the reason masks
+      // every string they hold.
+      val reason = toolDecodeFailureReason(e, action.argumentsJson)
       Console.log(
         "[JsScriptingCallbackDispatcher] DESERIALIZE_FAILED tool '${action.toolName}' in session " +
-          "${entry.sessionId.value}: ${e::class.simpleName}: ${e.message}",
+          "${entry.sessionId.value}: $reason",
       )
       return JsScriptingCallbackResult.CallToolResult(
         success = false,
-        errorMessage = "Failed to deserialize tool call '${action.toolName}': " +
-          (e.message ?: e::class.simpleName),
+        errorMessage = "Failed to deserialize tool call '${action.toolName}': $reason",
       )
     }
 
@@ -344,7 +347,7 @@ object JsScriptingCallbackDispatcher {
     // Known remaining gap vs the QuickJS transport: [SessionScopedHostBinding.executeResolved]
     // expands a [xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool] into its executable
     // sub-tools, while this path rejects one as NON_EXECUTABLE. Pre-existing for
-    // session-registered YAML tools; unfiltered resolution widens which tools reach it.
+    // session-registered tools; unfiltered resolution widens which tools reach it.
     if (tool !is ExecutableTrailblazeTool) {
       Console.log(
         "[JsScriptingCallbackDispatcher] NON_EXECUTABLE tool '${action.toolName}' in session " +

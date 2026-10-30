@@ -15,10 +15,16 @@
 // Export surveys from a `*.survey.ts` file; each one's name is its export name. Run them over any
 // number of finished sessions with the CLI in `cli.ts` or `runSurveys()` from code, or from a tool
 // while the trail runs (`ctx.surveys.<name>()`). A finding is a summary, the records that prove it,
-// and whatever `data` its survey chose to carry.
+// and whatever `data` its survey chose to carry. After a batch of runs, a survey's optional label
+// phase turns findings into labels: what the runs add up to, each backed by the findings behind it.
 
-export { survey, explainFinding, explainFootprint, isSurvey, matchFinding, matchFootprint, withId } from "./survey.js";
-export type { SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult, FindingExplanation, FindingSpec, FindingQueries, FootprintExplanation, FootprintSpec, FootprintQueries } from "./survey.js";
+export { survey, explainFinding, isSurvey, matchFinding, withId } from "./survey.js";
+export type { DataOf, LabelBatch, LabelOf, LabelResult, SurveyContext, SurveyDefinition, SurveyHandler, FindResult, SurveyResult, FindingExplanation, FindingSpec, FindingQueries, BatchFinding, Dependency } from "./survey.js";
+export { labelOrder, planSurveys, runLabelPhases } from "./labels.js";
+export type { LabelOutcome, PlannedSurvey } from "./labels.js";
+export { STORED_SURVEYS_FILE, currentEntry, readStoredSurveys, writeStoredSurveys } from "./stored.js";
+export type { StoredSurvey, StoredSurveys } from "./stored.js";
+export { runSurveyCli } from "./cli-main.js";
 // Running a survey while the trail runs, over `ctx.events`. Also the only part a survey bundle sees
 // in the sandbox (`./in-process.ts`).
 export { FinishedSessionRequiredError, LiveSessionReader, runNamedLiveSurvey, runLiveSurvey } from "./live.js";
@@ -48,7 +54,7 @@ export type { TargetCatalog, TargetDefinition } from "./targets.js";
 export type { DiscoverSessionsOptions, LoadSurveysOptions, LoadedSurvey } from "./discover.js";
 export { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
 export type { Workspace } from "./workspace.js";
-export { renderMarkdown, renderSummaryLines } from "./report.js";
+export { labelName, renderMarkdown, renderSummaryLines } from "./report.js";
 export {
   anyNode,
   classifierChain,
@@ -91,6 +97,11 @@ export type {
   RecordKind,
   Finding,
   FindingInput,
+  SurveyFinding,
+  FindingRef,
+  Label,
+  LabelInput,
+  LabelRecord,
   LogRecord,
   NetworkRequest,
   Objective,

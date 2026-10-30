@@ -612,7 +612,7 @@ function buildSummary(
 
   const result = asRecord(readJsonIfPresent(join(dir, SESSION_RESULT_FILE)));
   const ci = asRecord(readJsonIfPresent(join(dir, CI_CONTEXT_FILE)));
-  const firstLog = logs[0]?.log as { session?: string } | undefined;
+  const firstLog = logs[0]?.log as { session?: unknown } | undefined;
 
   const trailConfig = started?.trailConfig ?? undefined;
   const device = started?.trailblazeDeviceInfo;
@@ -640,7 +640,7 @@ function buildSummary(
   }
 
   const summary: SessionSummary = {
-    id: asString(result?.session_id) ?? firstLog?.session ?? basename(dir),
+    id: asString(result?.session_id) ?? asString(firstLog?.session) ?? basename(dir),
     path: dir,
     title: asString(result?.title) ?? trailConfig?.title ?? undefined,
     trailId: trailConfig?.id ?? undefined,

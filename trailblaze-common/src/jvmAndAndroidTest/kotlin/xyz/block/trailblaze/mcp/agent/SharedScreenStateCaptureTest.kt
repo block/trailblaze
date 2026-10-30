@@ -4,8 +4,11 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isNotNull
 import assertk.assertions.isNotSameInstanceAs
+import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -16,12 +19,14 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -113,7 +118,6 @@ class SharedScreenStateCaptureTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "dynamic-only",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
     )
     repo.addDynamicTools(listOf(DynamicCaptureTestRegistration))
@@ -148,7 +152,6 @@ class SharedScreenStateCaptureTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "dynamic-only",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
     )
     repo.addDynamicTools(listOf(DynamicCaptureTestRegistration))
@@ -197,6 +200,35 @@ class SharedScreenStateCaptureTest {
     assertThat(captures).isEqualTo(3)
   }
 
+  /**
+   * Every dispatched tool's result is composed here, including host-local scripted tools. The
+   * action has already happened, so a capture that throws must still yield the tool's result
+   * (with the loop nudge, if any) instead of failing the call.
+   */
+  @Test
+  fun `a dispatched tool result survives a failed post-action capture`() {
+    val capture = SharedScreenStateCapture { error("hierarchy timed out") }
+
+    val plain = composeToolDispatchResult("Executed signIn: Success", loopNudge = null, capture = capture)
+    val nudged = composeToolDispatchResult("Executed signIn: Success", loopNudge = "You repeated this.", capture = capture)
+
+    assertThat(plain).isEqualTo("Executed signIn: Success")
+    assertThat(nudged).isEqualTo("You repeated this.\n\nExecuted signIn: Success")
+  }
+
+  @Test
+  fun `a dispatched tool result carries the nudge then the fresh screen`() {
+    val capture = SharedScreenStateCapture {
+      object : ScreenState by FakeScreenState() {
+        override val viewHierarchyTextRepresentation: String = "<screen>"
+      }
+    }
+
+    val result = composeToolDispatchResult("Executed tap: Success", loopNudge = "Stuck?", capture = capture)
+
+    assertThat(result).isEqualTo("Stuck?\n\nExecuted tap: Success\n\nCurrent screen:\n<screen>")
+  }
+
   @OptIn(InternalAgentToolsApi::class)
   @Test
   fun `dynamic tool added by surface refresh invalidates the snapshot`() {
@@ -208,7 +240,6 @@ class SharedScreenStateCaptureTest {
       TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "dynamic-only",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
     )
     val liveRegistry = ToolRegistry {}
@@ -228,6 +259,70 @@ class SharedScreenStateCaptureTest {
 
     assertThat(captures).isEqualTo(2)
     assertThat(nextRequestScreen).isNotSameInstanceAs(requestScreen)
+  }
+
+  /**
+   * A scripted tool the model calls goes through the agent's dispatch like a class-backed one, since
+   * that dispatch is what logs it for recordings and reports. The dispatcher attaches the screen
+   * itself, so neither dynamic-tool hook runs.
+   */
+  @OptIn(InternalAgentToolsApi::class)
+  @Test
+  fun `host-local dynamic tool is dispatched through the agent`() {
+    val repo = TrailblazeToolRepo(
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "dynamic-only",
+        toolClasses = emptySet(),
+      ),
+    )
+    repo.addDynamicTools(listOf(HostLocalTestRegistration))
+    val dispatched = mutableListOf<TrailblazeTool>()
+    val registry = repo.asToolRegistryWithDynamicToolHook(
+      toolDispatcher = { tool -> dispatched += tool; "dispatched" },
+      trailblazeToolContextProvider = { error("a dispatched tool does not need this context") },
+      afterDynamicToolExecution = { error("the dispatcher handles the screen") },
+      decorateDynamicToolResult = { error("the dispatcher handles the screen") },
+    )
+
+    val tool = HostLocalTestTool()
+    val result = runBlocking { registry.getTool("hostLocalTest").executeUnsafe(tool) }
+
+    assertThat(result).isEqualTo("dispatched")
+    assertThat(dispatched).containsExactly(tool)
+  }
+
+  @Test
+  fun `a host-local tool starts with no screen so its context captures on first read`() {
+    var captures = 0
+    val provider = SharedScreenStateCapture { captures++; FakeScreenState() }.asProvider()
+
+    assertThat(dispatchScreenState(HostLocalTestTool(), provider)).isNull()
+    assertThat(captures).isEqualTo(0)
+    assertThat(dispatchScreenState(DynamicCaptureTestTool(), provider)).isNotNull()
+    assertThat(captures).isEqualTo(1)
+  }
+
+  @Serializable
+  private class HostLocalTestTool : HostLocalExecutableTrailblazeTool {
+    override val advertisedToolName: String get() = "hostLocalTest"
+
+    override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+      error("only the agent's dispatch runs this tool")
+  }
+
+  private object HostLocalTestRegistration : DynamicTrailblazeToolRegistration {
+    override val name = ToolName("hostLocalTest")
+    override val trailblazeDescriptor = TrailblazeToolDescriptor(name = name.toolName)
+
+    override fun buildKoogTool(
+      trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+    ): TrailblazeKoogTool<out TrailblazeTool> = TrailblazeKoogTool(
+      argsSerializer = HostLocalTestTool.serializer(),
+      descriptor = ToolDescriptor(name = name.toolName, description = "test"),
+      executeTool = { error("the registry must route this call to the dispatcher") },
+    )
+
+    override fun decodeToolCall(argumentsJson: String): TrailblazeTool = HostLocalTestTool()
   }
 
   @Serializable

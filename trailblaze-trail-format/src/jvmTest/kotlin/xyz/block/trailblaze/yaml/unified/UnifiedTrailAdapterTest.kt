@@ -1506,6 +1506,62 @@ class UnifiedTrailAdapterTest {
     }
   }
 
+  @Test
+  fun `the bound names pick the configuration among several`() {
+    val casts =
+      UnifiedTrailConfig(
+        devices =
+          linkedMapOf(
+            "phone-cast" to
+              TrailblazeDeviceDefinition(
+                devices =
+                  linkedMapOf(
+                    "pos" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+                    "customer" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+                  )
+              ),
+            "tablet-cast" to
+              TrailblazeDeviceDefinition(
+                devices =
+                  linkedMapOf(
+                    "seller" to TrailblazeDeviceDefinition(classifier = "android-tablet"),
+                    "buyer" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+                    "customer" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+                  )
+              ),
+          )
+      )
+
+    assertEquals(
+      "phone-cast",
+      casts.implicitMultiDeviceConfigurationName(true, boundDeviceNames = setOf("customer")),
+    )
+    assertEquals(
+      "tablet-cast",
+      casts.implicitMultiDeviceConfigurationName(true, setOf("buyer", "customer")),
+    )
+    assertFalse(casts.requiresExplicitMultiDeviceConfiguration(true, setOf("customer")))
+    // Exact, not a subset or a superset: the runtime refuses an unbound member and a binding no
+    // member declares, so neither cast could start on these.
+    listOf(setOf("buyer"), setOf("buyer", "customer", "kitchen"), emptySet()).forEach { names ->
+      assertNull(casts.implicitMultiDeviceConfigurationName(true, names), "bound $names")
+      assertTrue(casts.requiresExplicitMultiDeviceConfiguration(true, names), "bound $names")
+    }
+    // The start device is the launch device, never a binding.
+    assertNull(casts.multiDeviceConfigurationBoundBy(setOf("pos", "customer")))
+  }
+
+  @Test
+  fun `bound names that fit several configurations still need an explicit selection`() {
+    val twins =
+      UnifiedTrailConfig(
+        devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration())
+      )
+
+    assertNull(twins.multiDeviceConfigurationBoundBy(setOf("buyer")))
+    assertTrue(twins.requiresExplicitMultiDeviceConfiguration(true, setOf("buyer")))
+  }
+
   /**
    * The pre-flight gates' view of a mixed trail on a single-device cell: its classifier legs count,
    * and the configuration's fully-recorded leg does not stand in for a classifier that has none.

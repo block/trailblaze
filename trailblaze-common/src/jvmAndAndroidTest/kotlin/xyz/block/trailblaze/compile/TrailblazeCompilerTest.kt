@@ -13,6 +13,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 
 class TrailblazeCompilerTest {
 
@@ -236,6 +237,93 @@ class TrailblazeCompilerTest {
     assertTrue(
       result.errors.any { "tap_with_tehxt" in it && "excluded_tools" in it },
       "Expected error to name the unknown excluded tool; got: ${result.errors}",
+    )
+  }
+
+  @Test
+  fun `excluded_tools may name a bare ts tool from the trailmap's own tools dir`() {
+    // A `.ts` tool is on its trailmap's target without being listed, so `excluded_tools:` is how
+    // an author keeps one off a platform. It has no descriptor, so only the resolved target knows
+    // its name — the reference check must accept it rather than reject the whole target.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: My App
+        platforms:
+          android:
+            app_ids:
+              - com.example.myapp
+            excluded_tools:
+              - myapp_demo
+      """.trimIndent(),
+    )
+    val script = File(trailmapsDir, "myapp/tools/myapp_demo.ts")
+    script.writeText("export const myapp_demo = trailblaze.tool(async () => \"ok\");\n")
+    val enrichment = object : ScriptedToolEnrichment {
+      override fun enrich(
+        trailmapId: String,
+        trailmapDir: File,
+        trailmapToolsDir: File,
+        deferredDescriptors: List<ScriptedToolEnrichment.DeferredDescriptor>,
+      ): List<ScriptedToolEnrichment.EnrichmentResult> = deferredDescriptors.map { d ->
+        ScriptedToolEnrichment.EnrichmentResult.Resolved(
+          relativePath = d.relativePath,
+          configs = listOf(InlineScriptToolConfig(script = script.absolutePath, name = "myapp_demo")),
+        )
+      }
+    }
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = staticReferenceSource(tools = setOf("tap_with_text")),
+      commandLabel = "compile",
+      scriptedToolEnrichment = enrichment,
+    )
+
+    assertTrue(result.isSuccess, "Expected compile to accept the excluded .ts tool; got: ${result.errors}")
+    assertEquals(listOf("myapp.yaml"), result.emittedTargets.map { it.name })
+  }
+
+  @Test
+  fun `excluded_tools rejects a scripted tool only another trailmap declares`() {
+    // Excluding a name hides nothing on a target that doesn't carry it, so another trailmap's
+    // scripted tool is as much a typo here as a name nothing declares.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: My App
+        platforms:
+          android:
+            app_ids:
+              - com.example.myapp
+            excluded_tools:
+              - other_demo
+      """.trimIndent(),
+    )
+    val reference = ConfigResourceSource { directoryPath, _ ->
+      when (directoryPath) {
+        TrailblazeConfigPaths.TRAILMAPS_DIR ->
+          mapOf("other/tools/other_demo.yaml" to "script: ./other_demo.ts\nname: other_demo\n")
+        else -> emptyMap()
+      }
+    }
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = reference,
+    )
+
+    assertTrue(
+      result.errors.any { "other_demo" in it && "excluded_tools" in it },
+      "Expected another trailmap's tool to be rejected; got: ${result.errors}",
     )
   }
 

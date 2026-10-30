@@ -196,7 +196,8 @@ Before publishing — to either a registry or a `github:` ref a consumer is goin
    without any additional auth or setup. This is the artifact downstream consumers use
    to validate an install.
 4. **Version bumps follow semver.** Breaking a tool's input interface, removing a tool
-   from `target.tools:`, or renaming a waypoint id is a major bump. Adding a tool is a
+   (deleting its file or adding it to `excluded_tools:`), or renaming a waypoint id is a
+   major bump. Adding a tool is a
    minor bump. Fixing a tool's body without changing its surface is a patch.
 
 ## See also

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.yaml
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 
 /**
  * Where [DesktopYamlRunner] sends a run: the agent loop's location and the channel it uses to
@@ -14,8 +15,9 @@ enum class DispatchPath {
   HOST_IN_PROCESS_KOOG,
 
   /**
-   * Host agent loop, individual tool calls to the device over RPC. The only path wired for
-   * multi-device configurations.
+   * Host agent loop dispatching each tool to its device: an Android device's over its on-device
+   * RPC, an iOS simulator's host-side. The only path wired for multi-device configurations, so a
+   * multi-device session launched on an iOS simulator runs here too.
    */
   HOST_AGENT_OVER_ONDEVICE_RPC,
 
@@ -34,13 +36,25 @@ enum class DispatchPath {
  */
 object DesktopDispatchDecision {
 
+  /** Launch drivers, beyond the on-device Android ones, that can start a multi-device session. */
+  private val HOST_MULTI_DEVICE_LAUNCH_DRIVERS = setOf(
+    TrailblazeDriverType.IOS_HOST,
+    TrailblazeDriverType.IOS_AXE,
+    TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+  )
+
   /**
    * Resolves the dispatch path. Arms are evaluated in the same order as the runner's `when`.
+   * [selectedConfigurationName] is the multi-device configuration the run binds, if any.
    */
   fun decide(
     driverType: TrailblazeDriverType,
     preferHostAgent: Boolean,
+    selectedConfigurationName: String?,
   ): DispatchPath = when {
+    selectedConfigurationName != null && driverType in HOST_MULTI_DEVICE_LAUNCH_DRIVERS ->
+      DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC
+
     // Drivers whose tools run on the host take the in-process agent. On-device drivers need the
     // device attached via the on-device RPC server, which the host path cannot provide, so they
     // run the agent on the device, or host-side over RPC when `preferHostAgent` opts in.
@@ -79,6 +93,49 @@ object DesktopDispatchDecision {
     selectedConfigurationName != null && !supportsMultiDevice(path)
 
   /**
+   * Whether a call that continues an open session must be refused because a browser launches its
+   * multi-device configuration: each call builds a fresh browser agent, whose secret redaction
+   * would not know the secrets an earlier call filled.
+   */
+  fun refusesContinuedBrowserLaunch(
+    driverType: TrailblazeDriverType,
+    selectedConfigurationName: String?,
+    startsSession: Boolean,
+  ): Boolean = selectedConfigurationName != null &&
+    driverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE &&
+    !startsSession
+
+  /**
+   * Whether a run ends its session when it returns. A browser-launched configuration always does,
+   * so no later call, with or without a configuration, can continue its session in another agent.
+   */
+  fun endsSessionOnReturn(
+    driverType: TrailblazeDriverType,
+    selectedConfigurationName: String?,
+    sendsSessionEndLog: Boolean,
+  ): Boolean = sendsSessionEndLog ||
+    (selectedConfigurationName != null && driverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE)
+
+  /**
+   * What to tell a run that asked for trailhead reuse (`trailblaze loop --reuse-trailhead`) on a
+   * [path] that drops the request, or null when [path] honours it. The request travels in
+   * `TrailblazeConfig.trailheadReuse`, which the on-device RPC does not carry: an on-device
+   * agent takes reuse only from its own instrumentation argument. Without this notice the run
+   * sets up from scratch every time and says nothing.
+   */
+  fun ignoredTrailheadReuseNotice(path: DispatchPath, driverType: TrailblazeDriverType): String? {
+    if (path != DispatchPath.ON_DEVICE_AGENT) return null
+    val remedy = if (driverType.hostAgentDispatchable) {
+      "Enable `preferHostAgent` to reuse it."
+    } else {
+      "The $driverType driver takes reuse only from its `${TrailheadRuns.REUSE_INSTRUMENTATION_ARG}` " +
+        "instrumentation argument."
+    }
+    return "Trailhead reuse was requested, but this run executes on the device, which does not " +
+      "receive that request: its trailhead sets up from scratch. $remedy"
+  }
+
+  /**
    * Why a multi-device trail cannot run here, phrased as the change that would make it
    * dispatchable.
    *
@@ -101,8 +158,8 @@ object DesktopDispatchDecision {
       }
 
     DispatchPath.HOST_IN_PROCESS_KOOG ->
-      "The $driverType driver runs entirely on the host and is never reached over the on-device " +
-        "RPC server. Run this trail on an Android device with an on-device driver and " +
-        "`preferHostAgent` enabled."
+      "The $driverType driver cannot launch a multi-device session. Launch this trail with " +
+        "${HOST_MULTI_DEVICE_LAUNCH_DRIVERS.joinToString(", ")}, or on an Android device with an " +
+        "on-device driver and `preferHostAgent` enabled."
   }
 }

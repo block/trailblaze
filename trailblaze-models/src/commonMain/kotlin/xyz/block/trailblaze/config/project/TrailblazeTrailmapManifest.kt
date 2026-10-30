@@ -89,9 +89,9 @@ import xyz.block.trailblaze.config.PlatformConfig
  * `<trailmap>/waypoints/` for the waypoint flavor) by directory walk. Scripted-tool descriptors
  * (`*.yaml` files in `<trailmap>/tools/` whose name doesn't carry one of those operational
  * suffixes) are also auto-discovered into a per-trailmap name-keyed registry. Authoring is
- * "drop a YAML file in `tools/`, it ships with the trailmap" — the manifest doesn't enumerate the
- * tool files themselves. The `target.tools:` list still appears, but as a per-target list of
- * scripted-tool *names* selecting which discovered tools this target exposes — names, not paths.
+ * "drop a file in `tools/`, it ships with the trailmap" — the manifest doesn't enumerate the
+ * tool files themselves. Every discovered scripted tool is on the trailmap's target (a platform's
+ * `excluded_tools:` removes one there); `target.tools:` may still name them, redundantly.
  */
 @Serializable
 data class TrailblazeTrailmapManifest(
@@ -272,7 +272,8 @@ data class TrailmapTargetConfig(
    */
   @SerialName("system_prompt_file") val systemPromptFile: String? = null,
   /**
-   * Scripted-tool names this target exposes. Each entry must match the `name:` field on a
+   * Scripted-tool names this target exposes. Optional: every scripted tool discovered under the
+   * trailmap's `tools/` directory is on the target anyway, so listing one here is redundant. Each entry must match the `name:` field on a
    * [TrailmapScriptedToolFile] (or one of its [TrailmapScriptedToolEntry] entries in the multi-tool
    * shape) auto-discovered from any `.yaml` file under the trailmap's `tools/` directory. The
    * loader builds a name-keyed registry per trailmap and errors helpfully if a name doesn't

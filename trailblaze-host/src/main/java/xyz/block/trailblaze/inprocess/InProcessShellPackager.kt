@@ -5,6 +5,7 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.inprocess.apk.ApkReadException
 import xyz.block.trailblaze.inprocess.apk.AppManifestProviders
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
 import xyz.block.trailblaze.surveys.SurveyBundles
@@ -688,24 +689,149 @@ object InProcessShellPackager {
    * the same runtime resolver.
    */
   private fun inProcessToolSources(toolsDir: File): List<File> {
-    val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
     val toolExport = Regex("""trailblaze\s*\.\s*(?:tool|trailhead)\s*[<(]""")
+    // Per `.ts`, whether every descriptor YAML for it (the one whose `script:` names it, or its
+    // same-basename sibling when that names none) runs it as a subprocess.
+    val allOwnersSubprocess = mutableMapOf<File, Boolean>()
+    toolsDir.walkTopDown()
+      .filter { f -> f.isFile && f.name.endsWith(".yaml") && OPERATIONAL_TOOL_YAML_SUFFIXES.none { f.name.endsWith(it) } }
+      .forEach { yaml ->
+        val keys = topLevelYamlValues(yaml.readText())
+        // A YAML the loader can't decode as a descriptor describes nothing, so it claims no script.
+        if (!isToolDescriptor(keys)) return@forEach
+        val script = keys["script"]?.let(::yamlScalar) ?: (yaml.name.removeSuffix(".yaml") + ".ts")
+        val ts = (File(script).takeIf { it.isAbsolute } ?: File(yaml.parentFile, script)).canonicalFile
+        val subprocess = keys["runtime"]?.let(::yamlScalar) == "subprocess"
+        allOwnersSubprocess[ts] = (allOwnersSubprocess[ts] ?: true) && subprocess
+      }
     return toolsDir.walkTopDown()
       .filter { f ->
         f.isFile &&
           f.name.endsWith(".ts") &&
           !f.name.endsWith(".test.ts") &&
           !f.name.endsWith(".d.ts") &&
-          File(f.parentFile, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
-            if (yaml.isFile) {
-              !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
-            } else {
-              toolExport.containsMatchIn(f.readText())
-            }
-          }
+          (allOwnersSubprocess[f.canonicalFile]?.not() ?: toolExport.containsMatchIn(f.readText()))
       }
       .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
       .toList()
+  }
+
+  /** Tool-directory YAMLs that are not tool descriptors. */
+  private val OPERATIONAL_TOOL_YAML_SUFFIXES = TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES
+
+  private val TOP_LEVEL_YAML_KEY = Regex("""^([A-Za-z_][\w-]*):(?:\s+(.*?))?\s*$""")
+  private val DOUBLE_QUOTED_YAML = Regex("""^"((?:[^"\\]|\\.)*)"""")
+  private val SINGLE_QUOTED_YAML = Regex("""^'((?:[^']|'')*)'""")
+
+  private val BLOCK_SCALAR_HEADER = Regex("""^([|>])([1-9]?)([-+]?)([1-9]?)(?:\s+#.*)?$""")
+
+  /**
+   * Each top-level key of a YAML [text], mapped to its raw inline value with any trailing comment
+   * dropped — `""` when the value is a nested block. A `|` or `>` block scalar maps to its decoded
+   * content, re-quoted so [yamlScalar] reads it like any quoted value.
+   */
+  private fun topLevelYamlValues(text: String): Map<String, String> {
+    val lines = text.lines()
+    val values = mutableMapOf<String, String>()
+    lines.forEachIndexed { index, line ->
+      val match = TOP_LEVEL_YAML_KEY.matchEntire(line) ?: return@forEachIndexed
+      val raw = match.groupValues[2]
+      val quoted = raw.startsWith('"') || raw.startsWith('\'')
+      val block = BLOCK_SCALAR_HEADER.matchEntire(raw)
+      values[match.groupValues[1]] = when {
+        quoted -> raw
+        block != null -> "'" + blockScalar(block, lines.drop(index + 1)).replace("'", "''") + "'"
+        else -> raw.substringBefore(" #").takeUnless { it.startsWith("#") }.orEmpty().trim()
+      }
+    }
+    return values
+  }
+
+  /**
+   * The content of the top-level block scalar whose [header] (`|`, `>-`, `|2+`, ...) precedes [following],
+   * decoded per the YAML spec: `|` keeps line breaks, `>` folds them into spaces, and the chomping
+   * indicator strips (`-`), keeps (`+`), or clips to one (default) the trailing breaks.
+   */
+  private fun blockScalar(header: MatchResult, following: List<String>): String {
+    val (style, indentBefore, chomping, indentAfter) = header.destructured
+    val explicitIndent = (indentBefore + indentAfter).toIntOrNull()
+    val indent = explicitIndent
+      ?: following.firstOrNull { it.isNotBlank() }?.let { it.length - it.trimStart(' ').length }?.takeIf { it > 0 }
+      ?: return ""
+    val body = following
+      .takeWhile { it.isBlank() || it.length - it.trimStart(' ').length >= indent }
+      .map { if (it.isBlank() && it.length <= indent) "" else it.substring(indent) }
+    val content = body.dropLastWhile { it.isEmpty() }
+    if (content.isEmpty()) return if (chomping == "+") "\n".repeat(body.size) else ""
+    val text = if (style == "|") content.joinToString("\n") else foldBlockLines(content)
+    return text + when (chomping) {
+      "-" -> ""
+      "+" -> "\n".repeat(body.size - content.size + 1)
+      else -> "\n"
+    }
+  }
+
+  /** Folded (`>`) block [lines] joined: a break between two plain lines is a space, a blank line a break. */
+  private fun foldBlockLines(lines: List<String>): String {
+    val folded = StringBuilder()
+    var previous: String? = null
+    var blankRun = 0
+    fun moreIndented(line: String) = line.startsWith(' ') || line.startsWith('\t')
+    for (line in lines) {
+      if (line.isEmpty()) {
+        blankRun++
+        continue
+      }
+      folded.append(
+        when {
+          previous == null -> "\n".repeat(blankRun)
+          moreIndented(previous) || moreIndented(line) -> "\n".repeat(blankRun + 1)
+          blankRun == 0 -> " "
+          else -> "\n".repeat(blankRun)
+        },
+      )
+      folded.append(line)
+      previous = line
+      blankRun = 0
+    }
+    return folded.toString()
+  }
+
+  /** [raw] as a YAML string scalar, unquoted and without its comment; `null` for a list, map, block, or null. */
+  private fun yamlScalar(raw: String): String? {
+    DOUBLE_QUOTED_YAML.find(raw)?.let { return unescapeDoubleQuotedYaml(it.groupValues[1]) }
+    SINGLE_QUOTED_YAML.find(raw)?.let { return it.groupValues[1].replace("''", "'") }
+    val plain = raw.substringBefore(" #").trim()
+    return plain.takeUnless { it.isEmpty() || it == "~" || it == "null" || it.first() in "[{|>&*!\"'" }
+  }
+
+  private val DOUBLE_QUOTED_YAML_ESCAPE = Regex("""\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)""")
+  private val SIMPLE_YAML_ESCAPES = mapOf(
+    '0' to "\u0000", 'a' to "\u0007", 'b' to "\b", 't' to "\t", 'n' to "\n", 'v' to "\u000B", 'f' to "\u000C",
+    'r' to "\r", 'e' to "\u001B", ' ' to " ", '"' to "\"", '/' to "/", '\\' to "\\", 'N' to "\u0085",
+    '_' to "\u00A0", 'L' to "\u2028", 'P' to "\u2029",
+  )
+
+  /** A double-quoted YAML scalar's [body] with its escapes (`\\`, `\"`, `\t`, `\u0020`, ...) decoded. */
+  private fun unescapeDoubleQuotedYaml(body: String): String =
+    DOUBLE_QUOTED_YAML_ESCAPE.replace(body) { match ->
+      val escape = match.groupValues[1]
+      when (escape[0]) {
+        'x', 'u', 'U' -> String(Character.toChars(escape.substring(1).toInt(16)))
+        else -> SIMPLE_YAML_ESCAPES[escape[0]] ?: match.value
+      }
+    }
+  private val YAML_NULLS = setOf("~", "null", "Null", "NULL")
+
+  /**
+   * Whether top-level [keys] decode as a scripted-tool descriptor: `script:` and `name:`, when set, are non-empty
+   * string scalars, and `tools:`, when set, is a non-empty list. A YAML like `name: []` describes no tool. An
+   * optional field set to null (`tools: null`, `name: ~`) is absent, as in the loader; `script:` is required.
+   */
+  private fun isToolDescriptor(keys: Map<String, String>): Boolean {
+    val present = keys.filter { (key, value) -> key == "script" || value !in YAML_NULLS }
+    return listOf("script", "name").all { key -> present[key]?.let { !yamlScalar(it).isNullOrEmpty() } ?: true } &&
+      (present["tools"]?.let { it.isEmpty() || (it.startsWith("[") && it != "[]") } ?: true)
   }
 
   /**

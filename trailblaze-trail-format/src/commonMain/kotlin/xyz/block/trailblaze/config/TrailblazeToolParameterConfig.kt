@@ -17,7 +17,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 
 /**
- * Describes a single parameter of a YAML-defined (`tools:` mode) Trailblaze tool.
+ * Describes a single parameter of a Trailblaze tool.
  *
  * Mirrors the Kotlin data-class constructor parameter shape so that LLM descriptors generated from
  * YAML match those generated reflectively from Kotlin-backed tools.

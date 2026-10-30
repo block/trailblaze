@@ -830,8 +830,11 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .logpane .ln { display: flex; gap: 10px; padding: 1px 11px; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--line); }
 .logpane .ln:first-child { border-top: none; }
 .logpane .ln.e { color: var(--danger-text); } .logpane .ln.w { color: var(--warning-text); }
-.logpane.net .ln span:first-child { font-weight: var(--font-weight-emphasis); min-width: 46px; }
+.logpane.net .meth { font-weight: var(--font-weight-emphasis); min-width: 46px; }
 .logpane.net .m { color: var(--sub); min-width: 96px; }
+.logpane.net .netphase { color: var(--sub); min-width: 68px; }
+.logpane.net .netphase.trailhead { color: var(--trail-text); }
+.netcoverage { margin-top: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--sub); font-size: 12px; }
 .evchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .evchip { background: var(--bg3); border: 1px solid var(--line2); color: var(--txt); border-radius: 999px; padding: 4px 10px; font-size: 11.5px; font-weight: var(--font-weight-emphasis); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .evchip:hover { border-color: var(--run); }

@@ -8,7 +8,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 import xyz.block.trailblaze.android.test.AndroidTestTrailblazeRule.Companion.applyLocaleAndAwaitIfActivityRunning
+import xyz.block.trailblaze.android.test.AndroidTestTrailblazeRule.Companion.mustObserveLocale
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 
 class AndroidTestLocaleSetupTest {
 
@@ -25,7 +28,7 @@ class AndroidTestLocaleSetupTest {
     gate.configure(
       locale = "es",
       activityProvider = { error("No Activity has launched") },
-      applyLocale = {},
+      applyLocale = { true },
     )
 
     val activity = gate.activity {
@@ -57,7 +60,7 @@ class AndroidTestLocaleSetupTest {
     gate.configure(
       locale = "es",
       activityProvider = { error("No Activity has launched") },
-      applyLocale = {},
+      applyLocale = { true },
     )
 
     assertNull(gate.activityIfAvailable { null })
@@ -77,7 +80,7 @@ class AndroidTestLocaleSetupTest {
     gate.configure(
       locale = "es",
       activityProvider = { error("No Activity has launched") },
-      applyLocale = {},
+      applyLocale = { true },
     )
 
     assertNull(gate.activityIfAvailable { "unlocalized" })
@@ -96,7 +99,7 @@ class AndroidTestLocaleSetupTest {
     gate.configure(
       locale = "es",
       activityProvider = { "localized" },
-      applyLocale = {},
+      applyLocale = { true },
     )
 
     assertEquals(1, localeWaits)
@@ -117,7 +120,7 @@ class AndroidTestLocaleSetupTest {
       gate.configure(
         locale = "es",
         activityProvider = { "running" },
-        applyLocale = {},
+        applyLocale = { true },
       )
     }
 
@@ -145,7 +148,7 @@ class AndroidTestLocaleSetupTest {
     gate.configure(
       locale = "es",
       activityProvider = { error("No Activity has launched") },
-      applyLocale = {},
+      applyLocale = { true },
     )
 
     assertFailsWith<IllegalStateException> { gate.activity { "stale" } }
@@ -180,6 +183,7 @@ class AndroidTestLocaleSetupTest {
           applyLocale = {
             localeApplyStarted.countDown()
             check(finishLocaleApply.await(10, TimeUnit.SECONDS))
+            true
           },
         )
       }
@@ -203,7 +207,10 @@ class AndroidTestLocaleSetupTest {
     applyLocaleAndAwaitIfActivityRunning<String>(
       locale = "es",
       activityProvider = { error("No Activity has launched") },
-      applyLocale = { events += "apply:$it" },
+      applyLocale = {
+        events += "apply:$it"
+        true
+      },
       awaitLocale = { _, _ -> events += "await" },
     )
 
@@ -220,12 +227,63 @@ class AndroidTestLocaleSetupTest {
         events += "activity"
         "running"
       },
-      applyLocale = { events += "apply:$it" },
+      applyLocale = {
+        events += "apply:$it"
+        true
+      },
       awaitLocale = { locale, activityProvider ->
         events += "await:$locale:${activityProvider()}"
       },
     )
 
     assertEquals(listOf("activity", "apply:es", "activity", "await:es:running"), events)
+  }
+
+  @Test
+  fun `a language the device already had is not awaited in the running Activity`() {
+    val events = mutableListOf<String>()
+
+    applyLocaleAndAwaitIfActivityRunning(
+      locale = "en-US",
+      activityProvider = { "running" },
+      applyLocale = {
+        events += "apply:$it"
+        false
+      },
+      awaitLocale = { _, _ -> events += "await" },
+    )
+
+    assertEquals(listOf("apply:en-US"), events)
+  }
+
+  @Test
+  fun `Activity access is not gated on a language that needed nothing`() {
+    val gate = ActivityLocaleGate<String> { _, _ -> error("nothing changed, so nothing to await") }
+    gate.configure(
+      locale = "en-US",
+      activityProvider = { null },
+      applyLocale = { false },
+    )
+
+    assertEquals("running", gate.activity { "running" })
+  }
+
+  @Test
+  fun `an interrupt during the Activity probe stops the run instead of reading as no Activity`() {
+    assertNull(orNullUnlessInterrupted<String> { error("activity recreating") })
+
+    assertFailsWith<InterruptedException> {
+      orNullUnlessInterrupted<String> { throw InterruptedException() }
+    }
+    assertTrue(Thread.interrupted(), "the interrupt flag is restored for the run's termination handling")
+  }
+
+  @Test
+  fun `a default left half done does not wait for the app to show it`() {
+    val default = TrailDeviceLocale.forTrail(null)
+    assertFalse(mustObserveLocale(default, TrailDeviceLocale.Outcome.PARTIAL))
+    assertFalse(mustObserveLocale(default, TrailDeviceLocale.Outcome.UNCHANGED))
+    assertTrue(mustObserveLocale(default, TrailDeviceLocale.Outcome.CHANGED))
+    assertTrue(mustObserveLocale(TrailDeviceLocale.forTrail("es"), TrailDeviceLocale.Outcome.UNCHANGED))
   }
 }

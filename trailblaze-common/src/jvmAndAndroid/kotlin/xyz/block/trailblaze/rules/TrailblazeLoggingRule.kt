@@ -337,7 +337,9 @@ abstract class TrailblazeLoggingRule(
     ServerScreenStateLogger(
       isServerAvailable = { isServerAvailable },
       trailblazeLogServerClient = trailblazeLogServerClient,
-      writeScreenshotToDisk = writeScreenshotToDisk,
+      // [isServerAvailable] is false under [noLogging], which would otherwise send every
+      // screenshot down the disk fallback.
+      writeScreenshotToDisk = if (noLogging) { _ -> } else writeScreenshotToDisk,
     )
   }
 

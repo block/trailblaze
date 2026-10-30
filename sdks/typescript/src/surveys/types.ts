@@ -7,9 +7,9 @@
 
 import type { TrailblazeLog, TrailblazeToolLog } from "../generated/trailrunner-dtos.js";
 
-/** Where a piece of evidence came from. Drives how a report renders it. */
-import type { FindingSpec } from "./survey.js";
+import type { FindingSpec, LabelBatch, LabelResult, SurveyDefinition, SurveyHandler } from "./survey.js";
 
+/** Where a piece of evidence came from. Drives how a report renders it. */
 export type RecordKind =
   | "network"
   | "analytics"
@@ -211,7 +211,7 @@ export interface SessionSummary {
  * carry: like an event stream's rows, its shape is the survey's own, and the readers that know the
  * survey know what to expect in it.
  */
-export interface FindingInput<D extends object = Record<string, unknown>> {
+export interface SurveyFinding<D extends object = Record<string, unknown>> {
   /** One line: what happened in this session. */
   summary: string;
   /** The records that prove it. Query results can be passed straight through. */
@@ -220,19 +220,77 @@ export interface FindingInput<D extends object = Record<string, unknown>> {
   data?: D;
 }
 
+/** @deprecated Use SurveyFinding. */
+export type FindingInput<D extends object = Record<string, unknown>> = SurveyFinding<D>;
+
 /** A finding as it appears in a report: what one survey found in one session, with the records that prove it. */
-export interface Finding<D extends object = Record<string, unknown>> extends FindingInput<D> {
+export interface Finding<D extends object = Record<string, unknown>> extends SurveyFinding<D> {
   /** The survey that found it: its export name. */
   survey: string;
   session: string;
+  /** The survey's version when it found this: a hash of the file that defines it and its local imports. Absent for a survey built in code. */
+  version?: string;
 }
 
 /**
- * Declares what a survey checks and which sessions it applies to. The survey's name is the name it
- * is exported under. A survey with a handler needs nothing here; a declarative one needs a
- * `description`, or a `summary` on its finding, to say what it found.
+ * What a survey's label phase hands back: a conclusion its findings add up to across a batch of
+ * runs, backed by the findings that prove it. `type` is the survey's own vocabulary, like an event
+ * type: the framework knows none. A label's runs are the sessions of its findings.
  */
-export interface SurveySpec {
+export interface LabelInput<LD extends object = Record<string, unknown>> {
+  /** What kind of label it is (`job`, `journey`, ...). The survey that emits a type owns it. */
+  type?: string;
+  /** Which one. Labels of one survey with the same type and name are one label, their findings combined. */
+  name: string;
+  /** One line on why the findings add up to this label. */
+  reasoning?: string;
+  /** Anything else the label carries, in any shape. */
+  data?: LD;
+  /** The findings that prove it. At least one: a label nothing proves is unexplainable. */
+  findings: ReadonlyArray<Finding<object>>;
+}
+
+/** A label as another survey's label phase reads it: `dependsOn.<name>.labels`. */
+export type Label<L extends LabelInput<object> = LabelInput> = L & {
+  /** The survey whose label phase emitted it. */
+  survey: string;
+  version?: string;
+  /** Ids of the sessions its findings came from, in batch order. */
+  runs: string[];
+};
+
+/** Names one finding in a report: which survey found it, in which run, and what it said. */
+export interface FindingRef {
+  survey: string;
+  session: string;
+  /** Which of the survey's findings in that session, in the order the session's findings list them. */
+  index: number;
+  summary: string;
+}
+
+/** A label as a report carries it: its findings by reference rather than in full. */
+export interface LabelRecord {
+  survey: string;
+  version?: string;
+  type?: string;
+  name: string;
+  reasoning?: string;
+  data?: object;
+  runs: string[];
+  findings: FindingRef[];
+}
+
+/**
+ * Declares a survey: which sessions it applies to, its find phase (per session), and its label
+ * phase (per batch). The survey's name is the name it is exported under. Write `find` before
+ * `label`: TypeScript reads the object top to bottom, so that order is what types `label`'s
+ * findings by what `find` returns.
+ */
+export interface SurveySpec<
+  D extends object = Record<string, unknown>,
+  L extends LabelInput<object> = LabelInput,
+  U extends Record<string, SurveyDefinition> = {},
+> {
   /** What the survey checks, for readers of the report. */
   description?: string;
   /** Only run on sessions whose platform is listed. Unset runs everywhere. */
@@ -241,8 +299,6 @@ export interface SurveySpec {
   appIds?: ReadonlyArray<string>;
   /** Only run on sessions of these trail targets. */
   targets?: ReadonlyArray<string>;
-  /** Free-form tags for filtering which surveys a run includes. */
-  tags?: ReadonlyArray<string>;
   /**
    * True when the survey needs the finished session: its outcome or duration, logs, tool calls,
    * screen text, the device log, the trace, or any file. Such a survey runs only after the run, on
@@ -255,11 +311,23 @@ export interface SurveySpec {
    */
   requiresFinishedSession?: boolean;
   /**
-   * Declarative form: the finding the survey reports and the queries that prove it. Give this
-   * instead of a handler when the check is "these records were observed" and nothing needs
-   * computing.
+   * The find phase: runs once per session and returns what it found there. A function of the
+   * session, or a declarative finding: the queries that prove it, when nothing needs computing.
    */
-  finding?: FindingSpec;
-  /** @deprecated Renamed to {@link finding}; still read when `finding` is unset. */
-  footprint?: FindingSpec;
+  find?: SurveyHandler<D> | FindingSpec<D>;
+  /** The declarative finding, as `find` also takes it. Kept for surveys written before `find`. */
+  finding?: FindingSpec<D>;
+  /**
+   * The surveys this survey's label phase reads, by the name it reads them under:
+   * `dependsOn: { journeys }`, then `label: ({ dependsOn }) => dependsOn.journeys.labels`. Their
+   * label phases run first; a cycle fails when the surveys load. Running this survey alone still
+   * runs them, reusing a session's stored findings when they are current.
+   */
+  dependsOn?: U;
+  /**
+   * The label phase: runs once, after the find phase has run over every session of the batch, and
+   * turns findings into labels. Only after runs, never mid-trail. A survey may have only a label
+   * phase, reading the surveys in its `dependsOn`.
+   */
+  label?(batch: LabelBatch<D, U>): LabelResult<L> | Promise<LabelResult<L>>;
 }

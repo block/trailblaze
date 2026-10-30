@@ -13,8 +13,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 
 /**
  * Direct tests for [ResolvedTargetToolDetailRenderer]. The renderer is the single source
@@ -25,9 +23,8 @@ import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
  * after a regen — far from the cause.
  *
  * Covers:
- *  - All three [ResolvedTargetToolDetailRenderer.ToolDetail] variants (class-backed via
- *    a `@TrailblazeToolClass` fixture, YAML-defined via [ToolYamlConfig], scripted via
- *    [InlineScriptToolConfig]).
+ *  - Both [ResolvedTargetToolDetailRenderer.ToolDetail] variants (class-backed via
+ *    a `@TrailblazeToolClass` fixture, scripted via [InlineScriptToolConfig]).
  *  - Both `renderMarkdown` overloads — the workspace `(detail, targetId)` shorthand and
  *    the docs-generator `(detail, Header)` caller-configurable variant.
  *  - JSON-schema → param-row rendering for scripted tools (required vs optional split,
@@ -191,111 +188,6 @@ class ResolvedTargetToolDetailRendererTest {
     assertTrue("enum type label") { md.contains("- `direction` — `enum(UP | DOWN)`") }
     assertTrue("array type label") { md.contains("- `tags` — `array<String>`") }
     assertFalse("no leaked Kotlin type model") { md.contains("ToolParameterType.") }
-  }
-
-  // ── YamlDefined ─────────────────────────────────────────────────────────────────────
-
-  @Test
-  fun `yaml-defined renders description, tool id, and parameter list`() {
-    val config = ToolYamlConfig(
-      id = "eraseText",
-      description = "Erase characters from the focused text field.",
-      parameters = listOf(
-        TrailblazeToolParameterConfig(
-          name = "charactersToErase",
-          type = "integer",
-          required = false,
-          description = "Number of characters to erase.",
-        ),
-      ),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(
-      name = "eraseText",
-      config = config,
-    )
-    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
-    assertTrue("description") { md.contains("Erase characters from the focused text field.") }
-    assertTrue("source kind") { md.contains("- Kind: YAML-defined") }
-    assertTrue("tool id") { md.contains("- Tool id: `eraseText`") }
-    assertTrue("optional param row") {
-      md.contains("- `charactersToErase` — `integer`") && md.contains("Number of characters to erase.")
-    }
-  }
-
-  @Test
-  fun `yaml-defined renders Contract section with explicit flags from YAML config`() {
-    // ToolYamlConfig in `tools:` mode lets the YAML author set the three contract flags
-    // directly. Pin that the renderer reads them through verbatim instead of forcing the
-    // annotation-equivalent defaults — a YAML author saying `surface_to_llm: false` and
-    // `is_recordable: false` should see those flags in the sidecar.
-    val config = ToolYamlConfig(
-      id = "internalUtility",
-      description = "YAML-defined sharp utility.",
-      surfaceToLlm = false,
-      isRecordable = false,
-      requiresHost = true,
-      parameters = emptyList(),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(
-      name = "internalUtility",
-      config = config,
-    )
-    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
-    assertTrue("Contract section header") { md.contains("## Contract") }
-    assertTrue("LLM-visible reflects yaml `surface_to_llm: false`") {
-      md.contains("- Visible to LLM: no (`surface_to_llm: false`)")
-    }
-    assertTrue("Recordable reflects yaml `is_recordable: false`") {
-      md.contains("- Recordable: no (`is_recordable: false`)")
-    }
-    assertTrue("Host-only reflects yaml `requires_host: true`") {
-      md.contains("- Host-only: yes (`requires_host: true`)")
-    }
-  }
-
-  @Test
-  fun `yaml-defined Contract falls back to framework defaults when flags are null`() {
-    // The three flags are `Boolean?` on ToolYamlConfig — null means "use framework default".
-    // The renderer should resolve null to true/true/false rather than render `null` or omit
-    // the line, so the Contract section is always a complete three-row view.
-    val config = ToolYamlConfig(
-      id = "defaults",
-      description = null,
-      parameters = emptyList(),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(
-      name = "defaults",
-      config = config,
-    )
-    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
-    assertTrue("LLM-visible default=yes") {
-      md.contains("- Visible to LLM: yes (`surface_to_llm: true`)")
-    }
-    assertTrue("Recordable default=yes") {
-      md.contains("- Recordable: yes (`is_recordable: true`)")
-    }
-    assertTrue("Host-only default=no") {
-      md.contains("- Host-only: no (`requires_host: false`)")
-    }
-  }
-
-  @Test
-  fun `yaml-defined with no description falls back to the missing marker`() {
-    val config = ToolYamlConfig(
-      id = "bareTool",
-      description = null,
-      parameters = emptyList(),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(
-      name = "bareTool",
-      config = config,
-    )
-    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
-    assertTrue("missing-description fallback") { md.contains("_(no description provided)_") }
   }
 
   // ── Scripted ────────────────────────────────────────────────────────────────────────
@@ -484,24 +376,6 @@ class ResolvedTargetToolDetailRendererTest {
   }
 
   @Test
-  fun `yaml-defined Contract keeps the snake_case spellings its decoder accepts`() {
-    // The other half of the split: `ToolYamlConfig` carries `@SerialName("surface_to_llm")`, so
-    // snake_case IS the settable key there and must NOT drift to camelCase along with scripted.
-    val config = ToolYamlConfig(
-      id = "spelling",
-      description = "Checks the rendered flag spelling.",
-      parameters = emptyList(),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(name = "spelling", config = config)
-    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
-    assertTrue("yaml page keeps `surface_to_llm`, got:\n$md") { md.contains("`surface_to_llm: true`") }
-    assertFalse("yaml page must not render the scripted camelCase key") {
-      md.contains("`surfaceToLlm:")
-    }
-  }
-
-  @Test
   fun `scripted from exporting dep shows the exports attribution`() {
     val config = InlineScriptToolConfig(
       script = "./tools/createEntity.ts",
@@ -666,6 +540,44 @@ class ResolvedTargetToolDetailRendererTest {
     assertTrue("sidecar regen hint") { md.contains("<!-- Regenerate with: trailblaze check -->") }
   }
 
+  // ── renderSection (one entry of a many-tool document) ─────────────────────────────────
+
+  @Test
+  fun `renderSection carries the page's description, contract and parameters without page furniture`() {
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked(
+      name = "greetTool",
+      kclass = GreetTool::class,
+    )
+    val section = ResolvedTargetToolDetailRenderer.renderSection(detail)
+    assertTrue("description") { section.contains("Greets a user by name.") }
+    assertTrue("contract") { section.contains("- Visible to LLM: yes") }
+    assertTrue("parameter") { section.contains("- `name` — `String`") }
+    assertFalse("no banner") { section.contains(ResolvedTargetToolDetailRenderer.GENERATED_BANNER) }
+    assertFalse("no headings, which would flood a many-tool document's table of contents") {
+      section.lines().any { it.startsWith("#") }
+    }
+    assertFalse("no Output boilerplate") { section.contains("Output") }
+  }
+
+  @Test
+  fun `renderSection renders a scripted tool the same for every consuming target`() {
+    val config = InlineScriptToolConfig(
+      script = "./tools/createEntity.ts",
+      name = "createEntity",
+      description = "Make a thing.",
+    )
+    fun sectionFor(consumer: String) = ResolvedTargetToolDetailRenderer.renderSection(
+      ResolvedTargetToolDetailRenderer.ToolDetail.Scripted(
+        name = "createEntity",
+        config = config,
+        originTrailmapId = consumer,
+        consumerTrailmapId = consumer,
+      ),
+    )
+    assertEquals(sectionFor("storefront"), sectionFor("backoffice"))
+    assertTrue("script path") { sectionFor("storefront").contains("- Script: `./tools/createEntity.ts`") }
+  }
+
   // ── matrixKindAndSource (availability-matrix Kind/Source columns) ─────────────────────
 
   @Test
@@ -675,18 +587,6 @@ class ResolvedTargetToolDetailRendererTest {
       kclass = GreetTool::class,
     )
     assertEquals("Kotlin" to "`GreetTool`", ResolvedTargetToolDetailRenderer.matrixKindAndSource(detail))
-  }
-
-  @Test
-  fun `matrixKindAndSource labels a YAML-defined tool YAML with its tool id`() {
-    val config = ToolYamlConfig(
-      id = "eraseText",
-      description = null,
-      parameters = emptyList(),
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(name = "eraseText", config = config)
-    assertEquals("YAML" to "`eraseText`", ResolvedTargetToolDetailRenderer.matrixKindAndSource(detail))
   }
 
   @Test

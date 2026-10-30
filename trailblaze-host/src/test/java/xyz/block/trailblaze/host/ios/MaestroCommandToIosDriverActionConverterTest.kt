@@ -23,6 +23,7 @@ import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
+import maestro.TapRepeat
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.WaitForAnimationToEndCommand
 import org.junit.Test
@@ -48,6 +49,18 @@ class MaestroCommandToIosDriverActionConverterTest {
     val action = assertIs<IosDriverAction.Tap>(out.single())
     assertEquals(120, action.x)
     assertEquals(240, action.y)
+  }
+
+  @Test
+  fun `TapOnPointV2 with repeat 2 maps to a double Tap`() {
+    val out = convert(TapOnPointV2Command(point = "100,65", repeat = TapRepeat(2, 0)))
+    assertEquals(IosDriverAction.Tap(100, 65, repeat = 2), out.single())
+  }
+
+  @Test
+  fun `TapOnPointV2 with percent coords and repeat 2 maps to a double TapRelative`() {
+    val out = convert(TapOnPointV2Command(point = "50%,26%", repeat = TapRepeat(2, 0)))
+    assertEquals(IosDriverAction.TapRelative(50.0, 26.0, repeat = 2), out.single())
   }
 
   @Test

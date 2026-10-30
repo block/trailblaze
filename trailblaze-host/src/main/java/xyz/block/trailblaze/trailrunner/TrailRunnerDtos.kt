@@ -618,8 +618,8 @@ data class ToolCatalogResponse(val tools: List<ToolCatalogEntry>)
 data class ToolUsageCountsResponse(val counts: Map<String, Int>)
 
 /**
- * What kind of tool a [ToolCatalogEntry] is. The three kinds are exhaustive — a tool is a
- * `@TrailblazeToolClass` Kotlin tool, a `.tool.yaml` declaration, or a `.ts` scripted tool. There is
+ * What kind of tool a [ToolCatalogEntry] is. The two kinds are exhaustive — a tool is a
+ * `@TrailblazeToolClass` Kotlin tool or a `.ts` scripted tool. There is
  * deliberately no `UNKNOWN`: a tool that can't be classified is a real authoring bug (e.g. an
  * unparseable `.tool.yaml`), which `ToolCatalogBuilder` logs and drops rather than surfacing as a
  * bogus catalog entry. `@SerialName` keeps the wire values the lowercase strings the UI already uses.
@@ -628,9 +628,6 @@ data class ToolUsageCountsResponse(val counts: Map<String, Int>)
 enum class ToolFlavor {
   @SerialName("kotlin")
   KOTLIN,
-
-  @SerialName("yaml")
-  YAML,
 
   @SerialName("scripted")
   SCRIPTED,

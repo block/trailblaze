@@ -97,11 +97,11 @@ class BaseTrailblazeAgentTest {
     ): TrailblazeToolResult = result
   }
 
-  // ── Stub tool shaped like a YAML-defined one: a per-instance name, and a class annotation that
-  // every instance shares (`YamlDefinedTrailblazeTool` uses the reserved `_yaml_defined`) ──
+  // ── Stub tool shaped like a scripted one: a per-instance name, and a class annotation that
+  // every instance shares ──
 
   @Serializable
-  @TrailblazeToolClass("_yaml_defined")
+  @TrailblazeToolClass("_shared_impl")
   private class InstanceNamedStubTool(
     override val instanceToolName: String,
   ) : ExecutableTrailblazeTool, InstanceNamedTrailblazeTool {
@@ -299,15 +299,20 @@ class BaseTrailblazeAgentTest {
       traceId: TraceId,
       screenState: ScreenState?,
       screenStateProvider: (() -> ScreenState)?,
-    ) = TrailblazeToolExecutionContext(
-      screenState = screenState,
-      traceId = traceId,
-      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
-      sessionProvider = sessionProvider,
-      screenStateProvider = screenStateProvider,
-      trailblazeLogger = trailblazeLogger,
-      memory = memory,
-    )
+    ): TrailblazeToolExecutionContext {
+      lateinit var context: TrailblazeToolExecutionContext
+      context = TrailblazeToolExecutionContext(
+        screenState = screenState,
+        traceId = traceId,
+        trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+        sessionProvider = sessionProvider,
+        screenStateProvider = screenStateProvider,
+        trailblazeLogger = trailblazeLogger,
+        memory = memory,
+        nestedToolExecutor = nestedToolExecutorFor { context },
+      )
+      return context
+    }
 
     override fun executeTool(
       tool: TrailblazeTool,
@@ -406,6 +411,34 @@ class BaseTrailblazeAgentTest {
 
     assertThat((seenScreenStates[0] as LabeledScreenState).label).isEqualTo("first")
     assertThat((seenScreenStates[1] as LabeledScreenState).label).isEqualTo("fresh-capture")
+  }
+
+  @Test
+  fun `a nested call after a nested action reads the screen after that action`() = runBlocking {
+    // A scripted tool that taps and then reads the screen through two `ctx.tools` calls shares one
+    // context. The tap must re-arm lazy capture, or the read sees the screen from before the tap.
+    val agent = ScreenStateThreadingTestAgent()
+    var captures = 0
+    val provider: () -> ScreenState = { LabeledScreenState("capture-${++captures}") }
+    val seen = mutableListOf<ScreenState?>()
+    val reader = RecordingStubTool(onExecute = { ctx -> seen += ctx.screenState })
+    val tapThenRead = object : HostLocalExecutableTrailblazeTool {
+      override val advertisedToolName = "tap_then_read"
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+        val nested = toolExecutionContext.nestedToolExecutor!!
+        nested(StubTool())
+        return nested(reader)
+      }
+    }
+
+    agent.runTrailblazeTools(
+      tools = listOf(tapThenRead),
+      screenState = LabeledScreenState("before-tap"),
+      elementComparator = noOpComparator,
+      screenStateProvider = provider,
+    )
+
+    assertThat((seen.single() as LabeledScreenState).label).isEqualTo("capture-1")
   }
 
   @Test
@@ -1414,8 +1447,8 @@ class BaseTrailblazeAgentTest {
 
   @Test
   fun `a tool that names itself gets that name, not its class annotation`() = runBlocking {
-    // Every `tools:`-authored tool shares one class, whose annotation is the reserved
-    // `_yaml_defined`. Going by the annotation collapses them all into one span name, and the
+    // Many named tools can share one implementation class (and so one class annotation). Going by
+    // the annotation collapses them all into one span name, and the
     // question the trace exists to answer — which of my tools was slow — stops having an answer.
     run(
       TestAgent(),

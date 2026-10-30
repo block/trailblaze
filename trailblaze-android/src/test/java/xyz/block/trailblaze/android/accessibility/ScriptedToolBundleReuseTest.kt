@@ -29,7 +29,6 @@ class ScriptedToolBundleReuseTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "empty",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 

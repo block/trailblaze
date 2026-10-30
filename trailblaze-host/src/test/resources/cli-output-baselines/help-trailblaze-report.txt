@@ -9,8 +9,9 @@ Usage: trailblaze report [-hvV] [--current] [--full-report-payloads] [--no-gif]
                          [--no-webp] [--open] [--[no-]storyboard-yaml] [--gif
                          [=<gifOutput>]] [--storyboard[=<storyboardOutput>]]
                          [--video[=<videoOutput>]] [--webp[=<webpOutput>]]
-                         [--id=<id>] [--max-size=<maxSize>]
-                         [--output-dir=<outputDir>] [--share-url=<url>]
+                         [--surveys[=<names>[,<names>...]]]... [--id=<id>]
+                         [--max-size=<maxSize>] [--output-dir=<outputDir>]
+                         [--share-url=<url>]
                          [--storyboard-columns=<storyboardColumns>]
                          [<session-id>]
 Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session
@@ -156,6 +157,17 @@ truncated artifact is still written with a warning.
                                typical session, at the cost of less actionable
                                per-cell labels). Has no effect without
                                --storyboard.
+      --surveys[=<names>[,<names>...]]
+                             Also run surveys over the report's sessions, and
+                               write what they found beside the report: surveys.
+                               md (labels, the findings behind each, and the
+                               runs they came from) and surveys.json. Bare,
+                               every survey the workspace carries runs; or name
+                               them, comma-separated (--surveys=journeys,jobs).
+                               Each session's findings and labels are stored in
+                               its surveys.json too. Surveys never run unless
+                               asked. Put a session id before this flag, or it
+                               is read as a survey name.
   -v, --verbose              Show the generator's own progress logs — workspace
                                config loading, tool-class discovery,
                                per-session clock normalisation, and step

@@ -208,7 +208,7 @@ object AdbCommandUtil {
    * off, so a second toggle takes them down again rather than restoring them. Reading the radios
    * back instead would make the toggle reversible by answering the wrong question, and would report
    * a device genuinely in airplane mode as not being in it. A trail that needs the radios back
-   * should say so with `networkConnection`, which names each radio and the flag separately.
+   * should say so with `mobile_networkConnection`, which names each radio and the flag separately.
    */
   fun isAirplaneModeEnabled(): Boolean {
     val raw = execShellCommand(

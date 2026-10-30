@@ -6,7 +6,6 @@ import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -134,29 +133,6 @@ class QuickJsTrailheadTeardownTest {
     assertEquals(TrailheadEventStream.Setup.REUSE_FAILED, failed.string("setup"))
     assertEquals("true", failed.string("failed"))
     assertNull(memory.variables["fixture_carriedOn"])
-  }
-
-  @Test
-  fun `a step that throws unserializable error data still tells teardown what it created`() = runBlocking {
-    val util = runnerUtil(connect())
-
-    memory.remember("fixture_addItemThrowsCyclic", "true")
-    assertFails { runTrail(util, addItem = "item-1") }
-
-    val notes = trailheadEvents().filter { it.string("type") == TrailheadEventStream.Type.NOTE }
-    assertEquals(listOf("item-1"), notes.map { it["created"]!!.jsonObject.string("id") })
-  }
-
-  @Test
-  fun `a step that returns an unserializable value still tells teardown what it created`() = runBlocking {
-    for (shape in listOf("cyclic", "cyclicEnvelope")) {
-      session = newSession()
-      memory.remember("fixture_addItemReturns", shape)
-      runCatching { runTrail(runnerUtil(connect()), addItem = "item-$shape") }
-
-      val notes = trailheadEvents().filter { it.string("type") == TrailheadEventStream.Type.NOTE }
-      assertTrue("item-$shape" in notes.map { it["created"]!!.jsonObject.string("id") }, "$shape: $notes")
-    }
   }
 
   @Test

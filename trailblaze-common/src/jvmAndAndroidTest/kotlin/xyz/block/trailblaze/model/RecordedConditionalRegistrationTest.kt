@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
  * Every session built through [toSessionToolRepo] (the on-device rules, the host runner and the
  * daemon) must register `runIf`, the recorded-trail conditional, with or without a target. The
  * scripted-tool launchers register exactly [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo.allCatalogScriptedToolNames],
- * so a recorded `runIf` step, or a `block_runIf` forwarding to it, fails as an unknown tool on any
+ * so a recorded `runIf` step fails as an unknown tool on any
  * session whose repo leaves it out.
  */
 class RecordedConditionalRegistrationTest {

@@ -88,7 +88,7 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  *
  * The emitted `trailblaze-client.d.ts` is the FULL, ungated tool surface — every class-backed tool a
  * trailmap resolves is typed there, and the emitter re-injects selector args and surfaces every
- * recordable tool (class- and YAML-defined), so a faithfully-recorded call type-checks cleanly.
+ * recordable class-backed tool, so a faithfully-recorded call type-checks cleanly.
  * Validation is bounded by how *faithfully* that surface models a recorded call; a residual
  * per-target fidelity gap is absorbed by the exemption above until the surface closes it.
  *

@@ -29,9 +29,6 @@ import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsResponse as ComposeExecuteToolsResponse
-import xyz.block.trailblaze.config.TrailblazeConfigYaml
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -61,19 +58,16 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.RunCommandTrailblazeTool
 
 /**
- * Pins the pure helpers `executeTrailblazeTool` is built out of — where a tool is routed, how a
- * composed YAML tool expands, and what the CLI prints for a completed tool.
+ * Pins the pure helpers `executeTrailblazeTool` is built out of — where a tool is routed and
+ * what the CLI prints for a completed tool.
  *
- * Both routing helpers are load-bearing for the same failure mode: a tool that can only run on
- * the daemon JVM being shipped to the device, which has no registration for it and answers
- * "Unknown tool". `resolveToolDispatchRoute` decides host vs device;
- * `expandDelegatingToolHostSide` flattens a `requires_host = true` composition so each child
- * routes on its own.
+ * Routing is load-bearing for one failure mode: a tool that can only run on the daemon JVM being
+ * shipped to the device, which has no registration for it and answers "Unknown tool".
+ * `resolveToolDispatchRoute` decides host vs device, including whether a `requires_host`
+ * delegating tool is expanded host-side so each child routes on its own.
  *
- * The recursive per-child dispatch in `expandDelegatingToolAndDispatch` is covered end-to-end
- * via the OSS smoke (`trailblaze tool wikipedia_back_safe` against the wikipedia reproducer
- * trailmap). This file pins the decisions those paths are made of, plus the assembly of the
- * host-local execution context out of them.
+ * This file pins the decisions those paths are made of, plus the assembly of the host-local
+ * execution context out of them.
  *
  * ## What a green run here does NOT cover
  *
@@ -407,106 +401,6 @@ class TrailblazeMcpBridgeImplTest {
     assertEquals("xyz.block.trailblaze.runner", runnerProcessIds[otherKey])
   }
 
-  @Test
-  fun `expandDelegatingToolHostSide flattens YAML composed tool into executable primitives`() {
-    // A typical workspace pure-YAML composed tool: `requires_host: true` (added by
-    // `AppTargetDiscovery.registerWorkspaceYamlTools` when null), `tools:` body that
-    // wraps a maestro back press.
-    val config = parse(
-      """
-      id: test_back_safe
-      description: Wraps the maestro back primitive for the test.
-      requires_host: true
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
-      """.trimIndent(),
-    )
-    val tool = YamlDefinedTrailblazeTool(config = config, params = emptyMap())
-
-    val expanded: List<ExecutableTrailblazeTool> =
-      TrailblazeMcpBridgeImpl.expandDelegatingToolHostSide(
-        tool = tool,
-        trailblazeDeviceId = TrailblazeDeviceId(
-          instanceId = "test-emu",
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-        ),
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-        traceId = null,
-      )
-
-    // Crucial regression pins:
-    // 1. Expansion produced exactly the children the YAML body declares (one maestro back).
-    assertEquals(
-      1,
-      expanded.size,
-      "Expansion should produce one primitive per `tools:` body entry; got ${expanded.size}",
-    )
-    // 2. The child is an `ExecutableTrailblazeTool` (per the return type), not a wrapper.
-    val child = assertNotNull(expanded.firstOrNull(), "Expansion must produce a non-null child")
-    // 3. CRITICAL: the child is NOT itself a DelegatingTrailblazeTool — if it were, the
-    //    recursive dispatch in `expandDelegatingToolAndDispatch` could re-enter the
-    //    host-expansion branch on the child, producing nested-recursion. The framework's
-    //    `YamlDefinedTrailblazeTool.toExecutableTrailblazeTools` enforces this via a cast
-    //    + `?: error(...)`, but we re-assert it here so a future refactor of the framework
-    //    can't silently break the no-nested-expansion invariant the bridge relies on.
-    assertTrue(
-      child !is DelegatingTrailblazeTool,
-      "Expanded child must be an executable primitive, not another delegating tool — " +
-        "host-expansion's recursive dispatch assumes non-delegating children. Got: ${child::class.simpleName}",
-    )
-  }
-
-  @Test
-  fun `expandDelegatingToolHostSide handles multi-child compositions in order`() {
-    // Pin that expansion preserves YAML declaration order — the recursive dispatcher
-    // calls `executeTrailblazeTool` on each child sequentially, so order is observable.
-    val config = parse(
-      """
-      id: test_multi
-      description: Multiple primitives in declaration order.
-      requires_host: true
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
-        - mobile_maestro:
-            commands:
-              - back: {}
-        - mobile_maestro:
-            commands:
-              - back: {}
-      """.trimIndent(),
-    )
-    val tool = YamlDefinedTrailblazeTool(config = config, params = emptyMap())
-
-    val expanded = TrailblazeMcpBridgeImpl.expandDelegatingToolHostSide(
-      tool = tool,
-      trailblazeDeviceId = TrailblazeDeviceId(
-        instanceId = "test-emu",
-        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-      ),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      traceId = null,
-    )
-
-    assertEquals(
-      3,
-      expanded.size,
-      "Three `tools:` entries should produce three expanded children; got ${expanded.size}",
-    )
-    expanded.forEachIndexed { idx, child ->
-      assertTrue(
-        child !is DelegatingTrailblazeTool,
-        "Child at index $idx must be an executable primitive (not a delegating wrapper); " +
-          "got ${child::class.simpleName}",
-      )
-    }
-  }
-
   // -- renderExecutionResult: what `trailblaze tool` prints for the HOST/Maestro blocking path --
   //
   // This is the pure helper the HOST-blocking branch of `executeTrailblazeTool` now routes its
@@ -715,9 +609,9 @@ class TrailblazeMcpBridgeImplTest {
 
   @Test
   fun `an executable tool whose metadata requires the host routes to the host`() {
-    // The `requiresHostInstance()` arm of the route, which is what carries SCRIPTED and
-    // YAML-defined tools (`trailblaze/requiresHost` in a `*.tool.yaml` or a TS `_meta` block) —
-    // they have no class to hang the marker interface on. No class-backed production tool
+    // The `requiresHostInstance()` arm of the route, which is what carries SCRIPTED tools
+    // (`trailblaze/requiresHost` in a TS `_meta` block) — they have no class to hang the marker
+    // interface on. No class-backed production tool
     // reaches this arm any more (they all declare `HostLocalExecutableTrailblazeTool`), so the
     // fixture is deliberately a test-local class: the arm still has to hold for the population
     // that needs it.
@@ -746,33 +640,15 @@ class TrailblazeMcpBridgeImplTest {
   }
 
   @Test
-  fun `a composed YAML tool expands host-side only when it requires the host`() {
-    val body = """
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
-    """.trimIndent()
-
+  fun `a delegating tool expands host-side only when it requires the host`() {
     assertEquals(
       TrailblazeMcpBridgeImpl.ToolDispatchRoute.HOST_EXPAND,
-      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(
-        YamlDefinedTrailblazeTool(
-          config = parse("id: host_back\ndescription: Host-composed back.\nrequires_host: true\n$body"),
-          params = emptyMap(),
-        ),
-      ),
+      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(MetadataDelegatingTool(requiresHost = true)),
     )
-    // Without the flag the whole composition ships to the device, exactly as before.
+    // Without the flag the whole delegating tool ships to the device.
     assertEquals(
       TrailblazeMcpBridgeImpl.ToolDispatchRoute.DEVICE,
-      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(
-        YamlDefinedTrailblazeTool(
-          config = parse("id: device_back\ndescription: Device-composed back.\n$body"),
-          params = emptyMap(),
-        ),
-      ),
+      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(MetadataDelegatingTool(requiresHost = false)),
     )
   }
 
@@ -1181,15 +1057,10 @@ class TrailblazeMcpBridgeImplTest {
     assertNotSame(first.memory, second.memory)
   }
 
-  private fun parse(yaml: String): ToolYamlConfig =
-    TrailblazeConfigYaml.instance.decodeFromString(ToolYamlConfig.serializer(), yaml)
-      .also { it.validate() }
-
   /**
    * An executable tool that requires the host through per-instance [TrailblazeToolMetadata] and
    * NOT through the [xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool] marker —
-   * the shape a scripted (`_meta`) or YAML-defined (`requires_host: true`) tool presents to
-   * `resolveToolDispatchRoute`.
+   * the shape a scripted (`_meta`) tool presents to `resolveToolDispatchRoute`.
    */
   private class MetadataHostOnlyTool : ExecutableTrailblazeTool {
     override val toolMetadata = TrailblazeToolMetadata(requiresHost = true)
@@ -1197,5 +1068,17 @@ class TrailblazeMcpBridgeImplTest {
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
+
+  /**
+   * A delegating tool whose host requirement comes from per-instance [TrailblazeToolMetadata], so
+   * one class covers both sides of the `HOST_EXPAND` arm of `resolveToolDispatchRoute`.
+   */
+  private class MetadataDelegatingTool(requiresHost: Boolean) : DelegatingTrailblazeTool {
+    override val toolMetadata = TrailblazeToolMetadata(requiresHost = requiresHost)
+
+    override fun toExecutableTrailblazeTools(
+      executionContext: TrailblazeToolExecutionContext,
+    ): List<ExecutableTrailblazeTool> = emptyList()
   }
 }

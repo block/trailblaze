@@ -83,8 +83,8 @@ This precedence is intentional and is documented in code on `TrailblazeResolvedC
 | `targets/*.yaml` | Yes | Defines target ids, per-platform app ids, tool selection, and driver scoping. Still supported as the legacy compatibility path. |
 | `trailmaps/<id>/toolsets/*.yaml` | Yes | Groups tools and can scope them with `platforms:` or `drivers:`. |
 | `trailmaps/<id>/tools/*.tool.yaml` with `class:` | Yes | The class must already be on the JVM classpath. |
-| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | Yes | YAML-defined tool composition. Workspace-authored entries register through `AppTargetDiscovery` and resolve via the toolset → tool dispatch chain the same way classpath-bundled tools do. |
-| `trailblaze.yaml` targets / toolsets / tools | Partially | Targets and toolsets are live today, and class-backed `tools:` entries participate in discovery. Provider refs and external YAML-defined (`tools:` mode) project tools are still follow-up work. |
+| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | No | A YAML list of other tool calls is skipped at load with a warning, so a trail that calls it fails as an unknown tool. Write a tool that composes other tools as a TypeScript tool instead. |
+| `trailblaze.yaml` targets / toolsets / tools | Partially | Targets and toolsets are live today, and class-backed `tools:` entries participate in discovery. Provider refs are still follow-up work. |
 
 ## Authoring a Target
 
@@ -131,24 +131,6 @@ target:
     ios:
       app_ids:
         - xyz.block.trailblaze.examples.iossampleapp
-  # Authoring surface: trailmap scripted tools — flat-schema, one tool per file under tools/.
-  # No `bun install` required, no subprocess. The host runner synthesizes a small wrapper at
-  # session start.
-  tools:
-    - sampleapp_writeArtifact
-    # Authoring references — bare typed `.ts`, no `.yaml` sidecar (the framework reads the description
-    # from the JSDoc; the analyzer derives the input schema from the TS types). They show how to
-    # package the wait-until pattern as a reusable tool / a TypeScript trailhead, and are validated by
-    # their unit tests. They are NOT backed by a shipped runnable trail (compiling a workspace `.ts`
-    # tool needs the dev toolchain), like `sampleapp_writeArtifact`. The example's runnable wait demo
-    # is the pure-YAML `loading/wait-for-content` trail, which uses only built-in tools.
-    - sampleapp_waitForText
-    - sampleapp_launchToLoadedContent
-    # TypeScript trailhead with `teardown`, behind the teardown/accept-terms-* trail pair.
-    - sampleapp_openSettings
-    # Inverted not-visible check behind the agent eval `evals/multiline-not-visible.trail.yaml`,
-    # which needs an LLM and is run by hand.
-    - sampleapp_assertTextStillShown
 ```
 
 ## Authoring Toolsets
@@ -183,11 +165,11 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 9 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
-| `ios_primitives` | Yes | `ios-axe`, `ios-host` | 4 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 23 |
+| `ios_primitives` | Yes | `ios-axe`, `ios-host` | 5 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 2 |
-| `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
+| `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 6 |
 | `multi_device` | No | `all drivers` | 1 |
 | `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 4 |
 | `observation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 1 |
@@ -200,11 +182,10 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 
 ## Authoring Tools
 
-Tool definitions have three current shapes:
+Tool definitions have two current shapes:
 
 1. **Class-backed YAML** in `trailmaps/<id>/tools/*.tool.yaml`.
-2. **YAML-defined composition** in `trailmaps/<id>/tools/*.tool.yaml` with a `tools:` block.
-3. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).
+2. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).
 
 ### Class-Backed YAML
 
@@ -215,39 +196,22 @@ class: com.example.trailblaze.tools.MyCustomTrailblazeTool
 
 This works from both bundled classpath config and the filesystem overlay, as long as the backing class is already on the binary's JVM classpath.
 
-### YAML-Defined Composition
-
-```yaml
-id: eraseThenType
-description: "Erases characters from the focused field, then types new text."
-parameters:
-  - name: charactersToErase
-    type: integer
-    required: false
-  - name: text
-    type: string
-    required: true
-tools:
-  - eraseText:
-      charactersToErase: "{{params.charactersToErase}}"
-  - inputText:
-      text: "{{params.text}}"
-```
-
-This authoring mode is part of the tool schema today, but new filesystem contributions of this kind are not yet wired into the binary's global tool resolver.
-
 ### JS / TS Scripted Tools
 
-For binary users, JS/TS tools are the path that does **not** require rebuilding Trailblaze. Put each tool's `<name>.ts` (or `.js`) file plus a sibling `<name>.yaml` descriptor under `<trailmap>/tools/`, and list the tool's `name:` under the trailmap's `target.tools:` block.
+For binary users, JS/TS tools are the path that does **not** require rebuilding Trailblaze. Put each tool's `<name>.ts` (or `.js`) file, optionally with a sibling `<name>.yaml` descriptor, under `<trailmap>/tools/`. Every tool there is on the trailmap's target without being listed; name one under `target.platforms.<platform>.excluded_tools:` to keep it off.
 
 ```yaml
 # trailmaps/<your-trailmap>/trailmap.yaml
 target:
-  tools:
-    - yourTool
+  platforms:
+    android:
+      excluded_tools:
+        - yourDebugOnlyTool
 ```
 
-Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime selection happens per descriptor: tools run in-process (QuickJS) by default; set `runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. The file extension is not a runtime hint. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
+Runtime selection happens per descriptor: tools run in-process (QuickJS) by default; set `runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. The file extension is not a runtime hint. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
+
+A tool that composes other tools is a scripted tool too: call them from its handler. A `.tool.yaml` with a `tools:` body (a YAML list of tool calls) fails to load.
 
 ## Distribution Pattern for Pre-Vetted Target Trailmaps
 
@@ -258,7 +222,7 @@ The current loader already supports a good packaging model for app-specific bund
 3. Keep target-specific capabilities inside the trailmap's nested target block so the agent only sees the extra tools when that target is active.
 4. Use toolsets to keep high-value actions coarse-grained. That lets the LLM solve common website/app tasks with fewer tool calls.
 
-What is still missing for a full remote-download story is install/update UX and filesystem discovery for YAML-defined `tools:` compositions. The directory shape above is still the right place to put those contributions as the wiring lands.
+What is still missing for a full remote-download story is install/update UX. The directory shape above is still the right place to put those contributions as the wiring lands.
 
 ---
 

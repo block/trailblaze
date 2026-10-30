@@ -56,6 +56,8 @@ object MultiDeviceConfigurationResolver {
     val memberTargetIds: Map<String, String?>,
     /** Human-readable role descriptions, in declaration order and including the start device. */
     val memberDescriptions: Map<String, String?>,
+    /** The driver each companion is driven by, keyed like [companionDeviceIds] — see [effectiveMemberDriver]. */
+    val companionDriverTypes: Map<String, TrailblazeDriverType>,
   )
 
   /**
@@ -139,6 +141,9 @@ object MultiDeviceConfigurationResolver {
    * path that hasn't resolved one, which rejects every DRIVER-DEPENDENT pin (a WEB companion's
    * `PLAYWRIGHT_NATIVE` doesn't depend on the session driver, so it is still accepted).
    *
+   * [boundDevicePlatforms] maps a connected device's instance id to its platform, for a member
+   * whose classifier names no platform (see [memberPlatform]).
+   *
    * Every rejection throws [TrailblazeException] with the offending names, because each one is a
    * misconfiguration that would otherwise run the trail against the wrong device set.
    */
@@ -150,6 +155,7 @@ object MultiDeviceConfigurationResolver {
     requestConfigurationName: String? = null,
     environmentConfigurationName: String? = null,
     sessionDriverType: TrailblazeDriverType?,
+    boundDevicePlatforms: Map<String, TrailblazeDevicePlatform> = emptyMap(),
   ): ResolvedMultiDeviceConfiguration? {
     // A non-unified (v1) trail declares no configuration rather than short-circuiting before
     // selection: returning null here would drop a per-request selection or binding silently, which
@@ -246,7 +252,7 @@ object MultiDeviceConfigurationResolver {
       }
       TrailblazeDeviceId(
         instanceId = instanceId,
-        trailblazeDevicePlatform = memberPlatform(member, primaryDeviceId),
+        trailblazeDevicePlatform = memberPlatform(member, primaryDeviceId, boundDevicePlatforms[instanceId]),
       )
     }
     return ResolvedMultiDeviceConfiguration(
@@ -255,6 +261,15 @@ object MultiDeviceConfigurationResolver {
       companionDeviceIds = companionDeviceIds,
       memberTargetIds = members.mapValues { (_, member) -> member.target },
       memberDescriptions = members.mapValues { (_, member) -> member.description },
+      // A path that resolved no session driver has always run its Android companions on the default.
+      companionDriverTypes = companionDeviceIds.mapValues { (name, deviceId) ->
+        effectiveMemberDriver(
+          memberPlatform = deviceId.trailblazeDevicePlatform,
+          declaredDriver = members.getValue(name).driver,
+          isStartDevice = false,
+          sessionDriverType = sessionDriverType,
+        ) ?: TrailblazeDriverType.DEFAULT_ANDROID
+      },
     )
   }
 
@@ -299,8 +314,9 @@ object MultiDeviceConfigurationResolver {
   /**
    * The platform a named device runs on: its declared `driver:`'s platform when one is pinned,
    * else the platform its `classifier:` folds up to (`web` → WEB, `android-phone` → ANDROID,
-   * `ios-iphone` → IOS), else the launch device's platform — an internal device-family classifier
-   * (e.g. `lab-a`) carries no platform prefix, and those casts are same-platform pairs.
+   * `ios-iphone` → IOS), else the platform of the connected device it is bound to, else the launch
+   * device's platform. A custom device-family classifier (e.g. `lab-a`) carries no platform
+   * prefix, so only the bound device can say what it is once the launch device may be iOS.
    *
    * Before this fold existed every companion inherited the launch device's platform, which
    * mis-stamped any cross-platform cast (a web browser or an iOS simulator companion of an
@@ -309,8 +325,10 @@ object MultiDeviceConfigurationResolver {
   private fun memberPlatform(
     member: TrailblazeDeviceDefinition,
     primaryDeviceId: TrailblazeDeviceId,
+    boundPlatform: TrailblazeDevicePlatform? = null,
   ): TrailblazeDevicePlatform = member.driver?.platform
     ?: member.classifier?.let { UnifiedTrailTargets.platformFor(it) }
+    ?: boundPlatform
     ?: primaryDeviceId.trailblazeDevicePlatform
 
   /**
@@ -372,7 +390,9 @@ object MultiDeviceConfigurationResolver {
    * signal because they are what a CI lane that boots companions actually exports. Any binding
    * counts, not just ones naming this configuration's members: a mistyped name then reaches
    * [resolve]'s undeclared-binding error instead of quietly running single-device on a lane that
-   * booted companions for this trail.
+   * booted companions for this trail. On a trail declaring several configurations the bound NAMES
+   * decide which one — the configuration they bind exactly, if one does — so each CI cell of a
+   * multi-cast trail replays its own cast without naming it.
    */
   private fun selectConfigurationName(
     config: UnifiedTrailConfig,
@@ -407,21 +427,35 @@ object MultiDeviceConfigurationResolver {
       environmentConfigurationName = environmentConfigurationName,
     )
     if (selected == null) {
-      // The env is parsed only where it can change the answer — a configuration-only trail binds
-      // its configuration either way — so a daemon-wide TRAILBLAZE_DEVICE_BINDINGS cannot fail
-      // selection for a run it doesn't affect; [resolve] parses (and validates) it for real.
-      val bindsCompanionDevices = requestDeviceBindingNames.isNotEmpty() ||
-        (config.declaresSingleDeviceEntries && parseDeviceBindings(rawDeviceBindings).isNotEmpty())
-      if (config.requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices)) {
+      // The env is parsed only where it can change the answer — a trail with a single
+      // configuration and no single-device entries binds it either way — so a daemon-wide
+      // TRAILBLAZE_DEVICE_BINDINGS cannot fail selection for a run it doesn't affect; [resolve]
+      // parses (and validates) it for real. The request map replaces the env, as in [resolve].
+      val boundDeviceNames = requestDeviceBindingNames.ifEmpty {
+        if (config.declaresSingleDeviceEntries || declaredNames.size > 1) {
+          parseDeviceBindings(rawDeviceBindings).keys
+        } else {
+          emptySet()
+        }
+      }
+      val bindsCompanionDevices = boundDeviceNames.isNotEmpty()
+      if (config.requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices, boundDeviceNames)) {
         throw TrailblazeException(
           "This trail declares ${declaredNames.size} device configurations ($declaredNames) and " +
-            "this run selects none. Name one on $DEVICE_CONFIGURATION_REQUEST_FIELD, or set " +
+            "this run selects none" +
+            (if (bindsCompanionDevices) {
+              ", and its bindings ${boundDeviceNames.sorted()} are not exactly the devices one of " +
+                "them declares beyond its start device"
+            } else {
+              ""
+            }) +
+            ". Name one on $DEVICE_CONFIGURATION_REQUEST_FIELD, or set " +
             "$DEVICE_CONFIGURATION_ENV_VAR=<name> before the daemon starts. Binding the first " +
             "declared configuration would run a different device set than whoever declared the " +
             "others expected.",
         )
       }
-      return config.implicitMultiDeviceConfigurationName(bindsCompanionDevices)
+      return config.implicitMultiDeviceConfigurationName(bindsCompanionDevices, boundDeviceNames)
     }
     if (selected !in declaredNames) {
       val source = if (requested != null) {
@@ -457,7 +491,7 @@ object MultiDeviceConfigurationResolver {
   /**
    * The driver a named device is ACTUALLY driven by. A session resolves ONE driver for its whole
    * cast — the launch device's, from `--driver` / the trail's classifier-keyed pin / the app
-   * setting — and every device in the configuration is dispatched over that driver. The one
+   * setting — and every device in the configuration is dispatched over that driver. One
    * exception is a WEB **companion**: `runHostAgentWithOnDeviceRpc` builds a host-owned Playwright
    * browser for it, so it runs [TrailblazeDriverType.PLAYWRIGHT_NATIVE] whatever the session
    * resolved.
@@ -467,24 +501,30 @@ object MultiDeviceConfigurationResolver {
    * cast launched on Android still runs the session's Android driver — exempting it would let the
    * one pin this object exists to catch through.
    *
-   * An IOS member gets no exception, deliberately: nothing today builds a host-owned iOS driver for
-   * a companion the way it builds a browser, so an iOS companion in an Android-launched cast is
-   * dispatched over the session's Android driver and an `IOS_HOST` pin genuinely cannot be honored.
-   * Add a branch here when — and only when — a companion iOS driver exists to honor it; adding one
-   * sooner would accept a pin nothing carries out, which is the exact defect this check closes.
+   * An IOS **companion** is the second exception: the runner drives it host-side with its own
+   * simulator driver, [iosCompanionDriver], independent of the session's driver. And an ANDROID
+   * companion beside a launch device of another platform cannot share that device's driver, so it
+   * runs [TrailblazeDriverType.DEFAULT_ANDROID].
    *
    * Null when the caller resolved no session driver, i.e. this path can honor no driver-dependent
-   * pin. A WEB companion's Playwright pin is not driver-dependent, so it is still accepted.
+   * pin. A WEB or IOS companion's pin is not session-driver-dependent, so it is still checked.
    */
   private fun effectiveMemberDriver(
     memberPlatform: TrailblazeDevicePlatform,
+    declaredDriver: TrailblazeDriverType?,
     isStartDevice: Boolean,
     sessionDriverType: TrailblazeDriverType?,
-  ): TrailblazeDriverType? = if (memberPlatform == TrailblazeDevicePlatform.WEB && !isStartDevice) {
-    TrailblazeDriverType.PLAYWRIGHT_NATIVE
-  } else {
-    sessionDriverType
+  ): TrailblazeDriverType? = when {
+    isStartDevice -> sessionDriverType
+    memberPlatform == TrailblazeDevicePlatform.WEB -> TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    memberPlatform == TrailblazeDevicePlatform.IOS -> iosCompanionDriver(declaredDriver)
+    sessionDriverType == null || sessionDriverType.platform == TrailblazeDevicePlatform.ANDROID -> sessionDriverType
+    else -> TrailblazeDriverType.DEFAULT_ANDROID
   }
+
+  /** IOS_HOST unless the member pins IOS_AXE; any other iOS pin is rejected as unhonorable. */
+  private fun iosCompanionDriver(declaredDriver: TrailblazeDriverType?): TrailblazeDriverType =
+    if (declaredDriver == TrailblazeDriverType.IOS_AXE) declaredDriver else TrailblazeDriverType.IOS_HOST
 
   /**
    * Rejects a configuration member whose declared `driver:` the session will not run it on.
@@ -510,6 +550,7 @@ object MultiDeviceConfigurationResolver {
     val declaredDriver = member.driver ?: return
     val effectiveDriver = effectiveMemberDriver(
       memberPlatform = memberPlatform(member, primaryDeviceId),
+      declaredDriver = declaredDriver,
       isStartDevice = isStartDevice,
       sessionDriverType = sessionDriverType,
     )

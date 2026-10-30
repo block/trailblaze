@@ -131,9 +131,12 @@ class QuickJsTrailblazeTool(
       val resultJson = host.callTool(advertisedName.toolName, resolvedArgs, ctx)
       resultMeta = resultJson["_meta"] as? JsonObject
       val decoded = resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
-      // A failed or unfinished catch-up fails the trailhead even when the handler caught it.
-      val reuseFailure = (decoded as? TrailblazeToolResult.Success)
-        ?.let { TrailheadRuns.reuseFailure(trailheadInvocation, resultMeta) }
+      // A failed or unfinished catch-up fails the trailhead even when the handler caught it, and so
+      // does a reused setup that lands somewhere other than where the previous run's trailhead ended.
+      val reuseFailure = (decoded as? TrailblazeToolResult.Success)?.let {
+        TrailheadRuns.reuseFailure(trailheadInvocation, resultMeta)
+          ?: TrailheadRuns.checkLanding(toolExecutionContext, trailheadInvocation, resultMeta)
+      }
       val toolResult = reuseFailure?.let { TrailblazeToolResult.Error.ExceptionThrown(errorMessage = it) } ?: decoded
       // Flush the handler's `ctx.memory.set(...)` / `.delete(...)` writes back into the shared
       // AgentMemory, mirroring SubprocessTrailblazeTool. The in-process/on-device SDK
@@ -163,8 +166,8 @@ class QuickJsTrailblazeTool(
       TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, this)
     } finally {
       binding?.activeContext = null
-      // Notes ride the error envelope too, so a tool that created something and then threw still
-      // tells `teardown` what to clean up.
+      // The reuse report rides the error envelope too, so a handler that threw after
+      // `previousRun.reuse(...)` is still recorded as a failed reuse.
       TrailheadRuns.completeInvocation(
         toolExecutionContext,
         advertisedName.toolName,

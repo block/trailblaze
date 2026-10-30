@@ -89,7 +89,7 @@ class DirectMcpAgent(
    *
    * When null, the agent falls back to [TrailblazeToolSet.DefaultLlmTrailblazeTools] for
    * descriptor generation — sufficient for basic use, but `setActiveToolSets` becomes a
-   * no-op ("Dynamic toolsets not configured") and YAML-defined tools are not advertised
+   * no-op ("Dynamic toolsets not configured") and scripted tools are not advertised
    * (they require a repo to resolve).
    */
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
@@ -329,8 +329,8 @@ GUIDELINES:
 
   /**
    * Maps a tool name and JSON args to a TrailblazeTool by routing through the
-   * [trailblazeToolRepo]. The repo dispatches by toolName to the matching class-backed or
-   * YAML-defined serializer and decodes the flat args directly. Returns null when no repo
+   * [trailblazeToolRepo]. The repo dispatches by toolName to the matching tool's
+   * serializer and decodes the flat args directly. Returns null when no repo
    * is configured or the lookup fails — the caller logs and continues to the next iteration.
    */
   private fun mapToTrailblazeTool(toolName: String, args: JsonObject): TrailblazeTool? {
@@ -510,7 +510,7 @@ GUIDELINES:
     if (trailblazeToolRepo != null) {
       return trailblazeToolRepo.getCurrentTrailblazeToolDescriptors()
     }
-    // Fallback: class-backed tools only. YAML-defined tools need a repo to resolve.
+    // Fallback: class-backed tools only. Scripted tools need a repo to resolve.
     return TrailblazeToolSet.DefaultLlmTrailblazeTools.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }

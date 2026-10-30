@@ -4,8 +4,6 @@ import xyz.block.trailblaze.bundle.SurveyDts
 import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
 import xyz.block.trailblaze.surveys.SurveyBundles
 import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.ToolParameterType
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -19,8 +17,6 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
@@ -566,10 +562,10 @@ object PerTrailmapClientDtsEmitter {
     )
 
   /**
-   * Resolve the class-backed + YAML-defined tool surface for [trailmap], DERIVED FROM `isRecordable`
-   * so the trail-recording validator can type-check every recordable tool. Three sources, merged
+   * Resolve the class-backed tool surface for [trailmap], DERIVED FROM `isRecordable` so the
+   * trail-recording validator can type-check every recordable tool. Two sources, merged
    * first-write-wins (a `tool_sets:` entry wins over the same tool in the recordable union — richer,
-   * authoritative — and a name-colliding YAML tool loses to either):
+   * authoritative):
    *
    *  1. **The trailmap's OWN `tool_sets:` tools** (via [TrailblazeToolSetCatalog.resolve]) — the
    *     authoring surface; every class-backed tool the trailmap declares, recordable or not, so a
@@ -581,8 +577,6 @@ object PerTrailmapClientDtsEmitter {
    *     each to `built-in-tools.ts` inevitably drifts (it missed `assertNotVisibleBySelector`).
    *     Sourcing from the recordable registry — the same set replay decodes against — means the
    *     surface can't silently miss a recordable tool.
-   *  3. **YAML-defined (`tools:` mode) recordable tools** ([TrailblazeSerializationInitializer.buildYamlDefinedTools],
-   *     a `tools:` composition) — no Kotlin class, so params come straight from the config.
    *
    * **Selector args re-injected.** [selectorParamsForTs] recovers the `TrailblazeNodeSelector` /
    * legacy `selector` params that [toScriptedToolDescriptor] strips (they overflow Koog's lowering),
@@ -602,7 +596,7 @@ object PerTrailmapClientDtsEmitter {
     val metadataByName = mutableMapOf<String, ToolFrameworkMetadata>()
     val selectorParamsByName = mutableMapOf<String, List<WorkspaceClientDtsGenerator.ToolParam>>()
 
-    // First-write-wins across the three sources: once a name has a metadata entry it's skipped.
+    // First-write-wins across the two sources: once a name has a metadata entry it's skipped.
     fun addClassTool(kClass: KClass<out TrailblazeTool>) {
       val descriptor = kClass.toScriptedToolDescriptor() ?: return
       if (descriptor.name in HandCuratedRecordableTools.NAMES) return
@@ -643,19 +637,6 @@ object PerTrailmapClientDtsEmitter {
       .filter { it.trailblazeToolClassAnnotation().isRecordable }
       .forEach(::addClassTool)
 
-    // 3. YAML-defined recordable tools (`tools:` mode, e.g. eraseText).
-    TrailblazeSerializationInitializer.buildYamlDefinedTools().forEach { (toolName, config) ->
-      val name = toolName.toolName
-      if (config.isRecordable == false) return@forEach
-      if (name in HandCuratedRecordableTools.NAMES || metadataByName.containsKey(name)) return@forEach
-      descriptors += config.toRecordableToolDescriptor()
-      metadataByName[name] = ToolFrameworkMetadata(
-        surfaceToLlm = config.surfaceToLlm ?: true,
-        isRecordable = true,
-        requiresHost = config.requiresHost ?: false,
-      )
-    }
-
     return KotlinToolResolution(
       descriptors = descriptors,
       frameworkMetadataByName = metadataByName,
@@ -670,39 +651,6 @@ object PerTrailmapClientDtsEmitter {
       description = description,
       optional = optional,
     )
-
-  /**
-   * Build a koog [ToolDescriptor] for a YAML-defined (`tools:` mode) recordable tool from its
-   * declared [TrailblazeToolParameterConfig]s. The validator only needs the arg shape (name / type /
-   * required), so the composition body (`tools:`) is irrelevant here.
-   */
-  private fun ToolYamlConfig.toRecordableToolDescriptor(): ToolDescriptor {
-    fun TrailblazeToolParameterConfig.toParamDescriptor() = ToolParameterDescriptor(
-      name = name,
-      description = description?.trim().orEmpty(),
-      type = yamlParamTypeToToolParameterType(type),
-    )
-    return ToolDescriptor(
-      name = id,
-      description = description?.trim().orEmpty(),
-      requiredParameters = parameters.filter { it.required }.map { it.toParamDescriptor() },
-      optionalParameters = parameters.filterNot { it.required }.map { it.toParamDescriptor() },
-    )
-  }
-
-  /**
-   * Map a YAML parameter `type:` string to a koog [ToolParameterType] for descriptor building.
-   * Covers the scalar types YAML-defined recordable tools use today; anything else degrades to
-   * `String` (the validator still checks the arg's presence + name, just not its exact scalar type).
-   */
-  private fun yamlParamTypeToToolParameterType(type: String): ToolParameterType =
-    when (type.trim().lowercase()) {
-      "string" -> ToolParameterType.String
-      "integer", "int", "long" -> ToolParameterType.Integer
-      "number", "float", "double" -> ToolParameterType.Float
-      "boolean", "bool" -> ToolParameterType.Boolean
-      else -> ToolParameterType.String
-    }
 
   /**
    * Bundles the outputs of the tool-resolution pass — the koog [ToolDescriptor] list (args/result
@@ -755,17 +703,6 @@ object PerTrailmapClientDtsEmitter {
    * surfaces tools authored under its `target.tools:` (scripted `.ts` + `.yaml` pairs).
    * Library trailmaps (no `target:` block) get [ResolvedTrailmap.target] = null and therefore
    * cannot export scripted tools through this path today — they have nowhere to put them.
-   * Composed `.tool.yaml` exports from a library trailmap's own `tools/` directory are
-   * separately tracked and surface to consumers via the runtime registry, but they do NOT
-   * land in the typed surface yet (they'd require a `ToolYamlConfig` → `ToolEntry` bridge
-   * that handles composed-tool input schemas, deferred to Phase C/E along with the
-   * `target.tools:` paths → names flip).
-   *
-   * Until then, a library trailmap's `exports:` list is effectively *advisory* for the typed
-   * surface — it filters the runtime registry's view of "what consumers can see," but no
-   * typed entries flow through to consumers' `trailblaze-client.d.ts`. Authoring teams should keep
-   * library exports class-backed (via `tool_sets:` consumed by target trailmaps) until the
-   * later phases land.
    */
   private fun collectTrailmapTypedScriptedTools(
     trailmap: ResolvedTrailmap,

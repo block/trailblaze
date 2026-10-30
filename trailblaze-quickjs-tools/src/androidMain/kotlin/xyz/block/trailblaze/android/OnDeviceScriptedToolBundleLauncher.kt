@@ -134,7 +134,7 @@ object OnDeviceScriptedToolBundleLauncher {
     // tool that bundle's `listTools()` advertises.
     if (plan.bundlePaths.isEmpty()) return null
 
-    return QuickJsToolBundleLauncher.launchAll(
+    val runtime = QuickJsToolBundleLauncher.launchAll(
       bundles = plan.bundlePaths.map { McpServerConfig(script = it) },
       deviceInfo = deviceInfo,
       sessionId = sessionId,
@@ -149,6 +149,14 @@ object OnDeviceScriptedToolBundleLauncher {
       declaredToolNames = plan.declaredToolNames,
       engineExtension = engineExtension,
     )
+    toolRepo.hideScriptedToolsFromLlm(
+      OnDeviceScriptedToolBundlePlan.targetExclusionsToHide(
+        target = target,
+        driverType = deviceInfo.trailblazeDriverType,
+        registeredNow = toolRepo.getRegisteredDynamicTools().keys - alreadyRegistered,
+      ),
+    )
+    return runtime
   }
 
   /**

@@ -11,6 +11,7 @@ class CoreToolsTest {
     assertTrue(CoreTools.isTapAction("tap"))
     assertTrue(CoreTools.isTapAction("longPress"), "longPress is a tap-style hold action")
     assertTrue(CoreTools.isTapAction("tapOnPoint"))
+    assertTrue(CoreTools.isTapAction("tapOnPercent"))
     assertTrue(CoreTools.isTapAction("click"))
   }
 

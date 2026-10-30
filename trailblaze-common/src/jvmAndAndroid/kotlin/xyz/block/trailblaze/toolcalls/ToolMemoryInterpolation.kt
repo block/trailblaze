@@ -12,7 +12,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.MalformedArgTokenException
@@ -54,8 +53,6 @@ import java.util.concurrent.ConcurrentHashMap
  *   that a serializer round-trip cannot reconstruct. Their `execute()` resolves the args JSON at
  *   the engine boundary while `rawToolArguments` stays token-bearing for logs — the pattern this
  *   function generalizes to class-backed tools.
- * - [YamlDefinedTrailblazeTool] — params tree interpolated directly (the class has no
- *   `@Serializable` constructor; its params ARE the JSON tree already).
  * - Everything else — encode via the tool's concrete class serializer, interpolate the tree,
  *   decode back. Tools that can't round-trip (no serializer, contextual nested fields) pass
  *   through unchanged with a once-per-class diagnostic; they keep whatever behavior they had.
@@ -69,17 +66,6 @@ fun <T : TrailblazeTool> interpolateMemoryInTool(
   return when (tool) {
     is OtherTrailblazeTool -> tool
     is RawArgumentTrailblazeTool -> tool
-    is YamlDefinedTrailblazeTool -> {
-      val interpolatedParams = tool.params.mapValues { (_, value) ->
-        memory.interpolateVariablesInJson(value)
-      }
-      if (interpolatedParams == tool.params) {
-        tool
-      } else {
-        @Suppress("UNCHECKED_CAST")
-        (YamlDefinedTrailblazeTool(tool.config, interpolatedParams) as T)
-      }
-    }
     else -> interpolateViaClassSerializer(tool, memory)
   }
 }
@@ -370,7 +356,7 @@ private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: 
       // into the tree; when the receiving Kotlin field is a String, the strict decode rejects
       // the unquoted scalar. The tree walk can't know the field type, so retry with every token
       // rendered as text — reachable only when the native-typed tree already failed, so working
-      // native substitutions (YAML-defined params trees, matching field types) are unaffected.
+      // native substitutions (matching field types) are unaffected.
       // If this also fails, the outer catch's pass-through diagnostics apply as usual.
       val textRendered = memory.interpolateVariablesInJson(tree, renderWholeScalarArgTokensAsText = true)
       INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, textRendered)

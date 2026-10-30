@@ -28,7 +28,7 @@ import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.A
  * The state asserted below is the one that makes that concrete and is impossible to pass with a
  * radios-based read: airplane mode ON with wifi genuinely UP. Wifi is on
  * `airplane_mode_toggleable_radios`, so it can be brought back up through airplane mode and stay
- * up, which the `networkConnection` tool already relies on.
+ * up, which the `mobile_networkConnection` tool already relies on.
  *
  * Airplane mode is set and cleared through [NetworkConnectionTrailblazeTool]'s shared commands, and
  * read back through the framework's own `Settings.Global` rather than through the shell the driver

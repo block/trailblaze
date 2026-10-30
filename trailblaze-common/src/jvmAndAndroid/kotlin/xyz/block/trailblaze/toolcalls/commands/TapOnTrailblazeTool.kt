@@ -26,6 +26,8 @@ import xyz.block.trailblaze.util.Console
  *     relativePoint: "90%,50%"
  * ```
  *
+ * `doubleTap: true` taps the resolved point twice in quick succession (a double-tap gesture).
+ *
  * The [selector] is the universal [TrailblazeNodeSelector] — any of its `DriverNodeMatch`
  * variants (AndroidAccessibility, AndroidMaestro, IosMaestro, Web, Compose) is supported,
  * because resolution goes through [TrailblazeNodeSelectorResolver].
@@ -45,14 +47,20 @@ import xyz.block.trailblaze.util.Console
 @Serializable
 @TrailblazeToolClass("tapOn", surfaceToLlm = false)
 @LLMDescription(
-  "Tap (or long-press) the element resolved by a node selector, optionally at a percent-offset " +
-    "within its bounds.",
+  "Tap, double-tap or long-press the element resolved by a node selector, optionally at a " +
+    "percent-offset within its bounds.",
 )
 data class TapOnTrailblazeTool(
   val selector: TrailblazeNodeSelector,
   val relativePoint: String? = null,
   val longPress: Boolean = false,
+  /** Tap the resolved point twice in quick succession (a double-tap). Cannot combine with [longPress]. */
+  val doubleTap: Boolean = false,
 ) : ExecutableTrailblazeTool {
+
+  init {
+    require(!(longPress && doubleTap)) { "tapOn: longPress and doubleTap are mutually exclusive." }
+  }
 
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
@@ -102,11 +110,21 @@ data class TapOnTrailblazeTool(
         tool = this,
       )
     val result = agent.runMaestroCommands(
-      maestroCommands = listOf(TapOnPointV2Command(point = "$tapX,$tapY", longPress = longPress)),
+      maestroCommands = listOf(
+        TapOnPointV2Command(
+          point = "$tapX,$tapY",
+          longPress = longPress,
+          repeat = if (doubleTap) TapOnPointTrailblazeTool.DOUBLE_TAP_REPEAT else null,
+        ),
+      ),
       traceId = toolExecutionContext.traceId,
     )
     return if (result is TrailblazeToolResult.Success) {
-      val action = if (longPress) "Long pressed" else "Tapped"
+      val action = when {
+        longPress -> "Long pressed"
+        doubleTap -> "Double-tapped"
+        else -> "Tapped"
+      }
       TrailblazeToolResult.Success(message = "$action at ($tapX, $tapY) within element")
     } else {
       result

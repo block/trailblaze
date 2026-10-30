@@ -6,9 +6,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import maestro.TapRepeat
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
+import maestro.orchestra.TapOnPointV2Command
 
 /**
  * Tests [MaestroCommandConverter] handling of [TapOnElementCommand], with particular focus on
@@ -48,5 +50,43 @@ class MaestroCommandConverterTapTest {
     assertEquals(1, actions.size)
     val tap = assertIs<AccessibilityAction.TapOnElement>(actions.single())
     assertFalse(tap.optional, "optional must default to false when not specified")
+  }
+
+  @Test
+  fun `a point tap with repeat 2 converts to a double-tap at that point`() {
+    val tap = assertIs<AccessibilityAction.Tap>(
+      convert(TapOnPointV2Command(point = "100,65", repeat = TapRepeat(2, 0))).single(),
+    )
+
+    assertEquals(AccessibilityAction.Tap(x = 100, y = 65, repeat = 2), tap)
+  }
+
+  @Test
+  fun `a percent tap with repeat 2 converts to a double-tap at that percent`() {
+    val tap = assertIs<AccessibilityAction.TapRelative>(
+      convert(TapOnPointV2Command(point = "50%,26%", repeat = TapRepeat(2, 0))).single(),
+    )
+
+    assertEquals(AccessibilityAction.TapRelative(percentX = 50.0, percentY = 26.0, repeat = 2), tap)
+  }
+
+  @Test
+  fun `a decimal percent tap keeps its fraction`() {
+    assertEquals(
+      AccessibilityAction.TapRelative(percentX = 50.5, percentY = 26.25),
+      convert(TapOnPointV2Command(point = "50.5%,26.25%")).single(),
+    )
+  }
+
+  @Test
+  fun `a point tap without repeat stays a single tap`() {
+    assertEquals(
+      AccessibilityAction.Tap(x = 10, y = 20),
+      convert(TapOnPointV2Command(point = "10,20")).single(),
+    )
+    assertEquals(
+      AccessibilityAction.TapRelative(percentX = 50.0, percentY = 26.0),
+      convert(TapOnPointV2Command(point = "50%,26%")).single(),
+    )
   }
 }

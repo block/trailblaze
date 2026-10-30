@@ -630,6 +630,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    */
   private fun resolvedCaptureVideo(): Boolean = captureAll || (captureVideo ?: true)
 
+  /** Whether a run's session records anything: video, a device log or memory. */
+  internal fun capturesSessions(): Boolean =
+    resolvedCaptureVideo() || captureOptions.run { captureLogcat || captureIosLogs || captureMemory }
+
   /**
    * Whether the Playwright browser runs headless. Headless unless the run asked for a visible
    * window, either through the current spelling (`--no-headless` / `--headless=false`) or the
@@ -659,6 +663,13 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    */
   internal open fun yamlToRun(yamlContent: String): String = yamlContent
 
+  /**
+   * Whether each run asks its trailhead to take the setup the last run of the same trailhead on
+   * the device handed on (true) or refuses it (false). Null, `run`'s answer, leaves it to the
+   * daemon's `TRAILBLAZE_TRAILHEAD_REUSE`.
+   */
+  internal open val trailheadReuse: Boolean? get() = null
+
   /** One run of a trail on a device that got as far as a session, as [runAgain] sees it. */
   internal data class FinishedRun(val passed: Boolean, val sessionDir: File)
 
@@ -669,6 +680,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    * [FinishedRun.sessionDir] was never written.
    */
   internal open fun runAgain(run: FinishedRun?): Boolean = false
+
+  /**
+   * Called as each run starts, with the directory its session should log into, so a subclass can
+   * watch it; [FinishedRun.sessionDir] is where the session actually landed.
+   */
+  internal open fun sessionStarting(sessionDir: File) {}
 
   /** Set by both run loops after each run that recorded a session; null otherwise. */
   private var lastRun: FinishedRun? = null
@@ -1035,6 +1052,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         ) ?: deviceClassifierRejection(
           requestsDeviceClassifier = resolvedDeviceClassifierOverride.isNotEmpty(),
           daemonCapabilities = capabilities,
+        ) ?: trailheadReuseRejection(
+          requestsTrailheadReuse = trailheadReuse != null,
+          daemonCapabilities = capabilities,
         ) ?: workspaceTrailmapsRejection(
           callerHasWorkspaceTrailmaps = ServedTrailmaps.hasWorkspaceTrailmaps(
             CliCallerContext.callerCwd(),
@@ -1109,6 +1129,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers = configClassifiers,
       deviceConfiguration = deviceConfiguration,
       bindsCompanionDevices = bindsCompanionDevices(),
+      boundDeviceNames = boundDeviceNames(),
     )
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
@@ -1317,6 +1338,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers = configClassifiers,
       deviceConfiguration = deviceConfiguration,
       bindsCompanionDevices = bindsCompanionDevices(),
+      boundDeviceNames = boundDeviceNames(),
     )
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
@@ -1325,8 +1347,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       Console.info("No trail files to run after filtering. Exiting.")
       return TrailblazeExitCode.SUCCESS.code
     }
-    // The up-front gate sees only --bind/--configuration, but a mixed trail also forwards this
-    // shell's TRAILBLAZE_DEVICE_BINDINGS (delegatedDeviceBindings), which a daemon predating per-run
+    // The up-front gate sees only --bind/--configuration, but a mixed or multi-configuration trail
+    // also forwards this shell's TRAILBLAZE_DEVICE_BINDINGS (delegatedDeviceBindings), which a daemon predating per-run
     // bindings would drop and run single-device. Which trails forward is known only once planned.
     perRunDeviceBindingsRejection(
       requestsPerRunDeviceBindings = forwardsEnvironmentBindings(
@@ -1338,7 +1360,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     )?.let { rejection ->
       reportCliError(
         verb = "Trail run",
-        reason = "a mixed trail carries this shell's $DEVICE_BINDINGS_ENV_VAR on its run request, " +
+        reason = "a mixed or multi-configuration trail carries this shell's " +
+          "$DEVICE_BINDINGS_ENV_VAR on its run request, " +
           "but $rejection",
         hint = "restart the daemon so it picks up this build (`trailblaze --stop`, then " +
           "re-run), or run in-process with --no-daemon",
@@ -1442,6 +1465,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               continue
             }
 
+            val sessionId = SessionId.pinnedFor(testName)
             val request = delegatedRunRequest(
               file = file,
               yamlContent = yamlContent,
@@ -1450,7 +1474,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               useRecordedSteps = effectiveUseRecordedSteps,
               initialArgs = initialArgs,
               originalYaml = rawYaml,
+              sessionId = sessionId,
             )
+            sessionStarting(File(daemonLogsDir, sessionId.value))
 
             var lastProgress: String? = null
             val response = daemon.runSync(request) { progress ->
@@ -1925,6 +1951,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     // trail's session rather than enumerating every "new" session in the logs repo.
     // See SessionId.pinnedFor — same construction is used in handleCliRunRequest.
     val pinnedSessionId = SessionId.pinnedFor(testName)
+    sessionStarting(File(app.deviceManager.logsRepo.logsDir, pinnedSessionId.value))
 
     // Bind parameterized-trail args against this trail's declaration before dispatch, so a
     // missing required / unknown / bad-typed arg exits MISUSE before the device does any work.
@@ -1969,6 +1996,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         // path (DeviceConnectionService) which already threads appConfig.preferHostAgent.
         preferHostAgent =
           config.trailblazeSettingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
+        trailheadReuse = trailheadReuse,
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       maxLlmCalls = resolveEffectiveMaxLlmCalls(),
@@ -2946,6 +2974,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     initialArgs: Map<String, String>,
     envReader: (String) -> String? = System::getenv,
     originalYaml: String? = null,
+    sessionId: SessionId? = null,
   ): CliRunRequest = CliRunRequest(
     yamlContent = yamlContent,
     trailFilePath = file.absolutePath,
@@ -2989,6 +3018,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
     // The daemon resolves our workspace for its trailmap check, and cannot read our env.
     callerConfigDir = envReader(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR),
+    trailheadReuse = trailheadReuse,
+    sessionId = sessionId?.value,
   )
 
   /**
@@ -3154,11 +3185,18 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    * beside its configuration runs as that configuration. The planner's prediction only: an
    * unparseable env value counts as none here, and the runtime reports it properly.
    */
-  private fun bindsCompanionDevices(): Boolean = parsedDeviceBinds().isNotEmpty() ||
+  private fun bindsCompanionDevices(): Boolean = boundDeviceNames().isNotEmpty()
+
+  /**
+   * The device names this run binds — `--bind`, else this shell's `TRAILBLAZE_DEVICE_BINDINGS`, as
+   * the runtime reads them — which pick among a trail's several configurations the one declaring
+   * exactly those devices beyond its start device. The same prediction as [bindsCompanionDevices].
+   */
+  private fun boundDeviceNames(): Set<String> = parsedDeviceBinds().keys.ifEmpty {
     runCatching {
-      MultiDeviceConfigurationResolver.parseDeviceBindings(System.getenv(DEVICE_BINDINGS_ENV_VAR))
-        .isNotEmpty()
-    }.getOrDefault(false)
+      MultiDeviceConfigurationResolver.parseDeviceBindings(System.getenv(DEVICE_BINDINGS_ENV_VAR)).keys
+    }.getOrDefault(emptySet())
+  }
 
   /**
    * Returns the resolved `--memory KEY=VAL` map for the in-flight [call]. Walks the raw
@@ -3450,6 +3488,18 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         "run this trail without comparing its snapshots to any baseline"
     }
 
+    /** Refuses delegating `loop --reuse-trailhead` to a daemon that would discard its reuse answer. */
+    internal fun trailheadReuseRejection(
+      requestsTrailheadReuse: Boolean,
+      daemonCapabilities: () -> Set<String>?,
+    ): String? {
+      if (!requestsTrailheadReuse) return null
+      val capabilities = daemonCapabilities() ?: return null
+      if (CliDaemonCapabilities.TRAILHEAD_REUSE in capabilities) return null
+      return "the running daemon predates --reuse-trailhead, so it would ignore it: passes would " +
+        "never reuse a setup, or reuse one from before a failed pass"
+    }
+
     /** Refuses silent delegation to a daemon that would discard `--device-classifier`. */
     internal fun deviceClassifierRejection(
       requestsDeviceClassifier: Boolean,
@@ -3537,16 +3587,19 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
     /**
      * The companion bindings a DELEGATED run of [yamlContent] carries: `--bind` when passed, and
-     * otherwise, for a mixed trail only, this shell's `TRAILBLAZE_DEVICE_BINDINGS`.
+     * otherwise, for a mixed trail or one declaring several configurations, this shell's
+     * `TRAILBLAZE_DEVICE_BINDINGS`.
      *
-     * The planner judges a mixed trail's `skip:` by whether this shell binds companions
-     * ([bindsCompanionDevices]), but a delegated run executes with the daemon's own startup
-     * environment. Without forwarding, a daemon started without bindings would run single-device
-     * the trail this shell planned as its configuration. Only a mixed trail needs it: a
-     * configuration-only trail binds its configuration either way and still resolves members from
-     * the daemon's env, and on a trail declaring no configuration a request binding is a hard error
-     * where the env var is ignored. An unparseable value forwards nothing, as the planner counted
-     * none; the daemon reports its own.
+     * The planner judges those trails' `skip:` by which devices this shell binds
+     * ([boundDeviceNames]), but a delegated run executes with the daemon's own startup environment.
+     * Without forwarding, a daemon started with other bindings or none would run a different cast
+     * than this shell planned: single-device for a mixed trail, another configuration (or a
+     * refusal) for a multi-configuration one. These are exactly the trails the runtime reads
+     * bindings for when selecting a configuration. A trail with one configuration and no
+     * single-device entries binds it either way and still resolves members from the daemon's env,
+     * and on a trail declaring no configuration a request binding is a hard error where the env
+     * var is ignored. An unparseable value forwards nothing, as the planner counted none; the
+     * daemon reports its own.
      */
     /**
      * Whether any of [runFiles] would carry this shell's `TRAILBLAZE_DEVICE_BINDINGS` on its delegated
@@ -3573,13 +3626,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       rawEnvironmentBindings: String?,
     ): Map<String, String> {
       if (explicitBindings.isNotEmpty()) return explicitBindings
-      val mixed = runCatching {
+      val selectsByBindings = runCatching {
         TrailRecordings.isUnifiedTrailContent(yamlContent) &&
           createTrailblazeYaml().decodeUnifiedTrailConfig(yamlContent).let {
-            it.declaresSingleDeviceEntries && it.multiDeviceConfigurationNames.isNotEmpty()
+            val configurations = it.multiDeviceConfigurationNames
+            configurations.size > 1 || (it.declaresSingleDeviceEntries && configurations.isNotEmpty())
           }
       }.getOrDefault(false)
-      if (!mixed) return emptyMap()
+      if (!selectsByBindings) return emptyMap()
       return runCatching { MultiDeviceConfigurationResolver.parseDeviceBindings(rawEnvironmentBindings) }
         .getOrDefault(emptyMap())
     }
@@ -3591,8 +3645,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
      * needs to inspect config metadata before the runner takes over: the runner itself parses
      * the same resolved YAML, so pre-pass decisions stay consistent with what actually executes.
      *
-     * [deviceConfiguration] and [bindsCompanionDevices] are the run's `--device-configuration` and
-     * whether it binds companions. Together they decide which multi-device configuration the run
+     * [deviceConfiguration], [bindsCompanionDevices] and [boundDeviceNames] are the run's
+     * `--device-configuration`, whether it binds companions, and which. Together they decide which multi-device configuration the run
      * binds (`UnifiedTrailConfig.implicitMultiDeviceConfigurationName`), and so whether a `skip:`
      * keyed by that configuration applies. Without them a mixed trail run with `--bind` would be
      * judged as the single-device run it isn't, and a trail its author disabled for the pair runs.
@@ -3607,6 +3661,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       deviceConfiguration: String? = null,
       bindsCompanionDevices: Boolean = false,
+      boundDeviceNames: Set<String> = emptySet(),
     ): TrailConfig? = try {
       val rawYaml = file.readText()
       val resolvedYaml = TrailYamlTemplateResolver.resolve(rawYaml, file)
@@ -3622,7 +3677,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           requestConfigurationName = deviceConfiguration,
           environmentConfigurationName = System.getenv(DEVICE_CONFIGURATION_ENV_VAR),
         )?.takeIf { unified.multiDeviceConfigurationNames.isNotEmpty() }
-          ?: unified.implicitMultiDeviceConfigurationName(bindsCompanionDevices)
+          ?: unified.implicitMultiDeviceConfigurationName(bindsCompanionDevices, boundDeviceNames)
       } else {
         null
       }
@@ -3935,6 +3990,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       configClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       deviceConfiguration: String? = null,
       bindsCompanionDevices: Boolean = false,
+      boundDeviceNames: Set<String> = emptySet(),
     ): TrailExecutionPlan {
       val expanded = expandTrailFiles(files, deviceClassifiers)
       // [configClassifiers] resolves per-classifier `skip:`/`tags:`; it's the device classifiers,
@@ -3958,6 +4014,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           skipTagClassifiers,
           deviceConfiguration = deviceConfiguration,
           bindsCompanionDevices = bindsCompanionDevices,
+          boundDeviceNames = boundDeviceNames,
         )
         val tags = config?.tags.orEmpty()
 

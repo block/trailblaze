@@ -174,7 +174,8 @@ Key conventions to copy:
 
 ## Recipe: add your own scripted tool
 
-One file, then restart the daemon. Concrete steps:
+One file, then restart the daemon — there's nothing to register in `trailmap.yaml`.
+Concrete steps:
 
 ```bash
 TOOL=contacts_ios_myNewTool
@@ -203,19 +204,16 @@ export const contacts_ios_myNewTool = trailblaze.tool<MyNewToolArgs>(
 );
 TS
 
-# 2. Register in trailmap.yaml — add `contacts_ios_myNewTool` under target.tools.
-$EDITOR $TRAILMAP/trailmap.yaml
-
-# 3. Restart the daemon so the new tool is discovered + bindings regenerate.
+# 2. Restart the daemon so the new tool is discovered + bindings regenerate.
 trailblaze app --stop && trailblaze app --headless & disown
 
-# 4. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
+# 3. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
 #    autocomplete should now include your new tool.
 trailblaze toolbox --device ios --target contacts --search myNewTool
 ```
 
-For reference, here's what `trailmap.yaml`'s `target.tools:` list looks like — bare
-export names, one per line:
+This example's `trailmap.yaml` doesn't list its tools: every one in `tools/` is on the
+target. To keep a tool off, name it under `platforms.ios.excluded_tools:`.
 
 ```yaml
 # trails/config/trailmaps/contacts/trailmap.yaml (excerpt)
@@ -223,11 +221,6 @@ id: contacts
 target:
   display_name: Contacts
   system_prompt_file: contacts-ios-system-prompt.md
-  tools:
-    - contacts_ios_openApp
-    - contacts_ios_searchContacts
-    - contacts_ios_myNewTool        # ← your new tool, by export name
-    # ... others ...
   platforms:
     ios:
       app_ids: [com.apple.MobileAddressBook]
@@ -283,8 +276,8 @@ verbatim:
 ```
 
 The two scripted tools the trail composes (`contacts_ios_openApp` and
-`contacts_ios_searchContacts`) are exactly the ones registered in
-`trailmap.yaml`'s `target.tools:`. The agent dispatches them by name when the
+`contacts_ios_searchContacts`) are on the target because their files are in the
+trailmap's `tools/` folder. The agent dispatches them by name when the
 step text references them.
 
 Run it:
@@ -477,9 +470,8 @@ stale entries from previous crashes are safe to delete.
 
 1. Confirm the file is named exactly `<toolName>.ts` under `tools/` and
    exports a `trailblaze.tool(...)` declaration whose export name matches.
-2. Confirm the bare tool name is listed under `target.tools:` in
-   `trailmap.yaml`. Names omitted from that list are loaded by the bundler but
-   not advertised to the agent for this target.
+2. Confirm no `excluded_tools:` entry in `trailmap.yaml` names it, and that
+   its `supportedPlatforms` includes the session's platform.
 3. Restart the daemon after editing anything under
    `trails/config/trailmaps/<trailmap>/`. Trailmaps are discovered at boot.
 

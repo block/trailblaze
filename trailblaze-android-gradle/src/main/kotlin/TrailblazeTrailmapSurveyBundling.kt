@@ -137,12 +137,13 @@ private val FINISHED_SESSION_TRUE = Regex("""(?<![\w$])(["']?)requiresFinishedSe
 
 /**
  * The entry esbuild bundles for one survey file. SISTER-IMPL-TAG: survey-bundle-entry — the same
- * three lines as `SurveyBundles.entrySource`, which the daemon bundles from.
+ * entry as `SurveyBundles.entrySource`, which the daemon bundles from.
  */
 internal fun surveyBundleEntrySource(importPath: String): String = buildString {
   appendLine("// Synthetic entry: one survey file, built for the scripted-tool sandbox.")
   appendLine("import * as surveys from ${jsString(importPath)};")
   appendLine("import { runNamedLiveSurvey } from \"@trailblaze/scripting/surveys\";")
+  appendLine("export { liveSurveyCapabilities as capabilities } from \"@trailblaze/scripting/surveys\";")
   appendLine("export const runLive = (name, events, options) => runNamedLiveSurvey(surveys, name, events, options);")
 }
 

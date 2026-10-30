@@ -12,6 +12,7 @@ import xyz.block.trailblaze.network.NetworkEvent
 import xyz.block.trailblaze.network.Phase
 import xyz.block.trailblaze.network.REDACTED_VALUE
 import xyz.block.trailblaze.network.Source
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import java.io.BufferedWriter
 import java.io.File
@@ -102,7 +103,7 @@ class WebNetworkCapture private constructor(
   /** Writes this capture's loss marker; at most one per session, see [recordLoss]. */
   @Volatile private var markerWriter: Thread? = null
 
-  private data class RequestState(val id: String, val startMs: Long)
+  private data class RequestState(val id: String, val startMs: Long, val trailPhase: String?)
 
   /**
    * A captured event awaiting its drainer-side work. [requestBodyBytes] is read on the
@@ -243,6 +244,7 @@ class WebNetworkCapture private constructor(
         logSwallowed("readRequestBody", it)
       }
       .getOrNull()
+    val trailPhase = TrailheadRuns.phaseName(sessionId)
     val event = NetworkEvent(
       id = id,
       sessionId = sessionId,
@@ -253,11 +255,12 @@ class WebNetworkCapture private constructor(
       urlPath = pathOf(request.url()),
       requestHeaders = headers,
       source = Source.PLAYWRIGHT_WEB,
+      trailPhase = trailPhase,
     )
     // Insert the entry only after we've committed to writing the event so a
     // throw above can't strand a RequestState that the response handler then
     // matches — which would emit an unpaired RESPONSE_END.
-    requestStarts[request] = RequestState(id = id, startMs = nowMs)
+    requestStarts[request] = RequestState(id = id, startMs = nowMs, trailPhase = trailPhase)
     // Update the engine-agnostic in-flight tracker so future idling tools can
     // observe network activity. Done after we've committed to writing the
     // event so a transient build-event throw can't poison tracker state.
@@ -300,6 +303,7 @@ class WebNetworkCapture private constructor(
       responseHeaders = headers,
       responseBodyRef = bodyRef,
       source = Source.PLAYWRIGHT_WEB,
+      trailPhase = state.trailPhase,
     )
     enqueue(PendingWrite(event))
   }
@@ -319,6 +323,7 @@ class WebNetworkCapture private constructor(
       urlPath = pathOf(request.url()),
       durationMs = nowMs - state.startMs,
       source = Source.PLAYWRIGHT_WEB,
+      trailPhase = state.trailPhase,
     )
     enqueue(PendingWrite(event))
   }

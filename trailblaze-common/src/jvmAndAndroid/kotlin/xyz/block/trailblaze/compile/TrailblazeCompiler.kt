@@ -369,8 +369,8 @@ object TrailblazeCompiler {
       trailmapTools + classpathTrailmapTools
     }
     // Scripted tools are never in [toolPool]. A toolset can deliver the ones that declare a
-    // static `name:` (`openUrl` in `core_interaction`); the rest reach a target through its
-    // own `tools:`, checked per target below.
+    // static `name:` (`openUrl` in `core_interaction`); the rest are on their own trailmap's
+    // target (its resolved `tools:`), checked per target below.
     val scriptedToolPool: Set<String> = referenceSource
       ?.let { ScriptedToolNameDiscoverer.discoverAllNames(it).map { name -> name.toolName }.toSet() }
       .orEmpty()
@@ -380,7 +380,8 @@ object TrailblazeCompiler {
     for (target in resolved.targets) {
       // The loader hoists scripted tools out of `platforms.<p>.tools:` into the target's own
       // `tools:`, folding in the ones its dependencies export.
-      val scriptedToolNames = target.tools.orEmpty().map { it.name }.toSet() + scriptedToolPool
+      val ownScriptedToolNames = target.tools.orEmpty().map { it.name }.toSet()
+      val scriptedToolNames = ownScriptedToolNames + scriptedToolPool
       target.platforms?.forEach { (platform, platformConfig) ->
         if (toolsetPool != null) {
           platformConfig.toolSets?.forEach { name ->
@@ -395,8 +396,10 @@ object TrailblazeCompiler {
               errors += unresolvedRefError(target.id, platform, "tools", name, "tool")
             }
           }
+          // A scripted tool is on its trailmap's target unlisted, so opting one out names it here.
+          // Only this target's own: a name another trailmap declares hides nothing on this one.
           platformConfig.excludedTools?.forEach { name ->
-            if (name !in toolPool) {
+            if (name !in toolPool && name !in ownScriptedToolNames) {
               errors += unresolvedRefError(target.id, platform, "excluded_tools", name, "tool")
             }
           }

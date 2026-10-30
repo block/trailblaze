@@ -40,7 +40,7 @@ import xyz.block.trailblaze.toolcalls.getAgentToolboxForDriver
  *     the rendered Markdown.
  *  4. Asserting the two tool-name sets are identical.
  *
- * The compared surface is the full set the LLM sees: class-backed, YAML-defined, AND scripted
+ * The compared surface is the full set the LLM sees: class-backed AND scripted
  * (`.ts` / `.js`) tools delivered by a toolset. Scripted tools matter here because converting a
  * tool from class-backed to scripted (as PR #3803 did for `openUrl`) is exactly the kind of
  * change that can drop it from one compositor but not the other.
@@ -128,8 +128,8 @@ class AgentToolboxPrimitivesMatchTest {
 
     // With `excluded_tools: [openUrl]`, the scripted tool must disappear from BOTH the live
     // resolver and the report — and the two must still agree (the drift guard's whole point).
-    // Before the scripted-exclusion wiring, `excluded_tools: [openUrl]` was honored for class /
-    // YAML tools but silently ignored for toolset-delivered scripted tools, so `openUrl` stayed
+    // Before the scripted-exclusion wiring, `excluded_tools: [openUrl]` was honored for
+    // class-backed tools but silently ignored for toolset-delivered scripted tools, so `openUrl` stayed
     // advertised.
     val withExclusion = assertPrimitivesMatch(
       targetId = "primitives_scripted_excluded",
@@ -191,7 +191,6 @@ class AgentToolboxPrimitivesMatchTest {
         kclass.java.getAnnotation(xyz.block.trailblaze.toolcalls.TrailblazeToolClass::class.java)
           .name
       } +
-        liveToolbox.yamlToolNames.map { it.toolName } +
         // Scripted (`.ts` / `.js`) tools the toolsets delivered (e.g. `openUrl` via
         // `core_interaction`). The LLM sees these too, so the drift guard compares them — this is
         // the surface that diverged after `openUrl` became a scripted tool in PR #3803.
@@ -243,7 +242,7 @@ class AgentToolboxPrimitivesMatchTest {
    * Extracts the LLM-visible tool names the report renders for [platform] / [driverKey] inside the
    * "Agent toolbox" section. That surface is the union of two report blocks:
    *
-   *  - **`#### Driver <key>` bullets** — the per-(platform, driver) class-backed, YAML-defined, and
+   *  - **`#### Driver <key>` bullets** — the per-(platform, driver) class-backed and
    *    `tools:`-addition tools.
    *  - **`### Scripted tools` bullets** — toolset-delivered + target-root scripted (`.ts` / `.js`)
    *    tools (e.g. `openUrl`). The report renders these once below the per-driver slices because it
@@ -253,8 +252,8 @@ class AgentToolboxPrimitivesMatchTest {
    * Both block kinds are walked heading-by-heading so the scripted section is captured intentionally
    * rather than by the prior implementation's slice bleeding past the last `#### Driver` block. Linkified
    * rows like `- [\`web_click\`](primitives/tools/web_click.md)` and bare `- \`web_click\`` rows both
-   * match; the `(YAML-defined)`, `(individual tools: addition)`, and scripted-origin suffixes are
-   * ignored — only the tool name matters.
+   * match; the `(individual tools: addition)` and scripted-origin suffixes are ignored — only the
+   * tool name matters.
    */
   private fun extractToolNamesForDriver(report: String, platform: String, driverKey: String): Set<String> {
     val toolboxSection = report
@@ -265,7 +264,7 @@ class AgentToolboxPrimitivesMatchTest {
     val platformSlice = toolboxSection
       .substringAfter("### Platform `$platform`")
       .substringBefore("### Platform `")
-    // (a) Per-(platform, driver) bullets — class-backed + YAML + `tools:` additions, scoped to the
+    // (a) Per-(platform, driver) bullets — class-backed + `tools:` additions, scoped to the
     //     requested driver's block within the platform slice.
     val driverNames = bulletsUnderHeading(platformSlice) { it.startsWith("#### Driver `$driverKey`") }
     // (b) Driver-agnostic scripted-tools section. Parsed from the FULL toolbox section, NOT the
@@ -278,8 +277,8 @@ class AgentToolboxPrimitivesMatchTest {
   /**
    * Collects linkified (`- [\`name\`](path)`) and bare (`- \`name\``) bullet tool names that sit
    * under the first heading matching [isWanted], stopping at the next Markdown heading. Suffixes
-   * like `(YAML-defined)` / `(individual tools: addition)` / scripted-origin notes are ignored —
-   * only the tool name matters.
+   * like `(individual tools: addition)` / scripted-origin notes are ignored — only the tool name
+   * matters.
    *
    * `- \`name\` (excluded)` bullets are skipped: the report renders the "Excluded by
    * `excluded_tools:`" list as bullets directly after the per-driver block (no intervening

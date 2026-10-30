@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { SurveySession, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFinding, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
+import { SurveySession, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFinding, runSurveys, renderMarkdown, targetsOf } from "./index.js";
 import { redactUrl } from "./session.js";
 import { withId } from "./survey.js";
 
@@ -605,7 +605,7 @@ describe("surveys and the runner", () => {
   test("a survey's row counts each session once even when it reports several findings there", async () => {
     const twice = withId(survey({ description: "Each tap" }, (session) => session.tools.filter({ name: "tapOn" }).map((t) => ({ summary: t.summary, evidence: [t] }))), "taps");
     const report = await runSurveys({ surveys: [twice], sessions: [hashed, sequential] });
-    expect(report.surveys).toEqual([{ id: "taps", description: "Each tap", sessionsMatched: 1, sessionIds: ["ci-session-42"], findings: 2 }]);
+    expect(report.surveys).toEqual([{ id: "taps", description: "Each tap", sessionsMatched: 1, sessionIds: ["ci-session-42"], findings: 2, labels: 0 }]);
     expect(renderMarkdown(report)).toContain("| taps | 1/2 | 2 | Each tap |");
   });
 
@@ -662,7 +662,7 @@ describe("surveys and the runner", () => {
     expect(report.sessions[0]!.findings.map((f) => [f.survey, f.summary, f.data])).toEqual([["appCrashed", "The app crashed", { severity: "fatal" }]]);
     // An empty query list is not a query: unrejected, it would match every session with no evidence.
     expect(() => survey({ description: "Hollow", finding: { network: [] } })).toThrow(/no queries/);
-    expect(() => survey({ description: "Nothing" })).toThrow(/needs a handler or a finding/);
+    expect(() => survey({ description: "Nothing" })).toThrow(/needs a find phase, a label phase, or both/);
     expect(matchFinding(SurveySession.load(hashed), { network: [], analytics: { name: "No Such Event" } })).toBeUndefined();
   });
 
@@ -688,17 +688,6 @@ describe("surveys and the runner", () => {
     const session = SurveySession.load(hashed);
     expect(matchFinding(session, { events: { stream: "crash" } })?.map((e) => e.kind)).toEqual(["event"]);
     expect(matchFinding(session, { tools: {}, absent: { events: { stream: "crash" } } })).toBeUndefined();
-  });
-
-  test("a survey still written with the old `footprint` key reports the same finding as `finding`", async () => {
-    const old = withId(survey({ description: "The app crashed", footprint: { events: { stream: "crash" }, data: { severity: "fatal" } } }), "oldSpelling");
-    const report = await runSurveys({ surveys: [old], sessions: [hashed] });
-    expect(report.sessions[0]!.findings.map((f) => [f.survey, f.summary, f.data, f.evidence.map((e) => e.kind)])).toEqual([
-      ["oldSpelling", "The app crashed", { severity: "fatal" }, ["event"]],
-    ]);
-    expect(matchFootprint(SurveySession.load(hashed), { events: { stream: "crash" } })?.map((e) => e.kind)).toEqual(["event"]);
-    expect(() => survey({ description: "Both", finding: { tools: {} }, footprint: { tools: {} } })).toThrow(/both `finding` and `footprint`/);
-    expect(() => survey({ description: "Both", finding: { tools: {} }, footprint: { tools: {} } }, () => undefined)).toThrow(/both `finding` and `footprint`/);
   });
 
   test("a session filter keeps only matching sessions and lists the rest as excluded", async () => {

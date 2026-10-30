@@ -5,7 +5,7 @@
 // build time for a device), and `trailblaze.surveys.load` hands that bundle over. It is evaluated
 // once per engine and holds the survey runtime, so this file stays small in every tool's bundle.
 
-import type { SessionEvents } from "./session-events.js";
+import type { SessionEvents, SessionEventsSince } from "./session-events.js";
 
 /** Reserved host function behind [TrailblazeSurveys]. Mirrors `SurveyHostFunctions.kt`. */
 export const HOST_FUNCTION_SURVEYS_LOAD = "trailblaze.surveys.load";
@@ -19,8 +19,12 @@ export const HOST_FUNCTION_SURVEYS_LOAD = "trailblaze.surveys.load";
 export interface TrailblazeSurveyMap {}
 
 export interface SurveyRunOptions {
+  /** Read only events since this starting point or `ctx.events.mark(name)`. Default: the whole session. */
+  since?: SessionEventsSince;
   /** How long to wait for a finding before failing. Default 0: judge what is captured now. */
   waitMs?: number;
+  /** Partial finding to wait for. Objects allow extra keys; arrays match expected items in any order. Primitives match exactly. */
+  expected?: Record<string, unknown>;
 }
 
 /** One finding, with the records that prove it and whatever `data` its survey carried. */
@@ -35,7 +39,7 @@ export interface SurveyRunFinding {
 
 export interface SurveyRunResult {
   survey: string;
-  /** True on the first finding. False when time ran out or the capture lost data first. */
+  /** True on the first matching finding. False when time ran out or the capture lost data first. */
   passed: boolean;
   /** What was found, or why nothing was: the queries that matched and those that did not. */
   message: string;
@@ -58,6 +62,7 @@ export interface SurveySessionInfo {
 }
 
 interface SurveyBundle {
+  capabilities?: { since?: boolean; expected?: boolean };
   runLive(
     name: string,
     events: SessionEvents,
@@ -120,6 +125,12 @@ export function createSessionSurveys(host: unknown, events: SessionEvents, about
       const defined = Object.fromEntries(Object.entries(summary).filter(([, v]) => v !== undefined));
       return async (options?: SurveyRunOptions) => {
         const { bundle, targets } = await load(name);
+        // Pushed tools can be newer than the survey bundle packaged in a device's test APK.
+        for (const option of ["since", "expected"] as const) {
+          if (options?.[option] !== undefined && bundle.capabilities?.[option] !== true) {
+            throw new Error(`Survey ${name}'s bundle does not support "${option}". Rebuild the test APK or regenerate the survey bundle with the current framework.`);
+          }
+        }
         return bundle.runLive(name, events, { ...options, ...(sessionId ? { sessionId } : {}), summary: defined, targets });
       };
     },

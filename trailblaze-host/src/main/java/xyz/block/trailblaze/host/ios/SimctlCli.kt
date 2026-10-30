@@ -303,9 +303,27 @@ object SimctlCli {
     }
   }
 
+  /**
+   * [Process.waitFor] that kills the child when the wait is interrupted, as it does on a timeout,
+   * rather than leave it running: a cancelled run's language write or SpringBoard stop must not
+   * land under the run that replaced it. The interrupt still propagates.
+   */
+  internal fun waitForOrKill(proc: Process, timeoutSeconds: Long): Boolean =
+    try {
+      proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    } catch (e: InterruptedException) {
+      proc.destroyForcibly()
+      // The interrupt is consumed by the throw, so this short reap is not cut short again.
+      runCatching { proc.waitFor(KILL_REAP_SECONDS, TimeUnit.SECONDS) }
+      Thread.currentThread().interrupt()
+      throw e
+    }
+
+  private const val KILL_REAP_SECONDS = 2L
+
   private fun run(args: List<String>, timeoutSeconds: Long): Result {
     val proc = ProcessBuilder(args).redirectErrorStream(false).start()
-    val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    val finished = waitForOrKill(proc, timeoutSeconds)
     if (!finished) {
       proc.destroyForcibly()
       return Result(-1, "", "simctl timed out after ${timeoutSeconds}s")

@@ -442,6 +442,21 @@ describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
     expect(stream.groupPath).toBe("urlPath");
   });
 
+  test("the trail phase on a network record is not part of its identity", () => {
+    const hit = (extra: Record<string, unknown>) => ({ method: "GET", statusCode: 200, durationMs: 10, urlPath: "/v1/items", phase: "end", ...extra });
+    // A capture from before phases were stamped against one that has them, and a request that
+    // moved from the trailhead to the trail: the traffic is the same.
+    const legacy = eventObjectsOf({ network: [hit({})] as any[] }).get("network");
+    expect(eventObjectsOf({ network: [hit({ trailPhase: null })] as any[] }).get("network")).toEqual(legacy);
+    expect(eventObjectsOf({ network: [hit({ trailPhase: "trailhead" })] as any[] }).get("network")).toEqual(legacy);
+    expect(eventObjectsOf({ network: [hit({ trailPhase: "trail" })] as any[] }).get("network")).toEqual(legacy);
+
+    // Same for a device's own stream in a multi-device session.
+    const device = (extra: Record<string, unknown>) => eventObjectsOf({ events: [{ name: "network.seller", total: 1, truncated: false, events: [{ t: 1, d: JSON.stringify(hit(extra)) }] }] as any[] }).get("network.seller");
+    expect(device({ trailPhase: "trailhead" })).toEqual(device({}));
+    expect(device({ trailPhase: "trailhead" })).toEqual([hit({})]);
+  });
+
   test("one canonical network stream represents aliases across any number of runs", () => {
     const raw = (count: number) => ({
       name: "com.example.plugin.network",

@@ -176,7 +176,7 @@ function trailheadLeadStep(selectedTh, thDetail, args) {
   if (!selectedTh || !window.jsyaml) return null;
   return {
     text: 'Start at ' + ((thDetail && thDetail.to) || selectedTh.name),
-    yaml: window.jsyaml.dump([{ tools: trailheadRunTools(selectedTh.name, thDetail && thDetail.tools, args) }], { lineWidth: -1 }).replace(/\n+$/, ''),
+    yaml: window.jsyaml.dump([{ tools: trailheadRunTools(selectedTh.name, args) }], { lineWidth: -1 }).replace(/\n+$/, ''),
     verify: false,
   };
 }
@@ -254,17 +254,25 @@ function trailheadsForTarget(trailmaps, target, platform) {
   });
 }
 
-// Parse a *.trailhead.yaml body into { description, to, tools, className }. For a scripted (.ts)
+// Parse a *.trailhead.yaml body into { description, to, className }. For a scripted (.ts)
 // trailhead (`scripted` true), the same shape is extracted from its inline `trailhead: { to }`
 // block via a lightweight regex instead — mirrors TrailmapCatalogBuilder's TRAILHEAD_INLINE scan on
-// the Kotlin side. It never has a `tools:`/`class:` of its own: the tool itself IS the trailhead, so
-// `tools` stays [] and `trailheadRunTools` below runs it by name (see the scripted-param fetch this
-// enables in RecordScreen's trailhead-detail effect).
-function parseTrailhead(text, scripted) {
+// the Kotlin side. It never has a `class:` of its own: the tool itself IS the trailhead. Either way
+// `trailheadRunTools` below runs the trailhead by name (see the scripted-param fetch this enables in
+// RecordScreen's trailhead-detail effect). One .ts file can export several trailheads, so a
+// scripted parse reads only the [name] export's block, up to the next export.
+function parseTrailhead(text, scripted, name) {
   if (!text) return null;
   if (scripted) {
-    const m = /trailhead\s*:\s*\{[^}]*\bto\s*:\s*["']([^"']+)["']/.exec(text);
-    return { description: '', to: m ? m[1] : null, tools: [], className: null };
+    let body = text;
+    const start = name ? text.search(new RegExp('export\\s+const\\s+' + name + '\\b')) : -1;
+    if (start >= 0) {
+      const rest = text.slice(start + 1);
+      const next = rest.search(/export\s+const\s/);
+      body = next >= 0 ? text.slice(start, start + 1 + next) : text.slice(start);
+    }
+    const m = /trailhead\s*:\s*\{[^}]*\bto\s*:\s*["']([^"']+)["']/.exec(body);
+    return { description: '', to: m ? m[1] : null, className: null };
   }
   if (!window.jsyaml) return null;
   try {
@@ -273,7 +281,6 @@ function parseTrailhead(text, scripted) {
     return {
       description: (doc.description || '').trim(),
       to: (doc.trailhead && doc.trailhead.to) || null,
-      tools: Array.isArray(doc.tools) ? doc.tools : [],
       // CLASS-mode trailheads run by id and may need params; the schema is fetched by this class FQN.
       className: doc.class || null,
     };
@@ -315,13 +322,12 @@ function trailheadAccountParam(params) {
   }) || null;
 }
 
-// The tool list that drives the device into a trailhead: a TOOLS-mode trailhead's inline list, or a
-// CLASS-mode trailhead invoked by its id (`<id>: {}`) with any filled params. Dotted param names
-// (account.email) nest under their parent key - the flattened schema is a UI shape, not the tool's
-// input shape.
+// The tool list that drives the device into a trailhead: the trailhead invoked by its id
+// (`<id>: {}`) with any filled params. Dotted param names (account.email) nest under their parent
+// key - the flattened schema is a UI shape, not the tool's input shape.
 // See app/trail-yaml.js — thin wrappers over the shared producers.
-function trailheadRunTools(name, tools, args) { return window.TrailYamlBuild.trailheadRunTools(name, tools, args); }
-function buildTrailheadRunYaml(name, tools, args, platform) { return window.TrailYamlBuild.buildTrailheadRunYaml(name, tools, args, platform); }
+function trailheadRunTools(name, args) { return window.TrailYamlBuild.trailheadRunTools(name, args); }
+function buildTrailheadRunYaml(name, args, platform) { return window.TrailYamlBuild.buildTrailheadRunYaml(name, args, platform); }
 
 // The required "Trailhead" step 0 at the top of the recorded-steps list: a dropdown of where it lands
 // you, plus an Account picker for its sign-in account. Required when the target has trailheads.
@@ -595,16 +601,18 @@ function RecordScreen({ go, active, yamlSeed }) {
   const [thArgs, setThArgs] = React.useState({}); // { paramName: value } the author fills in
   // Destination (`to`) + description for every available trailhead, for the picker rows + hover.
   const [thMetaByName, setThMetaByName] = React.useState({});
-  const availKey = availTrailheads.map((t) => t.relPath).join('|');
+  const availKey = availTrailheads.map((t) => t.name + '@' + t.relPath).join('|');
   React.useEffect(() => {
     let alive = true;
     Promise.all(availTrailheads.map(async (t) => {
-      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath), t.relPath.endsWith('.ts'));
+      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath), t.relPath.endsWith('.ts'), t.name);
       return [t.name, { to: (p && p.to) || null, description: (p && p.description) || '' }];
     })).then((pairs) => { if (alive) setThMetaByName(Object.fromEntries(pairs)); });
     return () => { alive = false; };
   }, [availKey]);
   const selectedThPath = selectedTh ? selectedTh.relPath : null;
+  // Exports of one .ts file share a path, so the name alone can change the selection.
+  const selectedThName = selectedTh ? selectedTh.name : null;
   React.useEffect(() => {
     if (!selectedThPath) { setThDetail(null); setThParams([]); setThArgs({}); return; }
     let alive = true;
@@ -612,7 +620,7 @@ function RecordScreen({ go, active, yamlSeed }) {
     const scripted = selectedThPath.endsWith('.ts');
     TB.fetchComponentSource(selectedThPath).then(async (src) => {
       if (!alive) return;
-      const parsed = parseTrailhead(src, scripted) || { description: '', to: null, tools: [], className: null };
+      const parsed = parseTrailhead(src, scripted, selectedThName) || { description: '', to: null, className: null };
       setThDetail({ ...parsed, name: selectedTh.name, relPath: selectedThPath });
       setThLoading(false);
       // Required discriminators (enum params) start on their first variant so their companion
@@ -636,7 +644,7 @@ function RecordScreen({ go, active, yamlSeed }) {
       }
     }).catch(() => { if (alive) { setThDetail(null); setThLoading(false); } });
     return () => { alive = false; };
-  }, [selectedThPath]);
+  }, [selectedThPath, selectedThName]);
 
   // The "account" param (a sign-in email) is driven by the Account picker beside the trailhead.
   const accountParam = trailheadAccountParam(thParams);
@@ -656,7 +664,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   async function goToTrailhead() {
     if (!selectedTh || !conn || (thRun && thRun.running)) return;
     if (thMissingRequired.length) { setThRun({ ok: false, text: 'Fill ' + thMissingRequired.map((p) => p.name).join(', ') + ' first.' }); return; }
-    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs(), platform);
+    const yaml = buildTrailheadRunYaml(selectedTh.name, thFilledArgs(), platform);
     if (!yaml) { setThRun({ ok: false, text: 'Could not build the trailhead run.' }); return; }
     setThRun({ running: true });
     const r = await TB.runToolQuick(yaml, tbId());

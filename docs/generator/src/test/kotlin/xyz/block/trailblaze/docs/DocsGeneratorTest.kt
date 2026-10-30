@@ -8,10 +8,6 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -24,8 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * `./gradlew :docs:generator:run` + CI's `git diff --exit-code` assertion. This file pins
  * the pieces of the generator that *can* be tested without a full classpath: the
  * `surfaceToLlm` surface gate that decides which tools land in the framework reference
- * docs, and the file shape produced by `createPageForCommand` and
- * `createPageForYamlDefinedTool`.
+ * docs, and the file shape produced by `createPageForCommand`.
  */
 class DocsGeneratorTest {
 
@@ -119,51 +114,6 @@ class DocsGeneratorTest {
     assertTrue("visible fixture file should exist") {
       File(functionsDir, "custom/visibleFixture.md").exists()
     }
-  }
-
-  // ── YAML-defined tools ──────────────────────────────────────────────────────────────
-
-  @Test
-  fun `createPageForYamlDefinedTool emits a YAML-flavored doc with id, description, and parameters`() {
-    // The YAML-defined render path is hit when a framework tool is composed in
-    // `tools:` mode (no Kotlin class), e.g. a trailmap's `tools/<name>.tool.yaml` composing other tools.
-    // Surface gate, idempotency, and class-backed rendering already have coverage; this
-    // case pins the YAML branch so a future regression in `ToolDetail.YamlDefined`
-    // serialization doesn't only surface via the integration `:docs:generator:run`.
-    val config = ToolYamlConfig(
-      id = "eraseText",
-      description = "Erase characters from the focused text field.",
-      parameters = listOf(
-        TrailblazeToolParameterConfig(
-          name = "charactersToErase",
-          type = "integer",
-          required = false,
-          description = "Number of characters to erase.",
-        ),
-      ),
-      // `toolsList` is required to put the config in `tools:` mode — the YAML-defined
-      // descriptor builder rejects `class:` mode here. A no-op JSON object is enough to
-      // satisfy validation; the test focuses on doc emission, not tool execution.
-      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
-    )
-    val (gen, functionsDir) = newGenerator()
-    val fileName = gen.createPageForYamlDefinedTool(config)
-    assertTrue("expected eraseText.md returned, got $fileName") { fileName == "eraseText.md" }
-    val emitted = File(functionsDir, "custom/eraseText.md")
-    assertTrue("expected the YAML-defined .md file on disk") { emitted.exists() }
-    val md = emitted.readText()
-    assertTrue("banner present") { md.startsWith(ResolvedTargetToolDetailRenderer.GENERATED_BANNER) }
-    assertTrue("description from YAML present") {
-      md.contains("Erase characters from the focused text field.")
-    }
-    assertTrue("source kind labels as YAML-defined") { md.contains("- Kind: YAML-defined") }
-    assertTrue("tool id row present") { md.contains("- Tool id: `eraseText`") }
-    assertTrue("optional parameter row rendered with type + description") {
-      md.contains("### Optional parameters") &&
-        md.contains("- `charactersToErase` — `integer`") &&
-        md.contains("Number of characters to erase.")
-    }
-    assertTrue("framework header origin") { md.contains("Trailblaze framework tool reference") }
   }
 
   @Test

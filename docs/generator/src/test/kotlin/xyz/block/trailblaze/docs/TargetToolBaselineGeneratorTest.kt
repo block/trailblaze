@@ -6,14 +6,11 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -23,9 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * framework classpath (`AppTargetYamlLoader.discoverConfigs()` + companions) which is
  * exercised end-to-end by `./gradlew :internal-docs-generator:run` + CI's
  * static-checks `git diff --exit-code` assertion. This file pins the part of the
- * generator that *can* be tested without that setup: the per-tool sidecar orphan-prune
- * behavior, which is the dogfood contract with the workspace `ResolvedTargetReportEmitter`
- * — stale emitter-owned sidecars must be removed, hand-authored siblings must survive.
+ * generator that *can* be tested without that setup: the token estimate and stale-file pruning.
  */
 class TargetToolBaselineGeneratorTest {
 
@@ -43,105 +38,25 @@ class TargetToolBaselineGeneratorTest {
     return File(parent, name).apply { mkdirs() }
   }
 
-  @Test
-  fun `pruneStaleSidecars deletes emitter-owned files not in the keep set`() {
-    val sidecarDir = newDir("sidecars")
-    val stale = File(sidecarDir, "stale_tool.md").apply {
-      writeText(
-        """
-        ${ResolvedTargetToolDetailRenderer.GENERATED_BANNER}
-        # stale
-        """.trimIndent(),
-      )
-    }
-    val current = File(sidecarDir, "current_tool.md").apply {
-      writeText(
-        """
-        ${ResolvedTargetToolDetailRenderer.GENERATED_BANNER}
-        # current
-        """.trimIndent(),
-      )
-    }
-
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = sidecarDir, keepNames = setOf("current_tool.md"))
-
-    assertFalse("stale emitter-owned sidecar should be deleted") { stale.exists() }
-    assertTrue("current emitter-owned sidecar should be preserved") { current.exists() }
-  }
-
-  @Test
-  fun `pruneStaleSidecars leaves hand-authored files alone even if not in keep set`() {
-    val sidecarDir = newDir("sidecars")
-    val handAuthored = File(sidecarDir, "design_notes.md").apply {
-      writeText("# Hand-authored — must survive\n\nLong-form design notes that don't belong to any tool.\n")
-    }
-
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = sidecarDir, keepNames = emptySet())
-
-    assertTrue("hand-authored file without the banner must survive") { handAuthored.exists() }
-  }
-
-  @Test
-  fun `pruneStaleSidecars is a no-op when the sidecar directory does not exist`() {
-    // Catches the early-return path so it never throws if a target has never had any
-    // tools (e.g. a newly added target that hasn't been generated yet).
-    val nonexistent = File(newDir("parent"), "tools")
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneStaleSidecars(sidecarDir = nonexistent, keepNames = emptySet())
-    // No exception thrown is the assertion; reaching here means the no-op path holds.
-    assertFalse("dir should still not exist after a no-op prune") { nonexistent.exists() }
-  }
-
-  @Test
-  fun `pruneOrphanedTargets deletes the page and sidecars of a target that is no longer generated`() {
-    val targetsDir = newDir("targets")
-    fun page(id: String) = File(targetsDir, "TARGET_$id.md").apply {
-      writeText("# Target: $id\n\n${DocsGenerator.THIS_DOC_IS_GENERATED_MESSAGE}\n")
-    }
-    fun sidecar(id: String) = File(targetsDir, "$id/tools/tap.md").apply {
-      parentFile.mkdirs()
-      writeText("${ResolvedTargetToolDetailRenderer.GENERATED_BANNER}\n# tap\n")
-    }
-    val keptPage = page("kept")
-    val keptSidecar = sidecar("kept")
-    val orphanPage = page("gone")
-    val orphanSidecar = sidecar("gone")
-
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneOrphanedTargets(targetsDir = targetsDir, keepIds = setOf("kept"))
-
-    assertFalse("orphaned target page should be deleted") { orphanPage.exists() }
-    assertFalse("orphaned target directory should be deleted") { File(targetsDir, "gone").exists() }
-    assertFalse("orphaned sidecar should be deleted") { orphanSidecar.exists() }
-    assertTrue("current target page should be preserved") { keptPage.exists() }
-    assertTrue("current target sidecar should be preserved") { keptSidecar.exists() }
-  }
-
-  @Test
-  fun `pruneOrphanedTargets leaves hand-authored files alone`() {
-    val targetsDir = newDir("targets")
-    // Titled like a generated page, but without the generated banner.
-    val handPage = File(targetsDir, "TARGET_notes.md").apply { writeText("# Target: Notes\n\nHand-authored.\n") }
-    val handSidecar = File(targetsDir, "notes/tools/design.md").apply {
-      parentFile.mkdirs()
-      writeText("# Hand-authored\n")
-    }
-
-    TargetToolBaselineGenerator(generatedDir = newDir("ignored"))
-      .pruneOrphanedTargets(targetsDir = targetsDir, keepIds = emptySet())
-
-    assertTrue("a TARGET_ file without the generated banner must survive") { handPage.exists() }
-    assertTrue("a sidecar without the generated banner must survive") { handSidecar.exists() }
-  }
-
   private fun scripted(config: InlineScriptToolConfig) = ToolDetail.Scripted(
     name = config.name,
     config = config,
     originTrailmapId = "t",
     consumerTrailmapId = "t",
   )
+
+  @Test
+  fun `pruning removes stale generated files and keeps hand-written ones`() {
+    val dir = newDir("targets")
+    val header = TargetToolBaselineGenerator.GENERATED_HEADER
+    File(dir, "kept.md").writeText("$header\n\n# kept\n")
+    File(dir, "stale.md").writeText("$header\n\n# stale\n")
+    File(dir, "notes.md").writeText("# Hand-written notes\n")
+
+    TargetToolBaselineGenerator(generatedDir = newDir("ignored")).pruneStaleFiles(dir, keep = setOf("kept.md"))
+
+    assertEquals(setOf("kept.md", "notes.md"), dir.list()!!.toSet())
+  }
 
   @Test
   fun `llmDescriptionTokens counts the tool description plus every parameter description`() {

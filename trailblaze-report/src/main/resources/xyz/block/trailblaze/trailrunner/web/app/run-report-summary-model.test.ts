@@ -325,6 +325,34 @@ describe('tools and LLM lanes', () => {
     expect(tap.body).toContain('nodeSelector');
   });
 
+  test('an iOS accessibility tap reads as a tap on the text it targets', () => {
+    const model = build({
+      trace: [
+        { label: 'Go', ts: 0, ms: 0, ok: true, objective: true },
+        { label: 'tapOnElementWithAccessibilityText', ts: 10, ms: 20, ok: true, args: '- tapOnElementWithAccessibilityText:\n    accessibilityText: Pizza' },
+      ],
+    });
+    const [tap] = model.lanes.find((lane) => lane.id === 'tools')!.bands[0];
+    expect(tap.label).toBe('tap');
+    expect(tap.detail).toBe('Pizza');
+  });
+
+  test('the framework runIf reads the same as the block_runIf older sessions carry', () => {
+    const condition = '\n    condition:\n      selector:\n        androidAccessibility:\n          textRegex: "^Allow$"';
+    const model = build({
+      trace: [
+        { label: 'Go', ts: 0, ms: 0, ok: true, objective: true },
+        { label: 'runIf', ts: 10, ms: 20, ok: true, args: `- runIf:${condition}` },
+        { label: 'block_runIf', ts: 40, ms: 20, ok: true, args: `- block_runIf:${condition}` },
+      ],
+    });
+    const notes = model.lanes.find((lane) => lane.id === 'tools')!.bands[0];
+    expect(notes.map((n) => [n.label, n.detail])).toEqual([
+      ['if', 'Allow'],
+      ['if', 'Allow'],
+    ]);
+  });
+
   test('an unknown tool reads as spaced words', () => {
     const model = build({
       trace: [

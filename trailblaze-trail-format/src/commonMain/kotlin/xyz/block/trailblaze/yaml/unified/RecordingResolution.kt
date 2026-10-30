@@ -73,12 +73,11 @@ data class RecordingResolution(
   companion object {
     /**
      * Recorded tools that re-evaluate their condition at replay time, in either of the two shapes
-     * that exist: a **wrapper** that gates inner recorded tools (`runIf`, plus `block_runIf`, the
-     * name older recordings carry), and a **self-guarding** tool that probes and no-ops when its
-     * target is absent (`block_dismissIfPresent`). Both mean the step doesn't fire blind, which is
-     * the only property [isConditionallyGuarded] and [TrailRecordingResolution.lostGuardsVersus]
-     * depend on — so limiting this to wrappers would report a device that used the self-guarding
-     * form as having lost a guard it never lost.
+     * that exist: a **wrapper** that gates inner recorded tools (`runIf`), and a **self-guarding**
+     * tool that probes and no-ops when its target is absent (`block_dismissIfPresent`). Both mean
+     * the step doesn't fire blind, which is the only property [isConditionallyGuarded] and
+     * [TrailRecordingResolution.lostGuardsVersus] depend on — so limiting this to wrappers would
+     * report a device that used the self-guarding form as having lost a guard it never lost.
      *
      * **A floor, not a complete set.** Membership is by name, and this module is target-agnostic —
      * it cannot name the tools any particular target defines, so a target's own self-guarding tools
@@ -87,7 +86,7 @@ data class RecordingResolution(
      * it as a lower bound. Making this complete needs the property to travel as tool metadata
      * rather than a name list.
      */
-    val CONDITIONAL_TOOL_NAMES = setOf("block_runIf", "runIf", "block_dismissIfPresent")
+    val CONDITIONAL_TOOL_NAMES = setOf("runIf", "block_dismissIfPresent")
   }
 }
 

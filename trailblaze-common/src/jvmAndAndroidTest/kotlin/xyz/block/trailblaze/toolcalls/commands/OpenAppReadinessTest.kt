@@ -178,6 +178,20 @@ class OpenAppReadinessTest {
   }
 
   @Test
+  fun `a slow cold start that draws after 30s is still opened`() {
+    val clock = FakeClock()
+    val drawn = AndroidOpenAppReadiness.awaitActivityDrawn(
+      appId = SETTINGS,
+      nowMs = clock::now,
+      sleep = clock::advance,
+    ) {
+      val visible = clock.now() >= 30_000L
+      dumpsys(appIdle = false).replace("packageName=com.android.settings", "nowVisible=$visible\n          packageName=com.android.settings")
+    }
+    assertThat(drawn).isTrue()
+  }
+
+  @Test
   fun `missing drawn evidence fails at the existing readiness cap`() {
     val clock = FakeClock()
     val drawn = AndroidOpenAppReadiness.awaitActivityDrawn(

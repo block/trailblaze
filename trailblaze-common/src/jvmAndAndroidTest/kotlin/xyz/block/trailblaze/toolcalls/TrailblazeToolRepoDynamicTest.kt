@@ -5,11 +5,13 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.messageContains
 import assertk.assertions.prop
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import kotlin.test.Test
 
@@ -19,7 +21,6 @@ class TrailblazeToolRepoDynamicTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "empty",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 
@@ -148,7 +149,6 @@ class TrailblazeToolRepoDynamicTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "non-llm",
         toolClasses = setOf(NonLlmTool::class),
-        yamlToolNames = emptySet(),
       ),
     )
     val decoded = repo.toolCallToTrailblazeTool(
@@ -216,38 +216,105 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
   }
 
-  @Test fun `withDynamicToolSets subtracts excluded YAML and scripted names from the always-enabled surface`() {
-    // The on-device / host-runner exclusion fix relies on excludedYamlToolNames /
-    // excludedScriptedToolNames being subtracted from the ALWAYS-ENABLED catalog surface — not just
-    // from caller-supplied custom sets. That's exactly where a tool like `openUrl` is re-added, so
-    // pre-subtracting it upstream isn't enough; the param must reach the initial composition. Pin
-    // both partitions here against an always-enabled fixture toolset.
-    val yamlName = ToolName("always_yaml")
+  @Test fun `an excluded target-declared scripted tool is dispatchable but never advertised`() {
+    // Not a catalog tool: a trailmap's own `.ts` tool, on its target unlisted and opted out of
+    // with `excluded_tools:`.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = TrailblazeToolSetCatalog.defaultEntries(),
+      excludedScriptedToolNames = setOf(ToolName("target_tool")),
+    )
+    repo.addDynamicTools(listOf(stubRegistration("target_tool"), stubRegistration("other_target_tool")))
+
+    val advertised = repo.getCurrentToolDescriptors().map { it.name }
+    assertThat(advertised).doesNotContain("target_tool")
+    assertThat(advertised).contains("other_target_tool")
+    assertThat(repo.toolCallToTrailblazeTool("target_tool", "{}")).isInstanceOf(StubDynamicTool::class)
+  }
+
+  @Test fun `hideScriptedToolsFromLlm hides a tool on a repo built without exclusions`() {
+    // A launcher hides its target's opted-out tools whatever repo it registers them into.
+    val repo = newRepo()
+    repo.addDynamicTools(listOf(stubRegistration("target_tool"), stubRegistration("other_target_tool")))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("target_tool")
+
+    repo.hideScriptedToolsFromLlm(setOf(ToolName("target_tool")))
+
+    val advertised = repo.getCurrentToolDescriptors().map { it.name }
+    assertThat(advertised).doesNotContain("target_tool")
+    assertThat(advertised).contains("other_target_tool")
+    assertThat(repo.toolCallToTrailblazeTool("target_tool", "{}")).isInstanceOf(StubDynamicTool::class)
+
+    repo.showScriptedToolsToLlm(setOf(ToolName("target_tool")))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("target_tool")
+  }
+
+  @Test fun `showScriptedToolsToLlm advertises a shared tool whose registered copy is hidden`() {
+    // Another target registered its `surfaceToLlm: false` copy first; a target that offers the tool shows it.
+    val repo = newRepo()
+    repo.addDynamicTools(listOf(stubRegistration("shared_tool", surfaceToLlm = false)))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain("shared_tool")
+
+    repo.showScriptedToolsToLlm(setOf(ToolName("shared_tool")))
+
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("shared_tool")
+  }
+
+  @Test fun `a removed tool's show and hide overrides don't carry over to its next registration`() {
+    val repo = newRepo()
+    repo.addDynamicTools(listOf(stubRegistration("shown_tool"), stubRegistration("hidden_tool")))
+    repo.showScriptedToolsToLlm(setOf(ToolName("shown_tool")))
+    repo.hideScriptedToolsFromLlm(setOf(ToolName("hidden_tool")))
+
+    repo.removeDynamicTool(ToolName("shown_tool"))
+    repo.removeDynamicTool(ToolName("hidden_tool"))
+    repo.addDynamicTools(
+      listOf(stubRegistration("shown_tool", surfaceToLlm = false), stubRegistration("hidden_tool")),
+    )
+
+    val advertised = repo.getCurrentToolDescriptors().map { it.name }
+    assertThat(advertised).doesNotContain("shown_tool")
+    assertThat(advertised).contains("hidden_tool")
+  }
+
+  @Test fun `showScriptedToolsToLlm never overrides the exclusions the repo was built with`() {
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = TrailblazeToolSetCatalog.defaultEntries(),
+      excludedScriptedToolNames = setOf(ToolName("target_tool")),
+    )
+    repo.addDynamicTools(listOf(stubRegistration("target_tool")))
+
+    repo.showScriptedToolsToLlm(setOf(ToolName("target_tool")))
+
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain("target_tool")
+  }
+
+  @Test fun `withDynamicToolSets subtracts excluded scripted names from the always-enabled surface`() {
+    // The on-device / host-runner exclusion fix relies on excludedScriptedToolNames being
+    // subtracted from the ALWAYS-ENABLED catalog surface — not just from caller-supplied custom
+    // sets. That's exactly where a tool like `openUrl` is re-added, so pre-subtracting it upstream
+    // isn't enough; the param must reach the initial composition. Pinned here against an
+    // always-enabled fixture toolset.
     val scriptedName = ToolName("always_scripted")
     val catalog = listOf(
       ToolSetCatalogEntry(
         id = "always_on",
         description = "always-enabled fixture",
         toolClasses = emptySet(),
-        yamlToolNames = setOf(yamlName),
         scriptedToolNames = setOf(scriptedName),
         alwaysEnabled = true,
       ),
     )
 
-    // Baseline: both surface from the always-enabled toolset, so the exclusion assertions below
-    // aren't vacuous.
+    // Baseline: it surfaces from the always-enabled toolset, so the exclusion assertion below
+    // isn't vacuous.
     val baseline = TrailblazeToolRepo.withDynamicToolSets(catalog = catalog)
-    assertThat(baseline.getRegisteredYamlToolNames()).contains(yamlName)
     assertThat(baseline.getRegisteredScriptedToolNames()).contains(scriptedName)
 
-    // Excluded: each partition is subtracted from the initial surface.
+    // Excluded: subtracted from the initial surface.
     val repo = TrailblazeToolRepo.withDynamicToolSets(
       catalog = catalog,
-      excludedYamlToolNames = setOf(yamlName),
       excludedScriptedToolNames = setOf(scriptedName),
     )
-    assertThat(repo.getRegisteredYamlToolNames()).doesNotContain(yamlName)
     assertThat(repo.getRegisteredScriptedToolNames()).doesNotContain(scriptedName)
   }
 
@@ -319,14 +386,12 @@ class TrailblazeToolRepoDynamicTest {
       id = "declared",
       description = "a toolset the target's trailmap declares",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("declared_yaml")),
       scriptedToolNames = setOf(ToolName("declared_scripted")),
     ),
     ToolSetCatalogEntry(
       id = "someone_elses",
       description = "another app's toolset",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("other_yaml")),
       scriptedToolNames = setOf(ToolName("other_scripted")),
     ),
   )
@@ -336,12 +401,10 @@ class TrailblazeToolRepoDynamicTest {
       catalog = scopeCatalog(),
       toolSetIds = listOf("declared"),
     )
-    assertThat(repo.getRegisteredYamlToolNames()).contains(ToolName("declared_yaml"))
     assertThat(repo.getRegisteredScriptedToolNames()).contains(ToolName("declared_scripted"))
     // Always-enabled entries ride along without being declared — that's their contract.
     assertThat(repo.getRegisteredTrailblazeTools()).contains(TapTrailblazeTool::class)
     // Another app's toolset does not.
-    assertThat(repo.getRegisteredYamlToolNames()).doesNotContain(ToolName("other_yaml"))
     assertThat(repo.getRegisteredScriptedToolNames()).doesNotContain(ToolName("other_scripted"))
   }
 
@@ -357,11 +420,66 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(scoped.allCatalogScriptedToolNames.toList()).containsExactly(ToolName("declared_scripted"))
   }
 
+  @Test fun `catalog scripted names resolve for a companion driver the repo's own driver excludes`() {
+    // A browser-launched session's repo is bound to PLAYWRIGHT_NATIVE and scoped to its target's
+    // web toolsets, but its iOS companion's recorded `openUrl` needs the mobile-only toolset too.
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "navigation",
+        description = "mobile-only navigation",
+        toolClasses = emptySet(),
+        scriptedToolNames = setOf(ToolName("openUrl")),
+        compatibleDriverTypes = setOf(TrailblazeDriverType.IOS_HOST),
+      ),
+      ToolSetCatalogEntry(
+        id = "web_core",
+        description = "web-only",
+        toolClasses = emptySet(),
+        scriptedToolNames = setOf(ToolName("web_scripted")),
+        compatibleDriverTypes = setOf(TrailblazeDriverType.PLAYWRIGHT_NATIVE),
+      ),
+    )
+    val webRepo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = catalog,
+      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      toolSetIds = listOf("web_core"),
+    )
+
+    assertThat(webRepo.allCatalogScriptedToolNames.toList()).containsExactly(ToolName("web_scripted"))
+    assertThat(webRepo.widenCatalogToDriver(TrailblazeDriverType.IOS_HOST).toList())
+      .containsExactly(ToolName("openUrl"))
+  }
+
+  @Test fun `a companion driver's catalog scripted tool is dispatchable but not advertised`() {
+    // Widening the catalog for a companion must not route its names around the advertisement
+    // gate: one the target excluded, or the repo never advertised, stays hidden from the LLM.
+    val openUrl = ToolName("openUrl")
+    val webRepo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = listOf(
+        ToolSetCatalogEntry(
+          id = "navigation",
+          description = "mobile-only navigation",
+          toolClasses = emptySet(),
+          scriptedToolNames = setOf(openUrl),
+          compatibleDriverTypes = setOf(TrailblazeDriverType.IOS_HOST),
+        ),
+      ),
+      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      toolSetIds = listOf("navigation"),
+      excludedScriptedToolNames = setOf(openUrl),
+    )
+    webRepo.widenCatalogToDriver(TrailblazeDriverType.IOS_HOST)
+    webRepo.addDynamicTools(listOf(stubRegistration(openUrl.toolName)))
+
+    assertThat(webRepo.getCurrentToolDescriptors().map { it.name }).doesNotContain(openUrl.toolName)
+    assertThat(webRepo.toolCallToTrailblazeTool(openUrl.toolName, "{}")).isInstanceOf(StubDynamicTool::class)
+  }
+
   @Test fun `omitting toolSetIds keeps the whole-catalog surface`() {
     // Callers with no target in hand (test fixtures, driver-agnostic construction) still get
     // everything — the scope is opt-in, so this change can't silently narrow them.
     val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = scopeCatalog())
-    assertThat(repo.getRegisteredYamlToolNames()).contains(ToolName("other_yaml"))
+    assertThat(repo.getRegisteredScriptedToolNames()).contains(ToolName("other_scripted"))
     assertThat(repo.allCatalogScriptedToolNames).contains(ToolName("other_scripted"))
   }
 

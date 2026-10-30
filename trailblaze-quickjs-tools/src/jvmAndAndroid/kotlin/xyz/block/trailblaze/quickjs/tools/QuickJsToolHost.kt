@@ -425,8 +425,8 @@ class QuickJsToolHost internal constructor(
             if (__structured !== undefined) {
               __envelope.structuredContent = __structured;
             }
-            // Trailhead notes a tool wrote before it threw (tool-core.ts marks the error), so the
-            // trailhead's teardown still learns what the failed tool created.
+            // The reuse report of a trailhead handler that threw (tool-core.ts marks the error), so
+            // a failed reuse is still recorded as one.
             try {
               const __report = (__e !== null && __e !== undefined && typeof __e === 'object')
                 ? __e[Symbol.for('trailblaze.trailhead.report')]
@@ -435,14 +435,14 @@ class QuickJsToolHost internal constructor(
                 __envelope._meta = { trailblaze: { trailhead: __report } };
               }
             } catch (__reportError) {
-              // A hostile accessor loses the notes, never the envelope.
+              // A hostile accessor loses the report, never the envelope.
             }
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__envelope);
             } catch (__payloadStringifyError) {
               // Non-JSON-serializable `data` (cycles, BigInt) must not cost the envelope —
-              // ship it payload-less rather than crash the dispatch. The trailhead notes stay:
-              // teardown needs them to clean up what the tool created.
+              // ship it payload-less rather than crash the dispatch. The trailhead's reuse report
+              // stays, so a failed reuse is still recorded.
               const __bare = { isError: true, content: [{ type: 'text', text: __name + ': ' + __msg + __stack }] };
               try {
                 globalThis.__trailblazeLastResult = JSON.stringify(
@@ -460,8 +460,8 @@ class QuickJsToolHost internal constructor(
                 isError: true,
                 content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
               };
-              // Keep the envelope's `_meta` (trailhead notes) when it serializes on its own:
-              // teardown needs them to clean up what the tool created.
+              // Keep the envelope's `_meta` (the trailhead's reuse report, memory writes) when it
+              // serializes on its own.
               let __meta;
               try {
                 __meta = (__dispatchResult !== null && typeof __dispatchResult === 'object') ? __dispatchResult._meta : undefined;

@@ -5,6 +5,7 @@ import kotlinx.datetime.Clock
 import maestro.device.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.MigrationScreenState
@@ -43,12 +44,14 @@ class HostMaestroTrailblazeAgent(
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
   sessionDirProvider: ((SessionId) -> File)? = null,
+  memory: AgentMemory = AgentMemory(),
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   nodeSelectorMode = nodeSelectorMode,
   trailblazeToolRepo = trailblazeToolRepo,
+  memory = memory,
   resolvedTarget = resolvedTarget,
   appId = appId,
   sessionDirProvider = sessionDirProvider,
@@ -92,6 +95,9 @@ class HostMaestroTrailblazeAgent(
     longPress: Boolean,
     // Ignored — this agent has only the coordinate-gesture path, so there is no route to pin.
     tapRoute: TapRouteOverride?,
+    // Not needed here: this reads the tree once, and a miss returns null so the caller's Maestro
+    // fallback (which carries the wait — see [TapOnByElementSelector.toMaestroCommands]) runs.
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null

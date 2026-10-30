@@ -26,13 +26,12 @@ import xyz.block.trailblaze.util.runQuiet
  *
  * ```
  * [platformConfigResourceSource] Layering user config from: /Users/…/trails/config
- * TrailblazeSerializationInitializer: discovered 2 YAML-defined tools (sample: eraseText…)
  * [ToolCommand] fast-path rejected 'tpaOn' (not in local registry)
  * Unknown tool: tpaOn.
  * Tip: Run 'trailblaze toolbox --device <platform> --target <target>' to see what's available.
  * ```
  *
- * Two good sentences under three lines of machine output — and worse on the error paths than the
+ * Two good sentences under two lines of machine output — and worse on the error paths than the
  * success paths, which is backwards. [ToolCommand.emitUnknownToolEnvelope] used to document its
  * breadcrumb as "verbose-only, doesn't reach stderr", which was true of the intent and false of the
  * behavior, because nothing had enabled quiet mode by the time it ran.

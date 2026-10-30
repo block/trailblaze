@@ -26,12 +26,15 @@ sealed interface AccessibilityAction {
 
   // --- Gestures ---
 
-  data class Tap(val x: Int, val y: Int) : AccessibilityAction {
-    override val description get() = "Tap on ($x, $y)"
+  /** [repeat] > 1 taps that many times in one gesture (2 = double-tap). */
+  data class Tap(val x: Int, val y: Int, val repeat: Int = 1) : AccessibilityAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($x, $y)"
   }
 
-  data class TapRelative(val percentX: Int, val percentY: Int) : AccessibilityAction {
-    override val description get() = "Tap on ($percentX%, $percentY%)"
+  /** [repeat] > 1 taps that many times in one gesture (2 = double-tap). */
+  data class TapRelative(val percentX: Double, val percentY: Double, val repeat: Int = 1) :
+    AccessibilityAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($percentX%, $percentY%)"
   }
 
   data class LongPress(val x: Int, val y: Int, val durationMs: Long = 500L) :
@@ -292,3 +295,5 @@ sealed interface AccessibilityAction {
     RIGHT,
   }
 }
+
+private fun repeatSuffix(repeat: Int) = if (repeat > 1) " x$repeat" else ""

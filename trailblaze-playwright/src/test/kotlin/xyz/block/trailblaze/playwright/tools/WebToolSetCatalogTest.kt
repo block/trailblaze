@@ -93,7 +93,7 @@ class WebToolSetCatalogTest {
       requestedIds = WebToolSetIds.ALL,
     )
     val names =
-      (resolved.toolClasses.map { it.simpleName } + resolved.yamlToolNames.map { it.toolName })
+      (resolved.toolClasses.map { it.simpleName } + resolved.scriptedToolNames.map { it.toolName })
         .filterNotNull()
         .toSet()
     assertThat(names).contains("ObjectiveStatusTrailblazeTool")

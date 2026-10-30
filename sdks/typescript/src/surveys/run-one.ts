@@ -1,9 +1,9 @@
 // Runs one survey over one session. No filesystem access, so it serves the post-run runner, the
 // browser page, and a survey asserted while the trail is still running.
 
-import { validateFinding, type SurveyContext, type SurveyDefinition, type SurveyResult } from "./survey.js";
+import { validateFinding, type SurveyContext, type SurveyDefinition, type FindResult } from "./survey.js";
 import type { SurveySession } from "./session.js";
-import type { Finding, FindingInput, SessionRecord } from "./types.js";
+import type { Finding, SurveyFinding, SessionRecord } from "./types.js";
 
 export function compactRecord(e: SessionRecord): SessionRecord {
   const out: SessionRecord = { kind: e.kind, summary: e.summary, file: e.file };
@@ -13,11 +13,11 @@ export function compactRecord(e: SessionRecord): SessionRecord {
   return out;
 }
 
-function normalizeResult(result: SurveyResult, extra: FindingInput[]): FindingInput[] {
-  const out: FindingInput[] = [...extra];
+function normalizeResult(result: FindResult, extra: SurveyFinding[]): SurveyFinding[] {
+  const out: SurveyFinding[] = [...extra];
   if (result === undefined || result === null || result === false) return out;
-  if (Array.isArray(result)) out.push(...(result as ReadonlyArray<FindingInput>));
-  else out.push(result as FindingInput);
+  if (Array.isArray(result)) out.push(...(result as ReadonlyArray<SurveyFinding>));
+  else out.push(result as SurveyFinding);
   return out;
 }
 
@@ -34,7 +34,7 @@ export interface SurveyError {
  */
 const LEGACY_FIELDS = ["feature", "kind", "confidence"] as const;
 
-function dataOf(f: FindingInput, spec: object): Record<string, unknown> | undefined {
+function dataOf(f: SurveyFinding, spec: object): Record<string, unknown> | undefined {
   const legacy: Record<string, unknown> = {};
   for (const key of LEGACY_FIELDS) {
     const value = (f as unknown as Record<string, unknown>)[key] ?? (key === "confidence" ? undefined : (spec as Record<string, unknown>)[key]);
@@ -52,7 +52,7 @@ export async function runSurvey(
   log?: (m: string) => void,
   onError?: (error: SurveyError) => void,
 ): Promise<Finding[]> {
-  const found: FindingInput[] = [];
+  const found: SurveyFinding[] = [];
   const ctx: SurveyContext = {
     found(summary, evidence, data) {
       found.push(data === undefined ? { summary, evidence: [...evidence] } : { summary, evidence: [...evidence], data });
@@ -69,7 +69,8 @@ export async function runSurvey(
     validateFinding(f, id);
     const finding: Finding = { survey: id, session: session.id, summary: f.summary, evidence: f.evidence.map(compactRecord) };
     const data = dataOf(f, def.spec);
-    if (data !== undefined) finding.data = data;
+    finding.data = data ?? {};
+    if (def.version !== undefined) finding.version = def.version;
     return finding;
   });
 }

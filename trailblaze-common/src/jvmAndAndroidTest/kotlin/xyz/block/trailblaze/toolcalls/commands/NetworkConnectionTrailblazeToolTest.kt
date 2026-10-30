@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import kotlin.reflect.full.findAnnotation
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -11,6 +13,7 @@ import maestro.orchestra.Command
 import maestro.orchestra.SetAirplaneModeCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -19,12 +22,16 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.AndroidRadio
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
- * Pins what a `networkConnection` step MEANS, on both halves of the tool.
+ * Pins what a `mobile_networkConnection` step MEANS, on both halves of the tool.
  *
  * The Android half runs against a device shell, so what can be proven here is the vocabulary it
  * reads the device with — the flag values, and the refusals a device cannot be involved in.
@@ -117,7 +124,7 @@ class NetworkConnectionTrailblazeToolTest {
    * What every value of every flag means, written out.
    *
    * The polarity is the load-bearing part: reading these the wrong way round reports a device that
-   * stayed online as having gone offline, which is the failure `networkConnection` exists to
+   * stayed online as having gone offline, which is the failure `mobile_networkConnection` exists to
    * prevent. Every value NOT listed here has to read as unreadable, which is what stops a future
    * platform value being guessed into a direction.
    */
@@ -131,7 +138,7 @@ class NetworkConnectionTrailblazeToolTest {
    * comparison against "1"/"0".
    *
    * Under airplane mode wifi does not write `1` or `0`: left on it reads `2`, taken down it reads
-   * `3`. Matching literals reads both as unreadable, so `networkConnection` waits out its whole
+   * `3`. Matching literals reads both as unreadable, so `mobile_networkConnection` waits out its whole
    * settle ceiling and reports a refusal on a device whose radio is sitting in exactly the state
    * the trail asked for. `2` meaning on is device-verified — a device reading `wifi_on=2` answers
    * "Wifi is enabled" to `cmd wifi status`.
@@ -148,7 +155,7 @@ class NetworkConnectionTrailblazeToolTest {
    *
    * `bluetooth_on` also holds `2`, but it means the reverse of wifi's: the platform writes it to
    * remember that bluetooth was ON before airplane mode took it down, so the radio is OFF. Reading
-   * it as "on" would let `networkConnection` report a bluetooth switch as landed while the radio
+   * it as "on" would let `mobile_networkConnection` report a bluetooth switch as landed while the radio
    * had not moved — a silent wrong success, the one outcome worse than a loud refusal. It stays
    * unmapped until there is device evidence for it, and unmapped means refuse.
    */
@@ -550,6 +557,49 @@ class NetworkConnectionTrailblazeToolTest {
     )
   }
 
+  /**
+   * The deprecated `networkConnection` name still replays, and means exactly what
+   * `mobile_networkConnection` means. Recorded trails across several repos still use the old name
+   * while they migrate, so a step under either name must decode and reach the device identically.
+   */
+  @Test
+  fun `a step recorded under the deprecated name decodes and runs as mobile_networkConnection`() {
+    val trailblazeYaml = createTrailblazeYaml(
+      setOf(NetworkConnectionTrailblazeTool::class, DeprecatedNetworkConnectionTrailblazeTool::class),
+    )
+    val tools = trailblazeYaml.decodeTrail(
+      """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      ios:
+        - networkConnection:
+            airplaneMode: true
+        - mobile_networkConnection:
+            airplaneMode: true
+      """.trimIndent(),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios")),
+    ).filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.trailblazeTool }
+
+    assertEquals(DeprecatedNetworkConnectionTrailblazeTool(airplaneMode = true), tools[0])
+    assertEquals(NetworkConnectionTrailblazeTool(airplaneMode = true), tools[1])
+    assertEquals(
+      maestroCommandsFrom(tools[1] as ExecutableTrailblazeTool),
+      maestroCommandsFrom(tools[0] as ExecutableTrailblazeTool),
+    )
+  }
+
+  /** The old name is kept for replay only, so the LLM is never offered it and never records it. */
+  @Test
+  fun `the deprecated name is hidden from the LLM`() {
+    val annotation = DeprecatedNetworkConnectionTrailblazeTool::class
+      .findAnnotation<TrailblazeToolClass>()!!
+    assertEquals("networkConnection", annotation.name)
+    assertFalse(annotation.surfaceToLlm)
+  }
+
   private fun errorFrom(
     tool: NetworkConnectionTrailblazeTool,
     platform: TrailblazeDevicePlatform,
@@ -559,7 +609,7 @@ class NetworkConnectionTrailblazeToolTest {
     return result.errorMessage
   }
 
-  private fun maestroCommandsFrom(tool: NetworkConnectionTrailblazeTool): List<Command> {
+  private fun maestroCommandsFrom(tool: ExecutableTrailblazeTool): List<Command> {
     val agent = RecordingAgent()
     val result = runBlocking { tool.execute(context(TrailblazeDevicePlatform.IOS, agent)) }
     assertTrue(result is TrailblazeToolResult.Success, "expected a success, got: $result")

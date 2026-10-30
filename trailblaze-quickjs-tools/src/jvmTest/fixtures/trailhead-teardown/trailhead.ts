@@ -7,9 +7,9 @@ import { formatToolCalls, ToolError, trailblaze } from "@trailblaze/scripting";
 export const fixture_signIn = trailblaze.trailhead<{ persona: string }>(
   {
     async teardown(args, ctx, trailRun) {
-      const created = trailRun.notes.flatMap((n) => (n.created ? [n.created.id] : []));
+      const created = ctx.memory.get("fixture_lastItemId");
       if (trailRun.outcome !== "passed") return { reusable: false, reason: `trail ${trailRun.outcome}` };
-      return { reusable: true, reason: `signed in as ${args.persona}`, state: { leftItems: created } };
+      return { reusable: true, reason: `signed in as ${args.persona}`, state: { leftItems: created ? [created] : [] } };
     },
   },
   async (args, ctx) => {
@@ -33,9 +33,8 @@ export const fixture_signIn = trailblaze.trailhead<{ persona: string }>(
   },
 );
 
-/** A trail step that creates something and tells the trailhead's teardown about it. */
+/** A trail step that creates something and remembers it for the trailhead's teardown. */
 export const fixture_addItem = trailblaze.tool<{ id: string }>(async (args, ctx) => {
-  ctx.trailhead.note({ created: { kind: "item", id: args.id } });
   // Committed only if this call succeeds, so `ctx.history` shows it on a passing call alone.
   ctx.memory.set("fixture_lastItemId", args.id);
   if (ctx.memory.get("fixture_addItemThrowsCyclic") === "true") {
@@ -43,17 +42,6 @@ export const fixture_addItem = trailblaze.tool<{ id: string }>(async (args, ctx)
     const data: Record<string, unknown> = {};
     data.self = data;
     throw new ToolError(`could not finish adding ${args.id}`, { data });
-  }
-  // Results that can't be serialized: a plain value, and an envelope whose structured content is.
-  if (ctx.memory.get("fixture_addItemReturns") === "cyclic") {
-    const value: Record<string, unknown> = { id: args.id };
-    value.self = value;
-    return value as unknown as string;
-  }
-  if (ctx.memory.get("fixture_addItemReturns") === "cyclicEnvelope") {
-    const structured: Record<string, unknown> = { id: args.id };
-    structured.self = structured;
-    return { content: [{ type: "text", text: `added ${args.id}` }], structuredContent: structured } as unknown as string;
   }
   return `added ${args.id}`;
 });

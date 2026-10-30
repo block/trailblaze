@@ -1,4 +1,5 @@
-// The authoring surface: `survey(spec, handler)`, or `survey(spec)` with a declarative `finding`.
+// The authoring surface: `survey({ find, label })`. `find` is a function of one session or a
+// declarative finding; `survey(spec, handler)` and `survey({ finding })` are its older spellings.
 //
 // Mirrors `trailblaze.tool`: an author exports the return value of one call per check, the runner
 // discovers every such export in the files it is given, and the export name becomes the survey's
@@ -6,7 +7,7 @@
 
 import type { AnalyticsQuery, DeviceLogQuery, EventQuery, NetworkQuery, ObjectiveQuery, ScreenTextQuery, ToolQuery } from "./match.js";
 import type { SurveySession } from "./session.js";
-import type { FindingInput, SessionRecord, SurveySpec } from "./types.js";
+import type { Finding, SurveyFinding, Label, LabelInput, SessionRecord, SessionSummary, SurveySpec } from "./types.js";
 
 const BRAND: unique symbol = Symbol.for("trailblaze.survey");
 
@@ -24,32 +25,87 @@ export interface SurveyContext<D extends object = Record<string, unknown>> {
   error?(message: string): void;
 }
 
-export type SurveyResult<D extends object = Record<string, unknown>> = FindingInput<D> | ReadonlyArray<FindingInput<D>> | undefined | null | false | void;
+/** What a survey's `find` returns: one finding, several, or nothing. */
+export type FindResult<D extends object = Record<string, unknown>> = SurveyFinding<D> | ReadonlyArray<SurveyFinding<D>> | undefined | null | false | void;
 
-export type SurveyHandler<D extends object = Record<string, unknown>> = (session: SurveySession, ctx: SurveyContext<D>) => SurveyResult<D> | Promise<SurveyResult<D>>;
+/** @deprecated Use FindResult. */
+export type SurveyResult<D extends object = Record<string, unknown>> = FindResult<D>;
 
-/** What `survey()` returns. Export it; the runner does the rest. */
-export interface SurveyDefinition {
+export type SurveyHandler<D extends object = Record<string, unknown>> = (session: SurveySession, ctx: SurveyContext<D>) => FindResult<D> | Promise<FindResult<D>>;
+
+/**
+ * What `survey()` returns. Export it; the runner does the rest. `D` is the `data` its findings
+ * carry and `L` the labels its label phase returns, so another survey's label phase reads both typed.
+ */
+export interface SurveyDefinition<D extends object = any, L extends LabelInput<object> = any> {
   readonly [BRAND]: true;
-  readonly spec: SurveySpec;
+  readonly spec: SurveySpec<any, any, any>;
   readonly handler: SurveyHandler;
   /** Set by discovery from the export name. */
   readonly id?: string;
+  /** Set by discovery: a hash of the file that defines the survey and its local imports, so editing either re-surveys stored sessions. */
+  readonly version?: string;
+  /** Types only; never set. Carries `D` and `L` to the readers of this survey's findings and labels. */
+  readonly types?: { readonly data: D; readonly label: L };
 }
 
+/** The `data` a survey's findings carry. */
+export type DataOf<S> = S extends SurveyDefinition<infer D, any> ? D : never;
+
+/** The labels a survey's label phase returns. */
+export type LabelOf<S> = S extends SurveyDefinition<any, infer L> ? L : never;
+
+/**
+ * A finding as a label phase reads it. `data` is always there: `{}` when the find phase gave none,
+ * so reading a field needs no `!`.
+ */
+export type BatchFinding<D extends object = Record<string, unknown>> = Finding<D> & { readonly data: D };
+
+/** What a label phase reads of one survey it lists in `dependsOn`, typed as that survey declares it. */
+export interface Dependency<S extends SurveyDefinition = SurveyDefinition> {
+  /** The labels its label phase returned for this batch. */
+  readonly labels: ReadonlyArray<Label<LabelOf<S>>>;
+  /** Its findings across the batch. */
+  readonly findings: ReadonlyArray<BatchFinding<DataOf<S>>>;
+}
+
+/** What a label phase sees: the batch, and the surveys it depends on. */
+export interface LabelBatch<D extends object = Record<string, unknown>, U extends Record<string, SurveyDefinition> = {}> {
+  /** This survey's own findings, across every session of the batch. */
+  readonly findings: ReadonlyArray<BatchFinding<D>>;
+  /** The sessions of the batch: every one the find phase ran over that this survey applies to. */
+  readonly sessions: ReadonlyArray<SessionSummary>;
+  /** Each survey in `dependsOn`, under the name it is listed by there. */
+  readonly dependsOn: { readonly [K in keyof U]: Dependency<U[K]> };
+  /**
+   * This survey's findings grouped by `key`, in the order each key first appears: the usual first
+   * step of a label phase that emits one label per value.
+   */
+  groupBy<K extends string>(key: (finding: BatchFinding<D>) => K): Array<{ key: K; findings: BatchFinding<D>[] }>;
+  /** Diagnostic output; the runner forwards it to its own log, never into the report. */
+  log(message: string): void;
+}
+
+export type LabelResult<L extends LabelInput<object> = LabelInput> = L | ReadonlyArray<L> | undefined | null | false | void;
+
 /** How an error names a survey that has no id yet: its description, else nothing. */
-function named(spec: SurveySpec | undefined): string {
+function named(spec: SurveySpec<any, any, any> | undefined): string {
   return spec?.description ? ` (${spec.description})` : "";
 }
 
-function define(spec: SurveySpec, handler: SurveyHandler, id?: string): SurveyDefinition {
+/** Names a survey in an error: its id, else its description, else that it has neither. */
+export function nameOf(def: SurveyDefinition): string {
+  return def.id ?? (def.spec.description ? `(${def.spec.description})` : "(an unnamed survey)");
+}
+
+function define(spec: SurveySpec<any, any, any>, handler: SurveyHandler, id?: string, version?: string): SurveyDefinition {
   if (!spec || typeof spec !== "object") {
     throw new Error("survey(): the first argument must be a spec object");
   }
   if (typeof handler !== "function") {
     throw new Error(`survey(): second argument must be a handler function${named(spec)}`);
   }
-  return Object.freeze({ [BRAND]: true as const, spec, handler, id });
+  return Object.freeze({ [BRAND]: true as const, spec, handler, id, version });
 }
 
 /** True when `value` came out of `survey()`. */
@@ -57,9 +113,13 @@ export function isSurvey(value: unknown): value is SurveyDefinition {
   return typeof value === "object" && value !== null && (value as { [BRAND]?: unknown })[BRAND] === true;
 }
 
-/** Returns a copy of `def` carrying `id`. Discovery uses this to attach the export name. */
-export function withId(def: SurveyDefinition, id: string): SurveyDefinition {
-  return def.id === id ? def : define(def.spec, def.handler, id);
+/**
+ * Returns a copy of `def` carrying `id`, and `version` when given. Discovery uses this to attach the
+ * export name and the defining file's hash. The copy shares `def`'s spec and handler, which is how
+ * a survey listed in another's `dependsOn` is matched to its loaded copy.
+ */
+export function withId<S extends SurveyDefinition>(def: S, id: string, version: string | undefined = def.version): S {
+  return def.id === id && def.version === version ? def : (define(def.spec, def.handler, id, version) as S);
 }
 
 /**
@@ -68,11 +128,11 @@ export function withId(def: SurveyDefinition, id: string): SurveyDefinition {
  * match of each (or all matches with `evidence: "all"`). Use it when the check is "these things were
  * observed" and nothing needs computing; write a handler when something does.
  */
-export interface FindingSpec {
+export interface FindingSpec<D extends object = Record<string, unknown>> {
   /** One line for the finding. Defaults to the survey's description. */
   summary?: string;
   /** Carried into the finding's `data`. */
-  data?: Record<string, unknown>;
+  data?: D;
   /** Which matches to attach: the first per query (default) or every one. */
   evidence?: "first" | "all";
   network?: NetworkQuery | ReadonlyArray<NetworkQuery>;
@@ -91,20 +151,10 @@ export interface FindingSpec {
 
 export type FindingQueries = Pick<FindingSpec, "network" | "analytics" | "events" | "tools" | "objectives" | "screenText" | "deviceLog">;
 
-/** @deprecated Renamed to {@link FindingSpec}. */
-export type FootprintSpec = FindingSpec;
-/** @deprecated Renamed to {@link FindingQueries}. */
-export type FootprintQueries = FindingQueries;
-
-/**
- * [spec]'s declarative finding, under `finding` or its old name `footprint`. Throws when both are
- * set, since only one can be the survey's finding.
- */
-export function findingOf(spec: SurveySpec | undefined): FindingSpec | undefined {
-  if (spec?.finding !== undefined && spec.footprint !== undefined) {
-    throw new Error(`survey()${named(spec)}: sets both \`finding\` and \`footprint\`; \`footprint\` is the old name of \`finding\`, so keep one`);
-  }
-  return spec?.finding ?? spec?.footprint;
+/** [spec]'s declarative finding: `find` when it is one, else the older `finding`. */
+export function findingOf(spec: SurveySpec<any, any, any> | undefined): FindingSpec | undefined {
+  const find = spec?.find;
+  return find !== undefined && typeof find !== "function" ? find : spec?.finding;
 }
 
 const ACCESSORS = ["network", "analytics", "events", "tools", "objectives", "screenText", "deviceLog"] as const;
@@ -162,9 +212,6 @@ export function matchFinding(session: SurveySession, finding: FindingSpec): Sess
   return evidence;
 }
 
-/** @deprecated Renamed to {@link matchFinding}. */
-export const matchFootprint = matchFinding;
-
 /** Which of a finding's queries matched, as `accessor {query}` text, for a failure message. */
 export interface FindingExplanation {
   matched: string[];
@@ -172,9 +219,6 @@ export interface FindingExplanation {
   /** `absent` queries that did match, ruling the finding out. */
   vetoedBy: string[];
 }
-
-/** @deprecated Renamed to {@link FindingExplanation}. */
-export type FootprintExplanation = FindingExplanation;
 
 /** Says query by query why a finding did or did not match a session. */
 export function explainFinding(session: SurveySession, finding: FindingSpec): FindingExplanation {
@@ -191,9 +235,6 @@ export function explainFinding(session: SurveySession, finding: FindingSpec): Fi
   if (finding.absent) each(finding.absent, (label, hit) => hit && out.vetoedBy.push(label));
   return out;
 }
-
-/** @deprecated Renamed to {@link explainFinding}. */
-export const explainFootprint = explainFinding;
 
 /** Handlers `survey()` built from a finding, as opposed to ones an author wrote. */
 const DECLARATIVE = new WeakSet<SurveyHandler>();
@@ -227,7 +268,7 @@ function holdsFunction(value: unknown, seen = new Set<unknown>()): boolean {
   return Object.values(value).some((v) => holdsFunction(v, seen));
 }
 
-function findingHandler(spec: SurveySpec, finding: FindingSpec): SurveyHandler {
+function findingHandler(spec: SurveySpec<any, any, any>, finding: FindingSpec): SurveyHandler {
   if (!hasQueries(finding)) {
     throw new Error(`survey()${named(spec)}: the finding has no queries; at least one of ${ACCESSORS.join(", ")} is required`);
   }
@@ -249,16 +290,68 @@ function findingHandler(spec: SurveySpec, finding: FindingSpec): SurveyHandler {
 }
 
 /**
- * Defines a survey. With a handler, the handler inspects the session and returns zero or more
- * findings. Without one, `spec.finding` describes the check declaratively. `D` types the `data`
- * the handler's findings carry.
+ * Marks the handler `survey()` builds for a survey with only a label phase. A registered symbol,
+ * like the brand, because a workspace's surveys import the SDK copy extracted beside them while the
+ * runner may be another copy.
  */
-export function survey<D extends object = Record<string, unknown>>(spec: SurveySpec, handler?: SurveyHandler<D>): SurveyDefinition {
+const LABEL_ONLY: unique symbol = Symbol.for("trailblaze.survey.labelOnly");
+
+/** Whether [def] finds anything per session: false for a survey that has only a label phase. */
+export function hasFindPhase(def: SurveyDefinition): boolean {
+  return (def.handler as { [LABEL_ONLY]?: unknown })[LABEL_ONLY] !== true;
+}
+
+function checkLabelPhase(spec: SurveySpec<any, any, any>): void {
+  if (spec.label !== undefined && typeof spec.label !== "function") {
+    throw new Error(`survey()${named(spec)}: label must be a function`);
+  }
+  if (spec.dependsOn === undefined) return;
+  const deps = spec.dependsOn as unknown;
+  if (typeof deps !== "object" || deps === null || Array.isArray(deps) || Object.values(deps).some((s) => !isSurvey(s))) {
+    throw new Error(`survey()${named(spec)}: dependsOn must name surveys, each the value another survey() returned: dependsOn: { journeys }`);
+  }
+  if (spec.label === undefined) {
+    throw new Error(`survey()${named(spec)}: dependsOn is for label phases, and this survey has none; add a label phase or drop dependsOn`);
+  }
+}
+
+/** The surveys [def] lists in `dependsOn`, by the name it reads each under. */
+export function dependenciesOf(def: SurveyDefinition): Array<[name: string, survey: SurveyDefinition]> {
+  return Object.entries((def.spec.dependsOn ?? {}) as Record<string, SurveyDefinition>);
+}
+
+/**
+ * Defines a survey: `find` runs once per session and returns findings, `label` once per batch and
+ * turns them into labels. Either may stand alone. `D` types the `data` the findings carry, `L` the
+ * labels and `U` the surveys in `dependsOn`; let them be inferred. With `find` written before
+ * `label`, `label` reads the findings typed by what `find` returns.
+ *
+ * `survey(spec, handler)` and `survey({ finding })` are older spellings of `find`, and still work.
+ */
+export function survey<
+  D extends object = Record<string, unknown>,
+  L extends LabelInput<object> = LabelInput,
+  U extends Record<string, SurveyDefinition> = {},
+>(spec: SurveySpec<D, L, U>, handler?: SurveyHandler<D>): SurveyDefinition<D, L> {
+  if (!spec || typeof spec !== "object") throw new Error("survey(): the first argument must be a spec object");
+  const find = spec.find;
+  if (find !== undefined && (handler !== undefined || spec.finding !== undefined)) {
+    throw new Error(`survey()${named(spec)}: give the find phase once: as find, or as a handler or finding, not both`);
+  }
+  if (find !== undefined && (find === null || (typeof find !== "function" && typeof find !== "object"))) {
+    throw new Error(`survey()${named(spec)}: find must be a function of the session, or a declarative finding`);
+  }
   // Read first, so a spec setting both keys fails here even with a handler, not later mid-trail.
   const finding = findingOf(spec);
-  if (handler !== undefined) return define(spec, handler as unknown as SurveyHandler);
+  checkLabelPhase(spec);
+  const fn = handler ?? (typeof find === "function" ? find : undefined);
+  if (fn !== undefined) return define(spec, fn as unknown as SurveyHandler);
   if (finding) return declarative(define(spec, findingHandler(spec, finding)));
-  throw new Error(`survey()${named(spec)}: needs a handler or a finding`);
+  if (spec.label !== undefined) {
+    const none = Object.assign((() => undefined) as SurveyHandler, { [LABEL_ONLY]: true });
+    return define(spec, none);
+  }
+  throw new Error(`survey()${named(spec)}: needs a find phase, a label phase, or both`);
 }
 
 /**
@@ -266,7 +359,7 @@ export function survey<D extends object = Record<string, unknown>>(spec: SurveyS
  * Here rather than in the runner so a browser page, which cannot load the runner's disk reader,
  * holds its findings to the same rule.
  */
-export function validateFinding(f: FindingInput, survey: string): void {
+export function validateFinding(f: SurveyFinding, survey: string): void {
   if (typeof f.summary !== "string" || f.summary.trim() === "") {
     throw new Error(`survey ${survey} returned a finding without a summary`);
   }

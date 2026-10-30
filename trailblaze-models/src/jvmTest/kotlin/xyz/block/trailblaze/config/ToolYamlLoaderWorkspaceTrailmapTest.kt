@@ -62,11 +62,9 @@ class ToolYamlLoaderWorkspaceTrailmapTest {
     File(nestedTrailheadsDir, "open_dashboard.trailhead.yaml").writeText(
       """
       id: myapp_web_open_dashboard
-      description: Open the MyApp dashboard.
+      class: xyz.block.trailblaze.config.FakeToolYamlLoaderTool
       trailhead:
         to: myapp/web/dashboard
-      tools:
-        - tap: { selector: "dashboard_link" }
       """.trimIndent(),
     )
 
@@ -160,11 +158,9 @@ class ToolYamlLoaderWorkspaceTrailmapTest {
     File(trailheadsDir, "open_event.trailhead.yaml").writeText(
       """
       id: open_event_composite
-      description: Composite test trailhead.
+      class: xyz.block.trailblaze.config.FakeToolYamlLoaderTool
       trailhead:
         to: calendar/event-composer
-      tools:
-        - tap: { selector: "day_cell" }
       """.trimIndent(),
     )
 

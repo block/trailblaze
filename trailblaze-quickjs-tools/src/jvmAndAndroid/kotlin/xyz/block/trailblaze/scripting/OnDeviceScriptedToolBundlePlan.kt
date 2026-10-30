@@ -3,6 +3,7 @@ package xyz.block.trailblaze.scripting
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolAdvertisement
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -36,6 +37,18 @@ data class OnDeviceScriptedToolBundlePlan(
 ) {
 
   companion object {
+
+    /**
+     * The tools this launch registered ([registeredNow]) that [target]'s `excluded_tools:` names
+     * for [driverType]. The launcher hides them from the LLM while they stay dispatchable for
+     * replay, so the opt-out holds even when the session's repo was built without the target's
+     * exclusions (a custom tool-class surface or a repo override).
+     */
+    fun targetExclusionsToHide(
+      target: TrailblazeHostAppTarget?,
+      driverType: TrailblazeDriverType,
+      registeredNow: Set<ToolName>,
+    ): Set<ToolName> = target?.getExcludedScriptedToolNamesForDriver(driverType).orEmpty() intersect registeredNow
 
     /**
      * Resolves the two delivery routes an on-device session pulls scripted tools from:

@@ -13,7 +13,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { matchesPattern, type MatchDialect } from "../matcher/index.js";
 import type { SurveySession } from "./session.js";
-import type { FindingInput, LogRecord } from "./types.js";
+import type { SurveyFinding, LogRecord } from "./types.js";
 
 declare const Bun: { YAML?: { parse(text: string): unknown } } | undefined;
 
@@ -366,11 +366,11 @@ export function resolveSpec(wp: Waypoint, chain: ReadonlyArray<string>): { class
 }
 
 /** One finding per waypoint the session's screens matched, with every matching screen as proof. */
-export function waypointFindings(session: SurveySession, waypoints: ReadonlyArray<Waypoint>, options: ScreenOptions = {}): FindingInput[] {
+export function waypointFindings(session: SurveySession, waypoints: ReadonlyArray<Waypoint>, options: ScreenOptions = {}): SurveyFinding[] {
   const chain = sessionChain(session.summary);
   const screens = screensOf(session, options);
   if (screens.length === 0) return [];
-  const out: FindingInput[] = [];
+  const out: SurveyFinding[] = [];
   for (const wp of waypoints) {
     const resolved = resolveSpec(wp, chain);
     if (!resolved) continue;

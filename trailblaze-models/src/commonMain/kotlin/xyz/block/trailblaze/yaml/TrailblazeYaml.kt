@@ -45,6 +45,8 @@ class TrailblazeYaml internal constructor(
     selectedDeviceConfiguration: String? = null,
   ) = codec.decodeTrailOrToolEnvelope(yaml, deviceClassifiers, selectedDeviceConfiguration)
 
+  fun isBareToolEnvelope(yaml: String) = codec.isBareToolEnvelope(yaml)
+
   fun extractTrailConfig(yaml: String) = codec.extractTrailConfig(yaml)
 
   fun extractTrailConfig(

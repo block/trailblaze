@@ -99,7 +99,6 @@ class PlaywrightScriptedToolReplayDispatchTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "test",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
     toolSetCatalog = null,
   )

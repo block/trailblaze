@@ -1,19 +1,16 @@
 package xyz.block.trailblaze.tools
 
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
-import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.allToolNameStrings
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -36,55 +33,6 @@ import xyz.block.trailblaze.yaml.VerificationStep
 class DynamicToolSetTest {
 
   // -- withDynamicToolSets: everything the driver supports is advertised up front --
-
-  @Test
-  fun `getCurrentToolDescriptors surfaces YAML-defined tools alongside class-backed tools`() {
-    // Regression test for the empty-descriptors bug: before the fix, YAML-defined tools were
-    // silently dropped from `getCurrentToolDescriptors()` because it only
-    // iterated class-backed `KClass` entries. A target whose toolset ended up containing only
-    // YAML-defined tools would send zero descriptors to the LLM, which combined with
-    // `toolChoice=Required` produced an opaque OpenAI 400.
-    val names = YamlDefinedToolFixture.registered {
-      TrailblazeToolRepo(
-        trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-          name = "probe",
-          toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
-          yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
-        ),
-      ).getCurrentToolDescriptors().map { it.name }.toSet()
-    }
-    assertTrue(YamlDefinedToolFixture.NAME in names, "YAML-defined tool must surface in tool descriptors")
-    assertTrue("hideKeyboard" in names, "class-backed hideKeyboard must surface in tool descriptors")
-  }
-
-  @Test
-  fun `toolCallToTrailblazeTool can deserialize YAML-defined tool calls`() {
-    // Pair to the descriptor test above — keeps advertise/execute in sync. If
-    // getCurrentToolDescriptors() advertises a YAML-defined tool, the LLM can
-    // legally select it, and the executor path routes through toolCallToTrailblazeTool() to deserialize the tool call. That deserialization
-    // used to only resolve class-backed tools, so YAML picks would crash the executor with
-    // "Could not find Trailblaze tool class". Now YAML tool names resolve via the registered
-    // ToolYamlConfig + YamlDefinedToolSerializer.
-    val tool = YamlDefinedToolFixture.registered {
-      TrailblazeToolRepo(
-        trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-          name = "probe",
-          toolClasses = TrailblazeToolSet.DefaultLlmTrailblazeTools,
-          yamlToolNames = setOf(YamlDefinedToolFixture.toolName),
-        ),
-      ).toolCallToTrailblazeTool(
-        toolName = YamlDefinedToolFixture.NAME,
-        toolContent = """{"text":"hello"}""",
-      )
-    }
-    assertNotNull(tool, "Should deserialize YAML tool call without throwing")
-    assertTrue(
-      tool is YamlDefinedTrailblazeTool,
-      "Expected YamlDefinedTrailblazeTool, got ${tool::class.simpleName}",
-    )
-    assertEquals(YamlDefinedToolFixture.NAME, tool.config.id)
-    assertEquals(JsonPrimitive("hello"), tool.params["text"])
-  }
 
   @Test
   fun `getToolDescriptorsForStep scopes a VerificationStep to the verify surface`() {
@@ -206,11 +154,7 @@ class DynamicToolSetTest {
     // the LLM surface and offer tools that don't exist on those runtimes.
     val composeResolved =
       TrailblazeToolSetCatalog.resolveForDriver(TrailblazeDriverType.COMPOSE, requestedIds = emptyList())
-    val composeNames =
-      (
-        composeResolved.toolClasses.map { it.toolName().toolName } +
-          composeResolved.yamlToolNames.map { it.toolName }
-        ).toSet()
+    val composeNames = composeResolved.allToolNameStrings
     assertFalse("tap" in composeNames, "core_interaction 'tap' must not leak into COMPOSE resolution")
     assertFalse("inputText" in composeNames, "core_interaction 'inputText' must not leak into COMPOSE resolution")
     assertTrue("objectiveStatus" in composeNames, "meta 'objectiveStatus' is always enabled for every driver")
@@ -222,11 +166,7 @@ class DynamicToolSetTest {
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       requestedIds = emptyList(),
     )
-    val mobileNames =
-      (
-        mobileResolved.toolClasses.map { it.toolName().toolName } +
-          mobileResolved.yamlToolNames.map { it.toolName }
-        ).toSet()
+    val mobileNames = mobileResolved.allToolNameStrings
     assertTrue("tap" in mobileNames, "Mobile drivers should receive core_interaction 'tap'")
     assertTrue("inputText" in mobileNames, "Mobile drivers should receive core_interaction 'inputText'")
   }
@@ -614,37 +554,5 @@ class DynamicToolSetTest {
       .map { it.toolName().toolName }.toSet()
     assertTrue("tap" in androidNames, "Android is a compatible driver for core_interaction")
     assertTrue("hideKeyboard" in androidNames, "Android sees core_interaction tools")
-  }
-
-  // -- YAML tool name symmetry --
-
-  @Test
-  fun `defaultYamlToolNamesForDriver mirrors defaultToolClassesForDriver for YAML tools`() {
-    // Symmetric with defaultToolClassesForDriver. Android sees the YAML tools of an
-    // Android-compatible toolset; Playwright does not.
-    val (android, playwright) =
-      YamlDefinedToolFixture.inToolSet(setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)) {
-        TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) to
-          TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
-      }
-    assertTrue(YamlDefinedToolFixture.toolName in android, "A YAML-defined tool from an Android toolset should appear for Android")
-    assertFalse(YamlDefinedToolFixture.toolName in playwright, "A YAML-defined tool from a mobile-only toolset must not appear on Playwright")
-  }
-
-  @Test
-  fun `withDynamicToolSets forwards customYamlToolNames into the initial repo surface`() {
-    // Rule authors contributing a YAML-defined tool name should see it advertised to the LLM
-    // without needing a backing KClass — symmetric with customToolClasses for class-backed
-    // tools. If the repo drops customYamlToolNames from the forward, this test fails.
-    val descriptorNames = YamlDefinedToolFixture.registered {
-      TrailblazeToolRepo.withDynamicToolSets(
-        customYamlToolNames = setOf(YamlDefinedToolFixture.toolName),
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      ).getCurrentToolDescriptors().map { it.name }.toSet()
-    }
-    assertTrue(
-      YamlDefinedToolFixture.NAME in descriptorNames,
-      "customYamlToolNames must reach the tool descriptor registry",
-    )
   }
 }

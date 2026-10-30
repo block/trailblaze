@@ -152,7 +152,6 @@ class OnDeviceSleepBindingTest {
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "on-device-sleep-binding-test",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 

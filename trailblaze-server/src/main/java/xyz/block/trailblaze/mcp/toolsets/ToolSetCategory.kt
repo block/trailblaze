@@ -189,40 +189,12 @@ object ToolSetCategoryMapping {
   }
 
   /**
-   * Gets the YAML-defined tool names for a category. Parallel to [getToolClasses] for the
-   * `tools:` composition case — e.g. a toolset that lists a `tools:`-composed YAML tool (no Kotlin class).
-   *
-   * Routes through [TrailblazeToolSetCatalog.entryYamlToolNames] so MCP sees the same
-   * YAML-defined surface as other catalog consumers. [ToolSetCategory.ALL] returns every
-   * YAML-defined name from every catalog entry so the "give me everything" path doesn't
-   * silently drop YAML-only tools.
-   */
-  fun getYamlToolNames(category: ToolSetCategory): Set<ToolName> {
-    return when (category) {
-      ToolSetCategory.CORE_INTERACTION -> TrailblazeToolSetCatalog.entryYamlToolNames("core_interaction")
-      ToolSetCategory.NAVIGATION -> TrailblazeToolSetCatalog.entryYamlToolNames("navigation")
-      ToolSetCategory.OBSERVATION -> TrailblazeToolSetCatalog.entryYamlToolNames("observation")
-      ToolSetCategory.VERIFICATION -> TrailblazeToolSetCatalog.entryYamlToolNames("verification")
-      ToolSetCategory.MEMORY -> TrailblazeToolSetCatalog.entryYamlToolNames("memory")
-      ToolSetCategory.SESSION -> emptySet()
-      ToolSetCategory.ALL -> TrailblazeToolSetCatalog.defaultEntries().flatMap { it.yamlToolNames }.toSet()
-    }
-  }
-
-  /**
-   * Gets the combined YAML-defined tool names for multiple categories.
-   */
-  fun getYamlToolNames(categories: Set<ToolSetCategory>): Set<ToolName> {
-    return categories.flatMap { getYamlToolNames(it) }.toSet()
-  }
-
-  /**
    * Gets the scripted (`.ts`/`.js`) tool names for a category — tools authored in TypeScript and
-   * dispatched through the per-session scripted-tool runtime (no Kotlin class, no YAML body).
-   * Parallel to [getToolClasses] / [getYamlToolNames]; e.g. `navigation` includes `openUrl`.
+   * dispatched through the per-session scripted-tool runtime (no Kotlin class).
+   * Parallel to [getToolClasses]; e.g. `navigation` includes `openUrl`.
    * Routes through [TrailblazeToolSetCatalog.entryScriptedToolNames] so MCP sees the same scripted
    * surface every other catalog consumer does. Without this, converting a catalog tool from
-   * Kotlin/YAML to a scripted `.ts` silently drops it from the category-based MCP surface
+   * Kotlin to a scripted `.ts` silently drops it from the category-based MCP surface
    * (`DirectMcpToolExecutor`, `ToolDiscoveryToolSet`).
    */
   fun getScriptedToolNames(category: ToolSetCategory): Set<ToolName> {
@@ -245,13 +217,11 @@ object ToolSetCategoryMapping {
   }
 
   /**
-   * Class set + YAML-defined tool names for a single category, bundled so callers can't
+   * Class set + scripted tool names for a single category, bundled so callers can't
    * accidentally consume only half. Prefer this over the split [getToolClasses] /
-   * [getYamlToolNames] pair when you need a complete tool surface — every live MCP entrypoint
+   * [getScriptedToolNames] pair when you need a complete tool surface — every live MCP entrypoint
    * (DirectMcpToolExecutor, SubagentOrchestrator, the inner-agent fallback in
-   * TrailblazeMcpServer) must advertise both, and the regression this
-   * API guards against is exactly the "class-only lookup silently drops YAML-defined tools"
-   * bug that shipped with the pressBack migration.
+   * TrailblazeMcpServer) must advertise both.
    *
    * Returns [ResolvedToolSet] — the same type the catalog-level
    * [TrailblazeToolSetCatalog.resolve] returns, so callers can use one API regardless of
@@ -259,17 +229,15 @@ object ToolSetCategoryMapping {
    */
   fun resolve(category: ToolSetCategory): ResolvedToolSet = ResolvedToolSet(
     toolClasses = getToolClasses(category),
-    yamlToolNames = getYamlToolNames(category),
     scriptedToolNames = getScriptedToolNames(category),
   )
 
   /**
-   * Class set + YAML-defined tool names for a set of categories, bundled. Same rationale as
-   * [resolve] — the combined entry point so callers can't miss the YAML half.
+   * Class set + scripted tool names for a set of categories, bundled. Same rationale as
+   * [resolve] — the combined entry point so callers can't miss the scripted half.
    */
   fun resolve(categories: Set<ToolSetCategory>): ResolvedToolSet = ResolvedToolSet(
     toolClasses = getToolClasses(categories),
-    yamlToolNames = getYamlToolNames(categories),
     scriptedToolNames = getScriptedToolNames(categories),
   )
 }

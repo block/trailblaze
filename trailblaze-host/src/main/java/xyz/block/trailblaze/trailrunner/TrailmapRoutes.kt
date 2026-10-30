@@ -241,9 +241,9 @@ object TrailmapCatalogBuilder {
       return "${TrailblazeConfigPaths.CONFIG_DIR}/${normalized.substring(idx)}"
     }
 
-    // Operational YAML-composed tools — never scripted; those live on target.tools below.
-    // `Mode.METADATA` (trailhead-only YAMLs) is handled by branching on the field
-    // itself rather than a separate mode dispatch.
+    // Operational YAML tools: class-backed `*.tool.yaml` files and metadata-only
+    // `*.trailhead.yaml` files (`Mode.METADATA`, no `class:`) — never scripted; those live on
+    // target.tools below. Branches on the fields themselves rather than a separate mode dispatch.
     val yamlTools = tools.map { t ->
       val subdir = when {
         t.trailhead != null -> "trailheads"
@@ -253,7 +253,7 @@ object TrailmapCatalogBuilder {
       TrailmapComponent(
         name = t.id,
         relPath = yamlRelPath(t.id, subdir, suffix),
-        flavor = if (t.toolClass != null) ToolFlavor.KOTLIN else ToolFlavor.YAML,
+        flavor = if (t.toolClass != null) ToolFlavor.KOTLIN else null,
       )
     }
     // Scripted tools live only on target.tools (null for library trailmaps) — confirmed no real

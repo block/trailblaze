@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { SessionEvents } from "./session-events.js";
-import { createSessionSurveys, HOST_FUNCTION_SURVEYS_LOAD } from "./session-surveys.js";
+import { createSessionSurveys, HOST_FUNCTION_SURVEYS_LOAD, type SurveyRunOptions, type SurveyRunResult } from "./session-surveys.js";
 
 const SDK = resolve(import.meta.dir, "..");
 
@@ -19,6 +19,7 @@ function bundleSurvey(source: string): { source: string; file: string } {
   const entry = [
     `import * as surveys from ${JSON.stringify(file)};`,
     `import { runNamedLiveSurvey } from "@trailblaze/scripting/surveys";`,
+    `export { liveSurveyCapabilities as capabilities } from "@trailblaze/scripting/surveys";`,
     `export const runLive = (name, events, options) => runNamedLiveSurvey(surveys, name, events, options);`,
   ].join("\n");
   const out = spawnSync(
@@ -67,7 +68,48 @@ export const checkoutDone = trailblaze.survey({ description: "shop.checkout", fi
 export const afterRun = trailblaze.survey({ description: "shop.after", requiresFinishedSession: true, finding: { analytics: { name: "x" } } });
 `;
 
+// A packaged bundle from before since/expected: extra options are ignored.
+const LEGACY_BUNDLE = {
+  file: "trailmaps/shop/surveys/checkout.survey.ts",
+  source: `var __trailblazeSurveyBundle = {
+    runLive: async (name) => ({ survey: name, passed: true, message: "Found checkout", waitedMs: 0,
+      findings: [{ survey: name, summary: "shop.checkout", evidence: [] }] })
+  };`,
+};
+
 describe("ctx.surveys", () => {
+  test.each([
+    { since: "unknown-mark" },
+    { expected: { summary: "a different checkout" } },
+  ])("rejects unsupported constraints %j from an older survey bundle", async (options) => {
+    const host = { [HOST_FUNCTION_SURVEYS_LOAD]: async () => LEGACY_BUNDLE };
+    const surveys = createSessionSurveys(host, events({})) as Record<string, (o?: SurveyRunOptions) => Promise<SurveyRunResult>>;
+    await expect(surveys.checkoutDone!(options)).rejects.toThrow("Rebuild the test APK");
+  });
+
+  test("an older survey bundle still handles calls without since or expected", async () => {
+    const host = { [HOST_FUNCTION_SURVEYS_LOAD]: async () => LEGACY_BUNDLE };
+    const surveys = createSessionSurveys(host, events({})) as Record<string, (o?: SurveyRunOptions) => Promise<SurveyRunResult>>;
+    expect((await surveys.checkoutDone!({ waitMs: 100 })).passed).toBe(true);
+  });
+
+  test("passes structured expectations through the loaded bundle and returns finding data", async () => {
+    const source = `
+import { trailblaze } from "@trailblaze/scripting/surveys";
+export const operations = trailblaze.survey({ description: "shop.operations" }, (session) =>
+  session.analytics.filter({ name: "operation_done" }).map((event) => ({ summary: "Operation completed", evidence: [event], data: event.properties })));
+`;
+    const host = { [HOST_FUNCTION_SURVEYS_LOAD]: async () => bundleSurvey(source) };
+    const surveys = createSessionSurveys(host, events({ network: [], analytics: [
+      { name: "operation_done", properties: { count: "1" } },
+      { name: "operation_done", properties: { count: 1, extra: "allowed" } },
+    ] })) as Record<string, (options?: SurveyRunOptions) => Promise<SurveyRunResult>>;
+    const result = await surveys.operations!({ expected: { data: { count: 1 } } });
+    expect(result.passed).toBe(true);
+    expect(result.findings.map((f) => f.data)).toEqual([{ count: 1, extra: "allowed" }]);
+    expect((await surveys.operations!({ expected: { data: { count: 2 } } })).passed).toBe(false);
+  });
+
   test("loads the survey's bundle through the host and asserts it over the session's streams", async () => {
     const loads: unknown[] = [];
     const bundle = bundleSurvey(SURVEY);

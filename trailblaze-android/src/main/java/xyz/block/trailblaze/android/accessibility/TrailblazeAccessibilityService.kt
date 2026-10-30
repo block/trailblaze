@@ -1587,6 +1587,26 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Taps ([x], [y]) [count] times inside ONE gesture (2 = double-tap): each tap is its own
+     * stroke, [MULTI_TAP_GAP_MS] apart, so the sequence lands well inside the platform's
+     * double-tap timeout, which separate [tap] dispatches would not reliably do.
+     */
+    fun multiTap(x: Int, y: Int, count: Int): Boolean {
+      val builder = GestureDescription.Builder()
+      repeat(count) { i ->
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        builder.addStroke(
+          GestureDescription.StrokeDescription(
+            path,
+            i * (MULTI_TAP_STROKE_MS + MULTI_TAP_GAP_MS),
+            MULTI_TAP_STROKE_MS,
+          ),
+        )
+      }
+      return internalDispatchGesture(builder.build())
+    }
+
+    /**
      * Dispatches `ACTION_CLICK` on the live accessibility node whose screen bounds equal
      * [targetBounds], whose `className` matches [targetClassName] (when supplied), whose
      * `viewIdResourceName` matches [targetResourceId] (when supplied), and which advertises
@@ -2109,6 +2129,10 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * See: AccessibilityService.ACCESSIBILITY_TAKE_SCREENSHOT_REQUEST_INTERVAL_TIMES_MS
      */
     private const val NATIVE_SCREENSHOT_MIN_INTERVAL_MS = 333L
+
+    /** Per-tap press length and the pause between presses for [multiTap]. */
+    private const val MULTI_TAP_STROKE_MS = 50L
+    private const val MULTI_TAP_GAP_MS = 50L
 
     private val lastNativeScreenshotTimestampMs =
       AtomicLong(Clock.System.now().toEpochMilliseconds() - NATIVE_SCREENSHOT_MIN_INTERVAL_MS)

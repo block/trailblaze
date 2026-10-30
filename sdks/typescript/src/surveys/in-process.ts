@@ -3,8 +3,11 @@
 // reads files, so a survey that imports what is not here — `SurveySession.load`, the waypoint and
 // workspace readers, `node:*` — fails to bundle, which is the cue to set `requiresFinishedSession`.
 
-export { explainFinding, explainFootprint, isSurvey, matchFinding, matchFootprint, survey, withId } from "./survey.js";
-export type { FindingExplanation, FindingQueries, FindingSpec, FootprintExplanation, FootprintQueries, FootprintSpec, SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult } from "./survey.js";
+/** Survey bundles advertise the constraints their runtime honors to independently updated tools. */
+export const liveSurveyCapabilities = { since: true, expected: true };
+
+export { explainFinding, isSurvey, matchFinding, survey, withId } from "./survey.js";
+export type { DataOf, FindingExplanation, FindingQueries, FindingSpec, LabelBatch, LabelOf, LabelResult, SurveyContext, SurveyDefinition, SurveyHandler, FindResult, SurveyResult, BatchFinding, Dependency } from "./survey.js";
 export type { SurveySession } from "./session.js";
 export { Records } from "./match.js";
 export type {
@@ -29,6 +32,11 @@ export type {
   DeviceLogLine,
   Finding,
   FindingInput,
+  SurveyFinding,
+  FindingRef,
+  Label,
+  LabelInput,
+  LabelRecord,
   LogRecord,
   NetworkRequest,
   Objective,

@@ -22,38 +22,57 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 /**
  * Sets the device's radios and airplane-mode signal, each independently.
  *
- * There is no `connected: Boolean` shorthand on purpose. "Connected" would have to decide for the
- * trail which radios it meant, and adding a radio to that set later would silently change what
- * every already-recorded step meant. Naming the radios keeps a recorded trail readable and fixes
- * its meaning for good.
+ * ## Why the tool is shaped this way
  *
- * Airplane mode is deliberately NOT the same request as taking the radios down, because on Android
- * the two come apart in both directions.
+ * "Go offline" on Android is two different things an app can observe, and this tool exposes both
+ * rather than picking one. What each does, measured on an API 34 emulator by probing from the device
+ * a host HTTP server over `adb reverse` and over `10.0.2.2`, plus `ping 8.8.8.8` for the internet:
  *
- * Switching the radios off never sets the airplane-mode signal, so an app coding against that
- * signal sees nothing.
+ * | state                        | adb | `adb reverse` | `10.0.2.2` | internet | `airplane_mode_on` | `wifi_on` |
+ * |------------------------------|-----|---------------|------------|----------|--------------------|-----------|
+ * | online                       | up  | up            | up         | up       | 0                  | 1         |
+ * | `airplaneMode: true`         | up  | up            | DOWN       | DOWN     | 1                  | 3         |
+ * | wifi, cellular, bluetooth off| up  | up            | DOWN       | DOWN     | 0                  | 0         |
  *
- * And airplane mode is not a synonym for offline. Whether it takes down a radio on
+ * Every state returned to the online row when reversed. Each design decision follows from a row:
+ *
+ * **1. Airplane mode and the radios are separate fields, because they differ only in the signal.**
+ * Both rows cut the same connectivity, but only airplane mode sets `airplane_mode_on`. An app that
+ * checks that flag sees nothing when the radios go down, and an app that checks for a network sees
+ * the same outage either way. So the trail picks by what the app under test reads, and a trail that
+ * needs both asks for both. Neither is a "safer" way offline.
+ *
+ * **2. Airplane mode never implies the radios.** Whether it takes down a radio on
  * `airplane_mode_toggleable_radios` (default `bluetooth,wifi`) depends on a preference the platform
- * REMEMBERS, so the identical command gives opposite results on two devices that look the same.
- * Device-verified on API 36, both directions reproducible from a clean `airplane_mode_on=0`,
- * `wifi_on=1`:
+ * REMEMBERS, so the identical command gives opposite results on two devices that look the same. The
+ * table's 1 → 3 is one of those outcomes, not a rule. Device-verified on API 36, both directions
+ * reproducible from a clean `airplane_mode_on=0`, `wifi_on=1`:
  * - after wifi was last switched OFF during airplane mode, entering it moves `wifi_on` 1 → 3 and
  *   `cmd wifi status` reports "Wifi is disabled";
  * - after wifi was last switched ON during airplane mode, entering it moves `wifi_on` 1 → 2 and
  *   wifi stays enabled — and keeps doing so on every later entry, surviving airplane mode being
  *   turned off and on again.
+ * A trail can therefore never infer the radios from airplane mode, or the reverse.
  *
- * So a trail can never infer the radios from airplane mode, in either direction, which is the
- * whole reason these are separate fields rather than one "offline" flag. A trail that wants both
- * asks for both.
+ * **3. There is no `connected: Boolean` shorthand.** "Connected" would have to decide for the trail
+ * which radios it meant, and adding a radio to that set later would silently change what every
+ * already-recorded step meant. Naming the radios fixes a recorded step's meaning for good.
  *
- * On Android this executes directly against the device shell — no Maestro. On iOS it falls back to
- * Maestro's `SetAirplaneModeCommand`, the only part of this tool that platform can express. Web and
- * desktop have no network radios to set and refuse.
+ * **4. Nothing here keeps the run itself reachable — that is the transport's job.** Both offline
+ * rows also cut the run off from its own host: an on-device run whose logs or LLM calls travel over
+ * the device's network (`10.0.2.2`, the default without `trailblaze.reverseProxy`) loses them for
+ * the whole offline window. Only `adb reverse` survives, because it rides adb rather than the
+ * device's network, so a run that must keep talking while offline routes its traffic there
+ * (`trailblaze.reverseProxy`). A device reached over adb-over-wifi has no such route: taking wifi
+ * down drops adb too.
+ *
+ * **5. It is a mobile tool.** On Android it executes directly against the device shell — no
+ * Maestro. iOS has only the airplane-mode knob, through Maestro's `SetAirplaneModeCommand`, so a
+ * radio field is refused there by name rather than approximated. Web and desktop have neither and
+ * refuse, which is why the name carries the `mobile_` prefix.
  */
 @Serializable
-@TrailblazeToolClass("networkConnection")
+@TrailblazeToolClass("mobile_networkConnection")
 @LLMDescription(
   """
 Set the device's network radios and airplane mode; unset fields are left unchanged. To go offline,
@@ -80,7 +99,7 @@ data class NetworkConnectionTrailblazeTool(
   ): TrailblazeToolResult {
     if (requestedRadios().isEmpty() && airplaneMode == null) {
       return invalidRequest(
-        "networkConnection was asked to change nothing — set at least one of wifi, cellular, " +
+        "mobile_networkConnection was asked to change nothing — set at least one of wifi, cellular, " +
           "bluetooth or airplaneMode. A call with every field omitted is far more likely to be a " +
           "mistake than a deliberate no-op, so it is refused rather than silently passing. If " +
           "this step used to say `connected: true|false`, that field was removed: name the " +
@@ -92,7 +111,7 @@ data class NetworkConnectionTrailblazeTool(
       TrailblazeDevicePlatform.ANDROID -> {
         val executor = toolExecutionContext.androidDeviceCommandExecutor
           ?: return invalidRequest(
-            "networkConnection has no AndroidDeviceCommandExecutor, so it cannot reach the " +
+            "mobile_networkConnection has no AndroidDeviceCommandExecutor, so it cannot reach the " +
               "device shell",
           )
         executeOnAndroid(executor)
@@ -101,7 +120,7 @@ data class NetworkConnectionTrailblazeTool(
       TrailblazeDevicePlatform.IOS -> executeViaMaestro(toolExecutionContext)
 
       TrailblazeDevicePlatform.WEB, TrailblazeDevicePlatform.DESKTOP ->
-        invalidRequest("networkConnection is not supported on ${platform.displayName}.")
+        invalidRequest("mobile_networkConnection is not supported on ${platform.displayName}.")
     }
   }
 
@@ -149,7 +168,7 @@ data class NetworkConnectionTrailblazeTool(
       throw e
     } catch (e: Exception) {
       deviceFailure(
-        "networkConnection failed against the device shell: ${e.message ?: e::class.simpleName} " +
+        "mobile_networkConnection failed against the device shell: ${e.message ?: e::class.simpleName} " +
           "(${describeChanged(changed)})",
       )
     }
@@ -170,7 +189,7 @@ data class NetworkConnectionTrailblazeTool(
       )
       if (androidAirplaneModeSettingMeansOn(settled) != airplaneMode) {
         return deviceFailure(
-          "networkConnection could not turn airplane mode ${onOrOff(airplaneMode)} — " +
+          "mobile_networkConnection could not turn airplane mode ${onOrOff(airplaneMode)} — " +
             "`settings get global $ANDROID_AIRPLANE_MODE_SETTING` still reads '$settled' after " +
             "$SETTLE_MS ms (expected '${if (airplaneMode) "1" else "0"}'; ${describeChanged(changed)})",
         )
@@ -194,7 +213,7 @@ data class NetworkConnectionTrailblazeTool(
       )
       if (radio.settingMeansOn(settled) != wantOn) {
         return deviceFailure(
-          "networkConnection could not turn ${radio.fieldName} ${onOrOff(wantOn)} — " +
+          "mobile_networkConnection could not turn ${radio.fieldName} ${onOrOff(wantOn)} — " +
             "`settings get global ${radio.stateSetting}` still reads '$settled' after $SETTLE_MS " +
             "ms (expected any of " +
             radio.settingValuesMeaning(wantOn).joinToString(", ") { "'$it'" } +
@@ -236,7 +255,7 @@ data class NetworkConnectionTrailblazeTool(
     val reported = executor.executeShellCommand("getprop $ANDROID_SDK_INT_PROP").trim()
     if (androidSupportsRealAirplaneMode(reported) != false) return null
     return invalidRequest(
-      "networkConnection cannot set airplane mode on this device — `cmd connectivity " +
+      "mobile_networkConnection cannot set airplane mode on this device — `cmd connectivity " +
         "airplane-mode` needs API $ANDROID_MIN_SDK_FOR_AIRPLANE_MODE and `$ANDROID_SDK_INT_PROP` " +
         "reports '$reported'. Trailblaze implements no older path. If the trail only needs the " +
         "device offline, set wifi, cellular and bluetooth false instead — that is a different " +
@@ -278,7 +297,7 @@ data class NetworkConnectionTrailblazeTool(
     if (doomed.isEmpty()) return null
     val names = doomed.joinToString(", ") { (radio, _) -> radio.fieldName }
     return invalidRequest(
-      "networkConnection cannot hold $names on while airplane mode is on — this device's " +
+      "mobile_networkConnection cannot hold $names on while airplane mode is on — this device's " +
         "`$ANDROID_AIRPLANE_MODE_RADIOS` is '$affected' and its " +
         "`$ANDROID_AIRPLANE_MODE_TOGGLEABLE_RADIOS` is '$toggleable', so airplane mode switches " +
         "$names off and will not let $names back on, however they were set. Drop " +
@@ -311,13 +330,13 @@ data class NetworkConnectionTrailblazeTool(
       when (radio.settingMeansOn(raw)) {
         wantOn -> continue
         null -> return deviceFailure(
-          "networkConnection set ${radio.fieldName} ${onOrOff(wantOn)} and can no longer confirm " +
+          "mobile_networkConnection set ${radio.fieldName} ${onOrOff(wantOn)} and can no longer confirm " +
             "it — `settings get global ${radio.stateSetting}` now reads '$raw', which has no " +
             "verified meaning for this flag. ${AIRPLANE_MODE_RACE_HINT} (${describeChanged(changed)})",
         )
 
         else -> return deviceFailure(
-          "networkConnection set ${radio.fieldName} ${onOrOff(wantOn)} and the device moved it " +
+          "mobile_networkConnection set ${radio.fieldName} ${onOrOff(wantOn)} and the device moved it " +
             "back before the step finished — `settings get global ${radio.stateSetting}` now " +
             "reads '$raw'. ${AIRPLANE_MODE_RACE_HINT} (${describeChanged(changed)})",
         )
@@ -343,7 +362,7 @@ data class NetworkConnectionTrailblazeTool(
     val radios = requestedRadios().map { (radio, _) -> radio.fieldName }
     if (radios.isNotEmpty()) {
       return invalidRequest(
-        "networkConnection can only set airplaneMode on this device — " +
+        "mobile_networkConnection can only set airplaneMode on this device — " +
           "${radios.joinToString(", ")} ${if (radios.size == 1) "is" else "are"} Android-only, " +
           "because switching individual radios has no equivalent off Android. Ask for " +
           "airplaneMode instead, or run this step on an Android device.",
@@ -353,11 +372,11 @@ data class NetworkConnectionTrailblazeTool(
     // than a `!!` so a future caller reaching this directly gets an answer instead of a crash.
     val enabled = airplaneMode
       ?: return invalidRequest(
-        "networkConnection needs airplaneMode set to do anything on this device",
+        "mobile_networkConnection needs airplaneMode set to do anything on this device",
       )
     val agent = toolExecutionContext.maestroTrailblazeAgent
       ?: return invalidRequest(
-        "networkConnection has no device shell and no Maestro agent, so it cannot reach a device",
+        "mobile_networkConnection has no device shell and no Maestro agent, so it cannot reach a device",
       )
     return agent.runMaestroCommands(
       maestroCommands = listOf(
@@ -624,7 +643,7 @@ data class NetworkConnectionTrailblazeTool(
     /**
      * Every radio at once, as the radios-off stand-in for Maestro's `setAirplaneMode`.
      *
-     * This is NOT what this tool does. `networkConnection` sets the real airplane-mode flag with
+     * This is NOT what this tool does. `mobile_networkConnection` sets the real airplane-mode flag with
      * [androidAirplaneModeShellCommand] and each radio separately. This exists for the Maestro
      * `Driver.setAirplaneMode` override the Android drivers implement, which is reached only by a
      * raw `mobile_maestro: setAirplaneMode` command — a surface with one knob and no per-radio

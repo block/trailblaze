@@ -9,7 +9,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -28,6 +27,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.events.FileEventSink
+import xyz.block.trailblaze.events.SessionEventMarks
+import xyz.block.trailblaze.events.SessionEventsHostFunctions
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
@@ -49,6 +51,7 @@ class WorkspaceSurveyBundleSourceTest {
   @After
   fun restore() {
     sessions.forEach(SurveyBundles::unregister)
+    sessions.forEach(SessionEventMarks::clear)
   }
 
   private fun workspace(name: String = "config", survey: String = "checkoutDone"): File = tempFolder.newFolder(name).also { root ->
@@ -61,7 +64,7 @@ class WorkspaceSurveyBundleSourceTest {
     )
   }
 
-  private fun context(session: String): TrailblazeToolExecutionContext {
+  private fun context(session: String, dir: File? = null): TrailblazeToolExecutionContext {
     sessions += SessionId(session)
     return TrailblazeToolExecutionContext(
       screenState = null,
@@ -75,6 +78,7 @@ class WorkspaceSurveyBundleSourceTest {
       sessionProvider = { TrailblazeSession(sessionId = SessionId(session), startTime = Clock.System.now()) },
       trailblazeLogger = TrailblazeLogger.createNoOp(),
       memory = AgentMemory(),
+      sessionDirProvider = dir?.let { d -> { _: SessionId -> d } },
     )
   }
 
@@ -285,7 +289,6 @@ class WorkspaceSurveyBundleSourceTest {
     assumeTrue("needs esbuild and the TypeScript SDK source (bun install in sdks/typescript)", esbuild != null && sdkEntry != null)
     val root = workspace()
     val cache = tempFolder.newFolder("cache")
-    val toolContext = context("quickjs")
     SurveyBundles.register(
       SessionId("quickjs"),
       WorkspaceSurveyBundleSource(
@@ -298,8 +301,8 @@ class WorkspaceSurveyBundleSourceTest {
       writeText(
         """
         |import { trailblaze } from "@trailblaze/scripting";
-        |export const checkoutWasDone = trailblaze.tool(async (_input, ctx) => {
-        |  const result = await (ctx.surveys as any).checkoutDone();
+        |export const checkoutWasDone = trailblaze.tool(async (input: { since?: string }, ctx) => {
+        |  const result = await (ctx.surveys as any).checkoutDone({ since: input.since });
         |  return JSON.stringify({ passed: result.passed, data: result.findings.map((f: any) => f.data), message: result.message });
         |});
         """.trimMargin(),
@@ -312,24 +315,24 @@ class WorkspaceSurveyBundleSourceTest {
       cacheDir = cache,
     ).bundleOne(toolFile, toolName = "checkoutWasDone")
 
-    suspend fun run(analytics: List<String>): JsonObject {
+    suspend fun run(analytics: List<String>, markAfter: Int? = null): JsonObject {
+      val dir = tempFolder.newFolder()
+      val toolContext = context("quickjs", dir)
+      fun append(names: List<String>) = FileEventSink(dir).use { sink ->
+        names.forEach { name -> sink.append("analytics", System.currentTimeMillis(), buildJsonObject { put("name", name) }) }
+      }
+      append(analytics.take(markAfter ?: analytics.size))
+      if (markAfter != null) {
+        SessionEventsHostFunctions.call(SessionEventsHostFunctions.MARK, buildJsonObject { put("name", "retry") }, toolContext)
+        append(analytics.drop(markAfter))
+      }
       val binding = object : HostBinding {
         override suspend fun callFromBundle(name: String, argsJson: String): String = error("unused")
         override suspend fun callHostFunction(name: String, argsJson: String): String {
           val args = Json.parseToJsonElement(argsJson).jsonObject
           val value = when (name) {
             SurveyHostFunctions.LOAD -> SurveyHostFunctions.call(args, toolContext)
-            "trailblaze.sessionEvents.list" -> buildJsonArray { add(JsonPrimitive("analytics")) }
-            "trailblaze.sessionEvents.query" -> {
-              val after = args["after"]?.jsonPrimitive?.content?.toInt() ?: 0
-              val page = analytics.drop(after)
-              buildJsonObject {
-                put("captured", true)
-                put("complete", true)
-                put("cursor", after + page.size)
-                put("events", JsonArray(page.mapIndexed { i, n -> buildJsonObject { put("timeMs", i); put("data", buildJsonObject { put("name", n) }) } }))
-              }
-            }
+            SessionEventsHostFunctions.LIST, SessionEventsHostFunctions.QUERY -> SessionEventsHostFunctions.call(name, args, toolContext)
             else -> error("unexpected host function $name")
           }
           return buildJsonObject { put("ok", true); put("value", value) }.toString()
@@ -337,7 +340,8 @@ class WorkspaceSurveyBundleSourceTest {
       }
       val host = QuickJsToolHost.connect(toolBundle.readText(), hostBinding = binding)
       try {
-        val text = (host.callTool("checkoutWasDone", JsonObject(emptyMap()))["content"] as JsonArray).first().jsonObject["text"]!!.jsonPrimitive.content
+        val args = buildJsonObject { if (markAfter != null) put("since", "retry") }
+        val text = (host.callTool("checkoutWasDone", args)["content"] as JsonArray).first().jsonObject["text"]!!.jsonPrimitive.content
         return Json.parseToJsonElement(text).jsonObject
       } finally {
         host.shutdown()
@@ -350,5 +354,9 @@ class WorkspaceSurveyBundleSourceTest {
     val failed = run(listOf("checkout_started"))
     assertEquals(JsonPrimitive(false), failed["passed"], failed.toString())
     assertTrue(failed["message"]!!.jsonPrimitive.content.contains("found nothing"), failed.toString())
+    val oldResult = run(listOf("checkout_done"), markAfter = 1)
+    assertEquals(JsonPrimitive(false), oldResult["passed"], oldResult.toString())
+    val newResult = run(listOf("checkout_done", "checkout_done"), markAfter = 1)
+    assertEquals(JsonPrimitive(true), newResult["passed"], newResult.toString())
   }
 }

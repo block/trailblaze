@@ -9,18 +9,22 @@ import { survey, withId, type SurveyDefinition } from "./survey.js";
  * call and how many records crossed back, so a test can see what reached the survey. Without
  * `count` it is a host that can't filter, and every stream is read whole.
  */
-function hostEvents(initial: Record<string, unknown[]>, opts: { count?: boolean; incomplete?: Record<string, string> } = {}) {
+function hostEvents(initial: Record<string, unknown[]>, opts: { count?: boolean; incomplete?: Record<string, string>; timeFloorMs?: number } = {}) {
   const streams = new Map<string, Array<{ timeMs: number; data: unknown }>>();
+  const marks = new Map<string, Map<string, number>>();
   let clock = 1_000;
   for (const [stream, rows] of Object.entries(initial)) streams.set(stream, rows.map((data) => ({ timeMs: clock++, data })));
   const calls: Array<{ stream: string; count?: boolean; match?: Record<string, unknown>; after?: number; returned: number }> = [];
-  const scan = (stream: string, options: { match?: Record<string, unknown>; after?: number }) => {
+  const scan = (stream: string, options: { match?: Record<string, unknown>; since?: string; after?: number }) => {
     const rows = streams.get(stream);
     const reason = opts.incomplete?.[stream];
-    const health = { complete: reason === undefined, ...(reason ? { incompleteReason: reason } : {}) };
-    const from = options.after ?? 0;
+    const timeFloorMs = options.after === undefined && (options.since === "trail" || options.since === "trailhead") ? opts.timeFloorMs : undefined;
+    const boundary = options.since === undefined || options.since === "session" ? undefined : marks.get(options.since);
+    if (options.after === undefined && options.since !== undefined && options.since !== "session" && !boundary && timeFloorMs === undefined) throw new Error(`No mark named ${options.since}`);
+    const health = { complete: reason === undefined, ...(reason ? { incompleteReason: reason } : {}), ...(timeFloorMs !== undefined ? { timeFloorMs } : {}) };
+    const from = options.after ?? boundary?.get(stream) ?? 0;
     const range = (rows ?? []).slice(from);
-    return { rows, health, from, range, kept: range.filter((r) => options.match === undefined || matches(options.match, r.data)) };
+    return { rows, health, from, range, kept: range.filter((r) => (timeFloorMs === undefined || r.timeMs >= timeFloorMs) && (options.match === undefined || matches(options.match, r.data))) };
   };
   const source: LiveEventSource = {
     async list() {
@@ -46,7 +50,15 @@ function hostEvents(initial: Record<string, unknown[]>, opts: { count?: boolean;
   }
   /** Records that crossed into the survey: what every query returned. */
   const crossed = () => calls.reduce((n, c) => n + c.returned, 0);
-  return { source, calls, crossed, now: () => clock };
+  return {
+    source, calls, crossed, now: () => clock,
+    mark: (name: string) => marks.set(name, new Map([...streams].map(([stream, rows]) => [stream, rows.length]))),
+    add: (stream: string, data: unknown, timeMs?: number) => {
+      const rows = streams.get(stream) ?? [];
+      streams.set(stream, rows);
+      rows.push({ timeMs: timeMs ?? clock++, data });
+    },
+  };
 }
 
 function matches(match: Record<string, unknown>, value: unknown): boolean {
@@ -164,6 +176,51 @@ describe("a mid-trail finding reads only what it matches", () => {
       const { result } = await bothWays(def, rows);
       expect(result.passed).toBe(true);
     }
+  });
+});
+
+describe("filtered reads respect survey observation windows", () => {
+  const noDecline = withId(survey({
+    description: "payments.no-decline",
+    finding: { analytics: { name: "checkout_done" }, absent: { analytics: { name: "card_declined", stream: "payments-analytics" } } },
+  }), "probe");
+
+  test("a named mark scopes both matching reads and absence counts, including later arrivals", async () => {
+    const host = hostEvents({ analytics: [tableRow("checkout_done")], "payments-analytics": [tableRow("card_declined")] });
+    host.mark("retry");
+    const reader = new LiveSessionReader(host.source, { since: "retry" });
+    const check = () => runLiveSurvey(noDecline, reader, { now: host.now });
+    expect((await check()).passed).toBe(false);
+    host.add("analytics", tableRow("checkout_done"), 1);
+    expect((await check()).passed).toBe(true);
+    host.add("payments-analytics", tableRow("card_declined"), 1);
+    expect((await check()).passed).toBe(false);
+  });
+
+  test("falling back to a whole read still excludes records before the named mark", async () => {
+    const host = hostEvents({ analytics: [{ name: "checkout_done" }] });
+    host.mark("retry");
+    const done = withId(survey({ description: "checkout.done", finding: { analytics: { name: "checkout_done" } } }), "probe");
+    const reader = new LiveSessionReader(host.source, { since: "retry" });
+    expect((await runLiveSurvey(done, reader, { now: host.now })).passed).toBe(false);
+    host.add("analytics", { name: "checkout_done" });
+    const result = await runLiveSurvey(done, reader, { now: host.now });
+    expect(result.passed).toBe(true);
+    expect(result.findings[0]!.evidence).toHaveLength(1);
+  });
+
+  test.each(["trail", "trailhead"])("%s keeps excluding old timestamps after advancing the cursor on a count-capable host", async (since) => {
+    const host = hostEvents({ analytics: [], "payments-analytics": [] }, { timeFloorMs: 1_000 });
+    const reader = new LiveSessionReader(host.source, { since });
+    const check = () => runLiveSurvey(noDecline, reader, { now: host.now });
+    expect((await check()).passed).toBe(false);
+    host.add("analytics", tableRow("checkout_done"), 999);
+    expect((await check()).passed).toBe(false);
+    host.add("analytics", tableRow("checkout_done"));
+    host.add("payments-analytics", tableRow("card_declined"), 999);
+    expect((await check()).passed).toBe(true);
+    host.add("payments-analytics", tableRow("card_declined"));
+    expect((await check()).passed).toBe(false);
   });
 });
 

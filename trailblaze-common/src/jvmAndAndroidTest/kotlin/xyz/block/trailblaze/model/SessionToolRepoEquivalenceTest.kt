@@ -49,7 +49,6 @@ class SessionToolRepoEquivalenceTest {
       val advertised = target.getAgentToolboxForDriver(driver).allToolNames
       val repo = target.toSessionToolRepo(driver)
       val registered = repo.getRegisteredTrailblazeTools().map { it.toolName() }.toSet() +
-        repo.getRegisteredYamlToolNames() +
         repo.getRegisteredScriptedToolNames() +
         repo.allCatalogScriptedToolNames
 
@@ -133,9 +132,9 @@ class SessionToolRepoEquivalenceTest {
       "unconfigured target vs no target, class-backed",
     )
     assertEquals(
-      noTarget.getRegisteredYamlToolNames(),
-      unconfigured.getRegisteredYamlToolNames(),
-      "unconfigured target vs no target, YAML",
+      noTarget.getRegisteredScriptedToolNames(),
+      unconfigured.getRegisteredScriptedToolNames(),
+      "unconfigured target vs no target, scripted",
     )
   }
 
@@ -171,28 +170,23 @@ class SessionToolRepoEquivalenceTest {
   }
 
   @Test
-  fun `runtime-contributed tools reach the repo on all three backings`() {
+  fun `runtime-contributed tools reach the repo on both backings`() {
     // The `additional:` seam carries the daemon's OTHER bound targets and the host's driver-specific
     // web classes. Only its negative case (exclusion wins) was pinned, so the seam could have been
-    // dropped entirely and the suite would still pass. Dropping the YAML/scripted halves is exactly
+    // dropped entirely and the suite would still pass. Dropping the scripted half is exactly
     // what made sibling-target tools dispatch as "Unknown tool".
     val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val extraClass = xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool::class
-    val extraYaml = ToolName("someRuntimeContributedYamlTool")
     val extraScripted = ToolName("someRuntimeContributedScriptedTool")
 
     val repo = multiDriverTarget().toSessionToolRepo(
       driverType = driver,
-      additional = ResolvedAgentToolbox(setOf(extraClass), setOf(extraYaml), setOf(extraScripted)),
+      additional = ResolvedAgentToolbox(setOf(extraClass), setOf(extraScripted)),
     )
 
     assertTrue(
       extraClass in repo.getRegisteredTrailblazeTools(),
       "runtime-contributed class-backed tool must reach the repo",
-    )
-    assertTrue(
-      extraYaml in repo.getRegisteredYamlToolNames(),
-      "runtime-contributed YAML tool must reach the repo",
     )
     assertTrue(
       extraScripted in repo.getRegisteredScriptedToolNames(),
@@ -215,7 +209,7 @@ class SessionToolRepoEquivalenceTest {
     // registry is built from — otherwise this asserts nothing about the subtraction.
     val tools = target.toCustomTrailblazeToolsForDriver(
       driverType = driver,
-      additional = ResolvedAgentToolbox(excluded, emptySet(), emptySet()),
+      additional = ResolvedAgentToolbox(excluded, emptySet()),
     )
 
     assertEquals(
@@ -242,8 +236,8 @@ class SessionToolRepoEquivalenceTest {
 
     val tools = multiDriverTarget().toCustomTrailblazeToolsForDriver(
       driverType = driver,
-      additional = ResolvedAgentToolbox(setOf(siblingTool), emptySet(), emptySet()),
-      additionalExclusions = ResolvedToolExclusions(setOf(siblingTool), emptySet(), emptySet()),
+      additional = ResolvedAgentToolbox(setOf(siblingTool), emptySet()),
+      additionalExclusions = ResolvedToolExclusions(setOf(siblingTool), emptySet()),
     )
 
     assertFalse(
@@ -449,7 +443,7 @@ class SessionToolRepoEquivalenceTest {
     val repo = target.toSessionToolRepo(
       driverType = driver,
       additionalExclusions =
-        ResolvedToolExclusions(setOf(harnessExcluded), emptySet(), emptySet()),
+        ResolvedToolExclusions(setOf(harnessExcluded), emptySet()),
     )
     assertFalse(
       harnessExcluded in repo.getRegisteredTrailblazeTools(),
@@ -492,11 +486,6 @@ class SessionToolRepoEquivalenceTest {
       "no target must yield the whole driver-compatible catalog, class-backed",
     )
     assertEquals(
-      catalogRepo.getRegisteredYamlToolNames(),
-      repo.getRegisteredYamlToolNames(),
-      "no target must yield the whole driver-compatible catalog, YAML",
-    )
-    assertEquals(
       catalogRepo.allCatalogScriptedToolNames,
       repo.allCatalogScriptedToolNames,
       "no target must yield the whole driver-compatible catalog, scripted",
@@ -514,7 +503,7 @@ class SessionToolRepoEquivalenceTest {
 
     val repo = target.toSessionToolRepo(
       driverType = driver,
-      additional = ResolvedAgentToolbox(excluded, emptySet(), emptySet()),
+      additional = ResolvedAgentToolbox(excluded, emptySet()),
     )
     assertEquals(
       emptySet(),

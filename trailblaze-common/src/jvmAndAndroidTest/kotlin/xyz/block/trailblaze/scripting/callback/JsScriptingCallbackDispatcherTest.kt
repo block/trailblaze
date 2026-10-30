@@ -326,7 +326,6 @@ class CallbackDispatcherTest {
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       name = "empty-session-toolset",
       toolClasses = emptySet(),
-      yamlToolNames = emptySet(),
     ),
   )
 
@@ -365,6 +364,36 @@ class CallbackDispatcherTest {
     } finally {
       handle.close()
     }
+  }
+
+  @Test
+  fun `a call that fails to decode keeps its argument values out of the log and the error`() = runBlocking {
+    // Launch arguments carry credentials, and a call that fails to decode has no tool to mask
+    // them; the decoder's own message quotes the input.
+    val token = "fixture-session-token-7f3a"
+    val sessionId = SessionId("decode-failure-masking")
+    val handle = register(sessionId = sessionId, repo = emptySessionRepo())
+    val output = try {
+      captureConsoleLog {
+        val result = JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(
+            sessionId.value,
+            handle.invocationId,
+            "ios_openApp",
+            """{"appId":null,"arguments":{"SessionToken":"$token"}}""",
+          ),
+        )
+        val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+        assertThat(cap.success).isEqualTo(false)
+        val message = cap.errorMessage ?: error("Expected errorMessage on a decode failure")
+        assertThat(message).contains("Failed to deserialize tool call 'ios_openApp'")
+        assertThat(message).doesNotContain(token)
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("DESERIALIZE_FAILED tool 'ios_openApp'")
+    assertThat(output).doesNotContain(token)
   }
 
   @Test

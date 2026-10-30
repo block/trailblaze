@@ -5,7 +5,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.config.AppTargetYamlLoader
 import xyz.block.trailblaze.config.ToolNameResolver
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -80,21 +79,19 @@ class CustomTrailblazeToolsTest {
       id = "framework",
       description = "always-enabled framework surface",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("framework_yaml")),
+      scriptedToolNames = setOf(ToolName("framework_scripted")),
       alwaysEnabled = true,
     ),
     ToolSetCatalogEntry(
       id = "myapp",
       description = "the toolset this target declares",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("myapp_yaml")),
       scriptedToolNames = setOf(ToolName("myapp_scripted")),
     ),
     ToolSetCatalogEntry(
       id = "otherapp",
       description = "another app's toolset",
       toolClasses = emptySet(),
-      yamlToolNames = setOf(ToolName("otherapp_yaml")),
       scriptedToolNames = setOf(ToolName("otherapp_scripted")),
     ),
   )
@@ -122,11 +119,11 @@ class CustomTrailblazeToolsTest {
       )
       .toTrailblazeToolRepo()
 
-    val yamlNames = repo.getRegisteredYamlToolNames()
-    assertTrue(ToolName("myapp_yaml") in yamlNames, "the declared toolset's tools must be present")
-    assertTrue(ToolName("framework_yaml") in yamlNames, "always-enabled toolsets ride along undeclared")
+    val scriptedNames = repo.getRegisteredScriptedToolNames()
+    assertTrue(ToolName("myapp_scripted") in scriptedNames, "the declared toolset's tools must be present")
+    assertTrue(ToolName("framework_scripted") in scriptedNames, "always-enabled toolsets ride along undeclared")
     assertFalse(
-      ToolName("otherapp_yaml") in yamlNames,
+      ToolName("otherapp_scripted") in scriptedNames,
       "a toolset the trailmap never declared must not reach the session's LLM tool list",
     )
   }
@@ -134,7 +131,7 @@ class CustomTrailblazeToolsTest {
   @Test
   fun `on-device scripted bundling is scoped to the declared toolsets too`() {
     // `allCatalogScriptedToolNames` is what the on-device launcher loads bundles for and what
-    // gates their advertisement. Scoping only the class/YAML halves would leave every other app's
+    // gates their advertisement. Scoping only the class-backed half would leave every other app's
     // scripted tools bundled and advertised.
     val repo = onDeviceTarget()
       .toCustomTrailblazeToolsForDriver(
@@ -167,87 +164,11 @@ class CustomTrailblazeToolsTest {
     assertTrue("objectiveStatus" in names, "meta still present (driver-agnostic)")
   }
 
-  // -- YAML tool name symmetry (this PR's focus): first-class YAML-defined tools --
-  //
-  // `CustomTrailblazeTools` now carries YAML tool names alongside class-backed tools.
-  // Rule authors who reference YAML-defined tools (e.g. `compose_click`) can
-  // add them to the initial surface directly, without going through a full toolset-id
-  // indirection. These tests pin that the YAML fields flow through the same way class
-  // fields do.
-
-  @Test
-  fun `initialToolRepoYamlToolNames default includes driver-compatible YAML tools`() {
-    // Driver-compatible YAML tools flow from the full catalog scan, the same way class-backed
-    // tools do.
-    val androidYamlNames = YamlDefinedToolFixture.inToolSet(setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)) {
-      CustomTrailblazeTools(
-        registeredAppSpecificLlmTools = emptySet(),
-        config = TrailblazeConfig.DEFAULT,
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      ).initialToolRepoYamlToolNames
-    }
-    assertTrue(
-      YamlDefinedToolFixture.toolName in androidYamlNames,
-      "A YAML-defined tool from an Android-compatible toolset should appear for Android",
-    )
-  }
-
-  @Test
-  fun `initialToolRepoYamlToolNames default drops mobile-only YAML tools for Playwright`() {
-    val playwrightYamlNames = YamlDefinedToolFixture.inToolSet(setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)) {
-      CustomTrailblazeTools(
-        registeredAppSpecificLlmTools = emptySet(),
-        config = TrailblazeConfig.DEFAULT,
-        driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-      ).initialToolRepoYamlToolNames
-    }
-    assertFalse(
-      YamlDefinedToolFixture.toolName in playwrightYamlNames,
-      "A YAML-defined tool from a mobile-only toolset must not appear on Playwright",
-    )
-  }
-
-  @Test
-  fun `registeredAppSpecificYamlToolNames flows into initialToolRepoYamlToolNames default`() {
-    // Rule authors can add a YAML tool by name without needing a backing KClass.
-    val tools = CustomTrailblazeTools(
-      registeredAppSpecificLlmTools = emptySet(),
-      registeredAppSpecificYamlToolNames = setOf(ToolName("my_custom_yaml_tool")),
-      config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-    )
-    val names = tools.initialToolRepoYamlToolNames.map { it.toolName }.toSet()
-    assertTrue(
-      "my_custom_yaml_tool" in names,
-      "App-specific YAML tool name should flow into the default initial set",
-    )
-  }
-
-  @Test
-  fun `toTrailblazeToolRepo forwards YAML tool names so they surface in descriptors`() {
-    // This is the end-to-end test: a rule author adds a custom YAML tool name via
-    // CustomTrailblazeTools, and the resulting TrailblazeToolRepo advertises it as a
-    // descriptor. If the extension drops `customYamlToolNames` when forwarding to
-    // withDynamicToolSets, this test fails.
-    val descriptorNames = YamlDefinedToolFixture.registered {
-      CustomTrailblazeTools(
-        registeredAppSpecificLlmTools = emptySet(),
-        registeredAppSpecificYamlToolNames = setOf(YamlDefinedToolFixture.toolName),
-        config = TrailblazeConfig.DEFAULT,
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      ).toTrailblazeToolRepo().getCurrentToolDescriptors().map { it.name }.toSet()
-    }
-    assertTrue(
-      YamlDefinedToolFixture.NAME in descriptorNames,
-      "Custom YAML tool name must reach the tool descriptor registry",
-    )
-  }
-
   @Test
   fun `toTrailblazeToolRepo forwards scripted exclusions so an excluded scripted tool is not advertised`() {
     // The on-device gap this closes: openUrl is a scripted tool delivered by the always-enabled
     // core_interaction toolset, so withDynamicToolSets re-adds it from the catalog even when a
-    // caller pre-subtracts the class/YAML opt-outs. Only forwarding the SCRIPTED exclusion partition
+    // caller pre-subtracts the class-backed opt-outs. Only forwarding the SCRIPTED exclusion partition
     // through toTrailblazeToolRepo actually drops it on this path. The baseline (no exclusions) must
     // advertise openUrl, otherwise the exclusion assertion would be vacuous.
     val android = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
@@ -268,7 +189,6 @@ class CustomTrailblazeToolsTest {
       driverType = android,
       initialToolRepoExclusions = ResolvedToolExclusions(
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
         scriptedToolNames = setOf(ToolName("openUrl")),
       ),
     ).toTrailblazeToolRepo()

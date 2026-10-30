@@ -11,12 +11,13 @@
 #
 # Both iOS drivers run on the macOS host, which is where `xcrun simctl` runs. Simulators only.
 id: ios_primitives
-description: "iOS simulator framework-primitive tools (terminate, grant or revoke privacy services, answer the notifications alert, open a URL, reset the keychain) used by trailheads via `ctx.tools`. Not LLM-facing — registered so callback dispatch can resolve them by name."
+description: "iOS simulator framework-primitive tools (open with launch arguments, terminate, grant or revoke privacy services, answer the notifications alert, open a URL, reset the keychain) used by trailheads via `ctx.tools`. Not LLM-facing — registered so callback dispatch can resolve them by name."
 always_enabled: true
 drivers:
   - ios-host
   - ios-axe
 tools:
+  - ios_openApp
   - ios_openUrl
   - ios_resetKeychain
   - ios_setPermissions

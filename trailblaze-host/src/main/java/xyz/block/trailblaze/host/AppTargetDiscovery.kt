@@ -18,9 +18,7 @@ import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
 import xyz.block.trailblaze.config.project.workspaceRootFromConfigDir
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
-import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -72,7 +70,7 @@ object AppTargetDiscovery {
    * returns [defaultFallback] either way; only the error path differs.
    *
    * It also turns off the internal leniency that lets a pass continue past a malformed
-   * `trailblaze.yaml` or unreadable `*.tool.yaml`. Those produce a PARTIAL set rather than the
+   * `trailblaze.yaml`. That produces a PARTIAL set rather than the
    * fallback, which is the more dangerous shape for a replacing caller: it looks like a clean
    * discovery, so it installs silently and then matches itself on the follow-up drift check,
    * clearing the restart nudge that was the last warning the user would have gotten.
@@ -96,17 +94,6 @@ object AppTargetDiscovery {
         projectConfig = projectConfig,
         logPrefix = logPrefix,
       )
-      // Register workspace-discovered Mode.TOOLS YAML configs (pure-YAML composed tools)
-      // BEFORE building the resolver. The resolver snapshots
-      // `TrailblazeSerializationInitializer.buildYamlDefinedTools().keys` at construction,
-      // so a `<workspace>/trails/config/trailmaps/<id>/tools/foo.tool.yaml` that isn't
-      // registered by this point can't be referenced by name from a toolset
-      // (`Unknown tool name 'foo'` warning at toolset load). The discovered map is the
-      // union of classpath + workspace
-      // (the composite resource source layers them); the serialization initializer dedupes
-      // against its own classpath cache so re-registering the same classpath tools is a
-      // no-op. See `registerWorkspaceYamlTools` for the overlay semantics.
-      registerWorkspaceYamlTools(source, logPrefix, failFast)
       val resolver = ToolNameResolver.fromBuiltInAndCustomTools(customToolClasses)
 
       val discoveredToolSets = ToolSetYamlLoader.discoverAndLoadAll(
@@ -126,10 +113,8 @@ object AppTargetDiscovery {
       // ids. The catalog's `defaultEntries()` cache is classpath-only; without this overlay,
       // a target whose `platforms.<p>.tool_sets:` references a
       // `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml` would resolve to the
-      // alwaysEnabled classpath subset only, and workspace YAML tool names listed by that
-      // toolset would never reach the session repo's `registeredYamlToolNames` — surfacing
-      // as "Unknown tool" at dispatch. Same overlay shape as
-      // `TrailblazeSerializationInitializer.registerWorkspaceYamlTools` above.
+      // alwaysEnabled classpath subset only, and the tools that toolset lists would never reach
+      // the session repo — surfacing as "Unknown tool" at dispatch.
       registerWorkspaceToolSets(toolSets, logPrefix)
 
       val discoveredTargets = AppTargetYamlLoader.discoverAndLoadAll(
@@ -242,120 +227,9 @@ object AppTargetDiscovery {
   ): Map<ToolName, KClass<out TrailblazeTool>> {
     val discovered = ToolYamlLoader.discoverAndLoadAll(resourceSource = resourceSource)
     val projectTools = projectConfig?.let(::projectToolConfigs).orEmpty()
-    // Note: this returns only class-backed (`Mode.CLASS`) tools. TOOLS-mode entries that
-    // appear in `projectConfig.tools` (trailmap-resolved `*.tool.yaml` files flattened into the
-    // inline list by the project-config resolver) flow through `registerWorkspaceYamlTools`
-    // instead, which threads them into the YAML-defined tool overlay. No warning needed here:
-    // the workspace YAML-defined tool registration line covers the operational signal.
+    // Returns only class-backed (`Mode.CLASS`) tools. `loadFromConfigs` validates each inline
+    // entry and logs-and-skips one that fails, including a retired `tools:` body.
     return discovered + ToolYamlLoader.loadFromConfigs(projectTools)
-  }
-
-  /**
-   * Discovers workspace-side `Mode.TOOLS` YAML configs (pure-YAML composed tools — files
-   * under `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml`) and hands
-   * them to [TrailblazeSerializationInitializer.registerWorkspaceYamlTools] so they
-   * become resolvable by name from toolsets and reachable at runtime by the YAML-tool
-   * executor (`TrailblazeToolRepo.toolCallToTrailblazeTool`).
-   *
-   * **Classpath/workspace separation.** The composite resource source walks both layers,
-   * so `ToolYamlLoader.discoverYamlDefinedTools(source)` surfaces classpath-bundled YAML tools
-   * alongside workspace files. Pure classpath entries get
-   * filtered out via the `classpathConfigs[k] == v` equality check — they already live
-   * in the serialization initializer's classpath cache, and registering them as workspace
-   * overlay entries would force-flip their `requires_host` flag, silently changing their
-   * dispatch path through the host-expansion gate in
-   * `TrailblazeMcpBridgeImpl.executeTrailblazeTool`.
-   *
-   * **Override contract preserved.** A workspace `<id>.tool.yaml` that intentionally
-   * collides with a classpath-shipped id MUST reach the overlay so the union's
-   * last-write-wins semantics in `buildYamlDefinedTools()` can apply the override. The
-   * equality filter distinguishes "pure classpath" (configs match exactly, drop) from
-   * "workspace override of a classpath id" (configs differ, keep). Pinned by
-   * `workspace tool with classpath-colliding id overrides the bundled one`.
-   *
-   * **Class-backed ids are not overridable.** A name binds to one backing, so a workspace YAML
-   * tool named like a class-backed built-in (`eraseText`, `tapOnElementBySelector`) would make
-   * every [ToolNameResolver] built afterwards throw on the collision. It is skipped with an
-   * error instead (thrown when [failFast]), so the built-in stays and the catalog still builds.
-   *
-   * **Re-discovery soundness.** On a hypothetical second `discover()` call in the same
-   * JVM, the classpath snapshot is stable (`getClasspathYamlDefinedTools` reads the
-   * lazy-init classpath cache, not the overlay-merged view), so the equality check stays
-   * sound across passes. Pinned by `second discover pass preserves the previously-
-   * registered workspace overlay`.
-   */
-  private fun registerWorkspaceYamlTools(
-    resourceSource: ConfigResourceSource,
-    logPrefix: String,
-    failFast: Boolean = false,
-  ) {
-    val allDiscovered = try {
-      ToolYamlLoader.discoverYamlDefinedTools(resourceSource)
-    } catch (e: Exception) {
-      // Same reason as [loadResolvedWorkspaceConfig]: continuing here hands a [failFast] caller a
-      // target set whose workspace tools are silently absent, dressed up as a clean discovery.
-      if (failFast) throw e
-      Console.error(
-        "$logPrefix Workspace YAML-defined tool discovery failed: ${e.message}. " +
-          "Workspace `*.tool.yaml` files will not be registered.\n${e.stackTraceToString()}",
-      )
-      return
-    }
-    // Filter out configs that came from the classpath unchanged. `allDiscovered` was
-    // walked from a composite resource source (classpath + workspace filesystem), so
-    // classpath-bundled `*.tool.yaml` files show up
-    // alongside any workspace-authored ones. If we registered the full set, the
-    // `requires_host = null → true` mutation below would flip THEIR host-vs-device
-    // dispatch flag too — silently routing classpath tools through the host-expansion
-    // path in `TrailblazeMcpBridgeImpl.executeTrailblazeTool` with a synthesized empty
-    // `AgentMemory()` context instead of their normal on-device run with the live
-    // session. For trivial compositions the outcome is identical, but any classpath
-    // tool that uses `{{memory.X}}` token interpolation would substitute empty values.
-    //
-    // Equality check `classpathConfigs[k] == v` separates "pure classpath" from
-    // "workspace override of a classpath id" — if the workspace authored a real
-    // override (different content), the configs differ and the workspace version stays
-    // in the overlay. If the workspace doesn't touch a tool, the discovered config
-    // exactly matches the classpath one and gets filtered out. Preserves the override
-    // contract (pinned by `workspace tool with classpath-colliding id overrides the
-    // bundled one`) while leaving non-overridden classpath tools untouched.
-    val classpathConfigs = TrailblazeSerializationInitializer.getClasspathYamlDefinedTools()
-    val classBackedNames = ToolYamlLoader.discoverAndLoadAll(bundledConfigResourceSource()).keys
-    val shadowsClass = allDiscovered.keys.intersect(classBackedNames)
-    if (shadowsClass.isNotEmpty()) {
-      val message = "$logPrefix Workspace YAML tool(s) ${shadowsClass.map { it.toolName }.sorted()} " +
-        "reuse the name of a class-backed built-in tool and are not registered. Rename them."
-      if (failFast) error(message)
-      Console.error(message)
-    }
-    val workspaceOnly = allDiscovered
-      .filterKeys { it !in shadowsClass }
-      .filterNot { (k, v) -> classpathConfigs[k] == v }
-    // Force `requires_host = true` on workspace YAML configs whose author left it null.
-    // Workspace `*.tool.yaml` files live only on the host filesystem — the device's
-    // classpath doesn't have them, so RPC dispatch would fail with "Unknown tool 'X' is
-    // not registered". The new host-expansion gate in `TrailblazeMcpBridgeImpl
-    // .executeTrailblazeTool` honors this flag and expands the tool host-side, then
-    // dispatches each child primitive through per-child routing. Authors who explicitly
-    // set `requires_host: false` (because they're shipping the same config to the
-    // on-device runner out-of-band) keep their explicit value — the override only
-    // fires when the field is null.
-    val configsToRegister = workspaceOnly.mapValues { (_, config) ->
-      if (config.requiresHost == null) config.copy(requiresHost = true) else config
-    }
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(configsToRegister)
-    if (configsToRegister.isNotEmpty()) {
-      val overrides = configsToRegister.keys.intersect(classpathConfigs.keys)
-      val overrideSuffix = if (overrides.isNotEmpty()) {
-        " (overrides classpath: ${overrides.map { it.toolName }.sorted()})"
-      } else {
-        ""
-      }
-      Console.log(
-        "$logPrefix Registered ${configsToRegister.size} workspace YAML-defined tool(s): " +
-          "${configsToRegister.keys.map { it.toolName }.sorted()}$overrideSuffix",
-      )
-    }
   }
 
   /**
@@ -378,13 +252,6 @@ object AppTargetDiscovery {
    * not read on that path at all and an inline toolset fails reference validation before it
    * could reach the emitter.
    *
-   * Registers the workspace's YAML-defined tools first for the same reason [discover] does — the
-   * resolver snapshots the known YAML tool names at construction, so a workspace `.tool.yaml`
-   * that isn't registered by then can't be referenced by name from a workspace toolset. That
-   * registration IS a process-global mutation (the resolver reads the global registry, so there
-   * is no scoped alternative today); tests exercising more than one workspace per JVM should
-   * reset it with `TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())`.
-   *
    * Best-effort: a discovery failure logs and falls back to the classpath-only catalog rather
    * than taking the caller down, matching the log-and-continue posture of the rest of this
    * object.
@@ -393,7 +260,6 @@ object AppTargetDiscovery {
     resourceSource: ConfigResourceSource,
     logPrefix: String = "[AppTargetDiscovery]",
   ): List<ToolSetCatalogEntry> = try {
-    registerWorkspaceYamlTools(resourceSource, logPrefix)
     val resolver = ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = resourceSource)
     val toolSets = ToolSetYamlLoader.discoverAndLoadAll(
       toolNameResolver = resolver,
@@ -413,9 +279,9 @@ object AppTargetDiscovery {
   /**
    * Converts the already-resolved workspace-aware toolset map (classpath + filesystem,
    * computed at line ~102 of `discover()` with the composite resource source) into
-   * `TrailblazeToolSetCatalog` entries and registers them as the workspace overlay.
-   * Mirrors the shape of [registerWorkspaceYamlTools] above — full map registered, log
-   * line reports the workspace-only vs classpath-override breakdown using the catalog's
+   * `TrailblazeToolSetCatalog` entries and registers them as the workspace overlay. The full
+   * map is registered; the log line reports the workspace-only vs classpath-override breakdown
+   * using the catalog's
    * `getClasspathEntries()` accessor to avoid round-tripping the overlay through the
    * merged-view accessor.
    */

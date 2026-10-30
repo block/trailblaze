@@ -179,7 +179,7 @@ class SelectorDialectLintTest {
   }
 
   /**
-   * A wrapper tool's recording, in the verbatim shape `block_runIf` records: inner tool-calls live
+   * A wrapper tool's recording, in the verbatim shape `runIf` records: inner tool-calls live
    * inside the wrapper's own args as `{ <toolName>: <args> }`, under `condition.tool` and `then:`.
    */
   private fun runIfWrapper(
@@ -187,9 +187,9 @@ class SelectorDialectLintTest {
     conditionSelector: kotlinx.serialization.json.JsonObject? = null,
     then: List<TrailblazeToolYamlWrapper> = emptyList(),
   ): TrailblazeToolYamlWrapper = TrailblazeToolYamlWrapper(
-    name = "block_runIf",
+    name = "runIf",
     trailblazeTool = OtherTrailblazeTool(
-      toolName = "block_runIf",
+      toolName = "runIf",
       raw = buildJsonObject {
         putJsonObject("condition") {
           conditionSelector?.let { put("selector", it) }
@@ -207,7 +207,7 @@ class SelectorDialectLintTest {
 
   @Test
   fun `assertNotVisibleBySelector nested in a wrapper tool is not a finding`() {
-    // `block_runIf` records verbatim, so its inner calls sit in its own args. Nested dispatch
+    // `runIf` records verbatim, so its inner calls sit in its own args. Nested dispatch
     // reaches the same accessibility override as a top-level call and falls back the same way —
     // excluding only the TOP-LEVEL tool name would have made this a fatal finding on a step that
     // passes, which is the one failure class a fatal gate cannot have.
@@ -253,7 +253,7 @@ class SelectorDialectLintTest {
     )
     assertNotNull(result)
     assertEquals(2, result.selectorCount)
-    assertTrue(result.occurrences.all { it.toolName == "block_runIf" })
+    assertTrue(result.occurrences.all { it.toolName == "runIf" })
   }
 
   @Test
@@ -769,7 +769,7 @@ class SelectorDialectLintTest {
 
   @Test
   fun `a handover nested in a conditional branch is checked like a top-level one`() {
-    // `block_runIf` records verbatim, so the switch rides inside the wrapper's `then:` array. The
+    // `runIf` records verbatim, so the switch rides inside the wrapper's `then:` array. The
     // branch dispatches for real at replay, where an undeclared name fails the run — a gate that
     // read only the wrapper's own name would have passed this trail.
     val result = SelectorDialectLint.lint(
@@ -849,7 +849,7 @@ class SelectorDialectLintTest {
 
   @Test
   fun `a conditional's condition is judged before its nested handover ends the replay`() {
-    // `block_runIf` evaluates its predicate on the CURRENT device before either branch runs, so an
+    // `runIf` evaluates its predicate on the CURRENT device before either branch runs, so an
     // unreadable dialect there is decidable even though everything after the handover is not.
     // Stopping without judging it would silently drop a real finding.
     val result = SelectorDialectLint.lint(
@@ -889,7 +889,7 @@ class SelectorDialectLintTest {
         steps = listOf(
           step(
             "pos-pair" to listOf(
-              runIfWrapper(conditionTool = "block_runIf" to innerThatSwitchesAndSelects.toJsonArgs()),
+              runIfWrapper(conditionTool = "runIf" to innerThatSwitchesAndSelects.toJsonArgs()),
             ),
           ),
         ),
@@ -903,7 +903,7 @@ class SelectorDialectLintTest {
 
   @Test
   fun `a predicate switch that can only fail does not cost the rest of the leg its coverage`() {
-    // `kitchen` is declared nowhere, so this predicate can only throw — and `block_runIf` catches
+    // `kitchen` is declared nowhere, so this predicate can only throw — and `runIf` catches
     // that into a `false` verdict on the SAME device. The active member is provably still the
     // accessibility seller, so the tap below is decidable and is a real finding. Stopping the
     // replay here instead would let every selector after the conditional through a fatal gate.

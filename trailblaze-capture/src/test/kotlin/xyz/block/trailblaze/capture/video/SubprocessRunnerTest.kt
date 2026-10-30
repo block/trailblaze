@@ -37,6 +37,30 @@ class SubprocessRunnerTest {
   }
 
   @Test
+  fun `an interrupted wait kills the child and keeps the interrupt`() {
+    val pidFile = java.io.File.createTempFile("subprocess", ".pid").apply { deleteOnExit() }
+    var result: SubprocessResult? = SubprocessResult(0, "")
+    var stillInterrupted = false
+    val waiting = Thread {
+      result = runSubprocessWithTimeout(listOf("sh", "-c", "printf '%s' $$ > '${pidFile.path}'; exec sleep 30"), timeoutSeconds = 60)
+      stillInterrupted = Thread.currentThread().isInterrupted
+    }
+    waiting.start()
+    while (pidFile.readText().isBlank()) Thread.sleep(10)
+    val pid = pidFile.readText().trim().toLong()
+
+    waiting.interrupt()
+    waiting.join(10_000)
+
+    assertFalse(waiting.isAlive)
+    assertNull(result)
+    assertTrue(stillInterrupted)
+    val child = ProcessHandle.of(pid)
+    child.ifPresent { it.onExit().get(10, java.util.concurrent.TimeUnit.SECONDS) }
+    assertFalse(child.map { it.isAlive }.orElse(false), "the child outlived the wait")
+  }
+
+  @Test
   fun `missing binary returns null without throwing`() {
     val result =
       runSubprocessWithTimeout(

@@ -20,6 +20,12 @@ import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
+/**
+ * Launch tools whose logged arguments are masked by value: a recorded `<redacted>` would replay as a
+ * real launch argument, so a launch with literal arguments can't be recorded.
+ */
+private val LITERAL_LAUNCH_TOOL_NAMES = setOf("mobile_maestro", "ios_openApp")
+
 private fun JsonElement.hasRedactionMarker(): Boolean = when (this) {
   is JsonArray -> any { it.hasRedactionMarker() }
   is JsonObject -> values.any { it.hasRedactionMarker() }
@@ -145,10 +151,15 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   successfulObjectivesOnly: Boolean,
   narrate: (String) -> Unit,
 ): String {
+  // A caller with no config of its own (the Trail Runner's record, export and preview routes) gets
+  // the one the session logged at start, as the CLI save passes explicitly. Without it the merge
+  // rewrites this device's entry from a driver-only config and drops the `locale:` the run used, so
+  // a trail recorded in Spanish saves back as one that runs in the device's current language.
+  val recordingConfig = sessionTrailConfig ?: getSessionStartedInfo()?.toRecordingTrailConfig()
   val items = try {
     generateRecordedTrailItems(
       trailblazeYaml,
-      sessionTrailConfig,
+      recordingConfig,
       successfulObjectivesOnly = successfulObjectivesOnly,
     )
   } catch (e: Exception) {
@@ -171,6 +182,15 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     narrate(
       "Can't render this recording: a unified trail keys each device's tools under a classifier " +
         "slot and this session logged no device classifiers.",
+    )
+    return ""
+  }
+  // The session keeps its source trail with launch secrets masked, and the merge would save those
+  // masks as the other devices' real arguments.
+  if (getSessionStartedInfo()?.rawYaml?.contains(REDACTED_TOOL_ARG_PLACEHOLDER) == true) {
+    narrate(
+      "Can't render this recording: the trail it ran holds masked launch arguments, which would be " +
+        "saved as real values. Use memory references for them.",
     )
     return ""
   }
@@ -312,6 +332,10 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
     var currentLogIndex = 0
     var pendingFailedPrompt: PromptStep? = null
     var pendingSuccessfulTools = emptyList<TrailblazeToolYamlWrapper>()
+    var pendingRejected = false
+    // The step whose calls could not all be recorded. Orphaned tool logs must not give it a
+    // partial recording after the fact.
+    var rejectedStep: PromptStep? = null
     while (currentLogIndex < size) {
       when (val currentLog = logs[currentLogIndex]) {
         is TrailblazeLog.DelegatingTrailblazeToolLog -> {
@@ -359,26 +383,27 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
             .map { logs[it] as TrailblazeLog.TrailblazeToolLog }
           val toolLogsInWindow = assignedToolLogs
             .filter { it.isRecordable && it.successful }
-          val selectedToolLogs = (if (assignedToolLogs.any { it.isTopLevelToolCall }) {
+          val directSelection = if (assignedToolLogs.any { it.isTopLevelToolCall }) {
             selectDirectToolLogs(assignedToolLogs, deviceOffsets)
           } else {
             dropNestedToolCalls(toolLogsInWindow, deviceOffsets)
-          })
-            .let { dedupeLayerDuplicates(it) }
+          }
+          val windowRejected = directSelection == null
+          val selectedToolLogs = dedupeLayerDuplicates(directSelection.orEmpty())
           // A failed batch can already have launched the app before a later command failed.
           // Only a successful parent actually retained in the recording can cover that effect.
-          check(assignedToolLogs.none { failed ->
-            !failed.successful && failed.toolName == "mobile_maestro" &&
+          assignedToolLogs.firstOrNull { failed ->
+            !failed.successful && failed.toolName in LITERAL_LAUNCH_TOOL_NAMES &&
               failed.authoredTrailblazeTool.raw.hasRedactionMarker() &&
               !selectedToolLogs.coversFailedNestedLaunch(failed, assignedToolLogs, deviceOffsets)
-          }) {
-            "Cannot record a failed mobile_maestro launch with literal arguments; use memory references."
+          }?.let { failed ->
+            error("Cannot record a failed ${failed.toolName} launch with literal arguments; use memory references.")
           }
           // A masked literal launch cannot be replayed. Refuse the session recording rather
           // than silently saving only later taps, which would create a broken partial recording.
-          check(selectedToolLogs.none { it.toolName == "mobile_maestro" &&
-            it.authoredTrailblazeTool.raw.hasRedactionMarker() }) {
-            "Cannot record a mobile_maestro launch with literal arguments; use memory references."
+          selectedToolLogs.firstOrNull { it.toolName in LITERAL_LAUNCH_TOOL_NAMES &&
+            it.authoredTrailblazeTool.raw.hasRedactionMarker() }?.let { launch ->
+            error("Cannot record ${launch.toolName} with literal launch arguments; use memory references.")
           }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.authoredTrailblazeTool, log.toolName) }
@@ -388,19 +413,22 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
             successfulObjectivesOnly &&
               objectiveComplete.objectiveResult !is AgentTaskStatus.Success
           ) {
+            pendingRejected = windowRejected || continuesFailedPrompt && pendingRejected
             pendingSuccessfulTools =
               (if (continuesFailedPrompt) pendingSuccessfulTools else emptyList()) + windowTools
             pendingFailedPrompt = promptStep
             currentLogIndex = completeIndex
             continue
           }
-          val toolWrappers = if (successfulObjectivesOnly && continuesFailedPrompt) {
-            pendingSuccessfulTools + windowTools
-          } else {
-            windowTools
+          val stepRejected = windowRejected || successfulObjectivesOnly && continuesFailedPrompt && pendingRejected
+          val toolWrappers = when {
+            stepRejected -> emptyList()
+            successfulObjectivesOnly && continuesFailedPrompt -> pendingSuccessfulTools + windowTools
+            else -> windowTools
           }
           pendingFailedPrompt = null
           pendingSuccessfulTools = emptyList()
+          pendingRejected = false
 
           // Zero recordable tools in this objective window → emit no recording at all (null).
           // At replay time the step will fall through to AI. A live session capturing zero tools
@@ -440,6 +468,8 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
               )
             }
 
+            rejectedStep = newStep.takeIf { stepRejected }
+
             // Merge into existing PromptsTrailItem or create new one
             val lastItem = items.lastOrNull()
             if (lastItem is TrailYamlItem.PromptsTrailItem) {
@@ -461,19 +491,22 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           // asynchronously and land outside the objective window in the sorted log list. A tool
           // log that IS assigned to a window is consumed there and must not be re-emitted here.
           val consumedByWindow = currentLogIndex in toolWindowAssignment
-          check(consumedByWindow || currentLog.successful || currentLog.toolName != "mobile_maestro" ||
+          check(consumedByWindow || currentLog.successful || currentLog.toolName !in LITERAL_LAUNCH_TOOL_NAMES ||
             !currentLog.authoredTrailblazeTool.raw.hasRedactionMarker() ||
             logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
               .filter { it.isRecordable && it.successful }
               .coversFailedNestedLaunch(
                 currentLog, logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>(), deviceOffsets,
               )) {
-            "Cannot record a failed mobile_maestro launch with literal arguments; use memory references."
+            "Cannot record a failed ${currentLog.toolName} launch with literal arguments; use memory references."
           }
-          if (!consumedByWindow && currentLog.isRecordable && currentLog.successful) {
-            check(currentLog.toolName != "mobile_maestro" ||
+          // A step left unrecorded stays unrecorded: one late call would replay only part of it.
+          val joinsRejectedStep = rejectedStep != null &&
+            (items.lastOrNull() as? TrailYamlItem.PromptsTrailItem)?.promptSteps?.lastOrNull() === rejectedStep
+          if (!consumedByWindow && currentLog.isRecordable && currentLog.successful && !joinsRejectedStep) {
+            check(currentLog.toolName !in LITERAL_LAUNCH_TOOL_NAMES ||
               !currentLog.authoredTrailblazeTool.raw.hasRedactionMarker()) {
-              "Cannot record a mobile_maestro launch with literal arguments; use memory references."
+              "Cannot record ${currentLog.toolName} with literal launch arguments; use memory references."
             }
             val wrapper = wrapTrailblazeTool(currentLog.authoredTrailblazeTool, currentLog.toolName)
             val candidateFingerprint = if (currentLog.isVerification) {
@@ -638,6 +671,17 @@ private fun List<TrailblazeLog>.assignToolLogsToWindows(
     val window = bySpan ?: positional ?: return@forEachIndexed
     assignment[index] = window.startIndex
   }
+  // A call logged under a direct invocation's trace belongs to that invocation's window, wherever
+  // device-clock lag stamped it. Timing decides only when the trace's invocations span windows.
+  val windowByTrace = withIndex()
+    .filter { (_, log) -> log is TrailblazeLog.TrailblazeToolLog && log.isTopLevelToolCall && log.traceId != null }
+    .groupBy({ (_, log) -> (log as TrailblazeLog.TrailblazeToolLog).traceId }, { (index, _) -> assignment[index] })
+    .mapNotNull { (trace, invocationWindows) -> invocationWindows.distinct().singleOrNull()?.let { trace to it } }
+    .toMap()
+  forEachIndexed { index, log ->
+    if (log !is TrailblazeLog.TrailblazeToolLog || log.isTopLevelToolCall) return@forEachIndexed
+    windowByTrace[log.traceId]?.let { assignment[index] = it }
+  }
   return assignment
 }
 
@@ -744,17 +788,23 @@ private fun fingerprintForDedup(
  * A direct MCP step logs an outer top-level wrapper around each dispatch. Choose one replayable
  * representation per invocation by trace and execution span, independent of log order.
  * Native iOS Maestro has no inner log; host/Android can provide authored/resolved provenance.
+ * Returns null when the step can't be recorded in full, which must leave it unrecorded.
  */
 private fun selectDirectToolLogs(
   logs: List<TrailblazeLog.TrailblazeToolLog>,
   offsets: TrailblazeDeviceClockOffsets?,
-): List<TrailblazeLog.TrailblazeToolLog> {
+): List<TrailblazeLog.TrailblazeToolLog>? {
   val outers = logs.withIndex().filter { it.value.isTopLevelToolCall }
   val innerByOuter = mutableMapOf<Int, MutableList<TrailblazeLog.TrailblazeToolLog>>()
+  var foreignTraceChild = false
   for ((index, candidate) in logs.withIndex()) {
     if (candidate.isTopLevelToolCall || !candidate.isRecordable || !candidate.successful) continue
     val sameTrace = outers.filter { it.value.traceId == candidate.traceId }
     val candidateTime = candidate.normalizedMs(offsets)
+    if (sameTrace.isEmpty()) {
+      foreignTraceChild = true
+      continue
+    }
     // New direct dispatches have one trace per invocation. Older saved batches reused one
     // trace, so prefer the invocation whose execution span contains the child; a child whose
     // device clock is slightly behind can still use the closest start as a fallback.
@@ -806,6 +856,15 @@ private fun selectDirectToolLogs(
       { kotlin.math.abs(it.index - index) },
     )) ?: continue
     innerByOuter.getOrPut(outer.index) { mutableListOf() } += candidate
+  }
+  // On-device runners that ignored the host's trace logged each resolved call under a trace of its
+  // own. Timing can't tie such a call to its invocation under clock skew, so it is never recorded.
+  // If an invocation that replays only through a resolved call has none by trace, a recording would
+  // replay part of the step and still pass it: return null so the step is left unrecorded.
+  if (foreignTraceChild && outers.any { (index, outer) ->
+      outer.successful && !outer.isRecordable && innerByOuter[index].isNullOrEmpty()
+    }) {
+    return null
   }
   val selected = mutableListOf<TrailblazeLog.TrailblazeToolLog>()
   for ((index, outer) in outers) {

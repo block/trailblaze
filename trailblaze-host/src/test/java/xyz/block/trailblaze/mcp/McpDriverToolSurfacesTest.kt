@@ -69,8 +69,8 @@ class McpDriverToolSurfacesTest {
   /**
    * The other policy, and the reason it cannot simply be "every driver that contributes tools":
    * `StepToolSet.selectInnerAgentTools` treats a non-null answer as the *whole* list, discarding
-   * the target's customs and the YAML-defined tools. Only Compose can afford that, because its RPC
-   * server cannot execute anything else.
+   * the target's customs. Only Compose can afford that, because its RPC server cannot execute
+   * anything else.
    */
   @Test
   fun `only Compose replaces the inner agent's tool list outright`() {

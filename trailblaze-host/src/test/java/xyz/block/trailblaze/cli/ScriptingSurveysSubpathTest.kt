@@ -7,7 +7,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * End-to-end guard for the `@trailblaze/scripting/surveys` specifier from a **consumer repo
@@ -29,7 +28,6 @@ class ScriptingSurveysSubpathTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
-    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
   }
 
   @Test
@@ -55,7 +53,10 @@ class ScriptingSurveysSubpathTest {
     File(toolsDir, "demo_surveyOutcome.ts").writeText(
       """
       import { trailblaze } from "@trailblaze/scripting";
-      import type { FindingInput, SurveySession } from "@trailblaze/scripting/surveys";
+      import type { FindingInput, SurveyFinding, SurveySession } from "@trailblaze/scripting/surveys";
+
+      // SurveyFinding's deprecated name, which surveys written before the rename still import.
+      export type LegacyFinding = FindingInput;
 
       export interface DemoSurveyOutcomeArgs {
         /** Outcome to describe. */
@@ -69,7 +70,7 @@ class ScriptingSurveysSubpathTest {
       export const demo_surveyOutcome = trailblaze.tool<DemoSurveyOutcomeArgs>(
         { supportedPlatforms: ["android"] },
         async (args) => {
-          const describe = (summary: Pick<SurveySession["summary"], "outcome">): Pick<FindingInput, "summary"> => ({
+          const describe = (summary: Pick<SurveySession["summary"], "outcome">): Pick<SurveyFinding, "summary"> => ({
             summary: `Ended ${'$'}{summary.outcome}`,
           });
           return describe({ outcome: String(args.outcome) }).summary;

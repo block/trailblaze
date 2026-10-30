@@ -167,6 +167,15 @@ data class CliRunRequest(
   val snapshotBaselineThresholdPercent: Double? = null,
   /** Immutable GitHub permalink for the source trail YAML, when the caller has one. */
   val trailSourceUrl: String? = null,
+  /**
+   * True lets this run's trailhead take the setup the last run of the same trailhead on this device
+   * handed on (`trailblaze loop --reuse-trailhead`); false refuses it, even with the daemon's
+   * `TRAILBLAZE_TRAILHEAD_REUSE` on. Null leaves it to that env var, which an older daemon reads
+   * regardless.
+   */
+  val trailheadReuse: Boolean? = null,
+  /** The session id to run under, so the caller can watch its logs as it runs; null lets the daemon pin one. */
+  val sessionId: String? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:

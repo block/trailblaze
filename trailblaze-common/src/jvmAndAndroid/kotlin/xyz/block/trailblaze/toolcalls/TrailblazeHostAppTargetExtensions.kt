@@ -2,9 +2,7 @@ package xyz.block.trailblaze.toolcalls
 
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
-import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 
@@ -22,9 +20,8 @@ import xyz.block.trailblaze.util.Console
  * start. Diverging here is the source of bug
  * `2026-05-22-agent-toolbox-report-driver-leak.md`.
  *
- * The LLM-visible surface has three kinds: class-backed ([toolClasses]), YAML-defined
- * ([yamlToolNames]), and scripted (`.ts` / `.js`) tools delivered by a toolset's `tools:`
- * ([scriptedToolNames]). Scripted tools are bundled + registered through a separate per-session
+ * The LLM-visible surface has two kinds: class-backed ([toolClasses]) and scripted (`.ts` /
+ * `.js`) tools delivered by a toolset's `tools:` ([scriptedToolNames]). Scripted tools are bundled + registered through a separate per-session
  * runtime, but they're still advertised to the LLM, so a resolver that claims to answer "what
  * does the LLM see?" must include them. Omitting them is what let `openUrl` — converted from a
  * class-backed tool to a scripted one in PR #3803 — silently disappear from this resolver while
@@ -32,7 +29,6 @@ import xyz.block.trailblaze.util.Console
  */
 data class ResolvedAgentToolbox(
   override val toolClasses: Set<KClass<out TrailblazeTool>>,
-  override val yamlToolNames: Set<ToolName>,
   override val scriptedToolNames: Set<ToolName> = emptySet(),
 ) : TrailblazeToolSurface
 
@@ -42,7 +38,7 @@ data class ResolvedAgentToolbox(
  *
  * Two views derive from it and nothing else re-derives the scope:
  * - [getAgentToolboxForDriver] narrows it to the **advertised** view (applies the `surfaceToLlm`
- *   and YAML-config-presence filters) — what the LLM is offered.
+ *   filter) — what the LLM is offered.
  * - [xyz.block.trailblaze.model.toCustomTrailblazeToolsForDriver] turns it into a session tool
  *   repo — the **dispatchable** superset, which is deliberately wider so a recorded step can call
  *   a tool the LLM was never shown.
@@ -65,7 +61,6 @@ data class ResolvedTargetToolScope(
   /** What [declaredToolSetIds] (plus `always_enabled`) delivered, before customs and exclusions. */
   val fromTrailmap: ResolvedAgentToolbox,
   val customToolClasses: Set<KClass<out TrailblazeTool>>,
-  val customYamlToolNames: Set<ToolName>,
   /** `platforms.<p>.tools:` scripted names, plus the target's root `tools:` inline scripts. */
   val customScriptedToolNames: Set<ToolName>,
   val excluded: ResolvedToolExclusions,
@@ -93,8 +88,6 @@ data class ResolvedTargetToolScope(
 ) : TrailblazeToolSurface {
   override val toolClasses: Set<KClass<out TrailblazeTool>> =
     fromTrailmap.toolClasses + customToolClasses - excluded.toolClasses
-  override val yamlToolNames: Set<ToolName> =
-    fromTrailmap.yamlToolNames + customYamlToolNames - excluded.yamlToolNames
   override val scriptedToolNames: Set<ToolName> =
     fromTrailmap.scriptedToolNames + customScriptedToolNames - excluded.scriptedToolNames
 
@@ -137,7 +130,6 @@ fun TrailblazeHostAppTarget.resolveToolScopeForDriver(
     fromTrailmap = if (declaredToolSetIds.isEmpty()) {
       ResolvedAgentToolbox(
         toolClasses = TrailblazeToolSetCatalog.defaultToolClassesForDriver(driverType, catalog),
-        yamlToolNames = TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(driverType, catalog),
         scriptedToolNames =
           TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(driverType, catalog),
       )
@@ -146,18 +138,17 @@ fun TrailblazeHostAppTarget.resolveToolScopeForDriver(
         driverType = driverType,
         requestedIds = declaredToolSetIds,
         catalog = catalog,
-      ).let { ResolvedAgentToolbox(it.toolClasses, it.yamlToolNames, it.scriptedToolNames) }
+      ).let { ResolvedAgentToolbox(it.toolClasses, it.scriptedToolNames) }
     },
     customToolClasses = getCustomToolsForDriver(driverType),
-    customYamlToolNames = getCustomYamlToolNamesForDriver(driverType),
     // Both scripted inclusion buckets a target can author: a bare name in `platforms.<p>.tools:`,
     // and a root `tools:` inline script. Unioned here so no consumer has to remember both exist —
     // forgetting the second is what under-reported the surface for self-authoring targets.
     customScriptedToolNames = getCustomScriptedToolNamesForDriver(driverType) +
       getInlineScriptTools().map { ToolName(it.name) },
-    // Single entry point for the target's `excluded_tools:` opt-outs across all three backings
-    // (class / YAML / scripted) — see [getExcludedToolSurfaceForDriver]. Reading the surface once
-    // here is what keeps this resolver from re-introducing the "subtract class + YAML but forget
+    // Single entry point for the target's `excluded_tools:` opt-outs across both backings
+    // (class / scripted) — see [getExcludedToolSurfaceForDriver]. Reading the surface once
+    // here is what keeps this resolver from re-introducing the "subtract class but forget
     // scripted" drift that hand-rolled per-partition unions repeatedly caused.
     excluded = getExcludedToolSurfaceForDriver(driverType),
     targetId = id,
@@ -269,8 +260,6 @@ fun resetDeclaredToolSetProblemReporting() {
 fun TrailblazeHostAppTarget.getAgentToolboxForDriver(
   driverType: TrailblazeDriverType,
   catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
-  yamlToolConfigsByName: Map<ToolName, ToolYamlConfig> =
-    TrailblazeSerializationInitializer.buildYamlDefinedTools(),
 ): ResolvedAgentToolbox {
   val scope = resolveToolScopeForDriver(driverType, catalog)
   // The advertise side reports misconfiguration too. This is the resolver behind the `toolbox`
@@ -284,27 +273,6 @@ fun TrailblazeHostAppTarget.getAgentToolboxForDriver(
     // recoverable condition.
     .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
     .toSet()
-  // Mirror `KoogToolExt.buildDescriptorsForYamlDefined`: skip YAML tool names with no
-  // registered config (with a warning, same shape as the runtime) and drop names whose
-  // config declared `surface_to_llm: false`. Without the missing-config filter the
-  // resolver over-reports — a typo in `tool_sets:` would appear visible here but get
-  // skipped at LLM registration.
-  val yamlToolNames = scope.yamlToolNames
-    .filter { name ->
-      val config = yamlToolConfigsByName[name]
-      when {
-        config == null -> {
-          Console.log(
-            "getAgentToolboxForDriver: no YAML config registered for tool '${name.toolName}' " +
-              "on driver=${driverType.yamlKey}; will be skipped at LLM registration.",
-          )
-          false
-        }
-        config.surfaceToLlm == false -> false
-        else -> true
-      }
-    }
-    .toSet()
   // Scripted (`.ts` / `.js`) tool names the LLM sees — the canonical advertised surface (report /
   // discovery / CLI). Three sources:
   //   1. Toolset-delivered (`resolveForDriver(...).scriptedToolNames`) — e.g. `openUrl` via
@@ -314,9 +282,8 @@ fun TrailblazeHostAppTarget.getAgentToolboxForDriver(
   //      `TrailblazeMcpServer.ensureSessionScriptToolRuntime`.
   //   2. Target custom scripted tools (`getCustomScriptedToolNamesForDriver(driverType)`) — a
   //      scripted name listed directly in the target's `platforms.<p>.tools:`. This is the
-  //      inclusion-side mirror of `customYamlNames`/`customClasses` above; before it, such a name
-  //      was classified into neither the class nor YAML inclusion bucket and silently dropped as an
-  //      "unknown tool". (The daemon's in-process scripted-tool launcher bundles only catalog-
+  //      inclusion-side mirror of `customClasses` above; without it, such a name would be
+  //      silently dropped as an "unknown tool". (The daemon's in-process scripted-tool launcher bundles only catalog-
   //      delivered scripted tools today, so wiring a *bare-`tools:`* scripted tool through the live
   //      runtime is follow-up parity work — this resolver advertises it either way.)
   //   3. Target-root inline tools (`target.tools:`, via `getInlineScriptTools()`) — synthesized
@@ -324,15 +291,14 @@ fun TrailblazeHostAppTarget.getAgentToolboxForDriver(
   //      Omitting them under-reported the surface for targets that author their own scripted
   //      tools (Codex review on PR #3851).
   // Then subtract the target's `excluded_tools:` scripted opt-outs (`excluded.scriptedToolNames`)
-  // — the scripted-partition parallel of the class / YAML exclusions applied above, from the same
-  // surface. Before this, a target's `excluded_tools: [openUrl]` was honored for class-backed and
-  // YAML tools but silently ignored for toolset-delivered scripted tools, so `openUrl` stayed
+  // — the scripted-partition parallel of the class exclusions applied above, from the same
+  // surface. Before this, a target's `excluded_tools: [openUrl]` was honored for class-backed
+  // tools but silently ignored for toolset-delivered scripted tools, so `openUrl` stayed
   // advertised to the LLM. No `surfaceToLlm` filtering still: scripted tools have no
   // `@TrailblazeToolClass` annotation to read; the report's "Scripted tools" section — the surface
   // this resolver is pinned against — applies the same exclusion subtraction.
   return ResolvedAgentToolbox(
     toolClasses = toolClasses,
-    yamlToolNames = yamlToolNames,
     scriptedToolNames = scope.scriptedToolNames,
   )
 }
@@ -340,15 +306,14 @@ fun TrailblazeHostAppTarget.getAgentToolboxForDriver(
 
 /**
  * The target's resolved tool *exclusions* for [driverType] — the `excluded_tools:` opt-outs split
- * by backing (class-backed / YAML-defined / scripted), exposed as one [TrailblazeToolSurface].
+ * by backing (class-backed / scripted), exposed as one [TrailblazeToolSurface].
  *
  * This is the exclusion-side mirror of the inclusion surface ([TrailblazeToolSurface.allToolNames]):
  * a **single entry point** so consumers read one shape instead of re-unioning
  * [TrailblazeHostAppTarget.getExcludedToolsForDriver] +
- * [TrailblazeHostAppTarget.getExcludedYamlToolNamesForDriver] +
  * [TrailblazeHostAppTarget.getExcludedScriptedToolNamesForDriver] by hand. Hand-rolled unions are
  * exactly what dropped the scripted partition before — a target's `excluded_tools: [openUrl]` was
- * honored for class/YAML tools but silently ignored for scripted ones. Every site that subtracts a
+ * honored for class tools but silently ignored for scripted ones. Every site that subtracts a
  * target's `excluded_tools:` (this resolver, the daemon inner-agent provider, the scripted-tool
  * runtime repo, the discovery layer, on-device rule wiring) routes through here so a future tool
  * backing can't be excluded in some sites but not others.
@@ -361,17 +326,15 @@ fun TrailblazeHostAppTarget.getExcludedToolSurfaceForDriver(
   driverType: TrailblazeDriverType,
 ): ResolvedToolExclusions = ResolvedToolExclusions(
   toolClasses = getExcludedToolsForDriver(driverType),
-  yamlToolNames = getExcludedYamlToolNamesForDriver(driverType),
   scriptedToolNames = getExcludedScriptedToolNamesForDriver(driverType),
 )
 
 /**
- * The three-way split of a target's `excluded_tools:` opt-outs for a driver, as a
+ * The two-way split of a target's `excluded_tools:` opt-outs for a driver, as a
  * [TrailblazeToolSurface]. Produced by [getExcludedToolSurfaceForDriver]; the exclusion-side analog
  * of [ResolvedAgentToolbox].
  */
 data class ResolvedToolExclusions(
   override val toolClasses: Set<KClass<out TrailblazeTool>>,
-  override val yamlToolNames: Set<ToolName>,
   override val scriptedToolNames: Set<ToolName>,
 ) : TrailblazeToolSurface

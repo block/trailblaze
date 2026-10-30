@@ -4,7 +4,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -19,7 +18,6 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.ToolGroup
-import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.full.valueParameters
@@ -123,7 +121,7 @@ class DeviceManagerToolSetTest {
 
     // The unified device() connect must fire the same post-connect hook as the legacy
     // connectToDevice tool — it's what builds the scripted-tool runtime and re-registers
-    // MCP tools so descriptor-backed (scripted/YAML) tools appear for the session.
+    // MCP tools so descriptor-backed (scripted) tools appear for the session.
     assertEquals(1, deviceConnectedCallbacks)
   }
 
@@ -420,15 +418,14 @@ class DeviceManagerToolSetTest {
   }
 
   @Test
-  fun `device INFO SUMMARY uses per-device session target over daemon-wide for tool summary`() =
-    YamlDefinedToolFixture.registered { runTest {
-    // Regression for the YAML-tool dispatch bug surfaced when `--target X` was
+  fun `device INFO SUMMARY uses per-device session target over daemon-wide for tool summary`() = runTest {
+    // Regression for the tool dispatch bug surfaced when `--target X` was
     // set on a bound device but the daemon-wide setting still pointed at a
     // different target (or the no-tools default sentinel). `buildAvailableToolsSummary`
     // used to read `getCurrentAppTargetId()` — daemon-wide — so the resolved
     // target on the summary path didn't match what tool dispatch actually
-    // used for that device, and YAML-defined tools from the per-device
-    // target's trailmap got silently dropped from the gate.
+    // used for that device, and the per-device target's own tools got silently
+    // dropped from the gate.
     //
     // After the fix, the summary calls `getSessionTargetAppIdForDevice(deviceId)`,
     // which prefers the per-device override and only falls back to daemon-wide.
@@ -447,11 +444,11 @@ class DeviceManagerToolSetTest {
         driverType: TrailblazeDriverType,
       ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
 
-      override fun getCustomYamlToolNamesForDriver(
+      override fun getCustomScriptedToolNamesForDriver(
         driverType: TrailblazeDriverType,
       ): Set<ToolName> =
         if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
-          setOf(YamlDefinedToolFixture.toolName)
+          setOf(CatalogOnlyScriptedTool.name)
         } else emptySet()
     }
     val bridge = DeviceTestBridge(
@@ -464,12 +461,13 @@ class DeviceManagerToolSetTest {
       // Daemon-wide is the no-tools sentinel — would suppress the summary block.
       currentAppTargetId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
       // Per-device override is the real custom target — the device's tool
-      // dispatch sees these YAML tools, so the summary block must reflect that.
+      // dispatch sees these tools, so the summary block must reflect that.
       sessionTargetsByDevice = mapOf(androidDeviceId to perDeviceTarget.id),
     )
     val toolSet = DeviceManagerToolSet(
       sessionContext = createSessionContext(),
       mcpBridge = bridge,
+      scriptedToolCatalogFactory = { CatalogOnlyScriptedTool.catalog {} },
     )
     toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
 
@@ -478,10 +476,10 @@ class DeviceManagerToolSetTest {
     // Before the fix this block would be omitted (daemon-wide resolved to
     // the Default sentinel, which short-circuits the summary). After the
     // fix the per-device override resolves to `perdeviceapp`, the summary
-    // block is emitted, and the YAML-defined tools land in it.
+    // block is emitted, and the per-device target's tools land in it.
     assertContains(result, "Available ${perDeviceTarget.displayName} tools")
-    assertContains(result, YamlDefinedToolFixture.NAME)
-  } }
+    assertContains(result, CatalogOnlyScriptedTool.name.toolName)
+  }
 
   /**
    * The CLI sends a session-only INFO before every command it runs to check that its saved
@@ -489,8 +487,7 @@ class DeviceManagerToolSetTest {
    * list, and building that list walks the target's tool catalog on every call.
    */
   @Test
-  fun `session-only device INFO reports the device without building the tool list`() =
-    YamlDefinedToolFixture.registered { runTest {
+  fun `session-only device INFO reports the device without building the tool list`() = runTest {
     val androidDeviceId = TrailblazeDeviceId(
       instanceId = androidDevice.instanceId,
       trailblazeDevicePlatform = androidDevice.platform,
@@ -503,8 +500,8 @@ class DeviceManagerToolSetTest {
         driverType: TrailblazeDriverType,
       ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
 
-      override fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
-        setOf(YamlDefinedToolFixture.toolName)
+      override fun getCustomScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
+        setOf(CatalogOnlyScriptedTool.name)
     }
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),
@@ -519,7 +516,7 @@ class DeviceManagerToolSetTest {
       mcpBridge = bridge,
       scriptedToolCatalogFactory = {
         catalogs++
-        ScriptedToolCatalog { emptyMap() }
+        CatalogOnlyScriptedTool.catalog {}
       },
     )
     toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
@@ -533,7 +530,7 @@ class DeviceManagerToolSetTest {
     assertContains(probe, "Platform: ${androidDevice.platform.displayName}")
     assertTrue("Available ${target.displayName} tools" !in probe, "Probe must not carry the tool list. Got:\n$probe")
     assertEquals(catalogsBefore, catalogs, "the probe must not build a tool catalog")
-  } }
+  }
 
   @Test
   fun `device INFO returns error when no device connected`() = runTest {

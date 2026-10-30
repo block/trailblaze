@@ -256,6 +256,108 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `every scripted tool in tools dir is on the target, listed ones first`() {
+    // Same contract as the build-time generator's test of the same name — the baked target and
+    // the runtime-loaded one must agree.
+    val trailmapDir = File(tempFolder.root, "trailmaps/myapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: MyApp
+        tools:
+          - listedTool
+        platforms:
+          android:
+            drivers: [android-ondevice-accessibility]
+            excluded_tools: [excludedTool, androidOnlyExcluded, iosOnlyTool]
+          ios:
+            excluded_tools: [excludedTool, partlyExcluded]
+      """.trimIndent(),
+    )
+    File(trailmapDir, "tools").mkdirs()
+    // A YAML-described tool nobody lists.
+    File(trailmapDir, "tools/described.yaml").writeText(
+      """
+      script: ./described.js
+      name: describedTool
+      description: Described by YAML.
+      """.trimIndent(),
+    )
+    // Bare `.ts` tools, described by the (stubbed) analyzer: name to its `_meta` gates.
+    val metaByTool = mapOf(
+      "listedTool" to emptyMap(),
+      "unlistedTool" to emptyMap(),
+      "excludedTool" to emptyMap(),
+      "partlyExcluded" to emptyMap(),
+      "iosOnlyTool" to mapOf("trailblaze/supportedPlatforms" to listOf("ios")),
+      "androidOnlyExcluded" to mapOf("trailblaze/supportedPlatforms" to listOf("android")),
+      "webOnlyTool" to mapOf("trailblaze/supportedPlatforms" to listOf("web")),
+      "iosHostTool" to mapOf("trailblaze/supportedDrivers" to listOf("ios-host")),
+      "instrumentationOnlyTool" to mapOf(
+        "trailblaze/supportedPlatforms" to listOf("android"),
+        "trailblaze/supportedDrivers" to listOf("android-ondevice-instrumentation"),
+      ),
+    )
+    metaByTool.keys.forEach { name ->
+      File(trailmapDir, "tools/$name.ts")
+        .writeText("export const $name = trailblaze.tool(async () => \"ok\");\n")
+    }
+    val stub = StubEnrichment { _, _, _, deferred ->
+      deferred.map { d ->
+        val name = d.relativePath.substringAfterLast('/').removeSuffix(".ts")
+        ScriptedToolEnrichment.EnrichmentResult.Resolved(
+          relativePath = d.relativePath,
+          configs = listOf(
+            xyz.block.trailblaze.config.InlineScriptToolConfig(
+              script = File(trailmapDir, d.relativePath).absolutePath,
+              name = name,
+              meta = metaByTool.getValue(name).takeIf { it.isNotEmpty() }?.let { gates ->
+                JsonObject(gates.mapValues { (_, values) -> JsonArray(values.map(::JsonPrimitive)) })
+              },
+            ),
+          ),
+        )
+      }
+    }
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - myapp
+      """.trimIndent(),
+    )
+
+    val target = TrailblazeProjectConfigLoader.resolveRuntime(
+      TrailblazeProjectConfigLoader.load(file)!!,
+      includeClasspathTrailmaps = false,
+      scriptedToolEnrichment = stub,
+    ).targets.single()
+
+    assertEquals(
+      listOf(
+        // Listed first, then every other tool in name order. Nothing is pruned for platform,
+        // driver or `excluded_tools:` — each session applies those gates per driver.
+        "listedTool",
+        "androidOnlyExcluded",
+        "describedTool",
+        "excludedTool",
+        "instrumentationOnlyTool",
+        "iosHostTool",
+        "iosOnlyTool",
+        "partlyExcluded",
+        "unlistedTool",
+        "webOnlyTool",
+      ),
+      target.tools.orEmpty().map { it.name },
+    )
+    // A platform-scoped tool keeps its own scoping, which is what limits it to that platform.
+    assertEquals(
+      JsonArray(listOf(JsonPrimitive("ios"))),
+      target.tools.orEmpty().single { it.name == "iosOnlyTool" }.meta?.get("trailblaze/supportedPlatforms"),
+    )
+  }
+
+  @Test
   fun `per-platform strip preserves empty list so deps don't override an author-cleared tools field`() {
     // Pins the Codex P2 fix: a `platforms.<p>.tools:` list that was originally non-null but
     // entirely scripted (all names hoisted out) must remain `emptyList()`, not `null`, so the
@@ -381,13 +483,7 @@ class TrailblazeProjectConfigLoaderTest {
     File(trailmapDir, "tools/trailmap-tool.tool.yaml").writeText(
       """
       id: pack_tool
-      description: Trailmap tool
-      parameters: []
-      tools:
-        - tapOnElementBySelector:
-            nodeSelector:
-              androidAccessibility:
-                textRegex: "{{params.label}}"
+      class: com.example.tools.PackTool
       """.trimIndent(),
     )
     val file = tempFolder.writeConfig(
@@ -575,12 +671,7 @@ class TrailblazeProjectConfigLoaderTest {
     File(trailmapDir, "tools/wrong_listed.tool.yaml").writeText(
       """
       id: wrong_listed
-      description: Pure-YAML composed tool that doesn't belong in target.tools:
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - back: {}
+      class: com.example.tools.WrongListedTool
       """.trimIndent(),
     )
     File(trailmapDir, "trailmap.yaml").writeText(

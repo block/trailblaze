@@ -2,12 +2,13 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { type SurveyDefinition, isSurvey, withId } from "./survey.js";
+import { planSurveys } from "./labels.js";
 import { isSessionDirectory } from "./session.js";
 import { findTrailmapFiles } from "./targets.js";
 import * as surveysSdk from "./index.js";
@@ -255,7 +256,10 @@ function serveSdkToSurveys(): void {
  * Imports survey modules and returns every export that came out of `survey()`. A path that
  * is a file is imported whatever its name; a directory is walked for `*.survey.ts` (or `.js`).
  * The export name becomes the survey id; two modules exporting the same name is an error, as
- * it would be for tools, including one in a trailmap and one passed directly.
+ * it would be for tools, including one in a trailmap and one passed directly. Each survey's
+ * version is a hash of its file and the local modules it imports (see `versionOf`). Throws when
+ * label phases form a cycle through `dependsOn`, or when `dependsOn` names a survey no loaded file
+ * exports.
  */
 export async function loadSurveys(
   inputs: ReadonlyArray<string>,
@@ -291,6 +295,12 @@ export async function loadSurveys(
   const byId = new Map<string, string>();
   // A directory and one of its children both name the same file; load it once or every finding doubles.
   for (const file of [...new Set(files)]) {
+    // Edit the file or a module it imports and its stored findings stop being current. A module
+    // this process already read may be the cached one that runs, whatever the file says now: when
+    // any has changed since, nothing vouches for what runs, so the survey gets no version and its
+    // stored findings are neither reused nor kept current.
+    const version = vouchedVersion(file);
+    if (version === undefined) log?.(`${file}: its modules changed since this process first read them; its stored findings will not be reused`);
     const mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
     let count = 0;
     for (const [exportName, value] of Object.entries(mod)) {
@@ -300,10 +310,140 @@ export async function loadSurveys(
         throw new Error(`survey "${exportName}" is exported by both ${prior} and ${file}; export names must be unique`);
       }
       byId.set(exportName, file);
-      loaded.push({ definition: withId(value, exportName), file, exportName });
+      loaded.push({ definition: withId(value, exportName, version), file, exportName });
       count += 1;
     }
     if (count === 0) log?.(`no surveys exported by ${file}`);
   }
+  // A cycle through `dependsOn`, or an `dependsOn` naming a survey no file exports, fails here, at load.
+  planSurveys(loaded.map((l) => ({ def: l.definition, id: l.exportName })));
   return loaded;
+}
+
+/** A module as read: its text, and the files its relative imports resolved to. */
+export interface ReadModule {
+  text: string;
+  imports: string[];
+  /** It loads a local module with `require` or `import()`, which may run after the survey loads. */
+  deferred: boolean;
+}
+
+/** Each module this process's survey loads have read, by real path, as first read. */
+const firstRead = new Map<string, ReadModule>();
+
+/** Modules seen to change since this process first read them. Changing back does not clear one. */
+const changedSinceRead = new Set<string>();
+
+/**
+ * `versionOf(file)`, or undefined when nothing vouches that it names the code that runs: a module it
+ * reaches has changed since this process first read it, or loads a local module with `require` or
+ * `import()`, which may load whatever that file holds later rather than what was hashed.
+ */
+function vouchedVersion(file: string): string | undefined {
+  let changed = false;
+  const version = versionOf(file, (path, now) => {
+    if (now.deferred) changed = true;
+    const first = firstRead.get(path);
+    if (first === undefined) firstRead.set(path, now);
+    else if (first.text !== now.text || first.imports.join("\n") !== now.imports.join("\n")) changedSinceRead.add(path);
+    if (changedSinceRead.has(path)) changed = true;
+  });
+  return changed ? undefined : version;
+}
+
+/**
+ * A hash of a survey file and every local module it imports, followed through their own imports.
+ * Only relative imports count: a package's version, or a data file the survey reads at run time,
+ * does not change it. `onRead` sees each module as it is read.
+ */
+export function versionOf(file: string, onRead?: (path: string, module: ReadModule) => void): string {
+  const hash = createHash("sha256");
+  const seen = new Set<string>();
+  // By real path: a module reached through a link is the one Bun already loaded.
+  const entry = realpathSync(resolve(file));
+  const pending = [entry];
+  while (pending.length > 0) {
+    const next = pending.shift()!;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const source = readModule(next);
+    onRead?.(next, source);
+    hash.update(`${relative(dirname(entry), next)}\n${source.text.length}\n${source.text}`);
+    pending.push(...source.imports);
+  }
+  return hash.digest("hex").slice(0, 12);
+}
+
+/** What Bun offers for reading a module the way it will load it. Absent outside Bun. */
+interface BunModuleTools {
+  Transpiler: new (options: { loader: string }) => { scanImports(code: string): Array<{ path: string; kind: string }> };
+  resolveSync(specifier: string, from: string): string;
+}
+
+function readModule(path: string): ReadModule {
+  const text = readFileSync(path, "utf8");
+  const bun = (globalThis as { Bun?: BunModuleTools }).Bun;
+  const imports: string[] = [];
+  let deferred = false;
+  for (const { path: spec, deferred: later } of runtimeImports(text, path, bun)) {
+    if (!spec.startsWith("./") && !spec.startsWith("../")) continue;
+    const found = resolveLocal(spec, dirname(path), bun);
+    if (found === undefined) continue;
+    imports.push(found);
+    deferred ||= later;
+  }
+  // A load whose path is computed names no file to hash, so nothing vouches for what it loads.
+  deferred ||= COMPUTED_LOAD.test(text);
+  return { text, imports, deferred };
+}
+
+/** `require(x)`, `import(x)` or `createRequire`, with anything but a string literal as the path. */
+const COMPUTED_LOAD = /\b(?:require|import)\s*\(\s*(?!["'`][^"'`$]*["'`]\s*\))|\bcreateRequire\b/;
+
+/**
+ * The modules [text] loads when it runs: imports, re-exports, `require` and `import()`. Under Bun,
+ * read by its own scanner, so a type-only import, which compiles away, is not one.
+ */
+function runtimeImports(text: string, path: string, bun: BunModuleTools | undefined): Array<{ path: string; deferred: boolean }> {
+  if (bun) {
+    const ext = extname(path).toLowerCase();
+    const loader = ext === ".tsx" || ext === ".jsx" ? ext.slice(1) : /\.[cm]?ts$/.test(ext) ? "ts" : "js";
+    try {
+      return new bun.Transpiler({ loader })
+        .scanImports(text)
+        .map((i) => ({ path: i.path, deferred: i.kind === "require-call" || i.kind === "dynamic-import" }));
+    } catch {
+      // A file Bun cannot parse fails when imported; read it by text meanwhile.
+    }
+  }
+  return [...text.matchAll(/(\bfrom|\bimport|\brequire)\s*(\(?)\s*["'](\.{1,2}\/[^"']+)["']/g)].map((m) => ({
+    path: m[3]!,
+    deferred: m[1] === "require" || m[2] === "(",
+  }));
+}
+
+/**
+ * The real path of the file a relative import names. Under Bun, resolved by Bun, so a directory's
+ * `package.json` entry point counts as it does at load; elsewhere, as TypeScript resolves it.
+ */
+function resolveLocal(spec: string, from: string, bun: BunModuleTools | undefined): string | undefined {
+  try {
+    const found = bun ? bun.resolveSync(spec, from) : localModule(join(from, spec));
+    return found === undefined ? undefined : realpathSync(found);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The file an extensionless or `.js` relative import names, as TypeScript resolves it. */
+function localModule(spec: string): string | undefined {
+  const stem = /\.[cm]?js$/.test(spec) ? spec.replace(/\.([cm]?)js$/, ".$1ts") : undefined;
+  const candidates = [spec, ...(stem ? [stem] : []), ...[".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"].map((e) => spec + e), join(spec, "index.ts"), join(spec, "index.js")];
+  return candidates.find((c) => {
+    try {
+      return statSync(c).isFile();
+    } catch {
+      return false;
+    }
+  });
 }

@@ -17,6 +17,8 @@ import maestro.orchestra.SetOrientationCommand
 import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.ToggleAirplaneModeCommand
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.mobile.tools.SetOrientationTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.SetOrientationTrailblazeTool.Orientation
 
 /**
  * Tests [MaestroCommandConverter.convert] handling of device setting, navigation,
@@ -59,6 +61,24 @@ class MaestroCommandConverterDeviceSettingsTest {
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetOrientation>(actions.single())
     assertEquals(1, action.rotation)
+  }
+
+  @Test
+  fun `the typed mobile_setOrientation tool rotates to each Android rotation`() {
+    val rotations = Orientation.entries.associateWith { orientation ->
+      val command = SetOrientationTrailblazeTool(orientation).toMaestroCommands().single()
+      assertIs<AccessibilityAction.SetOrientation>(convert(command).single()).rotation
+    }
+
+    assertEquals(
+      mapOf(
+        Orientation.PORTRAIT to 0,
+        Orientation.LANDSCAPE_LEFT to 1,
+        Orientation.UPSIDE_DOWN to 2,
+        Orientation.LANDSCAPE_RIGHT to 3,
+      ),
+      rotations,
+    )
   }
 
   @Test

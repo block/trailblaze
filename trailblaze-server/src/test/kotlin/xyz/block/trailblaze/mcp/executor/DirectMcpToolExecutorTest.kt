@@ -6,7 +6,6 @@ import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
-import xyz.block.trailblaze.config.YamlDefinedToolFixture
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -61,7 +60,7 @@ class DirectMcpToolExecutorTest {
   }
 
   @Test
-  fun `getAvailableTools returns tools from multiple categories`() = YamlDefinedToolFixture.inCoreInteraction {
+  fun `getAvailableTools returns tools from multiple categories`() {
     val executor = createExecutor(setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION))
     val tools = executor.getAvailableTools()
 
@@ -73,12 +72,6 @@ class DirectMcpToolExecutorTest {
     assertTrue(
       tools.any { it.name == "openUrl" },
       "Should include openUrl from NAVIGATION",
-    )
-    // A YAML-defined tool in the CORE_INTERACTION catalog entry must appear in the advertised
-    // descriptor list or the LLM won't know it's available.
-    assertTrue(
-      tools.any { it.name == YamlDefinedToolFixture.NAME },
-      "Should include the YAML-defined tool from CORE_INTERACTION",
     )
   }
 
@@ -97,8 +90,7 @@ class DirectMcpToolExecutorTest {
     val executor = createExecutor()
 
     assertTrue(executor.isToolAvailable("tap"), "tap should be available")
-    // YAML-defined tool must be reported as available the same way class-backed tools are.
-    assertTrue(executor.isToolAvailable("eraseText"), "eraseText (YAML-defined) should be available")
+    assertTrue(executor.isToolAvailable("eraseText"), "eraseText should be available")
   }
 
   @Test
@@ -227,30 +219,6 @@ class DirectMcpToolExecutorTest {
       assertIs<ToolExecutionResult.Success>(result)
       assertEquals("type", result.toolName)
     }
-
-  @Test
-  fun `executeToolByName handles a YAML-defined tool from CORE_INTERACTION category`() =
-    YamlDefinedToolFixture.inCoreInteraction { runTest {
-      // The load-bearing regression guard for YAML-defined tool execution through
-      // DirectMcpToolExecutor: the executor must advertise a YAML-defined tool in the
-      // CORE_INTERACTION category and route its execution through the same polymorphic tool
-      // serializer that handles class-backed tools.
-      val mockBridge =
-        ConfigurableMockBridge().apply {
-          executeToolResult = "[OK] Erased text"
-        }
-      val executor =
-        createExecutor(
-          categories = setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION),
-          mockBridge = mockBridge,
-        )
-      val args = buildJsonObject {}
-
-      val result = executor.executeToolByName(YamlDefinedToolFixture.NAME, args)
-
-      assertIs<ToolExecutionResult.Success>(result)
-      assertEquals(YamlDefinedToolFixture.NAME, result.toolName)
-    } }
 
   @Test
   fun `executeToolByName returns ToolNotFound when tool is in unconfigured category`() =

@@ -31,6 +31,8 @@ Trailblaze - AI-powered device automation
                  MP4/GIF/WebP) for session recordings.
   strings      Extract the human-visible text a recorded session showed, for
                  localization and copy diffs
+  survey       Run surveys over finished sessions, store their findings and
+                 labels in each session, and print a report
   viewer       Write out the standalone report viewer (one self-contained HTML
                  page).
   profile      Generate a performance-analysis report (tools, LLM calls,

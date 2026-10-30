@@ -83,7 +83,7 @@ class SensitiveArgsLogRedactionTest {
           errorMessage = "$oldValue $newValue",
           structuredPayload = payload,
         ),
-      rawTool = AuthoredRawArgsTool("block_runIf", payload),
+      rawTool = AuthoredRawArgsTool("runIf", payload),
       sensitiveMemoryBeforeExecution = before,
     )
     val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
@@ -158,7 +158,7 @@ class SensitiveArgsLogRedactionTest {
         errorMessage = "old=4921 current=" + if (delete) "public" else "1",
         structuredPayload = payload,
       ),
-      rawTool = if (forwarded) AuthoredRawArgsTool("block_runIf", payload) else null,
+      rawTool = if (forwarded) AuthoredRawArgsTool("runIf", payload) else null,
       sensitiveMemoryBeforeExecution = before,
     )
     val log = agent.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
@@ -188,11 +188,11 @@ class SensitiveArgsLogRedactionTest {
     override val rawToolArguments: kotlinx.serialization.json.JsonObject,
   ) : RawArgumentTrailblazeTool
 
-  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass(name = "block_runIf")
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass(name = "runIf")
   private data class NestedConditionalLogFixture(
     override val rawToolArguments: kotlinx.serialization.json.JsonObject
   ) : RawArgumentTrailblazeTool, xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool {
-    override val instanceToolName: String = "block_runIf"
+    override val instanceToolName: String = "runIf"
 
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext

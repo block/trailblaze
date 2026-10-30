@@ -596,6 +596,8 @@ class SessionCaptureCoordinatorTest {
     },
   )
 
+  private fun inProgressMarker(id: SessionId) = File(logsRepo.getSessionDir(id), SessionCaptureCoordinator.CAPTURE_IN_PROGRESS_FILE)
+
   private fun metadataEntries(id: SessionId): List<Map<String, String?>> {
     val text = File(logsRepo.getSessionDir(id), "capture_metadata.json").readText()
     val artifacts = kotlinx.serialization.json.Json.parseToJsonElement(text)
@@ -764,6 +766,61 @@ class SessionCaptureCoordinatorTest {
   }
 
   @Test
+  fun `a browser-launched session records its browser's screencast and never asks Playwright to record`() {
+    // The shipped recorder, started before the browser's feed exists: the point a recorder with a
+    // Playwright fallback would publish a record dir and rebuild the context the browser is driving.
+    val browser = dashboard.deviceId.instanceId
+    val coord = SessionCaptureCoordinator(logsRepo)
+    val id = sessionId("web-launch-default")
+    val feed = FakeScreencastFeed()
+    try {
+      assertTrue(coord.startForSession(id, browser, TrailblazeDevicePlatform.WEB, videoOn, followWebScreencast = true))
+      assertNull(PlaywrightVideoRecordDir.getRecordDir(browser), "starting must not turn on Playwright's recorder")
+      WebScreencastFeedRegistry.register(browser, feed)
+      assertEquals(1, feed.subscribers.get(), "the launch browser is recorded from its screencast")
+
+      assertTrue(coord.stopForSession(id))
+      assertEquals(0, feed.subscribers.get(), "ending the session detaches from the screencast")
+      assertNull(PlaywrightVideoRecordDir.getRecordDir(browser))
+    } finally {
+      runCatching { coord.stopForSession(id) }
+      WebScreencastFeedRegistry.unregister(browser, feed)
+      PlaywrightVideoRecordDir.clearRecordDir(browser)
+    }
+  }
+
+  @Test
+  fun `a browser-launched session records every companion beside its browser`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("web-launch")
+    val browser = dashboard.deviceId.instanceId
+    assertTrue(coord.startForSession(id, browser, TrailblazeDevicePlatform.WEB, videoOn, followWebScreencast = true))
+    assertEquals(listOf(browser), companions.getValue("video").devicesStarted, "the browser keeps `video.webm`")
+
+    assertEquals(1, coord.bindDevices(id, listOf(dashboard, seller)))
+    assertEquals(listOf("emulator-5560"), companions.getValue("video-seller").devicesStarted)
+    assertTrue(coord.stopForSession(id))
+    assertEquals<Map<String?, String?>>(
+      mapOf("video.webm" to "dashboard", "video-seller.webm" to "seller"),
+      metadataEntries(id).associate { it.getValue("filename") to it["deviceName"] },
+    )
+  }
+
+  @Test
+  fun `a browser-launched session with video off still samples its companions' clocks`() {
+    val sampled = mutableListOf<String>()
+    // The shipped web recorder records nothing without video, so it builds no capture.
+    val coord = multiDeviceCoordinator(companionFactory = { _, _, _ -> null }, clockSamplersStarted = sampled)
+    val id = sessionId("web-launch-video-off")
+    val videoOff = CaptureOptions(captureVideo = false)
+    assertTrue(coord.startForSession(id, dashboard.deviceId.instanceId, TrailblazeDevicePlatform.WEB, videoOff, followWebScreencast = true))
+    assertEquals(0, coord.bindDevices(id, listOf(dashboard, seller)))
+    assertEquals(listOf("emulator-5560"), sampled, "the Android companion's clock is sampled without video")
+    assertTrue(coord.stopForSession(id))
+  }
+
+  @Test
   fun `a roster sent to a session with no capture records nothing`() {
     val coord = multiDeviceCoordinator()
     assertEquals(0, coord.bindDevices(sessionId("never-started"), listOf(seller, buyer)))
@@ -897,6 +954,7 @@ class SessionCaptureCoordinatorTest {
     val id = sessionId("late-unbind")
     coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
     coord.bindDevices(id, listOf(seller, buyer))
+    assertTrue(inProgressMarker(id).exists(), "a started capture is marked in progress")
 
     val pool = Executors.newFixedThreadPool(2)
     try {
@@ -919,6 +977,56 @@ class SessionCaptureCoordinatorTest {
       metadataEntries(id).map { it.getValue("filename") }.toSet(),
       "the late recording is on record once the session end returns",
     )
+    assertFalse(inProgressMarker(id).exists(), "every recording was on record when the session end returned")
+  }
+
+  @Test
+  fun `a session end that publishes before its companions stop leaves the capture in progress until the last one is on record`() {
+    val runner = SessionCaptureCoordinator.BoundDevice("runner", TrailblazeDeviceId("emulator-5564", TrailblazeDevicePlatform.ANDROID))
+    val stopsEntered = CountDownLatch(2)
+    val releases = mapOf("video-buyer" to CountDownLatch(1), "video-runner" to CountDownLatch(1))
+    val coord = multiDeviceCoordinator(companionFactory = { options, _, basename ->
+      val recording = RecordingStream(basename)
+      val slowStop = object : CaptureStream by recording {
+        override fun stop(options: CaptureOptions): CaptureArtifact? {
+          stopsEntered.countDown()
+          check(releases.getValue(basename).await(10, TimeUnit.SECONDS)) { "the test never released $basename's stop" }
+          return recording.stop(options)
+        }
+      }
+      CaptureSession(listOf(slowStop), options)
+    })
+    val id = sessionId("two-late-unbinds")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    coord.bindDevices(id, listOf(seller, buyer, runner))
+
+    val unbinding = Executors.newFixedThreadPool(2)
+    val ending = Executors.newSingleThreadExecutor()
+    val filenames = { metadataEntries(id).map { it.getValue("filename") }.toSet() }
+    try {
+      val buyerUnbound = unbinding.submit<Boolean> { coord.unbindDevice(id, "buyer") }
+      val runnerUnbound = unbinding.submit<Boolean> { coord.unbindDevice(id, "runner") }
+      assertTrue(stopsEntered.await(10, TimeUnit.SECONDS), "both unbinds are inside their companion's stop")
+      val stopped = ending.submit<Boolean> { coord.stopForSession(id) }
+      assertFailsWith<TimeoutException>("the session end is waiting on the unbinds") { stopped.get(300, TimeUnit.MILLISECONDS) }
+      ending.shutdownNow()
+      assertTrue(stopped.get(10, TimeUnit.SECONDS), "the session end returned on the interrupt")
+      assertTrue(inProgressMarker(id).exists(), "the session end published while both companions were stopping")
+
+      releases.getValue("video-buyer").countDown()
+      assertTrue(buyerUnbound.get(10, TimeUnit.SECONDS))
+      assertEquals(setOf("video.webm", "video-buyer.webm"), filenames())
+      assertTrue(inProgressMarker(id).exists(), "the runner is still stopping")
+
+      releases.getValue("video-runner").countDown()
+      assertTrue(runnerUnbound.get(10, TimeUnit.SECONDS))
+      assertEquals(setOf("video.webm", "video-buyer.webm", "video-runner.webm"), filenames())
+      assertFalse(inProgressMarker(id).exists(), "every recording is on record")
+    } finally {
+      releases.values.forEach { it.countDown() }
+      unbinding.shutdownNow()
+      ending.shutdownNow()
+    }
   }
 
   @Test

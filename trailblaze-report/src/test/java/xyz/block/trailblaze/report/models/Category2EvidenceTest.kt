@@ -1,14 +1,29 @@
 package xyz.block.trailblaze.report.models
 
+import java.io.File
 import java.nio.file.Files
+import java.util.Base64
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
 import org.junit.Test
+import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
 class Category2EvidenceTest {
   private val json = Json { ignoreUnknownKeys = true }
@@ -72,6 +87,7 @@ class Category2EvidenceTest {
       assertEquals("42", artifact.ci_build_number)
       assertTrue(artifact.before_yaml.contains("old selector"))
       assertTrue(artifact.after_yaml.contains("new selector"))
+      assertEquals(yamlWithText("old selector"), artifact.source_yaml)
       assertEquals(locator.size_bytes, artifactFile.length())
     } finally {
       sessionDir.deleteRecursively()
@@ -219,6 +235,196 @@ class Category2EvidenceTest {
     } finally {
       sessionDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `each healed step carries the screens before and after its heal`() {
+    val sessionDir = Files.createTempDirectory("category2-evidence").toFile()
+    try {
+      val shot = webp(64)
+      sessionDir.resolve("failed.webp").writeBytes(shot)
+      writeCategory2Evidence(
+        sessionDir = sessionDir,
+        context = context(),
+        originalYaml = yamlWithText("old selector"),
+        healedYaml = yamlWithText("new selector"),
+        healedStepIndexes = setOf(0),
+        logs = healLogs(stepIndex = 0, beforeShot = "failed.webp", afterShot = "never-written.png", at = 0),
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+
+      val screens = artifact(sessionDir).screens
+      assertEquals(listOf("before_heal", "after_heal"), screens.map { it.moment })
+      assertTrue(screens.all { it.step_index == 0 })
+      val before = screens[0]
+      assertEquals("image/webp", before.screenshot_media_type)
+      assertTrue(shot.contentEquals(Base64.getDecoder().decode(before.screenshot_base64)))
+      assertTrue(assertNotNull(before.hierarchy).contains("Old screen"))
+      assertNull(before.screenshot_missing)
+      val after = screens[1]
+      assertNull(after.screenshot_base64)
+      assertEquals("the screenshot could not be read", after.screenshot_missing)
+      assertTrue(assertNotNull(after.hierarchy).contains("New screen"))
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `screens that would overflow the artifact cap keep their hierarchy and drop screenshots`() {
+    val sessionDir = Files.createTempDirectory("category2-evidence").toFile()
+    try {
+      sessionDir.resolve("large.webp").writeBytes(webp(500 * 1024))
+      val logs = (0 until 3).flatMap { healLogs(stepIndex = 0, beforeShot = "large.webp", afterShot = "large.webp", at = it * 10) }
+      val evidence =
+        assertNotNull(
+          writeCategory2Evidence(
+            sessionDir = sessionDir,
+            context = context(),
+            originalYaml = yamlWithText("old selector"),
+            healedYaml = yamlWithText("new selector"),
+            healedStepIndexes = setOf(0),
+            logs = logs,
+            platform = TrailblazeDevicePlatform.ANDROID,
+          )
+        )
+
+      assertTrue(assertNotNull(evidence.heal_diff_locator).size_bytes <= 2 * 1024 * 1024)
+      val screens = artifact(sessionDir).screens
+      assertEquals(6, screens.size)
+      assertTrue(screens.all { it.screenshot_base64 == null && it.hierarchy != null })
+      assertTrue(screens.all { it.screenshot_missing == "screenshots exceeded the heal evidence size cap" })
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `screen content is dropped when hierarchies alone overflow the artifact cap`() {
+    val sessionDir = Files.createTempDirectory("category2-evidence").toFile()
+    try {
+      val logs =
+        (0 until 3).flatMap {
+          healLogs(stepIndex = 0, beforeShot = "none.webp", afterShot = "none.webp", at = it * 10, padding = "x".repeat(400 * 1024))
+        }
+      val evidence =
+        assertNotNull(
+          writeCategory2Evidence(
+            sessionDir = sessionDir,
+            context = context(),
+            originalYaml = yamlWithText("old selector"),
+            healedYaml = yamlWithText("new selector"),
+            healedStepIndexes = setOf(0),
+            logs = logs,
+            platform = TrailblazeDevicePlatform.ANDROID,
+          )
+        )
+
+      assertTrue(assertNotNull(evidence.heal_diff_locator).size_bytes <= 2 * 1024 * 1024)
+      val screens = artifact(sessionDir).screens
+      assertEquals(6, screens.size)
+      assertTrue(screens.all { it.hierarchy == null && it.screenshot_base64 == null })
+      assertTrue(screens.all { it.screenshot_missing == "screens exceeded the heal evidence size cap" })
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a confirmed upload is kept when a screenshot can no longer be read`() {
+    val sessionDir = Files.createTempDirectory("category2-evidence").toFile()
+    try {
+      sessionDir.resolve("failed.webp").writeBytes(webp(64))
+      fun write() =
+        assertNotNull(
+          writeCategory2Evidence(
+            sessionDir = sessionDir,
+            context = context(),
+            originalYaml = yamlWithText("old selector"),
+            healedYaml = yamlWithText("new selector"),
+            healedStepIndexes = setOf(0),
+            logs = healLogs(stepIndex = 0, beforeShot = "failed.webp", afterShot = "failed.webp", at = 0),
+            platform = TrailblazeDevicePlatform.ANDROID,
+          )
+        )
+      val locator = assertNotNull(write().heal_diff_locator)
+      sessionDir.resolve(CATEGORY2_HEAL_DIFF_UPLOAD_FILENAME).writeText(
+        """{"schema_version":1,"session_id":"session-1","path":"${locator.path}","source_job_id":"${locator.source_job_id}","size_bytes":${locator.size_bytes},"sha256":"${locator.sha256}","uploaded":true}"""
+      )
+      sessionDir.resolve("failed.webp").delete()
+
+      val regenerated = assertNotNull(write().heal_diff_locator)
+
+      assertEquals(locator.copy(uploaded = true), regenerated)
+      assertTrue(artifact(sessionDir).screens.all { it.screenshot_base64 != null })
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  private fun artifact(sessionDir: File) =
+    json.decodeFromString<HealDiffArtifact>(sessionDir.resolve(CATEGORY2_HEAL_DIFF_FILENAME).readText())
+
+  private fun webp(size: Int) =
+    "RIFF".encodeToByteArray() + ByteArray(4) + "WEBP".encodeToByteArray() + ByteArray(size)
+
+  private fun healLogs(
+    stepIndex: Int,
+    beforeShot: String,
+    afterShot: String,
+    at: Int,
+    padding: String = "",
+  ): List<TrailblazeLog> {
+    val session = SessionId("session-1")
+    val prompt = DirectionStep(step = "Enter text")
+    val tool = TrailblazeToolYamlWrapper(name = "inputText", trailblazeTool = InputTextTrailblazeTool(text = "old"))
+    fun time(second: Int) = Instant.fromEpochSeconds(1_800_000_000L + at + second)
+    fun screen(text: String, shot: String, second: Int) =
+      TrailblazeLog.AgentDriverLog(
+        viewHierarchy = ViewHierarchyTreeNode(text = text + padding, x2 = 100, y2 = 100),
+        screenshotFile = shot,
+        action = AgentDriverAction.TapPoint(x = 10, y = 10),
+        durationMs = 1,
+        session = session,
+        timestamp = time(second),
+        deviceHeight = 200,
+        deviceWidth = 100,
+      )
+    return listOf(
+      screen("Old screen", beforeShot, 0),
+      TrailblazeLog.SelfHealInvokedLog(
+        promptStep = prompt,
+        session = session,
+        timestamp = time(1),
+        recordingResult =
+          PromptRecordingResult.Failure(
+            successfulTools = emptyList(),
+            failedTool = tool,
+            failureResult = TrailblazeToolResult.Error.ExceptionThrown("recording missed"),
+          ),
+        stepIndex = stepIndex,
+      ),
+      screen("New screen", afterShot, 2),
+      TrailblazeLog.ObjectiveCompleteLog(
+        promptStep = prompt,
+        objectiveResult =
+          AgentTaskStatus.Success.ObjectiveComplete(
+            statusData =
+              AgentTaskStatusData(
+                taskId = TaskId.generate(),
+                prompt = prompt.step,
+                callCount = 1,
+                taskStartTime = time(1),
+                totalDurationMs = 1_000,
+              ),
+            llmExplanation = "healed",
+          ),
+        session = session,
+        timestamp = time(3),
+      ),
+      // A later step's screen must not be read as this heal's result.
+      screen("Next step", afterShot, 4),
+    )
   }
 
   private fun context() =

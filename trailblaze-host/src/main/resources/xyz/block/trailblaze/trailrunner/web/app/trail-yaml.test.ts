@@ -336,7 +336,7 @@ describe("buildRunnableToolYaml / buildTrailheadRunYaml", () => {
 
   test("returns null with a blank platform classifier (nothing to key the recording by)", () => {
     expect(TY.buildRunnableToolYaml("tap", "- tools:\n  - tapOn: {}", "")).toBeNull();
-    expect(TY.buildTrailheadRunYaml("th", null, { appId: "x" }, "")).toBeNull();
+    expect(TY.buildTrailheadRunYaml("th", { appId: "x" }, "")).toBeNull();
   });
 
   test("buildToolListRunYaml wraps a raw tool list in a single unified step keyed by classifier", () => {
@@ -355,7 +355,7 @@ describe("buildRunnableToolYaml / buildTrailheadRunYaml", () => {
   });
 
   test("buildTrailheadRunYaml keys the launch tool by classifier and expands dot-path args", () => {
-    const doc = parse(TY.buildTrailheadRunYaml("signedIn", null, { "creds.email": "a@b.com" }, "android"));
+    const doc = parse(TY.buildTrailheadRunYaml("signedIn", { "creds.email": "a@b.com" }, "android"));
     expect(doc.trail[0].recording.android).toEqual([{ signedIn: { creds: { email: "a@b.com" } } }]);
   });
 });

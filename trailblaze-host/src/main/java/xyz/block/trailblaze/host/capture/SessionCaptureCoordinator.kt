@@ -345,9 +345,13 @@ class SessionCaptureCoordinator(
    *   authoritative.
    * @return `true` when this call reserved the slot and started a fresh capture;
    *   `false` when (a) the slot was already taken by another caller, (b) the platform
-   *   has no coordinator-owned capture stream (WEB, which self-instruments — see below —
-   *   or Compose/desktop, which has no branch in [CaptureSession.fromOptions]; Android
-   *   and iOS are both wired), or (c) `startAll` threw and the slot was cleaned up.
+   *   has no coordinator-owned capture stream (WEB without [followWebScreencast], which
+   *   self-instruments — see below — or Compose/desktop, which has no branch in
+   *   [CaptureSession.fromOptions]; Android and iOS are both wired), or (c) `startAll` threw and
+   *   the slot was cleaned up.
+   * @param followWebScreencast records a WEB session from its browser's live screencast, the way a
+   *   web companion is recorded. For a multi-device session launched on a browser, whose browser is
+   *   not the single-device web runner's and whose companions are recorded only once this starts.
    */
   fun startForSession(
     sessionId: SessionId,
@@ -355,16 +359,16 @@ class SessionCaptureCoordinator(
     platform: TrailblazeDevicePlatform,
     options: CaptureOptions,
     appId: String? = null,
+    followWebScreencast: Boolean = false,
   ): Boolean {
-    // WEB is intentionally skipped here: `BasePlaywrightNativeTest` self-instruments
+    // WEB is skipped unless it follows the screencast: `BasePlaywrightNativeTest` self-instruments
     // its capture inside `runTrailblazeYamlSuspend` and owns the
     // `PlaywrightVideoRecordDir` lifecycle. If the coordinator also publishes a record
     // dir, the manager's `syncRecordingWithRegistry` tears down + recreates the
     // BrowserContext at exactly the moment the trail is trying to navigate, wedging
-    // the runBlocking call on the Playwright dispatcher thread. A session that starts on a
-    // browser therefore has no capture here — and so no companion recordings either (see
-    // [bindDevices]); web companions of an Android or iOS session are recorded.
-    if (platform == TrailblazeDevicePlatform.WEB) return false
+    // the runBlocking call on the Playwright dispatcher thread. The screencast recorder publishes
+    // no record dir, so a followed browser is never rebuilt.
+    if (platform == TrailblazeDevicePlatform.WEB && !followWebScreencast) return false
 
     // Step 1: reserve the slot atomically under `lock`. Bail if another caller already
     // owns this sessionId, if this id was tombstoned by a previous failed `stopAll`
@@ -396,7 +400,16 @@ class SessionCaptureCoordinator(
         )
         return false
       }
-      val captureSession = captureSessionFactory(options, platform)
+      // The companion factory is the one whose web recorder never falls back to Playwright's own.
+      // With nothing to record, an empty capture still owns the session so its companions' clocks are sampled.
+      val captureSession = (
+        if (platform == TrailblazeDevicePlatform.WEB) {
+          companionCaptureFactory(options, platform, CaptureFilenames.VIDEO_BASENAME)
+            ?: CaptureSession(emptyList(), options)
+        } else {
+          captureSessionFactory(options, platform)
+        }
+        )
         ?: run {
           Console.log(
             "[SessionCaptureCoordinator] no capture wired for platform=$platform — skipping " +
@@ -441,6 +454,7 @@ class SessionCaptureCoordinator(
       val committed = synchronized(lock) {
         if (active[sessionId] === reservation) {
           reservation.started = true
+          runCatching { File(reservation.sessionDir, CAPTURE_IN_PROGRESS_FILE).createNewFile() }
           true
         } else {
           false
@@ -487,8 +501,8 @@ class SessionCaptureCoordinator(
    * starts recording from that moment.
    *
    * Companions record only when the session's own capture records video: a session that opted out
-   * of video has not asked for footage of any display — and a session that started on a browser has
-   * no capture here at all ([startForSession] skips WEB), so none of its devices are recorded. A
+   * of video has not asked for footage of any display — and a session that started on a browser
+   * without `followWebScreencast` has no capture here at all, so none of its devices are recorded. A
    * companion records video and, on Android, logcat (`device-<name>.log`); the session has one
    * memory series, and it is the start device's.
    *
@@ -631,17 +645,21 @@ class SessionCaptureCoordinator(
       stopped.countDown()
     }
     val publishedAlready = synchronized(lock) {
-      capture.unbindsInFlight -= stopped
       capture.finishedCompanionArtifacts += artifacts
-      val published = capture.publishedArtifacts ?: return@synchronized false
-      // The session stopped while this companion was still stopping, and its metadata went out
-      // without this recording. Add it and write again, or the file on disk is invisible to readers.
-      capture.publishedArtifacts = published + artifacts
-      artifacts.isNotEmpty()
+      val published = capture.publishedArtifacts
+      if (published == null) capture.unbindsInFlight -= stopped else capture.publishedArtifacts = published + artifacts
+      published != null
     }
     if (publishedAlready) {
+      // The session stopped while this companion was still stopping, and its metadata went out
+      // without this recording. Add it and write again, or the file on disk is invisible to readers.
       runCatching { writeCaptureMetadata(capture) }.onFailure {
         Console.log("[SessionCaptureCoordinator] rewriting ${CaptureMetadata.FILENAME} for session=$sessionId failed: ${it.message}")
+      }
+      // Leaving in flight only after the write means the last one out clears the marker with every recording on record.
+      synchronized(lock) {
+        capture.unbindsInFlight -= stopped
+        if (capture.unbindsInFlight.isEmpty()) File(capture.sessionDir, CAPTURE_IN_PROGRESS_FILE).delete()
       }
     }
     return true
@@ -746,11 +764,16 @@ class SessionCaptureCoordinator(
     synchronized(lock) { capture.companionClockSamplers.values.toList() }.forEach { it.stop() }
     // Taking the finished list and publishing happen under one lock hold, so an unbind still
     // stopping its companion either lands in this list or sees it published and writes again.
-    val artifacts = synchronized(lock) {
-      (primaryArtifacts + companionArtifacts + capture.finishedCompanionArtifacts).also { capture.publishedArtifacts = it }
+    // Holding the write lock across both makes any such rewrite land after this write.
+    val artifacts = synchronized(capture.metadataWriteLock) {
+      synchronized(lock) {
+        (primaryArtifacts + companionArtifacts + capture.finishedCompanionArtifacts).also { capture.publishedArtifacts = it }
+      }.also {
+        runCatching { writeCaptureMetadata(capture) }
+          .onFailure { debug.appendLine("EXCEPTION writing ${CaptureMetadata.FILENAME}: ${it.message}") }
+      }
     }
-    runCatching { writeCaptureMetadata(capture) }
-      .onFailure { debug.appendLine("EXCEPTION writing ${CaptureMetadata.FILENAME}: ${it.message}") }
+    synchronized(lock) { if (capture.unbindsInFlight.isEmpty()) File(capture.sessionDir, CAPTURE_IN_PROGRESS_FILE).delete() }
     debug.appendLine("artifacts=${artifacts.size}")
     debug.appendLine(
       "artifactTypes=" + artifacts.joinToString(",") {
@@ -831,6 +854,9 @@ class SessionCaptureCoordinator(
 
     /** How long [stopForSession] waits for a companion an [unbindDevice] is still stopping. */
     private const val UNBIND_JOIN_TIMEOUT_SECONDS = 30L
+
+    /** In the session directory from a capture's start until every recording it made is in the metadata. */
+    const val CAPTURE_IN_PROGRESS_FILE = "capture_in_progress"
 
     /**
      * Per-session deadline used by [shutdownAll]. ffmpeg muxer flush + adb `screenrecord`

@@ -506,6 +506,7 @@ class TrailblazeTrailmapManifestLoaderTest {
           "mobile_clearAppData",
           "mobile_listInstalledApps",
           "mobile_listInstalledAppsDetailed",
+          "mobile_networkConnection",
           "mobile_pasteClipboard",
           "mobile_setClipboard",
         ),
@@ -549,6 +550,7 @@ class TrailblazeTrailmapManifestLoaderTest {
       assertEquals("ios_primitives", toolset.id)
       assertEquals(
         listOf(
+          "ios_openApp",
           "ios_openUrl",
           "ios_resetKeychain",
           "ios_setPermissions",

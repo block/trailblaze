@@ -32,6 +32,8 @@ class RunOnHostParams(
   val referrer: TrailblazeReferrer,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
+  /** See [xyz.block.trailblaze.model.DesktopAppRunYamlParams.keepDeviceLanguage]. */
+  val keepDeviceLanguage: Boolean = false,
   /**
    * Resolved per-run session-video toggle (CLI `--capture-video` > `TRAILBLAZE_CAPTURE_VIDEO` >
    * `trailblaze config capture-video` > default off). The web / Electron rules self-instrument

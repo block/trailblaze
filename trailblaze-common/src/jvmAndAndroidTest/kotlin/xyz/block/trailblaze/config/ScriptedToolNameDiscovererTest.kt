@@ -82,7 +82,7 @@ class ScriptedToolNameDiscovererTest {
 
   @Test
   fun `operational tool yaml suffixes under tools are excluded`() {
-    // *.tool.yaml is owned by ToolYamlLoader (class-backed / YAML-defined tools), not scripted.
+    // *.tool.yaml is owned by ToolYamlLoader (class-backed tools), not scripted.
     val source = resourceSourceOf(
       mapOf(
         "trailblaze/tools/assertVisible.tool.yaml" to """
@@ -153,7 +153,6 @@ class ScriptedToolNameDiscovererTest {
 
     val partitioned = resolver.partitionLenient(listOf("myapp_doThing", "definitelyUnknown"))
     assertTrue(partitioned.classBacked.isEmpty())
-    assertTrue(partitioned.yamlDefinedNames.isEmpty())
     assertEquals(setOf(ToolName("myapp_doThing")), partitioned.scriptedToolNames)
     assertFalse(ToolName("definitelyUnknown") in partitioned.scriptedToolNames)
   }

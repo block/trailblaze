@@ -85,7 +85,8 @@ data class TrailConfig(
    * Unified trails author this on their matching `config.devices` entry; lowering carries the
    * selected device's value here for existing executors. This is a device-level setting, rather
    * than an app-specific launch argument, so system UI and the target app observe the same
-   * language.
+   * language. Null runs an Android device or iOS Simulator in `en-US`, so a trail never inherits
+   * the previous trail's language.
    *
    * Appended after [args] to keep positional component accessors for earlier fields stable.
    */

@@ -78,7 +78,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         // Session-owning dispatch: the handler emits SessionEnded once this returns, so
         // the driver-log join has to happen inside this call, not in a next action.
-        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog
+        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+        traceId = runYamlRequest.traceId,
       )
     }
     return lastToolSuccess

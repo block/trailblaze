@@ -743,9 +743,9 @@ object TrailblazeProjectConfigLoader {
   ): ResolvedTrailmap {
     // Auto-discover every scripted-tool descriptor under `<trailmap>/tools/` and index it by the
     // `name:` field declared inside (or by each entry's `name:` for multi-tool descriptors).
-    // `target.tools:` then names which of those discovered tools the target exposes — names,
-    // not paths. The registry also serves the duplicate-name guard so two files declaring the
-    // same tool name fail loudly with both file paths in the error.
+    // Every discovered tool is on the target; `target.tools:` and `platforms.<p>.tools:` may still
+    // name them (names, not paths). The registry also serves the duplicate-name guard so two files
+    // declaring the same tool name fail loudly with both file paths in the error.
     val discovery = discoverTrailmapScriptedTools(loadedManifest, scriptedToolEnrichment)
     val scriptedToolRegistry = discovery.registry
 
@@ -868,6 +868,20 @@ object TrailblazeProjectConfigLoader {
         // though the author declared a tools list that just happened to be entirely scripted.
         platformConfig.copy(tools = retainedNames)
       }
+
+    // Every other scripted tool under `<trailmap>/tools/` is on the target too — listing it above
+    // is optional. Nothing is pruned here: each session already registers a tool only where its
+    // `supportedPlatforms` / `supportedDrivers` allow and `excluded_tools:` doesn't remove it.
+    // Appended after the listed tools in name order. Mirror of the build-time generator's step 2a.
+    if (loadedManifest.manifest.target != null) {
+      scriptedToolRegistry.keys
+        .filter { it !in mergedScriptedTools }
+        .sorted()
+        .forEach { toolName ->
+          resolveScriptedToolConfigsByName(toolName, scriptedToolRegistry, loadedManifest.source)
+            ?.forEach { cfg -> mergedScriptedTools.putIfAbsent(cfg.name, cfg) }
+        }
+    }
 
     val resolvedScriptedTools: List<InlineScriptToolConfig> = mergedScriptedTools.values.toList()
     val resolvedSystemPrompt: String? =
@@ -1996,8 +2010,8 @@ class ClasspathScriptedToolUnavailableException(message: String, cause: Throwabl
  *   trailmaps (those without a `target:` block).
  * @property toolsets Toolset YAML configs declared via the trailmap manifest's `toolsets:` list.
  * @property tools Operational tool YAMLs auto-discovered under the trailmap's `tools/` /
- *   `trailheads/` directories. These are the pure-YAML composed tools
- *   (`.tool.yaml`), not the scripted tools listed under `target.tools:` (those live on
+ *   `trailheads/` directories (`.tool.yaml` / `.trailhead.yaml` — class-backed or metadata
+ *   descriptors), not the scripted tools listed under `target.tools:` (those live on
  *   [target] via `AppTargetYamlConfig.tools`).
  * @property waypoints Waypoints auto-discovered under the trailmap's `waypoints/` directory.
  */

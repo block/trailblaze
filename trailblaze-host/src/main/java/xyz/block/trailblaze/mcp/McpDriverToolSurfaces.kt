@@ -50,7 +50,7 @@ object McpDriverToolSurfaces {
    * Drivers whose inner agent gets its tool list replaced outright rather than added to.
    *
    * `StepToolSet.selectInnerAgentTools` treats a non-null answer as the whole list, discarding the
-   * device-specific tools, the target's customs, and the YAML-defined ones. That is right for
+   * device-specific tools and the target's customs. That is right for
    * Compose, whose RPC server can only execute Compose tools, and wrong for every other driver —
    * which is why this is a one-element set and not "every driver that contributes tools".
    */

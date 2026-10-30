@@ -64,6 +64,33 @@ class BundledScriptedToolAnalyzeMainTest {
   }
 
   @Test
+  fun `meta-only and name-only YAMLs are described from their script, keeping what they declare`() {
+    write("card_reader.ts", "export const connectReader = trailblaze.tool({}, async () => ({ content: [] }));\n")
+    write("card_reader.yaml", "script: ./card_reader.ts\n_meta:\n  trailblaze/requiresHost: true\n")
+    write("named.ts", "export const named = trailblaze.tool({}, async () => ({ content: [] }));\n")
+    write("named.yaml", "script: ./named.ts\nname: named\n")
+    // A complete descriptor needs nothing from its script.
+    write("full.ts", "export const full = trailblaze.tool({}, async () => ({ content: [] }));\n")
+    write("full.yaml", "script: ./full.ts\nname: full\ndescription: Fully described.\n")
+
+    val partial = BundledScriptedToolAnalyzeMain.enrichableDescriptors(toolsDir)
+
+    assertEquals(listOf("card_reader.yaml", "named.yaml"), partial.map { it.first.name })
+    assertEquals(setOf("trailblaze/requiresHost"), partial.first().second.meta?.keys)
+    assertEquals("named", partial.last().second.name)
+    // The YAML owns its script, so the `.ts` is not also picked up as a bare tool.
+    assertEquals(emptyList(), selected())
+  }
+
+  @Test
+  fun `a same-named YAML that does not decode leaves the ts selected`() {
+    write("card_reader.ts", twoExports)
+    write("card_reader.yaml", "script: [unterminated\n")
+
+    assertEquals(listOf("card_reader.ts"), selected())
+  }
+
+  @Test
   fun `helper modules, declarations and tests are not selected`() {
     write("helpers.ts", "export function shared() {}\n")
     write("types.d.ts", twoExports)

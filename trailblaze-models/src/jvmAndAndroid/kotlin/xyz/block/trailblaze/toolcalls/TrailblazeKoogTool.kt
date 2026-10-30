@@ -97,12 +97,12 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
 
     /**
      * Projects a [TrailblazeToolDescriptor] onto Koog's typed [ToolDescriptor]. Shared by
-     * every tool source that surfaces descriptors to the LLM (class-backed tools, YAML-
-     * defined tools, subprocess MCP tools, future on-device bundle tools).
+     * every tool source that surfaces descriptors to the LLM (class-backed tools,
+     * subprocess MCP tools, future on-device bundle tools).
      *
      * [strict] controls unknown-type-string policy:
      *  - `true`  → throws an error with a clear message. Right for author-controlled schemas
-     *    (e.g. YAML-defined tools, `ToolYamlConfig.parameters[*].type`) where an unrecognized
+     *    (e.g. `ToolYamlConfig.parameters[*].type`) where an unrecognized
      *    type is a config bug worth surfacing loudly at registration.
      *  - `false` → silently falls back to [ToolParameterType.String]. Right for runtime-
      *    discovered schemas (e.g. subprocess MCP `tools/list` responses) where a tool with

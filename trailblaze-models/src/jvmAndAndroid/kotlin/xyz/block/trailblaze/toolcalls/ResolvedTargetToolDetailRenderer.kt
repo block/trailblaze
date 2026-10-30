@@ -10,24 +10,20 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
 
 /**
  * Renders one tool's Markdown detail page. The same renderer powers three callers so that
  * every per-tool doc surface in the project (workspace `trailblaze check` sidecars, the
  * framework reference docs under `docs/generated/functions/custom/`, and
- * the internal per-target docs under `docs/internal/targets/<id>/tools/`) shares one
+ * the internal tool-surface baseline under `docs/internal/targets/`) shares one
  * source of truth for what a tool's documentation looks like — if a field is missing,
  * every caller surfaces the same gap.
  *
- * Three input shapes are handled:
+ * Two input shapes are handled:
  *
  *  - [ClassBacked] — Kotlin-backed [TrailblazeTool] class. Description + parameter list come
  *    from the class's `@TrailblazeToolClass` + `@LLMDescription` + constructor reflection.
- *  - [YamlDefined] — `tools:`-mode YAML composition. Description + parameter list come from
- *    the YAML file ([ToolYamlConfig]).
  *  - [Scripted] — author-owned JS/TS module registered as an MCP tool. Description + input
  *    schema come from the [InlineScriptToolConfig] (which mirrors the per-trailmap
  *    `<trailmap>/tools/<id>.yaml` shape after schema translation).
@@ -44,15 +40,14 @@ object ResolvedTargetToolDetailRenderer {
 
   /**
    * Stable orphan-cleanup marker emitted as the **first line** of every per-tool sidecar
-   * file the project writes — workspace `trailblaze check`, OSS `:docs:generator:run`, and
-   * internal `:internal-docs-generator:run` all share this exact string. Orphan-prune
-   * passes in each caller (`ResolvedTargetReportEmitter.deleteOrphanSidecarFiles`,
-   * `DocsGenerator.generate`, `TargetToolBaselineGenerator.pruneStaleSidecars`) recognize
+   * file the project writes — workspace `trailblaze check` and OSS `:docs:generator:run`
+   * share this exact string. Orphan-prune passes in each caller
+   * (`ResolvedTargetReportEmitter.deleteOrphanSidecarFiles`, `DocsGenerator.generate`) recognize
    * emitter-owned files by this prefix and only delete files that carry it; hand-authored
    * markdown in the same directory survives untouched.
    *
-   * **Why the literal still mentions "trailblaze check"** — even though the OSS and
-   * internal gradle generators also produce these files, this constant is a *marker*
+   * **Why the literal still mentions "trailblaze check"** — even though the OSS gradle
+   * generator also produces these files, this constant is a *marker*
    * read by string-equality by every cleanup path, including files committed to disk
    * across multiple repos. Renaming it would strand pre-existing committed sidecars as
    * "not emitter-owned" and either skip the orphan-prune step (stale files linger) or
@@ -71,11 +66,6 @@ object ResolvedTargetToolDetailRenderer {
     data class ClassBacked(
       override val name: String,
       val kclass: KClass<out TrailblazeTool>,
-    ) : ToolDetail()
-
-    data class YamlDefined(
-      override val name: String,
-      val config: ToolYamlConfig,
     ) : ToolDetail()
 
     data class Scripted(
@@ -97,11 +87,10 @@ object ResolvedTargetToolDetailRenderer {
   /**
    * The `Kind` + `Source` pair for a tool in the per-target **availability matrix** — distinct
    * from the per-tool sidecar's `- Kind:` line (which names the backing *mechanism*:
-   * class-backed / YAML-defined / scripted). The matrix labels the authoring *language* instead:
+   * class-backed / scripted). The matrix labels the authoring *language* instead:
    *
    *  - [ToolDetail.ClassBacked] → `Kotlin`; source is the backing class's simple name (the
    *    fully-qualified name stays in the sidecar's `- Class:` line so the column doesn't blow out).
-   *  - [ToolDetail.YamlDefined] → `YAML`; source is the tool id (the descriptor at `<id>.tool.yaml`).
    *  - [ToolDetail.Scripted] → `TypeScript`; source is the `.ts`/`.js` file's base name.
    *  - `null` (no backing reachable — the same case that leaves the tool's name cell unlinked) →
    *    `-` / `-`.
@@ -114,7 +103,6 @@ object ResolvedTargetToolDetailRenderer {
   fun matrixKindAndSource(detail: ToolDetail?): Pair<String, String> = when (detail) {
     is ToolDetail.ClassBacked ->
       "Kotlin" to "`${detail.kclass.simpleName ?: detail.kclass.qualifiedName ?: "-"}`"
-    is ToolDetail.YamlDefined -> "YAML" to "`${detail.config.id}`"
     is ToolDetail.Scripted -> "TypeScript" to "`${File(detail.config.script).name}`"
     null -> "-" to "-"
   }
@@ -161,12 +149,8 @@ object ResolvedTargetToolDetailRenderer {
     appendLine()
     appendLine("# `${detail.name}`")
     appendLine()
-    when (detail) {
-      is ToolDetail.ClassBacked -> renderClassBacked(detail)
-      is ToolDetail.YamlDefined -> renderYamlDefined(detail)
-      is ToolDetail.Scripted -> renderScripted(detail)
-    }
-    appendLine("## Output")
+    renderBody(detail, section = false)
+    heading(section = false, depth = 1, text = "Output")
     appendLine()
     appendLine("Returns: `string` (opaque text content)")
     appendLine()
@@ -177,7 +161,29 @@ object ResolvedTargetToolDetailRenderer {
     appendLine()
   }
 
-  private fun StringBuilder.renderClassBacked(detail: ToolDetail.ClassBacked) {
+  /**
+   * Renders [detail] as one entry of a document that describes many tools — the internal
+   * tool-surface baseline. Same description, source, contract and input schema as
+   * [renderMarkdown], minus what only makes sense on a page of its own: no file banner, no title
+   * (the caller writes its own heading), bold labels instead of headings so a long list of entries
+   * don't flood the table of contents, no `Output` boilerplate, and no `Origin trailmap` line —
+   * that line names the consuming target, and an entry shared by many targets has no single one.
+   */
+  fun renderSection(detail: ToolDetail): String = buildString { renderBody(detail, section = true) }
+
+  private fun StringBuilder.renderBody(detail: ToolDetail, section: Boolean) {
+    when (detail) {
+      is ToolDetail.ClassBacked -> renderClassBacked(detail, section)
+      is ToolDetail.Scripted -> renderScripted(detail, section)
+    }
+  }
+
+  /** `## text` (depth 1) / `### text` (depth 2) on a page; a bold label inside a [renderSection] entry. */
+  private fun StringBuilder.heading(section: Boolean, depth: Int, text: String) {
+    appendLine(if (section) "**$text**" else "#".repeat(depth + 1) + " " + text)
+  }
+
+  private fun StringBuilder.renderClassBacked(detail: ToolDetail.ClassBacked, section: Boolean) {
     val descriptor = runCatching { detail.kclass.buildToolDescriptorIgnoringSurface() }
       .onFailure { e ->
         // Surface descriptor-build failures so a misannotated tool class (missing
@@ -194,7 +200,7 @@ object ResolvedTargetToolDetailRenderer {
     val description = descriptor?.description?.takeIf { it.isNotBlank() }
     appendLine(description ?: "_(no description provided)_")
     appendLine()
-    appendLine("## Source")
+    heading(section, 1, "Source")
     appendLine()
     appendLine("- Kind: class-backed")
     val fqn = detail.kclass.qualifiedName ?: detail.kclass.simpleName ?: "<anonymous>"
@@ -207,10 +213,11 @@ object ResolvedTargetToolDetailRenderer {
         isRecordable = annotation.isRecordable,
         requiresHost = annotation.requiresHost,
         keys = ContractKeys.YAML_SERIAL_NAMES,
+        section = section,
       )
     }
     if (descriptor == null) {
-      appendLine("## Input schema")
+      heading(section, 1, "Input schema")
       appendLine()
       appendLine("_(descriptor build failed — parameter list not available)_")
       appendLine()
@@ -223,6 +230,7 @@ object ResolvedTargetToolDetailRenderer {
       optional = descriptor.optionalParameters.map {
         ParamRow(it.name, renderKoogType(it.type), it.description.takeIf(String::isNotBlank))
       },
+      section = section,
     )
   }
 
@@ -246,64 +254,25 @@ object ResolvedTargetToolDetailRenderer {
     else -> type.toString().takeUnless { it.contains('\n') } ?: type.name.lowercase()
   }
 
-  private fun StringBuilder.renderYamlDefined(detail: ToolDetail.YamlDefined) {
-    val descriptor = runCatching { detail.config.toTrailblazeToolDescriptor() }
-      .onFailure { e ->
-        // Log so a malformed yaml-defined tool descriptor (wrong mode, missing fields, etc.)
-        // is observable rather than silently rendering as a stripped-down sidecar.
-        Console.error(
-          "ResolvedTargetToolDetailRenderer: failed to build descriptor for YAML-defined " +
-            "tool `${detail.name}` (id=${detail.config.id}): " +
-            "${e::class.simpleName}: ${e.message}",
-        )
-      }
-      .getOrNull()
-    val description = descriptor?.description ?: detail.config.description?.takeIf { it.isNotBlank() }
-    appendLine(description ?: "_(no description provided)_")
-    appendLine()
-    appendLine("## Source")
-    appendLine()
-    appendLine("- Kind: YAML-defined")
-    appendLine("- Tool id: `${detail.config.id}`")
-    appendLine()
-    renderContract(
-      surfaceToLlm = detail.config.surfaceToLlm ?: true,
-      isRecordable = detail.config.isRecordable ?: true,
-      requiresHost = detail.config.requiresHost ?: false,
-      keys = ContractKeys.YAML_SERIAL_NAMES,
-    )
-    if (descriptor != null) {
-      renderKoogParams(
-        required = descriptor.requiredParameters.toRows(),
-        optional = descriptor.optionalParameters.toRows(),
-      )
-      return
-    }
-    // Fall back to the raw `parameters:` block on the YAML config — toTrailblazeToolDescriptor
-    // throws if the YAML is in `class:` mode (shouldn't happen here, but guard anyway).
-    val (required, optional) = detail.config.parameters.partition { it.required }
-    renderKoogParams(
-      required = required.map { ParamRow(it.name, it.type, it.description?.takeIf(String::isNotBlank)) },
-      optional = optional.map { ParamRow(it.name, it.type, it.description?.takeIf(String::isNotBlank)) },
-    )
-  }
-
-  private fun StringBuilder.renderScripted(detail: ToolDetail.Scripted) {
+  private fun StringBuilder.renderScripted(detail: ToolDetail.Scripted, section: Boolean) {
     val description = detail.config.description?.takeIf { it.isNotBlank() }
     appendLine(description ?: "_(no description provided)_")
     appendLine()
-    appendLine("## Source")
+    heading(section, 1, "Source")
     appendLine()
     appendLine("- Kind: scripted")
     val scriptDisplay = renderScriptPath(detail.config.script, detail.originTrailmapDir)
     appendLine("- Script: `$scriptDisplay`")
-    if (detail.originTrailmapId == detail.consumerTrailmapId) {
-      appendLine("- Origin trailmap: `${detail.originTrailmapId}` (declared by this trailmap)")
-    } else {
-      appendLine(
-        "- Origin trailmap: `${detail.originTrailmapId}` (exported via `exports:` and consumed by " +
-          "`${detail.consumerTrailmapId}`)",
-      )
+    // A [renderSection] entry has no single consuming target, so it names no origin.
+    if (!section) {
+      if (detail.originTrailmapId == detail.consumerTrailmapId) {
+        appendLine("- Origin trailmap: `${detail.originTrailmapId}` (declared by this trailmap)")
+      } else {
+        appendLine(
+          "- Origin trailmap: `${detail.originTrailmapId}` (exported via `exports:` and consumed by " +
+            "`${detail.consumerTrailmapId}`)",
+        )
+      }
     }
     detail.config.runtime?.let { appendLine("- Runtime: `$it` (explicit override)") }
     appendLine()
@@ -325,8 +294,9 @@ object ResolvedTargetToolDetailRenderer {
       isRecordable = detail.config.isRecordable && meta.metaFlag(META_IS_RECORDABLE, default = true),
       requiresHost = detail.config.requiresHost || meta.metaFlag(META_REQUIRES_HOST, default = false),
       keys = ContractKeys.SCRIPTED_FIELD_NAMES,
+      section = section,
     )
-    renderScriptedInputSchema(detail.config.inputSchema)
+    renderScriptedInputSchema(detail.config.inputSchema, section)
   }
 
   private const val META_SURFACE_TO_LLM = "trailblaze/surfaceToLlm"
@@ -343,9 +313,9 @@ object ResolvedTargetToolDetailRenderer {
   private fun JsonObject?.metaFlag(key: String, default: Boolean): Boolean =
     (this?.get(key) as? JsonPrimitive)?.booleanOrNull ?: default
 
-  private fun StringBuilder.renderScriptedInputSchema(schema: JsonObject) {
+  private fun StringBuilder.renderScriptedInputSchema(schema: JsonObject, section: Boolean) {
     if (schema.isEmpty()) {
-      appendLine("## Input schema")
+      heading(section, 1, "Input schema")
       appendLine()
       appendLine("_(no input schema provided)_")
       appendLine()
@@ -356,7 +326,7 @@ object ResolvedTargetToolDetailRenderer {
       (it as? JsonPrimitive)?.contentOrNull()
     }.toSet()
     if (properties.isEmpty()) {
-      appendLine("## Input schema")
+      heading(section, 1, "Input schema")
       appendLine()
       appendLine("_(input schema declares no properties)_")
       appendLine()
@@ -370,7 +340,7 @@ object ResolvedTargetToolDetailRenderer {
       }
     val requiredRows = rows.filter { it.name in required }
     val optionalRows = rows.filter { it.name !in required }
-    renderKoogParams(required = requiredRows, optional = optionalRows)
+    renderKoogParams(required = requiredRows, optional = optionalRows, section = section)
   }
 
   private fun schemaTypeAndDescription(node: JsonElement): Pair<String, String?> {
@@ -405,10 +375,9 @@ object ResolvedTargetToolDetailRenderer {
     val requiresHost: String,
   ) {
     /**
-     * [ToolYamlConfig] carries `@SerialName("surface_to_llm")` and friends, so snake_case is what a
-     * `tools:`-mode YAML author sets. Class-backed pages also render this spelling: their flags come
-     * from a Kotlin annotation, a `class:`-mode `.tool.yaml` *rejects* all three, so no token there
-     * is a settable key either way — this is the shipped spelling, left alone deliberately.
+     * The snake_case spelling class-backed pages render. Their flags come from a Kotlin annotation,
+     * so no token is a settable YAML key either way — this is the shipped spelling, left alone
+     * deliberately so committed sidecars don't churn.
      */
     YAML_SERIAL_NAMES("surface_to_llm", "is_recordable", "requires_host"),
 
@@ -418,12 +387,12 @@ object ResolvedTargetToolDetailRenderer {
 
   /**
    * Renders the `## Contract` block. All three flags are sourced authoritatively (annotation
-   * reflection for class-backed; `ToolYamlConfig` fields with `null`-default fallback for
-   * YAML-defined; typed field combined with the namespaced `_meta` key for scripted) and always
-   * emitted for every tool kind, so a reader scanning a sidecar can answer "is this LLM-visible /
-   * recordable / host-only?" without having to grep Kotlin source, a `.ts` spec, or the runtime
-   * registry. Each token is the field name an author of THAT kind would set — see [ContractKeys],
-   * which is why the spelling differs per kind rather than being one shared literal.
+   * reflection for class-backed; typed field combined with the namespaced `_meta` key for
+   * scripted) and always emitted for every tool kind, so a reader scanning a sidecar can answer
+   * "is this LLM-visible / recordable / host-only?" without having to grep Kotlin source, a `.ts`
+   * spec, or the runtime registry. Each token is the field name an author of THAT kind would set —
+   * see [ContractKeys], which is why the spelling differs per kind rather than being one shared
+   * literal.
    *
    * Catches the bug class that motivated this section — PR #3407 added `isRecordable = false`
    * to `AndroidSendBroadcastTrailblazeTool` after a sibling tool's kdoc claimed it was
@@ -435,8 +404,9 @@ object ResolvedTargetToolDetailRenderer {
     isRecordable: Boolean,
     requiresHost: Boolean,
     keys: ContractKeys,
+    section: Boolean,
   ) {
-    appendLine("## Contract")
+    heading(section, 1, "Contract")
     appendLine()
     appendLine("- Visible to LLM: ${yesNo(surfaceToLlm)} (`${keys.surfaceToLlm}: $surfaceToLlm`)")
     appendLine("- Recordable: ${yesNo(isRecordable)} (`${keys.isRecordable}: $isRecordable`)")
@@ -446,24 +416,28 @@ object ResolvedTargetToolDetailRenderer {
 
   private fun yesNo(value: Boolean): String = if (value) "yes" else "no"
 
-  private fun StringBuilder.renderKoogParams(required: List<ParamRow>, optional: List<ParamRow>) {
+  private fun StringBuilder.renderKoogParams(
+    required: List<ParamRow>,
+    optional: List<ParamRow>,
+    section: Boolean,
+  ) {
     if (required.isEmpty() && optional.isEmpty()) {
-      appendLine("## Input schema")
+      heading(section, 1, "Input schema")
       appendLine()
       appendLine("_(no parameters)_")
       appendLine()
       return
     }
-    appendLine("## Input schema")
+    heading(section, 1, "Input schema")
     appendLine()
     if (required.isNotEmpty()) {
-      appendLine("### Required parameters")
+      heading(section, 2, "Required parameters")
       appendLine()
       required.forEach { row -> appendParamRow(row) }
       appendLine()
     }
     if (optional.isNotEmpty()) {
-      appendLine("### Optional parameters")
+      heading(section, 2, "Optional parameters")
       appendLine()
       optional.forEach { row -> appendParamRow(row) }
       appendLine()

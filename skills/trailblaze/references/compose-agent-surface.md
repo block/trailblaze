@@ -229,9 +229,9 @@ agent, walk the four checkpoints in order:
 1. **Run `trailblaze check --show-typed-tools`** — if the tool is in
    that output, it's analyzer-visible; the bug is downstream (steps 2–4).
    If it's not, the analyzer didn't see your `.ts` source; jump to 3.
-2. **Confirm the trailmap declares the tool** in `trailmap.yaml`'s
-   `target.tools:` list (matching the sibling YAML's filename or the
-   bare tool name, depending on which authoring path you're on).
+2. **Confirm the trailmap doesn't exclude the tool.** Every scripted
+   tool under `<trailmap>/tools/` is on the target; a
+   `target.platforms.<platform>.excluded_tools:` entry removes it on that platform.
 3. **Confirm the sibling YAML's `script:` path resolves.** The path
    is resolved against the JVM's working directory (repo root), not
    the trailmap directory — the conventional shape is

@@ -61,7 +61,7 @@ class TeardownTrailblazeTool(
     ) { put("outcome", outcome.wireName()) }
 
     val trailRun = TrailblazeJsonInstance
-      .encodeToJsonElement(TrailRunWire.serializer(), TrailRunWire(outcome, run.notes))
+      .encodeToJsonElement(TrailRunWire.serializer(), TrailRunWire(outcome))
       .jsonObject
     val started = TimeSource.Monotonic.markNow()
     val failures = mutableListOf<String>()

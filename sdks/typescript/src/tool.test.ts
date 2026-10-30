@@ -452,7 +452,7 @@ describe("tool() overload — typed authoring surface", () => {
     // likewise undefined here). Order matches the order the adapter constructs the
     // object literal in `defineTypedTool` — the test pins all five keys present
     // (an explicitly-set key is enumerable even when its value is `undefined`).
-    expect(observedCtxShape).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "trailhead", "events", "surveys", "history"]);
+    expect(observedCtxShape).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
 
     // Nothing was queued for MCP registration — the typed form is declarative, not imperative.
     // Verify by running registerPendingTools and asserting the capturing server saw no tools.
@@ -817,7 +817,7 @@ describe("tool() overload — typed authoring surface", () => {
     const result = await definition({ x: "hello" }, undefined, { tools: {} } as never);
     expect(result).toEqual({ y: 5 });
     expect(observed.input).toEqual({ x: "hello" });
-    expect(observed.ctxKeys).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "trailhead", "events", "surveys", "history"]);
+    expect(observed.ctxKeys).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
   });
 
   test("typed tool(handler) with NO type arguments — bare function + defaults", async () => {
@@ -893,7 +893,7 @@ describe("tool() overload — typed authoring surface", () => {
 describe("tool() overload — typed with-spec authoring surface", () => {
   // The typed `tool<I, O>(spec, handler)` overload is the destination shape for
   // YAML-free authoring (#3352). Authors set structured config (supportedPlatforms,
-  // requiresContext, requiresHost, supportedDrivers) on the spec object; the
+  // requiresHost, supportedDrivers) on the spec object; the
   // build-time analyzer extracts those from the AST and synthesizes the runtime
   // `_meta` for MCP advertisement. At runtime the spec is discarded — these tests
   // pin (a) the dispatch routes correctly, (b) the handler runs as if no spec
@@ -904,7 +904,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
     interface Input { x: string }
     interface Output { y: number }
     const definition = tool<Input, Output>(
-      { supportedPlatforms: ["web"], requiresContext: true },
+      { supportedPlatforms: ["web"], requiresHost: true },
       async (input) => ({ y: input.x.length }),
     );
 
@@ -991,7 +991,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
       handler: (input: I, ctx: { tools: Record<string, unknown> }) => Promise<O>,
     ) {
       return tool<I, O>(
-        { supportedPlatforms: ["web"], requiresContext: true, ...spec },
+        { supportedPlatforms: ["web"], requiresHost: true, ...spec },
         handler,
       );
     }
@@ -1008,23 +1008,23 @@ describe("tool() overload — typed with-spec authoring surface", () => {
   test("factory helper can override individual spec fields via spread", async () => {
     // The Partial<spec> pattern lets each tool file selectively override fields
     // its factory pre-filled. Pin that override semantics work (last-write-wins
-    // via spread), which is how a "web trailmap" tool can opt out of requiresContext
+    // via spread), which is how a "web trailmap" tool can opt out of requiresHost
     // for a specific tool without restating the whole spec.
     function webTool<I, O>(
       spec: Partial<TrailblazeTypedToolSpec>,
       handler: (input: I, ctx: { tools: Record<string, unknown> }) => Promise<O>,
     ) {
       return tool<I, O>(
-        { supportedPlatforms: ["web"], requiresContext: true, ...spec },
+        { supportedPlatforms: ["web"], requiresHost: true, ...spec },
         handler,
       );
     }
 
-    // Override `requiresContext` to false on a single tool; verify the call still
+    // Override `requiresHost` to false on a single tool; verify the call still
     // produces a working definition (spec is discarded at runtime, but the
     // typed-with-spec dispatch must still route correctly).
     const definition = webTool<{ x: number }, number>(
-      { requiresContext: false },
+      { requiresHost: false },
       async (input) => input.x * 2,
     );
     const result = await definition({ x: 21 }, undefined, { tools: {} } as never);
@@ -1067,7 +1067,7 @@ describe("tool() overload — typed with-spec authoring surface", () => {
     interface Input { v: number }
     const bare = tool<Input, number>(async (input) => input.v + 1);
     const withSpec = tool<Input, number>(
-      { requiresContext: true },
+      { requiresHost: true },
       async (input) => input.v + 1,
     );
     expect(typeof bare).toBe("function");
@@ -1441,13 +1441,13 @@ describe("ajv input validation at the dispatch boundary", () => {
     });
 
     test("typed spec WITHOUT inputSchema skips validation (other spec fields still apply)", async () => {
-      // An author who declares `supportedPlatforms` / `requiresContext` but omits
+      // An author who declares `supportedPlatforms` / `requiresHost` but omits
       // `inputSchema` opts out of runtime validation. Pin that the dispatch still
       // works without a schema — the spec's other fields are captured by the
       // analyzer and don't gate runtime dispatch.
       interface Input { x: number }
       const definition = tool<Input, number>(
-        { supportedPlatforms: ["web"], requiresContext: true },
+        { supportedPlatforms: ["web"], requiresHost: true },
         async (input) => input.x * 2,
       );
       const result = await definition({ x: 21 }, undefined, { tools: {} } as never);

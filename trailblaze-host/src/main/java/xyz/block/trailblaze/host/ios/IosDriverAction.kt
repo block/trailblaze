@@ -15,12 +15,15 @@ sealed interface IosDriverAction {
 
   // --- Gestures ---
 
-  data class Tap(val x: Int, val y: Int) : IosDriverAction {
-    override val description get() = "Tap on ($x, $y)"
+  /** [repeat] > 1 taps that many times in quick succession (2 = double-tap). */
+  data class Tap(val x: Int, val y: Int, val repeat: Int = 1) : IosDriverAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($x, $y)"
   }
 
-  data class TapRelative(val percentX: Double, val percentY: Double) : IosDriverAction {
-    override val description get() = "Tap on ($percentX%, $percentY%)"
+  /** [repeat] > 1 taps that many times in quick succession (2 = double-tap). */
+  data class TapRelative(val percentX: Double, val percentY: Double, val repeat: Int = 1) :
+    IosDriverAction {
+    override val description get() = "Tap${repeatSuffix(repeat)} on ($percentX%, $percentY%)"
   }
 
   data class LongPress(val x: Int, val y: Int, val durationMs: Long = 500L) : IosDriverAction {
@@ -256,3 +259,5 @@ sealed interface IosDriverAction {
     const val DEFAULT_ELEMENT_TIMEOUT_MS: Long = 5_000L
   }
 }
+
+private fun repeatSuffix(repeat: Int) = if (repeat > 1) " x$repeat" else ""

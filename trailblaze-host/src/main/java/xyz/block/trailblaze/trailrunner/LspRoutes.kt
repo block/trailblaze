@@ -105,26 +105,12 @@ internal fun Route.lspRoutes(deps: TrailRunnerDeps) {
   // pointing at the `/api/lsp/tool-schema.json` route below; the bridge itself is transport-only.
   webSocket(LSP_YAML_PATH) { serveLanguageServer(YAML_LS_BIN) }
 
-  // The JSON Schema for `.tool.yaml` tool definitions, generated from the LIVE tool catalog so the
-  // `tools:` composition block autocompletes/validates real framework + trailmap tool names and their
-  // params (see [ToolYamlSchemaBuilder]). The browser editor passes this URL — with `?trailmap=<id>`
-  // to scope tool names to that target — to yaml-language-server via `yaml.schemas`, so the server (a
-  // localhost child of this daemon) fetches it here. Catalog build is best-effort: on failure we still
-  // serve the static envelope schema (empty catalog) so validation degrades to structure-only.
+  // The JSON Schema for `.tool.yaml` tool definitions (see [ToolYamlSchemaBuilder]). The browser
+  // editor passes this URL to yaml-language-server via `yaml.schemas`, so the server (a localhost
+  // child of this daemon) fetches it here.
   get("$PATH_BASE/api/lsp/tool-schema.json") {
-    val trailmap = call.request.queryParameters["trailmap"]?.takeIf { it.isNotBlank() }
-    // Catalog comes from [ToolCatalogCache], which rebuilds only when a workspace tool source changed —
-    // yaml-language-server refetches the schema on every editor open (every Steps↔Edit toggle, every trail
-    // switch), so a fresh recursive build each time was the dominant open cost. On a build failure we serve
-    // the envelope-only schema (empty catalog) so YAML validation degrades to structure-only rather than
-    // erroring — but LOG it, or a "no YAML completions" report is untraceable.
-    val catalog = withContext(Dispatchers.IO) {
-      runCatching { ToolCatalogCache.get() }
-        .onFailure { Console.log("[LspRoutes] tool-schema catalog build failed; serving envelope-only schema: ${it.message}") }
-        .getOrDefault(emptyList())
-    }
     call.respondBytes(
-      ToolYamlSchemaBuilder.build(catalog, trailmap).encodeToByteArray(),
+      ToolYamlSchemaBuilder.build().encodeToByteArray(),
       ContentType.Application.Json,
       HttpStatusCode.OK,
     )

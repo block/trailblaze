@@ -13,7 +13,7 @@ import { NO_RECORD, READ_EVERYTHING, TABLE_ROW, planReads, type ReadPlan, type S
 import { runSurvey } from "./run-one.js";
 import type { SurveySession } from "./session.js";
 import { surveyApplies, type TargetCatalog } from "./scope.js";
-import { explainFinding, findingOf, isDeclarative, isSurvey, provesOnlyPresence, withId, type FindingExplanation, type SurveyDefinition } from "./survey.js";
+import { explainFinding, findingOf, hasFindPhase, isDeclarative, isSurvey, provesOnlyPresence, withId, type FindingExplanation, type SurveyDefinition } from "./survey.js";
 import type { Finding, NetworkRequest, SessionSummary, StreamEvent } from "./types.js";
 
 /** What one `ctx.events` read reports, besides its records. */
@@ -22,6 +22,8 @@ interface LiveScanResult {
   complete: boolean;
   incompleteReason?: string;
   cursor: number;
+  /** Inclusive timestamp cutoff resolved by the initial query, on the host clock. */
+  timeFloorMs?: number;
   /** The session-relative file the stream is read from, when it has one. */
   file?: string;
   /** What the host scanned to answer. A host that sends none can't have its filtering checked. */
@@ -33,13 +35,13 @@ export interface LiveEventSource {
   list(): Promise<string[]>;
   query(
     stream: string,
-    options?: { match?: Record<string, unknown>; after?: number; waitMs?: number; limit?: number },
+    options?: { match?: Record<string, unknown>; since?: string; after?: number; waitMs?: number; limit?: number },
   ): Promise<LiveScanResult & { events: Array<{ timeMs: number; data: unknown }>; truncated?: boolean }>;
   /**
    * How many records match, none of them returned. Without it every stream is read whole, as is
    * every stream when a host answers without a `count`.
    */
-  count?(stream: string, options?: { match?: Record<string, unknown>; after?: number }): Promise<LiveScanResult & { count?: number }>;
+  count?(stream: string, options?: { match?: Record<string, unknown>; since?: string; after?: number }): Promise<LiveScanResult & { count?: number }>;
 }
 
 /** Thrown when a survey running mid-trail reads something that exists only once the session ends. */
@@ -71,6 +73,8 @@ const MAX_RECORDS = 20_000;
 const MAX_RECORD_CHARS = 16_000_000;
 
 export interface LiveSessionOptions {
+  /** Initial read boundary for every stream. Later reads resume from that stream's cursor. */
+  since?: string;
   /** This session's id, for findings. */
   id?: string;
   /** What is already known about the run: platform, target, app, driver, device classifiers. */
@@ -109,6 +113,7 @@ export class LiveSessionReader {
   private readonly losses = new Map<string, string>();
   private readonly files = new Map<string, string>();
   private readonly captured = new Set<string>();
+  private timeFloorMs?: number;
   private readonly reads = new Map<string, StreamRead>();
   private readonly chars = new Map<string, number>();
   /** False once the host answers a count without one: from then on every stream is read whole. */
@@ -120,7 +125,9 @@ export class LiveSessionReader {
     private readonly source: LiveEventSource,
     private readonly options: LiveSessionOptions = {},
   ) {
-    this.filtering = typeof source.count === "function";
+    // Once a query uses a byte cursor, counts cannot exclude late arrivals with old timestamps.
+    // Time-based windows read records whole so drain() can keep applying their timestamp cutoff.
+    this.filtering = typeof source.count === "function" && options.since !== "trail" && options.since !== "trailhead";
   }
 
   /** What is known about the run, for a survey's `platforms`, `appIds` and `targets`. */
@@ -159,12 +166,17 @@ export class LiveSessionReader {
   async waitForMore(ms: number): Promise<void> {
     if (ms <= 0) return;
     const stream = this.lastGrown ?? this.cursors.keys().next().value ?? NETWORK_STREAM;
-    const after = this.cursors.get(stream);
     // A wait only sleeps: what it returns is read again, in order, by the next `read()`.
-    await this.source.query(stream, after === undefined ? { waitMs: ms, limit: 1 } : { after, waitMs: ms, limit: 1 });
+    await this.source.query(stream, { ...this.startingPoint(stream), waitMs: ms, limit: 1 });
   }
 
   private lastGrown?: string;
+
+  private startingPoint(stream: string): { since?: string; after?: number } {
+    const after = this.cursors.get(stream);
+    if (after !== undefined) return { after };
+    return this.options.since === undefined ? {} : { since: this.options.since };
+  }
 
   private held(): { records: number; chars: number } {
     let records = 0;
@@ -249,13 +261,19 @@ export class LiveSessionReader {
 
   private async drain(stream: string): Promise<void> {
     for (;;) {
-      const after = this.cursors.get(stream);
-      const result = await this.source.query(stream, after === undefined ? { limit: PAGE } : { after, limit: PAGE });
+      const result = await this.source.query(stream, { ...this.startingPoint(stream), limit: PAGE });
+      this.timeFloorMs ??= result.timeFloorMs;
+      if (this.timeFloorMs === undefined && (this.options.since === "trail" || this.options.since === "trailhead")) {
+        throw new Error(`Surveys with since: "${this.options.since}" require a runtime that returns the timestamp cutoff. Update the runtime or rebuild the Android test shell with the current framework.`);
+      }
       if (!this.note(stream, result)) return;
       if (result.events.length > 0) this.lastGrown = stream;
-      const chars = charsOf(result.events);
-      if (this.overLimit(stream, result.events.length, chars)) return;
-      this.hold(stream, result.events, chars);
+      // Time-based starting points keep their cutoff after switching to byte cursors, so
+      // later records carrying an older timestamp are excluded. Named marks keep every arrival.
+      const events = result.events.filter((row) => this.timeFloorMs === undefined || row.timeMs >= this.timeFloorMs);
+      const chars = charsOf(events);
+      if (this.overLimit(stream, events.length, chars)) return;
+      this.hold(stream, events, chars);
       this.cursors.set(stream, result.cursor);
       if (!result.truncated && result.events.length < PAGE) return;
     }
@@ -263,8 +281,7 @@ export class LiveSessionReader {
 
   /** A count that reads no record: captured, lost data, and where the stream ends. False when the host can't count. */
   private async readHealth(stream: string): Promise<boolean> {
-    const after = this.cursors.get(stream);
-    const result = await this.source.count!(stream, after === undefined ? { match: NO_RECORD } : { match: NO_RECORD, after });
+    const result = await this.source.count!(stream, { match: NO_RECORD, ...this.startingPoint(stream) });
     if (!this.counted(result)) return false;
     if (this.note(stream, result)) this.cursors.set(stream, result.cursor);
     return true;
@@ -277,7 +294,7 @@ export class LiveSessionReader {
    */
   private async drainFiltered(stream: string, read: Extract<StreamRead, { kind: "filtered" }>): Promise<boolean> {
     const start = this.cursors.get(stream);
-    const from = (after: number | undefined) => (after === undefined ? {} : { after });
+    const from = (after: number | undefined) => (after === undefined ? this.startingPoint(stream) : { after });
     let cursor = start;
     const kept: Array<{ timeMs: number; data: unknown }> = [];
     let keptChars = 0;
@@ -434,6 +451,8 @@ function liveSession(
 export interface LiveSurveyOptions {
   /** How long to wait for a finding. Default 0: judge what is captured now. */
   waitMs?: number;
+  /** Partial finding to wait for. Objects allow extra keys; arrays match expected items in any order. Primitives match exactly. */
+  expected?: Record<string, unknown>;
   /** How long one wait for new records lasts before the survey runs again. Default 500. */
   pollMs?: number;
   log?: (message: string) => void;
@@ -499,7 +518,7 @@ export interface LiveSurveyResult {
 }
 
 /**
- * Runs a survey against what is captured so far and passes on its first finding. Until then it waits
+ * Runs a survey against what is captured so far and passes on its first matching finding. Until then it waits
  * for more records and runs again, up to `waitMs`. It fails when the time runs out, naming which of
  * a finding's queries matched and which did not, and it fails when the capture lost data, since a
  * record that never arrived may be the one the survey looks for.
@@ -518,6 +537,14 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
       message: `Survey ${name} sets requiresFinishedSession: true, so it runs only after the session ends and cannot run mid-trail.`,
     };
   }
+  if (!hasFindPhase(def)) {
+    return {
+      passed: false,
+      findings: [],
+      waitedMs: 0,
+      message: `Survey ${name} has only a label phase, which runs after the session over a batch of runs, so it cannot run mid-trail.`,
+    };
+  }
   const about = reader.summary;
   if (!surveyApplies(def.spec, (about ?? {}) as SessionSummary, options.targets)) {
     return {
@@ -531,12 +558,18 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
   // Run against one read, collecting what the survey reports through `ctx.error()`.
   const judge = async (read: LiveRead) => {
     const errors: string[] = [];
-    const findings = await runSurvey(def, read.session, name, options.log, (e) => errors.push(e.message));
+    const all = await runSurvey(def, read.session, name, options.log, (e) => errors.push(e.message));
+    const findings = options.expected === undefined ? all : all.filter((f) => matchesExpected(f, options.expected));
     return { findings, errors };
   };
+  // Evidence can imply absence (for example an in-flight request whose response was lost).
+  // Only expectations on the fixed fields of a declarative finding preserve presence-only proof.
+  const presenceOnly = provesOnlyPresence(def) && Object.keys(options.expected ?? {}).every((key) =>
+    ["survey", "summary", "data"].includes(key),
+  );
   // A presence-only survey needs no stream it does not find a record on; any other needs every
   // stream its absence rests on to be captured.
-  const needed = provesOnlyPresence(def) ? [] : absenceStreams(def, named);
+  const needed = presenceOnly ? [] : absenceStreams(def, named);
   const plan = planReads(def);
   const readAll = async () => withUncaptured(await reader.read(named, plan), needed);
   const waitedMs = () => now() - started;
@@ -552,8 +585,8 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
     let { findings, errors } = await judge(read);
     if (errors.length > 0) return errorResult(errors);
     // Proof of absence needs every record; proof of presence does not.
-    if (findings.length > 0 && (read.complete || provesOnlyPresence(def))) {
-      if (!provesOnlyPresence(def)) {
+    if (findings.length > 0 && (read.complete || presenceOnly)) {
+      if (!presenceOnly) {
         // Streams are read one after another, so a record that landed on a stream already read,
         // before the one that completed the match, is missed. Every record that existed when the
         // first read ended is in a second, so an absence that holds there held then.
@@ -562,7 +595,7 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
         ({ findings, errors } = await judge(read));
         if (errors.length > 0) return errorResult(errors);
       }
-      if (findings.length > 0 && (read.complete || provesOnlyPresence(def))) {
+      if (findings.length > 0 && (read.complete || presenceOnly)) {
         return { passed: true, findings, waitedMs: waitedMs(), message: `Survey ${name} found ${findings.map((f) => f.summary).join("; ")}.` };
       }
     }
@@ -570,10 +603,25 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
     // be the start of something whose end has not arrived yet.
     const remaining = deadline - now();
     if (remaining <= 0 || !read.complete) {
-      return { passed: false, findings: [], waitedMs: waitedMs(), message: failure(def, name, read, waitedMs(), findings) };
+      const expected = options.expected === undefined ? "" : ` Expected a finding matching ${JSON.stringify(options.expected)}.`;
+      return { passed: false, findings: [], waitedMs: waitedMs(), message: failure(def, name, read, waitedMs(), findings) + expected };
     }
     await reader.waitForMore(Math.min(pollMs, remaining));
   }
+}
+
+/** Each expected array item must match one actual item; fields never combine across items. */
+function matchesExpected(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual) && expected.every((item) => actual.some((candidate) => matchesExpected(candidate, item)));
+  }
+  if (expected !== null && typeof expected === "object") {
+    if (actual === null || typeof actual !== "object" || Array.isArray(actual)) return false;
+    return Object.entries(expected).every(([key, value]) =>
+      Object.prototype.hasOwnProperty.call(actual, key) && matchesExpected((actual as Record<string, unknown>)[key], value),
+    );
+  }
+  return actual === expected;
 }
 
 function scopeOf(spec: SurveyDefinition["spec"]): string {
@@ -599,7 +647,7 @@ function capped(def: SurveyDefinition, name: string, read: LiveRead): string {
   // Only a finding filtered on an analytics event name can hold fewer by narrowing; one on network
   // requests or events, or a name the host can't match, reads its streams whole whatever it names.
   const instead = !isDeclarative(def)
-    ? `A handler reads every stream whole. Write the check as a finding on an analytics event name, which reads only that event's records, or`
+    ? `A handler reads every stream whole. Write the check as a finding on an analytics event name using a named mark or the session window to enable filtered reads, or`
     : read.cappedOnFilter
       ? `Narrow the finding to an analytics event name fewer records carry, or`
       : `This finding reads its streams whole, so`;
@@ -646,7 +694,9 @@ export async function runNamedLiveSurvey(
   name: string,
   events: LiveEventSource,
   options: {
+    since?: string;
     waitMs?: number;
+    expected?: Record<string, unknown>;
     sessionId?: string;
     summary?: LiveSessionOptions["summary"];
     targets?: TargetCatalog;
@@ -658,7 +708,7 @@ export async function runNamedLiveSurvey(
     const found = Object.keys(module).filter((k) => isSurvey(module[k]));
     throw new Error(`No survey is exported as ${name}. This file exports: ${found.join(", ") || "(none)"}.`);
   }
-  const reader = new LiveSessionReader(events, { id: options.sessionId, summary: options.summary });
-  const result = await runLiveSurvey(withId(def, name), reader, { waitMs: options.waitMs, targets: options.targets, log: options.log });
+  const reader = new LiveSessionReader(events, { id: options.sessionId, summary: options.summary, since: options.since });
+  const result = await runLiveSurvey(withId(def, name), reader, { waitMs: options.waitMs, expected: options.expected, targets: options.targets, log: options.log });
   return { survey: name, ...result };
 }

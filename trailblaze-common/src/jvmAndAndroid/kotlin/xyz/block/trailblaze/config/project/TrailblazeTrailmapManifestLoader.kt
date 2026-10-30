@@ -78,8 +78,6 @@ object TrailblazeTrailmapManifestLoader {
    * so tests that swap [Thread.currentThread]'s context classloader (via
    * `ClasspathFixture.withClasspathRoot`) naturally miss the cache and rediscover from the
    * new classpath. [WeakHashMap] keys ensure dead classloaders can be GC'd.
-   *
-   * Mirrors the cache pattern in `TrailblazeSerializationInitializer.buildYamlDefinedTools`.
    */
   private val classpathTrailmapCache = WeakHashMap<ClassLoader, List<LoadedTrailblazeTrailmapManifest>>()
   private val classpathTrailmapCacheLock = Any()

@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.trailhead
 
+import xyz.block.trailblaze.model.ResolvedTarget
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import kotlin.reflect.KClass
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.AfterTest
@@ -24,7 +27,6 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -35,7 +37,14 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
+import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -59,6 +68,7 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.events.SessionEventsHostFunctions
+import xyz.block.trailblaze.events.SessionEventsWaitPump
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -73,6 +83,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.waypoint.WaypointAssertion
 
 /**
  * Teardown through the shared runner: `teardown` runs once after every trail whatever its
@@ -84,15 +95,20 @@ class TeardownTest {
 
   @BeforeTest
   fun reset() {
+    // An unmatched landing waits out the settle; keep that short unless a test is about it.
+    TrailheadLanding.settleTimeoutMs = 1
     TrailheadRuns.clear()
     TrailheadHandoffStore.clear()
   }
 
   @AfterTest
   fun cleanUp() {
+    TrailheadLanding.waypoints = null
+    TrailheadLanding.settleTimeoutMs = WaypointAssertion.DEFAULT_TIMEOUT_MS
     sessionDir.deleteRecursively()
     TrailheadRuns.clear()
     TrailheadHandoffStore.clear()
+    SessionEventsWaitPump.clear()
   }
 
   /** A trailhead tool as the scripted runtime drives it: begin, handler, complete. */
@@ -123,8 +139,13 @@ class TeardownTest {
       val invocation = TrailheadRuns.beginInvocation(context, this, args)
       seenPreviousRun += invocation?.previousRun
       val meta = handler(invocation?.previousRun)
-      TrailheadRuns.completeInvocation(context, trailheadToolName, invocation, meta, failed = handlerFails)
-      return if (handlerFails) TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "catch-up failed") else TrailblazeToolResult.Success()
+      val landingFailure = if (handlerFails) null else TrailheadRuns.checkLanding(context, invocation, meta)
+      TrailheadRuns.completeInvocation(context, trailheadToolName, invocation, meta, failed = handlerFails || landingFailure != null)
+      return when {
+        handlerFails -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "catch-up failed")
+        landingFailure != null -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = landingFailure)
+        else -> TrailblazeToolResult.Success()
+      }
     }
   }
 
@@ -152,7 +173,33 @@ class TeardownTest {
     memory = AgentMemory(),
     sessionDirProvider = { sessionDir },
     deviceBindings = bindings,
+    screenStateProvider = screenTexts?.let {
+      { TextScreen(nextScreens.removeFirstOrNull() ?: screenTexts.orEmpty(), failTreeRead).also { captures++ } }
+    },
+    resolvedTarget = target?.let { ResolvedTarget(it, activeDeviceId) },
   )
+
+  /** Captures shown before [screenTexts], one per capture, for a screen still settling. */
+  private val nextScreens = ArrayDeque<List<String>>()
+
+  /** The run's target; its waypoints are the `app/` ones. Null runs with none, as a browser run does. */
+  private var target: TrailblazeHostAppTarget? = NamedTarget("app")
+
+  /** How many times the landing check captured the screen. */
+  private var captures = 0
+
+  /** Whether each capture's tree read fails, as a lazily read capture's would. */
+  private var failTreeRead = false
+
+  private class NamedTarget(id: String) : TrailblazeHostAppTarget(id = id, displayName = id) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String> = listOf("com.example.$id")
+
+    override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+      emptySet()
+  }
+
+  /** What a capture shows, as Android accessibility texts; null gives the context no capture. */
+  private var screenTexts: List<String>? = null
 
   /** Tools the fake dispatch knows by the text of their InputTextTrailblazeTool stand-in. */
   private val trailheads = mutableMapOf<String, FakeTrailhead>()
@@ -472,31 +519,55 @@ class TeardownTest {
   }
 
   @Test
-  fun `notes from trail tools reach teardown and a reused setup is logged`() {
-    val signIn = FakeTrailhead(handler = { last ->
+  fun `a reused setup is logged with the session it came from`() {
+    FakeTrailhead(handler = { last ->
       if (last != null) reuseMeta("already signed in", ok = true) else null
     }).also { trailheads["signIn"] = it }
-    stepTools["makeItem"] = { ctx ->
-      TrailheadRuns.completeInvocation(ctx, "makeItem", null, meta {
-        put("notes", buildJsonArray { add(buildJsonObject { put("created", buildJsonObject { put("kind", "item"); put("id", "i-7") }) }) })
-      })
-      TrailblazeToolResult.Success()
-    }
     stepTools["tap"] = { TrailblazeToolResult.Success() }
     val util = runnerUtil()
 
-    runTrail(util, "makeItem")
-    val notes = signIn.teardownCalls.single().second["notes"]!!.jsonArray
-    assertEquals("i-7", notes.single().jsonObject["created"]!!.jsonObject["id"]!!.jsonPrimitive.content)
-    assertEquals("makeItem", notes.single().jsonObject["tool"]!!.jsonPrimitive.content)
-
+    runTrail(util, "tap")
     nextSession("s-2")
     runTrail(util, "tap")
-    // Notes never carry across trails.
-    assertEquals(0, signIn.teardownCalls[1].second["notes"]!!.jsonArray.size)
     val setup = trailheadEvents().last { it["type"]?.jsonPrimitive?.content == TrailheadEventStream.Type.SETUP }
     assertEquals(TrailheadEventStream.Setup.REUSED, setup["setup"]?.jsonPrimitive?.content)
     assertEquals("s-1", setup["previousRunSessionId"]?.jsonPrimitive?.content)
+  }
+
+  @Test
+  fun `a driver holding events is made to hand them over before each phase ends, while that phase is current`() {
+    trailheads["signIn"] = FakeTrailhead()
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    // A driver that delivers only while called: what it holds when a phase ends gets the phase
+    // current when it is finally delivered.
+    val deliveredIn = mutableListOf<String?>()
+    SessionEventsWaitPump.register(session.sessionId.value) { deliveredIn += TrailheadRuns.phaseName(session.sessionId.value) }
+
+    runTrail(runnerUtil(), "tap")
+
+    // Null first: what the browser held before the trailhead opened is not the trailhead's.
+    assertEquals(listOf(null, "trailhead", "trail", "teardown"), deliveredIn)
+  }
+
+  @Test
+  fun `a chain of reuses names the session that ran the setup, not just the one that handed it on`() {
+    trailheads["signIn"] = FakeTrailhead(handler = { last ->
+      if (last != null) reuseMeta("already signed in", ok = true) else null
+    })
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+    nextSession("s-3")
+    runTrail(util, "tap")
+
+    val setups = trailheadEvents().filter { it["type"]?.jsonPrimitive?.content == TrailheadEventStream.Type.SETUP }
+    val third = setups.last()
+    assertEquals(TrailheadEventStream.Setup.REUSED, third["setup"]?.jsonPrimitive?.content)
+    assertEquals("s-2", third["previousRunSessionId"]?.jsonPrimitive?.content)
+    assertEquals("s-1", third["trailheadSessionId"]?.jsonPrimitive?.content)
   }
 
   @Test
@@ -694,6 +765,33 @@ class TeardownTest {
   }
 
   @Test
+  fun `a session failed after its teardown handed a setup on hands nothing to the next trail`() {
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    TrailheadHandoffStore.dropSession(SessionId("another-session"))
+    assertTrue(TrailheadHandoffStore.holdsReusableFor(deviceId, trailheadItems("signIn")))
+    TrailheadHandoffStore.dropSession(SessionId("s-1"))
+    assertFalse(TrailheadHandoffStore.holdsReusableFor(deviceId, trailheadItems("signIn")))
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertNull(signIn.seenPreviousRun[1])
+  }
+
+  @Test
+  fun `a run's own reuse answer beats the process env var, which decides only when the run says nothing`() {
+    val envOn: (String) -> String? = { if (it == TrailheadRuns.REUSE_ENV_VAR) "true" else null }
+
+    assertFalse(TrailheadRuns.reuseEnabledFor(false, envOn))
+    assertTrue(TrailheadRuns.reuseEnabledFor(null, envOn))
+    assertFalse(TrailheadRuns.reuseEnabledFor(null) { null })
+    assertTrue(TrailheadRuns.reuseEnabledFor(true) { null })
+  }
+
+  @Test
   fun `a device holds a reusable setup only after a teardown said reusable`() {
     val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
     stepTools["tap"] = { TrailblazeToolResult.Success() }
@@ -749,26 +847,6 @@ class TeardownTest {
 
     assertEquals("signed in", signIn.seenPreviousRun[1]?.reason)
     assertEquals("catalog seeded", seed.seenPreviousRun[1]?.reason)
-  }
-
-  @Test
-  fun `a step's invalidates note forces reusable false, naming the note`() {
-    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
-    stepTools["changeLocale"] = { ctx ->
-      TrailheadRuns.completeInvocation(ctx, "changeLocale", null, meta {
-        put("notes", buildJsonArray { add(buildJsonObject { put("invalidates", "device locale") }) })
-      })
-      TrailblazeToolResult.Success()
-    }
-    stepTools["tap"] = { TrailblazeToolResult.Success() }
-    val util = runnerUtil()
-
-    runTrail(util, "changeLocale")
-    nextSession("s-2")
-    runTrail(util, "tap")
-
-    assertNull(signIn.seenPreviousRun[1])
-    assertTrue(previousRunReasons().last().contains("invalidated the setup: device locale"), previousRunReasons().last())
   }
 
   @Test
@@ -970,14 +1048,14 @@ class TeardownTest {
       } as TrailblazeHostFunctionDispatcher.Outcome.Success).value as JsonArray
       result(false, "queried")
     }).also { trailheads["signIn"] = it }
-    stepTools["buyerNote"] = { ctx ->
+    stepTools["buyerStep"] = { ctx ->
       bindings!!.switchTo("buyer")
-      TrailheadEventLog.append(ctx, TrailheadEventStream.Type.NOTE) { put("tool", "buyerNote") }
+      TrailheadEventLog.append(ctx, "buyerStep") { put("tool", "buyerStep") }
       bindings!!.switchTo("seller")
       TrailblazeToolResult.Success()
     }
 
-    runTrail(runnerUtil(), "buyerNote")
+    runTrail(runnerUtil(), "buyerStep")
 
     val devices = queried!!.map { it.jsonObject["data"]!!.jsonObject[TrailheadEventLog.DEVICE_FIELD]?.jsonPrimitive?.content }
     assertTrue(devices.isNotEmpty())
@@ -1148,6 +1226,274 @@ class TeardownTest {
     runTrail(noLogging, "tap")
 
     assertFalse(missing.exists())
+  }
+
+  @Test
+  fun `a trailhead records the waypoints its setup ended on, and hands them to the next run`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertEquals(listOf("app/home"), landings().first()["waypoints"]?.jsonArray?.map { it.jsonPrimitive.content })
+    assertEquals("app/home", assertNotNull(signIn.seenPreviousRun[1]).trailheadEndWaypoint)
+  }
+
+  @Test
+  fun `a reused setup that lands where the last run's trailhead ended passes`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+    runTrail(util, "tap")
+
+    nextSession("s-2")
+    signIn.handler = { last -> if (last != null) reuseMeta("on home", ok = true) else null }
+    // Different content on the same place: only the waypoint's own selectors count.
+    screenTexts = listOf("Home", "Cart: 2 items")
+    runTrail(util, "tap")
+
+    val landing = landings().last()
+    assertEquals("app/home", landing["expected"]?.jsonPrimitive?.content)
+    assertNull(landing["missing"])
+  }
+
+  @Test
+  fun `a reused setup that lands somewhere else fails the trailhead`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+    runTrail(util, "tap")
+
+    nextSession("s-2")
+    signIn.handler = { last -> if (last != null) reuseMeta("on home", ok = true) else null }
+    screenTexts = listOf("Settings")
+    val error = assertFailsWith<TrailheadException> { runTrail(util, "tap") }
+
+    assertTrue(error.message.orEmpty().contains("not on app/home"), error.message)
+    assertEquals("app/home", landings().last()["missing"]?.jsonPrimitive?.content)
+    // A trailhead that failed hands nothing on.
+    nextSession("s-3")
+    signIn.handler = { null }
+    runTrail(util, "tap")
+    assertNull(signIn.seenPreviousRun[2])
+  }
+
+  @Test
+  fun `a trailhead that ended on no known waypoint hands nothing on`() {
+    installWaypoints()
+    screenTexts = listOf("Somewhere new")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    // Nothing reusable is held, so the next trail's pre-trail force-stop still gives it a clean start.
+    assertFalse(TrailheadHandoffStore.holdsReusableFor(deviceId, trailheadItems("signIn")))
+    assertFalse(TrailheadHandoffStore.holdsReusable(deviceId))
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertNull(signIn.seenPreviousRun[1])
+    assertTrue(previousRunReasons().last().contains("no known waypoint"), previousRunReasons().last())
+  }
+
+  @Test
+  fun `with no waypoint registry the landing is not checked and the setup is still handed on`() {
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    signIn.handler = { last -> if (last != null) reuseMeta("on home", ok = true) else null }
+    runTrail(util, "tap")
+
+    val last = assertNotNull(signIn.seenPreviousRun[1])
+    assertNull(last.trailheadEndWaypoint)
+    assertTrue(landings().all { it["waypoints"] is kotlinx.serialization.json.JsonNull && it["reason"] != null })
+  }
+
+  @Test
+  fun `a capture whose tree read fails leaves the setup unchecked and hands nothing on, without failing it`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    failTreeRead = true
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertNull(signIn.seenPreviousRun[1])
+    assertTrue(landings().first()["reason"]?.jsonPrimitive?.content.orEmpty().contains("capture failed"))
+  }
+
+  @Test
+  fun `a host run whose waypoint registry fails to load hands nothing on`() {
+    TrailheadLanding.waypoints = { error("bad trailmap") }
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    assertFalse(TrailheadHandoffStore.holdsReusable(deviceId))
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertNull(signIn.seenPreviousRun[1])
+    assertTrue(previousRunReasons().last().contains("could not be checked"), previousRunReasons().last())
+  }
+
+  @Test
+  fun `a setup whose screen is still settling records the waypoint it settles on`() {
+    installWaypoints()
+    TrailheadLanding.settleTimeoutMs = 5_000
+    nextScreens.addAll(listOf(listOf("Loading"), listOf("Loading")))
+    screenTexts = listOf("Home")
+    FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+
+    runTrail(runnerUtil(), "tap")
+
+    assertEquals(listOf("app/home"), landings().single()["waypoints"]?.jsonArray?.map { it.jsonPrimitive.content })
+  }
+
+  @Test
+  fun `a target with no waypoints of its own is not checked, and its setup is still handed on`() {
+    installWaypoints()
+    target = NamedTarget("other")
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    val last = assertNotNull(signIn.seenPreviousRun[1])
+    assertNull(last.trailheadEndWaypoint)
+    assertTrue(landings().first()["reason"]?.jsonPrimitive?.content.orEmpty().contains("target other"))
+  }
+
+  @Test
+  fun `a run with no target is not checked, captures nothing, and its setup is still handed on`() {
+    installWaypoints()
+    target = null
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    val last = assertNotNull(signIn.seenPreviousRun[1])
+    assertNull(last.trailheadEndWaypoint)
+    assertEquals(0, captures, "a browser capture spends the step's pending detail request")
+  }
+
+  @Test
+  fun `a trailhead that ended on more than one waypoint logs them all and hands nothing on`() {
+    installWaypoints()
+    screenTexts = listOf("Home", "Settings")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+    val util = runnerUtil()
+
+    runTrail(util, "tap")
+    nextSession("s-2")
+    runTrail(util, "tap")
+
+    assertEquals(
+      listOf("app/home", "app/settings"),
+      landings().first()["waypoints"]?.jsonArray?.map { it.jsonPrimitive.content },
+    )
+    assertNull(signIn.seenPreviousRun[1])
+  }
+
+  @Test
+  fun `a lane with reuse off checks no landing`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+
+    runTrail(runnerUtil(reuse = false), "tap")
+
+    assertTrue(landings().isEmpty())
+  }
+
+  @Test
+  fun `a run with reuse off hands nothing on, so the next reuse is always checked against a landing`() {
+    installWaypoints()
+    screenTexts = listOf("Home")
+    val signIn = FakeTrailhead().also { trailheads["signIn"] = it }
+    stepTools["tap"] = { TrailblazeToolResult.Success() }
+
+    runTrail(runnerUtil(reuse = false), "tap")
+    nextSession("s-2")
+    runTrail(runnerUtil(), "tap")
+
+    assertNull(signIn.seenPreviousRun[1])
+    assertTrue(previousRunReasons().last().contains("reuse was off"), previousRunReasons().last())
+  }
+
+  private fun installWaypoints() {
+    val all = listOf(textWaypoint("app/home", "Home"), textWaypoint("app/settings", "Settings"))
+    TrailheadLanding.waypoints = { targetId -> all.filter { it.id.startsWith("$targetId/") } }
+  }
+
+  private fun textWaypoint(id: String, text: String) = WaypointDefinition(
+    id = id,
+    byClassifier = mapOf(
+      "android" to WaypointVariant(
+        required = listOf(
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text)),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun landings(): List<JsonObject> =
+    trailheadEvents().filter { it["type"]?.jsonPrimitive?.content == TrailheadEventStream.Type.TRAILHEAD_END }
+
+  /** A capture showing [texts] as Android accessibility nodes; [failTreeRead] fails its lazy tree read. */
+  private class TextScreen(private val texts: List<String>, private val failTreeRead: Boolean = false) : ScreenState {
+    override val screenshotBytes: ByteArray? = null
+    override val deviceWidth: Int = 1080
+    override val deviceHeight: Int = 1920
+    override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+    override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+    override val trailblazeNodeTree: TrailblazeNode
+      get() = if (failTreeRead) {
+        error("tree read failed")
+      } else {
+        TrailblazeNode(
+          nodeId = 1,
+          children = texts.mapIndexed { i, text ->
+            TrailblazeNode(nodeId = (i + 2).toLong(), driverDetail = DriverNodeDetail.AndroidAccessibility(text = text))
+          },
+          driverDetail = DriverNodeDetail.AndroidAccessibility(),
+        )
+      }
   }
 
   private fun trailheadEvents(): List<JsonObject> =

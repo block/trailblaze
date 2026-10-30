@@ -90,6 +90,8 @@ class RunTrailYamlHandler(
             existingSessionId = null,
             referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
             useRecordedSteps = true,
+            // The action continues on the app's current screen, in the language it is showing.
+            keepDeviceLanguage = true,
             onComplete = { completion.complete(it) },
           )
           awaitCompletionWithTimeout(completion)

@@ -33,6 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes
+import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import kotlin.test.AfterTest
 import kotlin.test.Test
 
@@ -139,6 +140,22 @@ class SubprocessToolRegistrationTest {
     val decoded = registration.decodeToolCall("""{"email":"a@b.c"}""")
     assertThat(decoded).isInstanceOf(SubprocessTrailblazeTool::class)
       .prop(SubprocessTrailblazeTool::advertisedName).isEqualTo(ToolName("myapp_login"))
+  }
+
+  @Test fun `a non-recordable MCP tool decodes to a call that stays out of recordings`() {
+    fun decodedRecordability(meta: TrailblazeToolMeta): Boolean {
+      val registered = RegisteredSubprocessTool(
+        advertisedName = ToolName("debug_dump"),
+        description = null,
+        inputSchema = emptySchema,
+        meta = meta,
+      )
+      return SubprocessToolRegistration(registered, stubProvider()).decodeToolCall("{}")
+        .getIsRecordableFromAnnotation()
+    }
+
+    assertThat(decodedRecordability(TrailblazeToolMeta(isRecordable = false))).isEqualTo(false)
+    assertThat(decodedRecordability(TrailblazeToolMeta())).isEqualTo(true)
   }
 
   @Test fun `buildKoogTool wires the serializer and descriptor`() {

@@ -230,9 +230,8 @@ object TrailArgConfigSerializer : KSerializer<TrailArgConfig> {
       // A scalar default round-trips as its raw content; because coercion is declaration-driven
       // (re-read against `type` on the next parse), emitting the raw scalar is value-lossless for
       // string/integer/boolean. An array/object default has no scalar form, so it goes through the
-      // JsonElement<->structural bridge `YamlDefinedToolSerializer` uses to write a params tree
-      // back
-      // to YAML (kaml has no native `JsonElement` support).
+      // JsonElement<->structural bridge that writes a JSON tree back to YAML (kaml has no native
+      // `JsonElement` support).
       (value.default as? DefaultBehavior.Use)?.value?.let { defaultElement ->
         when (defaultElement) {
           is JsonPrimitive -> encodeStringElement(descriptor, 2, defaultElement.content)

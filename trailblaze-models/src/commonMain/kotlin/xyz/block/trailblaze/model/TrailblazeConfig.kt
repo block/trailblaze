@@ -59,6 +59,13 @@ data class TrailblazeConfig(
    * caller that really does drain first may set this.
    */
   val hostDrainsBeforeSessionEnd: Boolean = false,
+  /**
+   * True lets this run's trailhead receive the setup the last run of the same trailhead on this
+   * device handed on, as `ctx.previousRun`; false refuses it. Null leaves it to the host runner
+   * process's `TRAILBLAZE_TRAILHEAD_REUSE`. On-device runners read their instrumentation argument
+   * instead.
+   */
+  val trailheadReuse: Boolean? = null,
 ) {
   companion object {
     val DEFAULT = TrailblazeConfig()

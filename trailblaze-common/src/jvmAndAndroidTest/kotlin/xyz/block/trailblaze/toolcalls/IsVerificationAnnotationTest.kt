@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  *     class level (used by the verify gate when only a tool name is in hand).
  *  2. `TrailblazeTool.isVerificationToolInstance()` — the per-instance read that prefers
  *     [TrailblazeToolMetadata.isVerification] when present, falling back to the class
- *     annotation (used by `YamlDefinedTrailblazeTool` to surface YAML config flags).
+ *     annotation (used by tools whose flags vary per instance rather than per class).
  *  3. The default value when no annotation field is set — verification must be opt-in,
  *     not opt-out, so existing tools don't accidentally become verify-safe.
  *
@@ -68,8 +68,8 @@ class IsVerificationAnnotationTest {
     val instance = MetadataOverrideTool(toolMetadata = TrailblazeToolMetadata(isVerification = true))
     assertTrue(
       instance.isVerificationToolInstance(),
-      "Per-instance metadata must override the class annotation default — this is the path " +
-        "YamlDefinedTrailblazeTool uses to surface `is_verification: true` from YAML.",
+      "Per-instance metadata must override the class annotation default — this is how a " +
+        "tool whose flags vary per instance declares itself verify-safe.",
     )
   }
 

@@ -980,7 +980,8 @@ class CheckCommand : Callable<Int> {
    *    heuristic.
    *  - **Device pin** ([DevicePinLint], needs the RAW source): `config.driver:` beside
    *    `config.devices:` is fatal — a pin indented one level too shallow silently unpins the
-   *    device. The deprecated bare-string device form warns only, because that decode branch is
+   *    device, and so is a top-level `config.locale:`, which no device reads. The deprecated
+   *    bare-string device form warns only, because that decode branch is
    *    still live and unmigrated consumer repos must not break on a CLI upgrade.
    *  - **Trail target** ([TrailTargetLint], needs the DECODED trail): `config.target:` naming an id
    *    this workspace cannot resolve WARNS. The runtime behaviour it catches is the worst kind of
@@ -1368,10 +1369,10 @@ class CheckCommand : Callable<Int> {
       return EXIT_OK
     }
 
-    // A trailmap may legitimately carry ANY mix of Kotlin (class-backed `.tool.yaml`),
-    // TypeScript, and YAML tools — including zero TypeScript. `tsc` fails with TS18003 ("No
+    // A trailmap may legitimately carry ANY mix of Kotlin (class-backed `.tool.yaml`) and
+    // TypeScript tools — including zero TypeScript. `tsc` fails with TS18003 ("No
     // inputs were found") when pointed at a tools/ dir with no `.ts`/`.js` sources, so a
-    // Kotlin/YAML-only trailmap (e.g. a class-backed library trailmap) would otherwise fail the
+    // Kotlin-only trailmap (e.g. a class-backed library trailmap) would otherwise fail the
     // typecheck for having nothing to check. Partition those out and skip them — there is no
     // TypeScript to validate. Only trailmaps with at least one typecheckable source reach `tsc`.
     val (typecheckable, skipped) = trailmaps.partition { hasTypeScriptToolSources(it) }

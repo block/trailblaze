@@ -12,6 +12,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -94,11 +95,9 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
     runBlocking {
       TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
         dynamicLlmClient = stubLlmClient,
-        onDeviceRpc = rpcClient,
+        launchDevice = TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(testDeviceId, rpcClient, TrailblazeDriverType.DEFAULT_ANDROID),
         runYamlRequest = request,
-        trailblazeDeviceId = testDeviceId,
         onProgressMessage = {},
-        targetTestApp = null,
       )
     }
   }
@@ -112,11 +111,9 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
       runBlocking {
         TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = stubLlmClient,
-          onDeviceRpc = rpcClient,
+          launchDevice = TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(testDeviceId, rpcClient, TrailblazeDriverType.DEFAULT_ANDROID),
           runYamlRequest = request,
-          trailblazeDeviceId = testDeviceId,
           onProgressMessage = {},
-          targetTestApp = null,
         )
       }
     }
@@ -132,11 +129,9 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
       runBlocking {
         TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = stubLlmClient,
-          onDeviceRpc = rpcClient,
+          launchDevice = TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(testDeviceId, rpcClient, TrailblazeDriverType.DEFAULT_ANDROID),
           runYamlRequest = request,
-          trailblazeDeviceId = testDeviceId,
           onProgressMessage = { progress += it },
-          targetTestApp = null,
         )
       }
     }

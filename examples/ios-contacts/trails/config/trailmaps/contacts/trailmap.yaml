@@ -4,8 +4,8 @@
 # contact shape). Each scripted tool is a bare `<name>.ts` under `tools/` whose
 # `trailblaze.tool<I>(spec, handler)` export carries name, input schema, and metadata.
 # No sibling YAML descriptor is needed — the trailmap loader auto-discovers every `.ts`
-# in `tools/` that exports a typed tool and resolves the names listed below into the
-# runtime tool list. (An optional `<name>.yaml` is still supported when an author needs
+# in `tools/` that exports a typed tool and puts it on this target, so the manifest doesn't
+# list them. (An optional `<name>.yaml` is still supported when an author needs
 # to pin a descriptor field or declare a multi-tool file.)
 #
 # Trailmap id is `contacts` so the same trailmap can later host Android / web tools alongside
@@ -22,21 +22,6 @@ target:
   # the scripted-tool descriptions advertise themselves as the right choice. The
   # file lives next to this trailmap.yaml and is inlined at trailmap-load time.
   system_prompt_file: contacts-ios-system-prompt.md
-  tools:
-    # --- Trailheads: deterministic starting points -------------------------------
-    - contacts_ios_openApp
-    - contacts_ios_openContact
-    # --- Feature tools -----------------------------------------------------------
-    - contacts_ios_dismissKeyboardIfPresent
-    - contacts_ios_searchContacts
-    - contacts_ios_createContact
-    - contacts_ios_deleteContact
-    - contacts_ios_verifyContactStructure
-    - contacts_ios_addPhoneNumber
-    # --- Composition example: a scripted tool that delegates to other -----------
-    # --- scripted tools in the same trailmap via `client.tools.<name>(args)`. -------
-    - contacts_ios_searchAndVerify
-
   platforms:
     ios:
       app_ids:

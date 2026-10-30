@@ -128,14 +128,14 @@ object AppUnderTestLauncher {
    * [resumedActivityOrNull] with a ceiling on how long the main thread may take to answer.
    *
    * Null is ambiguous by design — "no Activity is RESUMED" and "the main thread did not answer in
-   * time" are the same answer to the only caller that needs one ([resumedActivityWithin]), which
-   * reports not-ready either way.
+   * time" are the same answer to both callers: [resumedActivityWithin], which reports not-ready
+   * either way, and the default-locale probe, which skips the wait either way.
    *
    * Same post-and-await shape as [onMainThreadForCapture], kept separate because the contracts
    * differ: caller-supplied budget and null on expiry here, fixed deadline and a thrown not-ready
    * there. A hang fix in one deserves a look at the other.
    */
-  private fun resumedActivityOrNullWithin(budgetMs: Long): Activity? {
+  internal fun resumedActivityOrNullWithin(budgetMs: Long): Activity? {
     val answered = CountDownLatch(1)
     val resumed = AtomicReference<Activity?>(null)
     Handler(Looper.getMainLooper()).post {

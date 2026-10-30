@@ -83,6 +83,7 @@ class InputTextSelectorTest {
       nodeSelector: TrailblazeNodeSelector,
       longPress: Boolean,
       tapRoute: TapRouteOverride?,
+      timeoutMs: Long?,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       if (!usesAccessibilityDriver) return null

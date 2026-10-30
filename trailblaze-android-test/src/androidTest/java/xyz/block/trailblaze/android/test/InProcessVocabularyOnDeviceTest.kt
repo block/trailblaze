@@ -399,9 +399,9 @@ class InProcessVocabularyOnDeviceTest {
       .getSystemService(Context.WIFI_SERVICE) as WifiManager
     try {
       run(allRadios(on = false))
-      awaitWifi(false, wifi, "networkConnection with every radio false should turn Wi-Fi off")
+      awaitWifi(false, wifi, "mobile_networkConnection with every radio false should turn Wi-Fi off")
       run(allRadios(on = true))
-      awaitWifi(true, wifi, "networkConnection with every radio true should turn Wi-Fi back on")
+      awaitWifi(true, wifi, "mobile_networkConnection with every radio true should turn Wi-Fi back on")
     } finally {
       // Hand the device back on, and WAIT for it: a radio still on its way up is the state every
       // test after this one would start from. Nothing here asserts — a restore that fails must not

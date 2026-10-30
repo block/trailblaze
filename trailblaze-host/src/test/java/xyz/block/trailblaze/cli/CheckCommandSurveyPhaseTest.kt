@@ -35,8 +35,8 @@ class CheckCommandSurveyPhaseTest {
     return captured.toString()
   }
 
-  private fun workspace(surveys: String): File {
-    val root = tempFolder.newFolder("ws")
+  private fun workspace(surveys: String, name: String = "ws"): File {
+    val root = tempFolder.newFolder(name)
     File(root, "trails/config/trailmaps/shop/surveys").mkdirs()
     File(root, "trails/config/trailmaps/shop/trailmap.yaml").writeText("id: shop\ntarget:\n  display_name: Shop\n")
     File(root, "trails/config/trailmaps/shop/surveys/shop.survey.ts").writeText(surveys.trimIndent())
@@ -129,17 +129,52 @@ class CheckCommandSurveyPhaseTest {
   }
 
   @Test
-  fun `a mid-trail survey still written with the old footprint key is linted the same`() {
+  fun `a mid-trail survey reading tool calls through find fails, however find is written`() {
+    val forms = mapOf(
+      "arrow" to "find: (s) => s.tools.filter({ name: \"tapOn\" }).map((t) => ({ summary: \"tap\", evidence: [t] }))",
+      "method" to "find(session) { return session.tools.filter({ name: \"tapOn\" }).map((t) => ({ summary: \"tap\", evidence: [t] })); }",
+      "declarative" to "find: { tools: { name: \"tapOn\" } }",
+    )
+    for ((form, find) in forms) {
+      val (exit, stderr) = run(
+        workspace(
+          """
+          import { trailblaze } from "@trailblaze/scripting/surveys";
+          export const tapped = trailblaze.survey({ feature: "shop.tap", $find });
+          """,
+          name = form,
+        ),
+      )
+      assertEquals(CheckCommand.EXIT_TYPE_ERROR, exit, form)
+      assertTrue(stderr.contains("Survey tapped reads session.tools"), "$form: $stderr")
+    }
+  }
+
+  @Test
+  fun `a survey still written with the old footprint key fails and says to use finding`() {
     val (exit, stderr) = run(
       workspace(
         """
         import { trailblaze } from "@trailblaze/scripting/surveys";
-        export const tapped = trailblaze.survey({ feature: "shop.tap", footprint: { tools: { name: "tapOn" } } });
+        export const paid = trailblaze.survey({ feature: "shop.pay", footprint: { network: { path: "/pay" } } });
+        export const tapped = trailblaze.survey({ feature: "shop.tap", requiresFinishedSession: true, footprint: { tools: { name: "tapOn" } } });
+        export const quoted = trailblaze.survey({ requiresFinishedSession: true, "footprint": { network: { path: "/q" } } });
+        export const singleQuoted = trailblaze.survey({ requiresFinishedSession: true, 'footprint': { network: { path: "/s" } } });
+        export const described = trailblaze.survey({ description: "footprint: in a string", finding: { network: { path: "/d" } } });
+        export const payload = trailblaze.survey({ description: 'Payload, "footprint": metadata', finding: { network: { path: "/p" } } });
+        const footprint = { network: { path: "/h" } };
+        export const shorthand = trailblaze.survey({ requiresFinishedSession: true, footprint });
         """,
       ),
     )
     assertEquals(CheckCommand.EXIT_TYPE_ERROR, exit)
-    assertTrue(stderr.contains("Survey tapped reads session.tools (a finding query)"), stderr)
+    assertTrue(stderr.contains("Survey quoted sets footprint, the old name of finding."), stderr)
+    assertTrue(stderr.contains("Survey singleQuoted sets footprint, the old name of finding."), stderr)
+    assertTrue(stderr.contains("Survey shorthand sets footprint, the old name of finding."), stderr)
+    assertFalse(stderr.contains("Survey described"), stderr)
+    assertFalse(stderr.contains("Survey payload"), stderr)
+    assertTrue(stderr.contains("Survey paid sets footprint, the old name of finding. Rename the key to finding."), stderr)
+    assertTrue(stderr.contains("Survey tapped sets footprint, the old name of finding. Rename the key to finding."), stderr)
   }
 
   @Test
@@ -166,7 +201,7 @@ class CheckCommandSurveyPhaseTest {
         import { trailblaze } from "@trailblaze/scripting/surveys";
         export const reported = trailblaze.survey({
           description: "Reported a tap",
-          footprint: { network: { path: "/x" }, data: { finding: { tools: ["tapOn"] } } },
+          finding: { network: { path: "/x" }, data: { finding: { tools: ["tapOn"] } } },
         });
         """,
       ),
@@ -194,15 +229,11 @@ class CheckCommandSurveyPhaseTest {
   }
 
   @Test
-  fun `a named footprint or an absent over tool calls fails`() {
+  fun `an absent over tool calls fails`() {
     val (exit, stderr) = run(
       workspace(
         """
         import { trailblaze } from "@trailblaze/scripting/surveys";
-        export const named = trailblaze.survey({
-          feature: "shop.named",
-          footprints: { "shop.a": { network: { path: "/a" } }, "shop.b": { objectives: { status: "failed" } } },
-        });
         export const vetoed = trailblaze.survey({
           feature: "shop.vetoed",
           finding: { network: { path: "/a" }, absent: { deviceLog: { contains: "crash" } } },
@@ -211,7 +242,6 @@ class CheckCommandSurveyPhaseTest {
       ),
     )
     assertEquals(CheckCommand.EXIT_TYPE_ERROR, exit)
-    assertTrue(stderr.contains("Survey named reads session.objectives (a finding query)"), stderr)
     assertTrue(stderr.contains("Survey vetoed reads session.deviceLog (a finding query)"), stderr)
   }
 

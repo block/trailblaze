@@ -10,10 +10,10 @@ Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
                        capture-memory] [--[no-]capture-network] [--[no-]
                        capture-video] [--full-report-payloads] [--[no-]
                        headless] [--markdown] [--no-daemon] [--no-logging]
-                       [--no-report] [--[no-]save-recording] [--self-heal] [--
-                       [no-]turbo] [--[no-]use-recorded-steps]
-                       [--args-file=<file>] [--compose-port=<composePort>]
-                       [--configuration=<name>]
+                       [--no-report] [--reuse-trailhead] [--[no-]
+                       save-recording] [--self-heal] [--[no-]turbo] [--[no-]
+                       use-recorded-steps] [--args-file=<file>]
+                       [--compose-port=<composePort>] [--configuration=<name>]
                        [--device-classifier=<catalog-key>]
                        [--driver=<driverType>] [--llm=<llm>]
                        [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
@@ -35,6 +35,10 @@ A failed pass is reported, handed to --on-failure, and counted toward
 --iterations. The loop then recovers in a new session that runs the trailhead
 again, and continues with the passes left. It stops early after 3 sessions in a
 row that complete no pass. Exits non-zero if any pass failed.
+
+With --reuse-trailhead, each pass's trailhead may reuse the setup the previous
+pass left instead of setting up again, when that trailhead supports it. Each
+pass then runs the whole trail in a session of its own.
 
 Takes the `trailblaze run` options, for one trail file. Several devices each
 loop in turn, for --iterations each. Never saves a recording: it would record
@@ -229,6 +233,13 @@ every pass into the trail.
                                its last argument. It runs alongside the loop,
                                one at a time: the loop waits for it before
                                starting the next one, and before exiting.
+      --reuse-trailhead      Let each pass's trailhead reuse the setup the
+                               previous pass handed on, instead of setting up
+                               again. Each pass then runs the whole trail,
+                               trailhead included, in a session of its own.
+                               Only a trailhead that defines `teardown` hands
+                               its setup on, and only after a pass that passed;
+                               otherwise the next pass sets up from scratch.
       --[no-]save-recording  Save the recording back to the trail source
                                directory after a successful run. Default: on.
                                Use --no-save-recording to skip. Even when on,

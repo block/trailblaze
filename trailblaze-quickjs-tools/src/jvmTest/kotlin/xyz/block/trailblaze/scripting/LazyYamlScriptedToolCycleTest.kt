@@ -27,10 +27,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * A cycle across two scripted tools (A calls B, B calls A back, as in `runIf` → `block_runIf` →
- * `runIf`) lands on A's engine while A's outer call still holds it. Each tool has its own engine, so
- * neither the same-bundle guard nor the engine's same-thread tripwire sees it. It must fail with a
- * cycle error marked as a call that never ran, never hang.
+ * A cycle across two scripted tools (A calls B, B calls A back) lands on A's engine while A's outer
+ * call still holds it. Each tool has its own engine, so neither the same-bundle guard nor the
+ * engine's same-thread tripwire sees it. It must fail with a cycle error marked as a call that
+ * never ran, never hang.
  */
 class LazyYamlScriptedToolCycleTest {
 

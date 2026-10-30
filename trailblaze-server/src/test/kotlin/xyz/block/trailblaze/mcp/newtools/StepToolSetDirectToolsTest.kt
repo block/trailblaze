@@ -907,7 +907,6 @@ class StepToolSetDirectToolsTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "arg-gate-test-set",
         toolClasses = emptySet(),
-        yamlToolNames = emptySet(),
       ),
     )
     val registeredName = name

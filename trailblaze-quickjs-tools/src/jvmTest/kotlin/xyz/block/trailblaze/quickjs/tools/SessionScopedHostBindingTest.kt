@@ -110,7 +110,6 @@ class SessionScopedHostBindingTest {
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         name = "test-set",
         toolClasses = classes.toSet(),
-        yamlToolNames = emptySet(),
       ),
     )
   }

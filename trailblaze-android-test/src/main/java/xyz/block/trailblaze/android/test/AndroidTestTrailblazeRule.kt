@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import java.util.concurrent.CancellationException
 import android.app.Activity
 import android.graphics.Bitmap
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,6 +15,7 @@ import kotlinx.datetime.Clock
 import org.junit.runner.Description
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.AndroidDeviceLocale
+import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
@@ -290,10 +292,8 @@ class AndroidTestTrailblazeRule(
       val trailItems = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = classifiers)
       if (trailblazeYaml.firstSkipReason(trailItems) == null) {
         val config = trailblazeYaml.extractTrailConfig(trailItems)
-        config?.locale?.let { locale ->
-          validateExecutableTrail(trailItems, config, assetPath)
-          applyLocaleAndAwaitRunningApp(locale)
-        }
+        validateExecutableTrail(trailItems, config, assetPath)
+        applyLocaleAndAwaitRunningApp(TrailDeviceLocale.forTrail(AndroidDeviceLocale.forTrail(config?.locale)))
       }
     }
 
@@ -374,6 +374,7 @@ class AndroidTestTrailblazeRule(
     sendSessionStartLog: Boolean,
     externalMemory: AgentMemory?,
     trailSourceUrl: String? = null,
+    keepDeviceLanguage: Boolean = false,
   ): TrailblazeToolResult.Success? {
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
     val trailItems =
@@ -385,6 +386,7 @@ class AndroidTestTrailblazeRule(
       trailSourceUrl = trailSourceUrl,
       sendSessionStartLog = sendSessionStartLog,
       externalMemory = externalMemory,
+      keepDeviceLanguage = keepDeviceLanguage,
     )
   }
 
@@ -430,6 +432,7 @@ class AndroidTestTrailblazeRule(
     trailSourceUrl: String?,
     sendSessionStartLog: Boolean,
     externalMemory: AgentMemory?,
+    keepDeviceLanguage: Boolean = false,
   ): TrailblazeToolResult.Success? {
     // A previous trail can leave a failed locale requirement behind. Reset before the host's
     // readiness mirror can observe this new trail, including when it declares another locale.
@@ -448,10 +451,16 @@ class AndroidTestTrailblazeRule(
     validateExecutableTrail(trailItems, trailConfig, trailFilePath)
 
     // Named and declared explicit assets already applied this at the rule boundary before app
-    // setup. The idempotent fallback covers direct YAML and undeclared arbitrary asset paths.
-    trailConfig?.locale?.let { locale ->
-      applyLocaleAndAwaitRunningApp(locale) { target.currentActivity() }
-    }
+    // setup. The idempotent fallback covers direct YAML and undeclared arbitrary asset paths. A
+    // prompt or single tool the host sends into a running session keeps the session's language,
+    // as does a run the host marks [keepDeviceLanguage]. A catalog device's locale counts as
+    // declared.
+    TrailDeviceLocale.forRun(
+      declared = AndroidDeviceLocale.forTrail(trailConfig?.locale),
+      continuesSession = keepDeviceLanguage ||
+        !sendSessionStartLog ||
+        trailblazeYaml.isBareToolEnvelope(trailYaml),
+    )?.let { request -> applyLocaleAndAwaitRunningApp(request) { target.currentActivity() } }
 
     val session = currentSession()
     if (sendSessionStartLog) {
@@ -689,17 +698,34 @@ class AndroidTestTrailblazeRule(
     )
 
   /**
-   * Applies [locale] before consumer setup and, when an outer rule already launched the app,
-   * waits until either that Activity or its replacement observes the new configuration.
+   * Applies the trail's locale [request] before consumer setup and, when an outer rule already
+   * launched the app, waits until either that Activity or its replacement observes the new
+   * configuration. A declared locale is always awaited, as it was before the default existed; the
+   * default only when it changed the device's language.
+   *
+   * The default looks for a running Activity without waiting, and gives the main thread
+   * [DEFAULT_LOCALE_ACTIVITY_PROBE_MS] to answer: [activityProvider] may block until one resumes
+   * (the standalone server's does, for minutes), which is right for a declared locale that must be
+   * seen to land, but would hold every trail without one behind an app that is not up or a main
+   * thread that is stuck.
    */
   private fun applyLocaleAndAwaitRunningApp(
-    locale: String,
+    request: TrailDeviceLocale.Request,
     activityProvider: () -> Activity? = AppUnderTestLauncher::resumedActivityOrNull,
   ) {
     activityLocaleGate.configure(
-      locale = locale,
-      activityProvider = activityProvider,
-      applyLocale = { AndroidDeviceLocale.apply(it) },
+      locale = request.locale,
+      activityProvider = if (request.declared) {
+        activityProvider
+      } else {
+        { AppUnderTestLauncher.resumedActivityOrNullWithin(DEFAULT_LOCALE_ACTIVITY_PROBE_MS) }
+      },
+      applyLocale = {
+        val outcome = TrailDeviceLocale.applyWithOutcome(request, deviceLabel = "this Android device") { locale ->
+          AndroidDeviceLocale.apply(locale)
+        }
+        mustObserveLocale(request, outcome)
+      },
     )
   }
 
@@ -732,6 +758,18 @@ class AndroidTestTrailblazeRule(
   }
 
   internal companion object {
+    /** How long the default-locale probe waits for the main thread to say which Activity is up. */
+    private const val DEFAULT_LOCALE_ACTIVITY_PROBE_MS = 1_000L
+
+    /**
+     * Whether a running app must be seen in the requested language before the trail goes on. A
+     * declared locale always must. The default only when it finished changing the language: one
+     * left half done may leave the device in its old language, and waiting for the default there
+     * would hold the trail for the full wait before it fails.
+     */
+    internal fun mustObserveLocale(request: TrailDeviceLocale.Request, outcome: TrailDeviceLocale.Outcome): Boolean =
+      request.declared || outcome == TrailDeviceLocale.Outcome.CHANGED
+
     /**
      * Returns an Activity only after it observes [locale]. A guarded provider lets the locale wait
      * span the brief interval where Activity recreation makes a harness reference unavailable.
@@ -742,24 +780,25 @@ class AndroidTestTrailblazeRule(
       awaitLocale: (String, () -> A?) -> A,
     ): A {
       if (locale == null) return activityProvider()
-      return awaitLocale(locale) { runCatching(activityProvider).getOrNull() }
+      return awaitLocale(locale) { orNullUnlessInterrupted(activityProvider) }
     }
 
     /**
      * Applies a device locale immediately, then waits for propagation only when an Activity was
-     * already running. [activityWithRequestedLocale] covers the complementary case where this
-     * initial probe lands inside an Activity recreation gap.
+     * already running and [applyLocale] says the app has something to pick up.
+     * [activityWithRequestedLocale] covers the complementary case where this initial probe lands
+     * inside an Activity recreation gap.
      */
     internal fun <A> applyLocaleAndAwaitIfActivityRunning(
       locale: String,
       activityProvider: () -> A?,
-      applyLocale: (String) -> Unit,
+      applyLocale: (String) -> Boolean,
       awaitLocale: (String, () -> A?) -> Unit,
     ): Boolean {
-      val safeActivityProvider = { runCatching(activityProvider).getOrNull() }
+      val safeActivityProvider = { orNullUnlessInterrupted(activityProvider) }
       val appWasRunning = safeActivityProvider() != null
-      applyLocale(locale)
-      if (appWasRunning) awaitLocale(locale, safeActivityProvider)
+      val mustObserve = applyLocale(locale)
+      if (appWasRunning && mustObserve) awaitLocale(locale, safeActivityProvider)
       return appWasRunning
     }
 
@@ -831,6 +870,23 @@ class AndroidTestTrailblazeRule(
 }
 
 /**
+ * [block]'s result, or null when it throws — except an interrupt or a cancel, which is a run being
+ * stopped rather than a missing Activity: it propagates, with the interrupt flag restored, so the
+ * run's termination handling still sees it.
+ */
+internal fun <T> orNullUnlessInterrupted(block: () -> T?): T? =
+  try {
+    block()
+  } catch (e: InterruptedException) {
+    Thread.currentThread().interrupt()
+    throw e
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Throwable) {
+    null
+  }
+
+/**
  * Serializes Activity capture with locale mutation and remembers the locale that every later
  * Activity access must observe. A failed propagation wait marks the gate failed so failure
  * reporting skips Activity access instead of repeating the same timeout.
@@ -843,10 +899,14 @@ internal class ActivityLocaleGate<A>(
 
   @Volatile private var requirement: LocaleRequirement = LocaleRequirement.None
 
+  /**
+   * [applyLocale] sets the device language and returns whether the app must be seen to observe
+   * it; when it returns false, nothing is required of later Activity access.
+   */
   fun configure(
     locale: String,
     activityProvider: () -> A?,
-    applyLocale: (String) -> Unit,
+    applyLocale: (String) -> Boolean,
   ) {
     pendingConfigurations.incrementAndGet()
     try {
@@ -856,8 +916,9 @@ internal class ActivityLocaleGate<A>(
             locale = locale,
             activityProvider = activityProvider,
             applyLocale = {
-              applyLocale(it)
-              requirement = LocaleRequirement.Required(it)
+              applyLocale(it).also { mustObserve ->
+                if (mustObserve) requirement = LocaleRequirement.Required(it)
+              }
             },
             awaitLocale = { expectedLocale, provider -> awaitLocale(expectedLocale, provider) },
           )
@@ -893,15 +954,15 @@ internal class ActivityLocaleGate<A>(
    * observational capture into a locale-propagation failure.
    */
   fun activityIfAvailable(activityProvider: () -> A?): A? = configurationLock.read {
-    val available = runCatching(activityProvider).getOrNull() ?: return@read null
+    val available = orNullUnlessInterrupted(activityProvider) ?: return@read null
     when (val current = requirement) {
       LocaleRequirement.None -> available
       LocaleRequirement.Failed -> null
-      is LocaleRequirement.Required -> runCatching {
-        awaitLocale(current.locale) { runCatching(activityProvider).getOrNull() }.also {
+      is LocaleRequirement.Required -> orNullUnlessInterrupted {
+        awaitLocale(current.locale) { orNullUnlessInterrupted(activityProvider) }.also {
           requirement = LocaleRequirement.None
         }
-      }.getOrNull()
+      }
     }
   }
 

@@ -85,6 +85,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     inputSchema: JsonObject = JsonObject(mapOf("type" to JsonPrimitive("object"))),
     spec: JsonObject? = null,
     uncapturedSpec: Boolean = false,
+    uncapturedSpecFields: List<String> = emptyList(),
   ): ScriptedToolDefinition = ScriptedToolDefinition(
     name = name,
     sourcePath = sourcePath,
@@ -94,6 +95,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     outputSchema = JsonObject(mapOf("type" to JsonPrimitive("string"))),
     spec = spec,
     uncapturedSpec = uncapturedSpec,
+    uncapturedSpecFields = uncapturedSpecFields,
   )
 
   /** Test seam: drives [AnalyzerScriptedToolEnrichment] with a fixed analyzer payload. */
@@ -175,6 +177,74 @@ class AnalyzerScriptedToolEnrichmentTest {
         failed.reason.contains("Inline the spec"),
       "expected an actionable inline-the-spec message, got: ${failed.reason}",
     )
+  }
+
+  @Test
+  fun `meta-only descriptor whose inline spec has an unreadable gate hard-fails naming the field`() {
+    // `trailblaze.tool({ description: "Swipe.", supportedPlatforms: ANDROID_ONLY, ...SHARED }, ...)`:
+    // the analyzer reads the description but not the platform gate or the spread. Registering it
+    // would advertise the tool on every platform, so enrichment fails and names what to inline.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "swipe.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "swipe",
+          sourcePath = script.absolutePath,
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Swipe."))),
+          uncapturedSpec = true,
+          uncapturedSpecFields = listOf("supportedPlatforms", "...SHARED"),
+        ),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/swipe.ts", script = "./swipe.ts")),
+    )
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failed.reason.contains("'swipe'") &&
+        failed.reason.contains("`supportedPlatforms`") &&
+        failed.reason.contains("`...SHARED`") &&
+        failed.reason.contains("inline literal"),
+      "expected the tool, each unreadable entry, and the inline-a-literal fix, got: ${failed.reason}",
+    )
+  }
+
+  @Test
+  fun `partial descriptor supplying the gate resolves despite an unreadable spec gate`() {
+    // The hard error is for descriptor-less tools only: a descriptor that supplies
+    // supportedPlatforms itself still registers, gated by the YAML, with nothing to warn about.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "swipe.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "swipe",
+          sourcePath = script.absolutePath,
+          uncapturedSpec = true,
+          uncapturedSpecFields = listOf("supportedPlatforms"),
+        ),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/swipe.yaml",
+          script = "./swipe.ts",
+          name = "swipe",
+          supportedPlatforms = listOf("android"),
+        ),
+      ),
+    )
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val platforms = assertIs<JsonArray>(config.meta?.get("trailblaze/supportedPlatforms"))
+    assertEquals(JsonPrimitive("android"), platforms.single())
   }
 
   @Test
@@ -766,7 +836,7 @@ class AnalyzerScriptedToolEnrichmentTest {
           spec = JsonObject(
             mapOf(
               "supportedPlatforms" to JsonArray(listOf(JsonPrimitive("web"))),
-              "requiresContext" to JsonPrimitive(true),
+              "requiresHost" to JsonPrimitive(true),
             ),
           ),
         ),
@@ -789,7 +859,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
     val platforms = assertIs<JsonArray>(meta.get("trailblaze/supportedPlatforms"))
     assertEquals(JsonPrimitive("web"), platforms.single())
-    assertEquals(JsonPrimitive(true), meta.get("trailblaze/requiresContext"))
+    assertEquals(JsonPrimitive(true), meta.get("trailblaze/requiresHost"))
   }
 
   @Test
@@ -865,7 +935,6 @@ class AnalyzerScriptedToolEnrichmentTest {
     val platforms = assertIs<JsonArray>(meta.get("trailblaze/supportedPlatforms"))
     assertEquals(JsonPrimitive("android"), platforms.single())
     // No analyzer-only keys leaked through.
-    assertNull(meta.get("trailblaze/requiresContext"))
     assertNull(meta.get("trailblaze/requiresHost"))
   }
 
@@ -1288,7 +1357,7 @@ class AnalyzerScriptedToolEnrichmentTest {
           spec = JsonObject(
             mapOf(
               "description" to JsonPrimitive("   "),
-              "requiresContext" to JsonPrimitive(true),
+              "requiresHost" to JsonPrimitive(true),
             ),
           ),
         ),

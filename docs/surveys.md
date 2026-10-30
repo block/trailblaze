@@ -9,6 +9,11 @@ is up to its author: a product feature, a user journey's outcome, a server error
 Run a set of surveys over a set of sessions and you get the findings per session plus a report
 per survey across the whole batch.
 
+Three words, in order: a **survey** is the check; its **findings** are what it found in each run,
+pinned to records; its **labels** are what those findings add up to across a batch of runs, each
+pinned to the findings behind it. *"Completed take-payment"* is a finding in one run; *"journey:
+take-payment, in 14 runs"* is a label. See [Labels](#labels).
+
 Most surveys run after a session, over the session directory the runner writes (or the zip CI
 uploads), so adding one never changes how a trail executes. A survey that reads only network,
 analytics and events can also run while the trail does, from a TypeScript tool: see
@@ -62,7 +67,6 @@ export const signedIn = trailblaze.survey({
 
 Every listed query must match at least one record; anything under `absent` must match none.
 The evidence is the first match of each query (`evidence: "all"` keeps every match).
-`footprint` is the old name of `finding` and still works for now.
 
 ### Shaping what a finding carries
 
@@ -103,8 +107,8 @@ them.
 ### Scoping
 
 `platforms`, `appIds`, and `targets` on the spec skip sessions the survey was never meant for,
-so an iOS payments survey is not blamed for silence on an Android dashboard run. `tags` lets
-the CLI run a subset.
+so an iOS payments survey is not blamed for silence on an Android dashboard run. To run a
+subset, name surveys with `--survey`.
 
 Prefer `targets` for "this is a feature of app X": a target is what the trailmap defines, and it
 already lists the app ids of every build of that app on every platform. Pass the workspace's
@@ -157,6 +161,90 @@ a session reached. `loadYamlWaypoints(dir, repoRoot)` reads `*.waypoint.yaml` fi
 the session logged. A finding's screenshot link is kept only when it points at a host the caller
 names in `screenshotHosts`, so a report never links somewhere unexpected.
 
+## Labels
+
+A survey has up to two phases. `find` runs once per session and returns findings; `label` runs
+once over the whole batch, after every survey's find phase, and turns findings into labels:
+`{ type?, name, reasoning?, data?, findings }`. `type` is any string you choose (`journey`, `job`,
+`risk`); `findings` is required and names the findings that prove the label, the way a finding
+names its records. A label's runs are the sessions of those findings, so every label traces back to
+the runs and records behind it.
+
+```ts
+import { trailblaze } from "@trailblaze/scripting/surveys";
+
+export const journeys = trailblaze.survey({
+  description: "Journeys the run completed",
+  find: (session) =>
+    session.analytics.filter({ name: "Journey Complete" }).map((e) => ({
+      summary: `Completed ${e.properties.journey}`,
+      evidence: [e],
+      data: { journey: String(e.properties.journey) },
+    })),
+  label: (batch) =>
+    batch.groupBy((f) => f.data.journey).map(({ key, findings }) => ({
+      type: "journey",
+      name: key,
+      findings,
+    })),
+});
+```
+
+Write `find` before `label`: TypeScript reads the object top to bottom, so that order is what types
+`label`'s findings by what `find` returns, with no annotations. `find` also takes a declarative
+finding (`find: { analytics: { name: "Journey Complete" } }`); the older `finding:` key and a
+handler as `survey()`'s second argument still work.
+
+The label phase gets one batch:
+
+| Field | What it is |
+| --- | --- |
+| `findings` | This survey's own findings across the batch. `data` is always present, `{}` when `find` gave none. |
+| `sessions` | The batch's sessions. |
+| `dependsOn` | Each survey listed in `dependsOn`, by the same name: its `labels` and `findings`. |
+| `groupBy(key)` | This survey's findings grouped by `key(finding)`, in first-seen order. |
+| `log(message)` | Writes to the run's log. |
+
+A survey's `platforms`, `appIds` and `targets` scope its label phase too: it sees only those runs,
+their findings, and dependency labels narrowed to them. A label may cite only findings the phase
+was given. Labels with the same type and name merge, combining their findings.
+
+A survey can build on other surveys' labels by naming them in `dependsOn`. Its label phase then runs
+after theirs and reads them under the same name, typed by those surveys' own declarations:
+
+```ts
+import { journeys } from "./journeys.survey";
+
+export const jobs = trailblaze.survey({
+  description: "Jobs the runs got done",
+  dependsOn: { journeys },
+  label: ({ dependsOn }) =>
+    dependsOn.journeys.labels
+      .filter((l) => l.name === "take-payment" || l.name === "refund")
+      .map((l) => ({ type: "job", name: "handle-money", findings: l.findings })),
+});
+```
+
+A survey may be only a label phase, as `jobs` is; it then cannot run mid-trail. Label phases
+share labels with each other only through `dependsOn`: a survey not listed there is not in
+`batch.dependsOn`, and a cycle in `dependsOn` fails when the surveys load, naming the loop. A label
+phase that fails skips every label phase that depends on it. Label phases run only after sessions finish, never through `ctx.surveys`.
+
+Selecting one survey (`--survey jobs`) still runs every survey it depends on, and says so. A needed
+survey reuses the findings stored in each session's `surveys.json` when they are current (see
+[Running](#running)), and surveys the session otherwise. Each survey carries a version, a hash of
+the file that defines it and the local modules it imports (a data file it reads at run time does not
+count); findings and labels record it, and stored findings from another version are not current. A
+survey gets no version, and nothing reuses its findings, when no hash can say what it runs: a local
+module it loads with `require` or `import()`, or from a computed path, can load after the survey
+does, and a process that loads surveys again after one of those files changed can't tell which copy
+runs. Nor are stored findings current once the session's files change (screen text extracted
+afterwards), or when another machine stored them: each entry is sealed with a key kept in
+`$TRAILBLAZE_HOME/survey-results.key`, so results inside a session downloaded from elsewhere are
+surveyed again rather than trusted.
+
+There is no per-type vocabulary yet: any `type` string is accepted.
+
 ## Running a survey mid-trail
 
 A TypeScript tool can run a survey mid-trail to check that what it looks for has happened by now:
@@ -190,7 +278,7 @@ export const verifyCheckout = trailblaze.tool(async (_args, ctx) => {
 });
 ```
 
-- A survey covers everything the session has captured so far, and returns on its first finding.
+- A survey covers everything the session has captured so far by default, and returns on its first finding.
   `waitMs` (default 0) waits for a finding to arrive.
 - It returns `{ passed, message, findings, waitedMs }` and never throws when it finds nothing.
   Each finding carries its survey's name, summary, evidence and `data`, so a tool can assert on
@@ -201,11 +289,67 @@ export const verifyCheckout = trailblaze.tool(async (_args, ctx) => {
 - `absent` in a finding means "not seen so far".
 - A request still waiting for its response is in flight: `status: failed` matches it only once
   the capture records the failure.
-- A finding that looks for an analytics event by name reads only that event's records, so a
-  long session costs it what it matches. Any other finding query reads its streams whole, and a
-  handler reads every stream whole. Mid-trail, a survey holds at most 20,000 records (16 million
-  characters of them). Past that it fails, naming the limit: write the check as a finding on an
-  event name, or move it after the session.
+- With the session window or a named mark, a finding that looks for an analytics event by name
+  reads only that event's records. Any other finding query reads its streams whole, and a
+  handler reads every stream whole. Time-based windows (`since: "trail"` or `"trailhead"`) also
+  read streams whole so later arrivals with older timestamps can be excluded. Mid-trail, a survey
+  holds at most 20,000 records (16 million characters of them). Past that it fails, naming the
+  limit. An analytics event-name finding using a time-based window can switch to a named mark
+  created before the action to enable filtered reads. A handler must also be rewritten as an
+  event-name finding. Alternatively, run the survey after the session with `requiresFinishedSession: true`.
+
+For repeated actions, mark the start of an attempt **before** doing the action, then pass `since`
+to the survey so an earlier result cannot satisfy the new check:
+
+```ts
+await ctx.events.mark("second-checkout");
+// Perform the next checkout.
+const done = await ctx.surveys.checkoutDone({ since: "second-checkout", waitMs: 10_000 });
+if (!done.passed) throw new Error(done.message);
+```
+
+To wait for particular fields from a survey that reports several findings, pass `expected`:
+
+```ts
+const done = await ctx.surveys.operations({
+  waitMs: 10_000,
+  expected: { data: { journey: "checkout", runs: [{ variant: "card", properties: { count: 1 } }] } },
+});
+if (!done.passed) throw new Error(done.message);
+```
+
+Only findings matching `expected` can pass the check and are returned in `findings`. Nonmatching
+findings do not stop polling. Objects match the specified keys, allowing additional captured keys.
+Each expected array item must match an actual item, in any order; extra actual items are allowed,
+and repeated expectations may match the same item. All fields of an expected object must occur
+together in one object, so fields from different runs cannot combine into a match. Primitive
+values match exactly, including their types: `1` does not match `"1"`. Omitting `expected` retains
+the default of passing on any finding. Each returned finding retains its `data` field for the
+calling tool.
+
+Expectations on evidence or fields beyond `survey`, `summary`, and `data` require complete
+capture and a second read before passing. Evidence can change as new records arrive: an in-flight
+request's summary alone cannot prove that no response arrived when the capture lost data.
+
+`since` accepts the same starting points as `ctx.events.query`: `"session"`, `"trailhead"`,
+`"trail"`, or a name from `ctx.events.mark()`. Each stream starts at that boundary, then polling
+resumes from its own cursor. `"trail"` and `"trailhead"` keep their timestamp cutoff throughout
+pagination and polling. Named marks use capture arrival order; streams created after a mark are included.
+
+Host time-based windows depend on clock alignment. The event API converts device timestamps
+when a clock measurement is available. Without one, clock skew can include older records or
+exclude newer ones. Named-mark boundaries do not depend on clock alignment.
+
+Reusing a mark name moves the boundary for the next survey call. Do not overwrite a mark until
+every survey using it has completed; use distinct names for overlapping attempts. Overwriting a
+mark during an active survey is unsupported and can produce inconsistent results.
+Separate calls do not consume events or delete capture history, so another check can still read them.
+The event API resolves the mark on the first read; an unknown name fails with an error.
+Both presence and `absent` queries apply only to the selected window. A network request that
+started before the window is not included as a complete exchange, even if its response arrives
+later. A mark excludes events already captured when it was created. Events captured later are
+included, even if they belong to an earlier operation. Match journey or request IDs when you
+need to distinguish such delayed results.
 
 A trailmap's generated types list its mid-trail surveys under `ctx.surveys`. A survey with
 `requiresFinishedSession` is left out on purpose. `session.final` is `false` mid-trail and `true`
@@ -282,6 +426,23 @@ gives the report a clickable location.
 
 ## Running
 
+From anywhere inside a workspace, `trailblaze survey` runs every survey it carries over finished
+sessions, prints the report, and stores each session's findings and labels in that session's
+`surveys.json`:
+
+```bash
+trailblaze survey                       # every session in the logs directory
+trailblaze survey 2026_10_27_14         # one session, by id or prefix
+trailblaze survey --survey jobs         # one survey, plus what it depends on
+trailblaze survey ./sessions -o report.json
+```
+
+`trailblaze report --surveys` (bare for all, or `--surveys=journeys,jobs`) runs surveys while it
+builds a report and writes `surveys.md` (labels, then the findings behind each, then their runs)
+and `surveys.json` beside it. Nothing runs surveys unless asked.
+
+Both are built on the surveys CLI, which takes more filters:
+
 ```bash
 # from anywhere inside a workspace: every survey it carries, over ~/.trailblaze/logs
 bun sdks/typescript/src/surveys/cli.ts --target acme
@@ -293,15 +454,15 @@ bun sdks/typescript/src/surveys/cli.ts --target acme ./sessions --out report.jso
 `--sessions` accepts session directories, directories of sessions, session zips as CI uploads
 them, or directories of zips (extracted to a temp dir, or `--extract-dir`). `--format` is
 `markdown` (default), `summary` (one line per session), `json`, or `none`; `--out` always writes
-the full JSON report. `--survey <name>` and `--tag` narrow which surveys run; `--platform`, `--device` (a device
+the full JSON report. `--survey <name>` narrows which surveys run; `--platform`, `--device` (a device
 classifier such as `iphone`, `ipad`, `tablet`), `--app-id`, `--target`, and `--outcome` narrow
 which sessions are analysed, judged on each session's own summary rather than on where the files
 came from. The workspace is found the way the trailblaze CLI finds it (the closest
 `trailblaze-config/` or `trails/config/` holding a `trailblaze.yaml`, or `TRAILBLAZE_CONFIG_DIR`),
 and its trailmaps make `--target` and survey `targets` cover a target's app ids. `--target` also
 drops surveys scoped to other targets. `--surveys` and `--trailmaps` replace the workspace with
-explicit paths. The process exits
-non-zero if any survey threw, and each throw is recorded against the session it happened on
+explicit paths. `--write` stores each session's findings and labels in its `surveys.json`. The
+process exits non-zero if any survey or label phase threw, and each throw is recorded against the session it happened on
 rather than aborting the batch.
 
 Programmatic use is the same surface the CLI is built on:
@@ -321,9 +482,16 @@ console.log(renderMarkdown(report));
 
 `SurveyReport` has one `sessions[]` entry per readable session with its summary, findings,
 skipped surveys, and errors; a `surveys[]` row per survey (name, description, the number of
-sessions it found something in and which ones, and its findings count); and `unreadable[]` for
-inputs that were not session directories. A finding is `{ survey, session, summary, evidence }`
-plus its `data`, when it has any.
+sessions it found something in and which ones, its findings and labels counts, and its version);
+`labels[]`, each `{ survey, type, name, reasoning, data, runs, findings }` with its findings as
+`{ survey, session, index, summary }` (`index` is which of that survey's findings in that session);
+`labelErrors[]`; and `unreadable[]` for inputs that were not session
+directories. A finding is `{ survey, session, summary, evidence }` plus its `data` and the survey's
+`version`, when it has them.
+
+A session's `surveys.json` holds one entry per survey that ran over it: the survey's version, its
+findings there, and the labels the run earned (each narrowed to this run's findings). A session still
+running is not stored.
 
 ## Session snapshots
 

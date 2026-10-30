@@ -11,15 +11,12 @@ import assertk.assertions.messageContains
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
-import xyz.block.trailblaze.config.ToolYamlConfig
-import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -118,28 +115,6 @@ class ToolMemoryInterpolationTest {
       .isEqualTo("sam tickets")
     assertThat(authored.nodeSelector!!.androidAccessibility!!.textRegex)
       .isEqualTo("\${user} tickets")
-  }
-
-  @Test
-  fun `yaml-defined tool params resolve as a tree`() {
-    val config = ToolYamlConfig(id = "myYamlTool")
-    val authored = YamlDefinedTrailblazeTool(
-      config = config,
-      params = mapOf(
-        "text" to JsonPrimitive("{{user}}"),
-        "nested" to buildJsonObject { put("host", "\${domain}") },
-      ),
-    )
-
-    val dispatched = interpolateMemoryInTool(authored, memory)
-
-    assertThat(dispatched).isNotSameInstanceAs(authored)
-    assertThat(dispatched.params["text"]!!.jsonPrimitive.content).isEqualTo("sam")
-    assertThat(dispatched.params["nested"]!!.jsonObject["host"]!!.jsonPrimitive.content)
-      .isEqualTo("example.com")
-    // The config rides along unchanged — only string scalars in the params tree are rewritten.
-    assertThat(dispatched.config).isSameInstanceAs(config)
-    assertThat(authored.params["text"]!!.jsonPrimitive.content).isEqualTo("{{user}}")
   }
 
   @Test
@@ -255,21 +230,6 @@ class ToolMemoryInterpolationTest {
 
     assertThat(dispatched.text).isEqualTo("Hi sam")
     assertThat(dispatched).isNotSameInstanceAs(authored)
-  }
-
-  @Test
-  fun `args-only memory still resolves a yaml-defined tool's params tree`() {
-    val argsOnlyMemory = AgentMemory().apply {
-      seedArgs(mapOf("recipient" to JsonPrimitive("sam")))
-    }
-    val authored = YamlDefinedTrailblazeTool(
-      config = ToolYamlConfig(id = "myYamlTool"),
-      params = mapOf("text" to JsonPrimitive("{{args.recipient}}")),
-    )
-
-    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
-
-    assertThat(dispatched.params["text"]!!.jsonPrimitive.content).isEqualTo("sam")
   }
 
   @Test

@@ -1310,7 +1310,7 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
-  fun `with-spec overload — supportedPlatforms and requiresContext are extracted into ScriptedToolDefinition spec`() = runBlocking {
+  fun `with-spec overload — supportedPlatforms is extracted into ScriptedToolDefinition spec`() = runBlocking {
     // Pin the load-bearing contract from #3352: the typed `(spec, handler)`
     // overload's inline-literal spec fields flow through the analyzer into
     // `ScriptedToolDefinition.spec` so the enrichment layer can project them
@@ -1330,7 +1330,7 @@ class ScriptedToolDefinitionAnalyzerTest {
         |interface SOut { y: string; }
         |
         |export const specTool = trailblaze.tool<SIn, SOut>(
-        |  { supportedPlatforms: ["web"], requiresContext: true },
+        |  { supportedPlatforms: ["web"] },
         |  async () => ({ y: "" }),
         |);
       """.trimMargin(),
@@ -1341,7 +1341,6 @@ class ScriptedToolDefinitionAnalyzerTest {
     val platforms = spec["supportedPlatforms"]?.jsonArray
       ?: fail("expected `supportedPlatforms` array in spec; got: $spec")
     assertEquals(listOf("web"), platforms.map { it.jsonPrimitive.content })
-    assertEquals(JsonPrimitive(true), spec["requiresContext"])
     // Booleans not authored on the call site stay absent (defaults applied
     // downstream by the runtime, not by the analyzer).
     assertNull(spec["requiresHost"], "expected requiresHost absent when not authored")
@@ -1857,13 +1856,12 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
-  fun `with-spec overload — unresolvable expressions (spread, identifier) are silently skipped`() = runBlocking {
+  fun `with-spec overload — unresolvable expressions (spread, identifier) are skipped from the spec`() = runBlocking {
     // Documents the inline-literal-only contract called out in the JS shim:
     // object spread (`...sharedDefaults`) and identifier references aren't
     // resolved today. The analyzer captures whatever inline literals it can
-    // read and skips the rest. Authors who need every field captured can
-    // inline the values at the call site until the future helper-resolution
-    // PR lands.
+    // read and skips the rest; the skipped gate and spread are flagged (see the
+    // test below).
     assumeAnalyzerRunnable()
     val toolsDir = tempFolder.newFolder("with-spec-partial-trailmap-tools")
     writeTsFixture(
@@ -1874,7 +1872,7 @@ class ScriptedToolDefinitionAnalyzerTest {
         |interface I { x: string; }
         |interface O { y: string; }
         |
-        |const SHARED = { requiresContext: true };
+        |const SHARED = { surfaceToLlm: false };
         |const PLATFORMS = ["web"];
         |
         |export const partialTool = trailblaze.tool<I, O>(
@@ -1890,11 +1888,97 @@ class ScriptedToolDefinitionAnalyzerTest {
     val spec = def.spec ?: fail("expected partial spec extraction; got null")
     // `requiresHost: true` (inline boolean literal) is captured.
     assertEquals(JsonPrimitive(true), spec["requiresHost"])
-    // Spread expressions (`...SHARED`) are skipped — no `requiresContext` key.
-    assertNull(spec["requiresContext"], "expected spread-introduced fields to be skipped")
+    // Spread expressions (`...SHARED`) are skipped — no `surfaceToLlm` key.
+    assertNull(spec["surfaceToLlm"], "expected spread-introduced fields to be skipped")
     // Identifier references (`supportedPlatforms: PLATFORMS`) are skipped — no
     // `supportedPlatforms` key.
     assertNull(spec["supportedPlatforms"], "expected identifier-referenced values to be skipped")
+    assertEquals(listOf("...SHARED", "supportedPlatforms"), def.uncapturedSpecFields)
+  }
+
+  @Test
+  fun `with-spec overload — an unreadable gate inside an inline spec sets uncapturedSpec and names it`() = runBlocking {
+    // An inline literal used to be trusted wholesale: a gate written as a constant, a shorthand,
+    // or hidden in a spread was skipped while the tool still registered — with no platform gate,
+    // surfaced to the LLM, and on-device. The shim now flags each and names what it couldn't read.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("unreadable-gate-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "unreadableGateTools.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |const ANDROID_ONLY = ["android"];
+        |const supportedPlatforms = ["android"];
+        |const HIDDEN = { surfaceToLlm: false };
+        |const HOST = true;
+        |declare const GATE: "supportedPlatforms";
+        |
+        |export const viaConstant = trailblaze.tool<I>({ supportedPlatforms: ANDROID_ONLY }, async () => "ok");
+        |export const viaShorthand = trailblaze.tool<I>({ supportedPlatforms }, async () => "ok");
+        |export const viaSpread = trailblaze.tool<I>({ ...HIDDEN, runtime: "inProcess" }, async () => "ok");
+        |export const viaQuotedKey = trailblaze.tool<I>(
+        |  { "requiresHost": HOST, supportedDrivers: ["android-ondevice-accessibility"] },
+        |  async () => "ok",
+        |);
+        |export const viaComputedKey = trailblaze.tool<I>({ ["supportedPlatforms"]: ["android"] }, async () => "ok");
+        |export const viaUnknownComputedKey = trailblaze.tool<I>({ [GATE]: ["android"] }, async () => "ok");
+        |export const viaGetter = trailblaze.tool<I>({ get surfaceToLlm() { return false; } }, async () => "ok");
+        |export const viaComputedClassifier = trailblaze.tool<I>({ ["requiredClassifiers"]: ["rig"] }, async () => "ok");
+      """.trimMargin(),
+    )
+
+    val defsByName = analyzer.analyze(toolsDir).associateBy { it.name }
+    assertEquals(
+      mapOf(
+        "viaConstant" to listOf("supportedPlatforms"),
+        "viaShorthand" to listOf("supportedPlatforms"),
+        "viaSpread" to listOf("...HIDDEN"),
+        "viaQuotedKey" to listOf("requiresHost"),
+        "viaComputedKey" to listOf("supportedPlatforms"),
+        "viaUnknownComputedKey" to listOf("[GATE]"),
+        "viaGetter" to listOf("surfaceToLlm"),
+        "viaComputedClassifier" to listOf("requiredClassifiers"),
+      ),
+      defsByName.mapValues { (_, def) -> def.uncapturedSpecFields },
+    )
+    defsByName.values.forEach { def ->
+      assertTrue(def.uncapturedSpec, "expected uncapturedSpec=true for '${def.name}'")
+    }
+    // The readable fields beside the unreadable one are still captured.
+    assertEquals(JsonPrimitive("inProcess"), defsByName.getValue("viaSpread").spec?.get("runtime"))
+    assertEquals(
+      listOf("android-ondevice-accessibility"),
+      defsByName.getValue("viaQuotedKey").spec?.get("supportedDrivers")?.jsonArray?.map { it.jsonPrimitive.content },
+    )
+  }
+
+  @Test
+  fun `with-spec overload — an unreadable non-gate field does not set uncapturedSpec`() = runBlocking {
+    // Control for the test above: `description` and `trailhead` don't restrict the tool, so a
+    // constant there is only skipped. Flagging it would fail descriptor-less tools for no reason.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("unreadable-non-gate-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "unreadableNonGateTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |const DESCRIPTION = "Opens the app.";
+        |
+        |export const nonGateTool = trailblaze.tool<I>(
+        |  { description: DESCRIPTION, ["trailhead"]: { to: "home" }, supportedPlatforms: ["ios"] as const },
+        |  async () => "ok",
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    assertEquals(false, def.uncapturedSpec, "expected no flag for an unreadable non-gate field")
+    assertEquals(emptyList(), def.uncapturedSpecFields)
+    assertEquals(listOf("ios"), def.spec?.get("supportedPlatforms")?.jsonArray?.map { it.jsonPrimitive.content })
   }
 
   @Test
@@ -2201,14 +2285,24 @@ class ScriptedToolDefinitionAnalyzerTest {
         |${declareTypedToolStub()}
         |interface I { x: string; }
         |const SPEC = { supportedPlatforms: ["web"] } as const;
+        |const WEB = ["web"];
         |export const uncapturedRefTool = trailblaze.tool<I>(SPEC, async () => "ok");
+        |export const uncapturedFieldTool = trailblaze.tool<I>({ supportedPlatforms: WEB }, async () => "ok");
       """.trimMargin(),
     )
     val firstDefs = warmAnalyzer.analyze(toolsDir)
-    assertEquals(setOf("hitTool", "uncapturedRefTool"), firstDefs.map { it.name }.toSet())
+    assertEquals(
+      setOf("hitTool", "uncapturedRefTool", "uncapturedFieldTool"),
+      firstDefs.map { it.name }.toSet(),
+    )
     assertTrue(
       firstDefs.single { it.name == "uncapturedRefTool" }.uncapturedSpec,
       "fixture must actually exercise uncapturedSpec, or the equality assertion below pins nothing",
+    )
+    assertEquals(
+      listOf("supportedPlatforms"),
+      firstDefs.single { it.name == "uncapturedFieldTool" }.uncapturedSpecFields,
+      "fixture must actually exercise uncapturedSpecFields, or the equality assertion below pins nothing",
     )
 
     val bogusBun = File(tempFolder.root, "definitely-not-bun")

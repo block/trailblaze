@@ -1249,7 +1249,7 @@ class DeviceManagerToolSet(
    * on `device connect` shows up in the summary instead of the daemon-wide
    * default — otherwise an LLM/human reading the connect summary would see
    * a tool list built against the wrong target and not understand why their
-   * dispatched YAML tools (e.g. `eraseText`) get rejected.
+   * dispatched tools (e.g. `eraseText`) get rejected.
    */
   private fun buildAvailableToolsSummary(deviceId: TrailblazeDeviceId): String? {
     val driverType = mcpBridge.getDriverType() ?: return null

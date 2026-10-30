@@ -249,12 +249,17 @@ object InlineScriptToolServerSynthesizer {
             throw new Error(`Inline tool inputSchema property "${'$'}{key}" only supports string enums.`);
           }
           base = z.enum(schema.enum);
-        } else if (schema.type === undefined && Object.keys(schema).length === 0) {
-          // An empty `{}` schema is an unconstrained value (e.g. a union branch's
-          // `selector: {}`); z.any() is the faithful mapping. Kept deliberately narrow: a
-          // non-empty typeless schema (a bare ref, etc.) still hits the throw below so
+        } else if (schema.type === undefined && isAnnotationOnly(schema)) {
+          // An empty `{}` schema, or one carrying only annotations (`{ description }`: the
+          // analyzer emits this for a field whose type it could not resolve, with the field's
+          // TSDoc on top), constrains nothing, so z.any() is the faithful mapping (e.g. a
+          // union branch's `selector: {}`). Kept deliberately narrow: a typeless schema with a
+          // structural keyword (a bare ref, `not`, `const`, etc.) still hits the throw below so
           // unsupported shapes stay loud.
           base = z.any();
+          if (typeof schema.description === "string") {
+            base = base.describe(schema.description);
+          }
         } else {
           switch (schema.type) {
             case "string":
@@ -296,6 +301,11 @@ object InlineScriptToolServerSynthesizer {
           jsonSchemaPropertyToZod(`${'$'}{key}|${'$'}{index}`, branch, true),
         );
         return variants.length === 1 ? variants[0] : z.union(variants);
+      }
+
+      function isAnnotationOnly(schema) {
+        const annotations = ["description", "title", "default", "examples", "${'$'}comment", "deprecated", "readOnly", "writeOnly"];
+        return Object.keys(schema).every((key) => annotations.includes(key));
       }
 
       function isPlainObject(value) {

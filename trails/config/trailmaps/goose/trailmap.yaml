@@ -25,7 +25,5 @@ target:
       ENABLE_PLAYWRIGHT: "true"
     cdpTimeoutSeconds: 60
   platforms:
-    web:
-      tools:
-        - goose_launchDesktop
+    web: {}
 # Waypoint YAMLs are auto-discovered from `waypoints/**.waypoint.yaml`.
