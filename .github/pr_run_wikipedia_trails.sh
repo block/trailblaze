@@ -76,9 +76,11 @@ if [ "$TEST_FAILED" != "true" ]; then
   # Showcase trail named for `web` in docs/showcase-trails.yml; its session is
   # what pr_generate_report_assets.sh publishes to report-assets/wikipedia/.
   # Change the featured test case by editing that manifest — no edits here.
+  # --capture-network records the browser's traffic into the session's network.ndjson so the
+  # published report shows the Network tab. Explicit so the demo never depends on a saved setting.
   if WEB_SHOWCASE_TRAIL="$(./.github/showcase-trail.sh web recording)" && [ -n "$WEB_SHOWCASE_TRAIL" ]; then
     echo "Web showcase trail (from docs/showcase-trails.yml): $WEB_SHOWCASE_TRAIL"
-    trailblaze trail "$WEB_SHOWCASE_TRAIL" || TEST_FAILED=true
+    trailblaze trail "$WEB_SHOWCASE_TRAIL" --capture-network || TEST_FAILED=true
   else
     echo "ERROR: could not resolve the web showcase trail from docs/showcase-trails.yml"
     TEST_FAILED=true

@@ -26,6 +26,8 @@ runs:
     device: web
     config-dir: examples/wikipedia/trails/config
     trails: [trails/wikipedia/test-article-shakespeare/trail.yaml]
+    # Record the browser's traffic so the report shows the Network tab.
+    args: --capture-network
 
   - name: ios-contacts
     device: ios

@@ -89,6 +89,10 @@ jobs:
       OPENAI_API_KEY: no-key-set
       # Record each session's screen so the report plays the recording (off by default).
       TRAILBLAZE_CAPTURE_VIDEO: "true"
+      # Capture the emulator's HTTP(S) traffic through a host-side mitmproxy into the session's
+      # network.ndjson, so the published report shows the Network tab. Read by the daemon the
+      # run script starts. Needs mitmdump (installed below) and an API 34+ emulator with `su`.
+      TRAILBLAZE_ANDROID_PROXY_CAPTURE: "1"
 
     steps:
       - name: Enable KVM group perms
@@ -150,6 +154,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends webp
 
+      - name: Install mitmproxy
+        # Android network capture proxies the emulator through mitmdump. Without it on PATH the
+        # capture logs a warning and the trail still runs, just with no network.ndjson.
+        run: |
+          pipx install mitmproxy
+          pipx environment --value PIPX_BIN_DIR >> "$GITHUB_PATH"
+
       - name: Create and start emulator and run the clock trail (Linux)
         if: runner.os == 'Linux'
         uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
@@ -166,6 +177,22 @@ jobs:
           # `trailblaze trail trails/clock/set-alarm-730am/android.trail.yaml` and leaves
           # the session under ~/.trailblaze/logs for the export step below.
           script: ./.github/pr_run_android_tests_host_rpc.sh
+
+      - name: Report Android network capture
+        # Surfaces what the proxy captured in the job summary. Informational: a quiet app or a
+        # capture that failed to arm leaves the trail result alone (the daemon log says why).
+        if: always()
+        run: |
+          {
+            echo "### Android network capture"
+            found=false
+            for f in "$HOME"/.trailblaze/logs/*/network.ndjson; do
+              [ -f "$f" ] || continue
+              found=true
+              echo "- \`$(basename "$(dirname "$f")")\`: $(grep -c '"RESPONSE_END"' "$f" || true) responses"
+            done
+            [ "$found" = true ] || echo "No network.ndjson was written. Look for \`[mitm-capture]\` in the daemon log."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate docs report-gallery assets
         # Storyboard + animated-timeline WebP + interactive HTML report, exported from the
