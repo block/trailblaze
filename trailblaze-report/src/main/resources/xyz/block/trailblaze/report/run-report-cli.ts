@@ -19,7 +19,7 @@ import { basename, join, sep } from "path";
 import { gzipSync } from "zlib";
 import {
   ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES,
-  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs,
+  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs, rootNetworkStreamFiles,
   isSafeSessionRelativePath, resolveFormatterModule,
 } from "./run-report-events";
 import { MAX_TRACE_BYTES, parseTraceFileText } from "./run-report-trace-spans";
@@ -412,33 +412,45 @@ export function readDeviceClockSync(sessionDir: string): DeviceClockSync | null 
   }
 }
 
-function readEvents(
+/** Exported for tests. */
+export function readEvents(
   sessionDir: string,
   formatters: EventStreamFormatter[],
   ctx: FormatterContext,
 ): EventStream[] | null {
   try {
     const dir = join(sessionDir, "events");
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
     const clockSync = readDeviceClockSync(sessionDir);
     const streams: EventStream[] = [];
     let totalChars = 0;
-    for (const file of readdirSync(dir).filter((n) => n.endsWith(".ndjson")).sort()) {
+    // False once the total budget is spent, so later streams are skipped too.
+    const add = (path: string, file: string): boolean => {
       try {
-        const path = join(dir, file);
         if (statSync(path).size > MAX_EVENT_STREAM_BYTES) {
           console.error(`events: skipping ${file} — exceeds the ${MAX_EVENT_STREAM_BYTES / 1024 / 1024}MB per-stream cap`);
-          continue;
+          return true;
         }
         const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters, ctx, clockSync);
-        if (!stream) continue;
+        if (!stream) return true;
         totalChars += JSON.stringify(stream).length;
         if (totalChars > MAX_EVENT_STREAMS_TOTAL_CHARS) {
           console.error(`events: skipping ${file} and later streams — session events exceed the ${MAX_EVENT_STREAMS_TOTAL_CHARS / 1024 / 1024}MB total budget`);
-          break;
+          return false;
         }
         streams.push(stream);
       } catch { /* skip this stream */ }
+      return true;
+    };
+    let withinBudget = true;
+    if (existsSync(dir) && statSync(dir).isDirectory()) {
+      for (const file of readdirSync(dir).filter((n) => n.endsWith(".ndjson")).sort()) {
+        if (!(withinBudget = add(join(dir, file), file))) break;
+      }
+    }
+    if (withinBudget) {
+      for (const file of rootNetworkStreamFiles(readdirSync(sessionDir), streams.map((s) => s.name))) {
+        if (!add(join(sessionDir, file), file)) break;
+      }
     }
     return streams.length ? streams : null;
   } catch {

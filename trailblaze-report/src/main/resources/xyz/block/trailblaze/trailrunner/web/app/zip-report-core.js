@@ -639,6 +639,13 @@
     var eventFiles = Object.keys(session.byFileName)
       .filter(function (name) { return EVENTS_STREAM_RE.test(name); })
       .sort();
+    // Root-level network captures read as streams too (see rootNetworkStreamFiles). An older bundle
+    // without the helper reads `events/` alone, as before.
+    if (typeof render.rootNetworkStreamFiles === 'function') {
+      var rootNames = Object.keys(session.byFileName).filter(function (name) { return name.indexOf('/') < 0; });
+      var eventNames = eventFiles.map(function (name) { return name.slice('events/'.length).replace(/(\.json)?\.ndjson$/, ''); });
+      eventFiles = eventFiles.concat(render.rootNetworkStreamFiles(rootNames, eventNames));
+    }
     var streams = [];
     var totalChars = 0;
     var overTotal = false;
@@ -662,7 +669,7 @@
           return;
         }
         return readZipEntry(zipBytes, entry, inflateRaw).then(function (data) {
-          var stream = render.buildEventStream(name.slice('events/'.length), utf8.decode(data).split('\n'), [], { sessionPassed: false }, clockSync);
+          var stream = render.buildEventStream(name.replace(/^events\//, ''), utf8.decode(data).split('\n'), [], { sessionPassed: false }, clockSync);
           if (!stream) return;
           totalChars += JSON.stringify(stream).length;
           if (totalChars > render.MAX_EVENT_STREAMS_TOTAL_CHARS) {
@@ -817,6 +824,7 @@
       packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
       traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
       buildEventStream: render.buildEventStream || g.buildEventStream,
+      rootNetworkStreamFiles: render.rootNetworkStreamFiles || g.rootNetworkStreamFiles,
       parseDeviceClockSync: render.parseDeviceClockSync || g.parseDeviceClockSync,
       collectStreamAttachmentRefs: render.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,
       ATTACHMENT_MIME: render.ATTACHMENT_MIME || g.ATTACHMENT_MIME,

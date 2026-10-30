@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 const ev = require("./run-report-events.ts") as {
   MAX_VALUE_CHARS: number;
   parseStreamFileName: (file: string) => string | null;
+  rootNetworkStreamFiles: (rootFileNames: readonly string[], eventStreamNames: readonly string[]) => string[];
   decodeEventLine: (line: string) => FormatterEntry | null;
   resolveFormatterModule: (mod: unknown) => EventStreamFormatter | null;
   formatterForStream: (formatters: EventStreamFormatter[], name: string) => EventStreamFormatter | null;
@@ -189,6 +190,21 @@ describe("parseStreamFileName", () => {
     expect(ev.parseStreamFileName("notes.txt")).toBeNull();
     expect(ev.parseStreamFileName(".ndjson")).toBeNull();
     expect(ev.parseStreamFileName(".json.ndjson")).toBeNull();
+  });
+});
+
+describe("rootNetworkStreamFiles", () => {
+  test("picks the session-root network captures, one per device", () => {
+    expect(ev.rootNetworkStreamFiles(["video.webm", "network.seller.ndjson", "network.ndjson", "device.log", "trace.json"], []))
+      .toEqual(["network.ndjson", "network.seller.ndjson"]);
+  });
+
+  test("a stream events/ already carries wins", () => {
+    expect(ev.rootNetworkStreamFiles(["network.ndjson", "network.buyer.ndjson"], ["network"])).toEqual(["network.buyer.ndjson"]);
+  });
+
+  test("ignores other ndjson files at the root", () => {
+    expect(ev.rootNetworkStreamFiles(["visible-strings.ndjson", "mynetwork.ndjson"], [])).toEqual([]);
   });
 });
 

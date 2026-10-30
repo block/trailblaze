@@ -30,7 +30,7 @@ import { buildMultiReportHtml, buildRunReportHtml } from './run-report-html';
 // SAME implementation through this bundle so attachment detection can't fork per surface.
 import {
   ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, attachmentRefOf, buildEventStream,
-  collectStreamAttachmentRefs, findAttachmentRefs, isSafeSessionRelativePath,
+  collectStreamAttachmentRefs, findAttachmentRefs, isSafeSessionRelativePath, rootNetworkStreamFiles,
 } from '../../../report/run-report-events';
 // Same arrangement for the tracer-span slimming: the bun driver reads trace.json from disk, the zip
 // viewer from an archive entry and the live document from the daemon, all through this one function.
@@ -50,7 +50,7 @@ const RUN_REPORT_EXPORTS = {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, parseDeviceClockSync,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, rootNetworkStreamFiles, parseDeviceClockSync,
   ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles,
   playbackGapMs, exportGapMs, videoEndMs, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt,
   normalizedToHostClock,
@@ -62,7 +62,7 @@ export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, parseDeviceClockSync,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, rootNetworkStreamFiles, parseDeviceClockSync,
   ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles,
   playbackGapMs, exportGapMs, videoEndMs, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt,
   normalizedToHostClock,

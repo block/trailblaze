@@ -64,11 +64,21 @@ class SessionEventsReader(
     val events: List<EventEntry>,
   )
 
-  /** Read every events stream under `<sessionDir>/events/`. Empty list if the folder is absent. */
+  /**
+   * Read every events stream under `<sessionDir>/events/`, plus the root-level network captures
+   * [rootNetworkFiles] picks. Empty list if there are none.
+   */
   fun read(sessionDir: File): List<EventStream> {
-    val eventsDir = File(sessionDir, SessionEvents.DIR_NAME)
-    if (!eventsDir.isDirectory) return emptyList()
     val clockSync = DeviceClockSyncFile.read(sessionDir)
+    val streams = readEventsDir(File(sessionDir, SessionEvents.DIR_NAME), clockSync)
+    val budget = maxStreams - streams.size
+    if (budget <= 0) return streams
+    val rootFiles = rootNetworkFiles(sessionDir.listFiles()?.filter { it.isFile }.orEmpty(), streams.map { it.name })
+    return streams + rootFiles.take(budget).mapNotNull { (file, name) -> readStream(file, name, clockSync) }
+  }
+
+  private fun readEventsDir(eventsDir: File, clockSync: DeviceClockSync?): List<EventStream> {
+    if (!eventsDir.isDirectory) return emptyList()
     return (eventsDir.listFiles() ?: emptyArray())
       .asSequence()
       .filter { it.isFile }
@@ -204,6 +214,21 @@ class SessionEventsReader(
 
   companion object {
     private const val ENVELOPE_DATA_FIELD = "data"
+    private val ROOT_NETWORK_FILE = Regex("""^network(?:\.[^/]+)?\.ndjson$""")
+
+    /**
+     * Network capture writes `network.ndjson` (`network.<device>.ndjson` per Android device) at the
+     * session root, outside `events/`, so these root [files] are read as streams too: the Summary's
+     * network lane and run comparisons only see streams. A stream `events/` already carries under
+     * the same name ([eventStreamNames]) wins. Mirrors the TS `rootNetworkStreamFiles`.
+     */
+    fun rootNetworkFiles(files: List<File>, eventStreamNames: List<String>): List<Pair<File, String>> {
+      val present = eventStreamNames.toSet()
+      return files
+        .filter { ROOT_NETWORK_FILE.matches(it.name) }
+        .mapNotNull { file -> SessionEvents.parseFileName(file.name)?.takeIf { it !in present }?.let { file to it } }
+        .sortedBy { it.first.name }
+    }
     private val DEVICE_CLOCK = TrailblazeClockDomain.DEVICE.wireName
     const val DEFAULT_MAX_EVENTS_PER_STREAM: Int = 2_000
     const val DEFAULT_MAX_BYTES_PER_STREAM: Long = 2_000_000L

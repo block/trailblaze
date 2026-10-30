@@ -55,6 +55,28 @@ class SessionEventsReaderTest {
   }
 
   @Test
+  fun `a session-root network capture reads as the network stream`() {
+    val dir = tempDir()
+    File(dir, "network.ndjson").writeText("""{"id":"r1","timestampMs":1234,"phase":"REQUEST_START"}""" + "\n")
+    File(dir, "network.seller.ndjson").writeText("""{"id":"s1","timestampMs":99,"phase":"REQUEST_START"}""" + "\n")
+    File(dir, "visible-strings.ndjson").writeText("""{"timestampMs":1}""" + "\n")
+
+    val streams = SessionEventsReader().read(dir)
+    assertEquals(listOf("network", "network.seller"), streams.map { it.name })
+    assertEquals(1234L, streams.first().events.single().timeMs)
+  }
+
+  @Test
+  fun `an events stream wins over the session-root capture of the same name`() {
+    val dir = tempDir()
+    FileEventSink(dir).use { it.appendRaw("network", """{"id":"e1","timestampMs":1,"phase":"REQUEST_START"}""") }
+    File(dir, "network.ndjson").writeText("""{"id":"r1","timestampMs":2,"phase":"REQUEST_START"}""" + "\n")
+
+    val s = SessionEventsReader().read(dir).single()
+    assertEquals("e1", (s.events.single().data as JsonObject)["id"]?.jsonPrimitive?.content)
+  }
+
+  @Test
   fun `bare rich-schema line with its own data field keeps all fields`() {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->

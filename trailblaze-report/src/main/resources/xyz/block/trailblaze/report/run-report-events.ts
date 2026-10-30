@@ -49,6 +49,21 @@ export function parseStreamFileName(file: string): string | null {
   return base || null;
 }
 
+const ROOT_NETWORK_FILE_RE = /^network(?:\.[^/]+)?\.ndjson$/;
+
+/**
+ * Network capture writes `network.ndjson` (`network.<device>.ndjson` per Android device) at the
+ * session root, outside `events/`, so these are the root files to read as event streams too: the
+ * Summary's network lane and run comparisons only see streams. A stream `events/` already carries
+ * under the same name wins. Mirrors `SessionEventsReader.rootNetworkFiles`.
+ */
+export function rootNetworkStreamFiles(rootFileNames: readonly string[], eventStreamNames: readonly string[]): string[] {
+  const present = new Set(eventStreamNames);
+  return rootFileNames
+    .filter((name) => ROOT_NETWORK_FILE_RE.test(name) && !present.has(parseStreamFileName(name) ?? ""))
+    .sort();
+}
+
 /**
  * Decode one NDJSON line. Mirrors the JVM SessionEventsReader envelope rule: a top-level `timeMs`
  * marks the `{ timeMs, data }` envelope (payload is `data`); otherwise the whole object is a bare

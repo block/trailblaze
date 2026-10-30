@@ -28,6 +28,7 @@ import {
   budgetedClipValue,
   newMediaBudget,
   readAttachments,
+  readEvents,
   readTraceFile,
   readVideo,
   remoteShotValue,
@@ -780,5 +781,28 @@ describe("formatter context (size-budget gate)", () => {
   test("fullEventPayloads (--full-report-payloads) disables the budgets even for passed sessions", () => {
     expect(formatterContext("passed", true)).toEqual({ sessionPassed: false });
     expect(formatterContext("failed", true)).toEqual({ sessionPassed: false });
+  });
+});
+
+describe("root-level network capture (readEvents)", () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), "tb-report-root-network-test-"));
+  afterAll(() => rmSync(sessionDir, { recursive: true, force: true }));
+  const request = { id: "r1", timestampMs: 1000, phase: "REQUEST_START", method: "GET", url: "https://example.com/a" };
+  const response = { id: "r1", timestampMs: 1050, phase: "RESPONSE_END", statusCode: 200 };
+  writeFileSync(join(sessionDir, "network.ndjson"), `${JSON.stringify(request)}\n${JSON.stringify(response)}\n`);
+  const ctx = formatterContext("passed", false);
+
+  test("becomes the session's network stream, so the Summary can draw it", () => {
+    const streams = readEvents(sessionDir, [], ctx);
+    expect(streams?.map((s) => s.name)).toEqual(["network"]);
+    expect(streams![0].events.map((e) => e.t)).toEqual([1000, 1050]);
+  });
+
+  test("an events/ stream of the same name wins", () => {
+    mkdirSync(join(sessionDir, "events"));
+    writeFileSync(join(sessionDir, "events", "network.ndjson"), `${JSON.stringify({ ...request, id: "e1" })}\n`);
+    const streams = readEvents(sessionDir, [], ctx);
+    expect(streams?.map((s) => s.name)).toEqual(["network"]);
+    expect(JSON.parse(streams![0].events[0].d).id).toBe("e1");
   });
 });
