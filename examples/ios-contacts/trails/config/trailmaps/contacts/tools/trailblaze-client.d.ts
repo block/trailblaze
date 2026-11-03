@@ -859,16 +859,11 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Deprecated: renamed to mobile_networkConnection, which takes the same fields.
-     *
-     * @trailblazeHiddenFromLlm
+     * Rotate the device to PORTRAIT, LANDSCAPE_LEFT, LANDSCAPE_RIGHT or UPSIDE_DOWN. The device stays in that orientation until rotated again, so rotate back when the step that needed it is done.
      */
-    networkConnection: {
+    mobile_setOrientation: {
       args: {
-        wifi?: boolean;
-        cellular?: boolean;
-        bluetooth?: boolean;
-        airplaneMode?: boolean;
+        orientation: "PORTRAIT" | "LANDSCAPE_LEFT" | "LANDSCAPE_RIGHT" | "UPSIDE_DOWN";
       };
       result: string;
     };
@@ -1319,7 +1314,6 @@ declare module "@trailblaze/scripting" {
       args: {
         reason?: string;
         longPress?: boolean;
-        tapRoute?: "ACTION_CLICK" | "GESTURE";
         timeoutMs?: number;
         nodeSelector?: TrailblazeNodeSelector;
       };

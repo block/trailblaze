@@ -8,8 +8,8 @@ Native driver. The trailmap ships:
   random article, main-page section verification, banner dismissal, article
   structure assertions, plus a composition example.
 - **30 trails** under `trails/wikipedia/` exercising those tools
-  + the built-in `web_*` toolset, with `tags` for selective runs and one
-  `skip:` example for opting out gracefully.
+  + the built-in `web_*` toolset, and one `skip:` example for opting out
+  gracefully.
 - **A target-scoped system prompt** that teaches the LLM when to reach for
   the scripted tools instead of inline-expanding to `web_*` primitives.
 - **CLI-first runtime** — every trail runs via `trailblaze run …`, the
@@ -258,9 +258,6 @@ config:
   devices:
     web:
       driver: PLAYWRIGHT_NATIVE
-  tags:
-  - smoke
-  - search
   title: 'Wikipedia: Search for Albert Einstein'
 
 trail:
@@ -310,35 +307,7 @@ trail file on a passing run.
 
 ---
 
-## Filtering trails with `tags`
-
-Every trail's `config:` block carries a `tags:` list. `--tags` filters by them.
-
-```bash
-# Smoke pass (fast, deterministic, must-pass on every build):
-trailblaze run trails/wikipedia --device web --tags smoke
-
-# Anything in the i18n or article suites:
-trailblaze run trails/wikipedia --device web --tags i18n,article
-
-# Long-tail nightly:
-trailblaze run trails/wikipedia --device web --tags slow
-```
-
-Conventions used in this example:
-
-| Tag           | Meaning |
-|---------------|---------|
-| `smoke`       | Fast, deterministic, must-pass on every run. |
-| `main-page`   | Asserts something about `wiki/Main_Page`. |
-| `nav`         | Exercises in-page navigation primitives (Random article, hamburger menu). |
-| `search`      | Drives the header search box. |
-| `article`     | Loads a specific article and asserts its shape. |
-| `i18n`        | Crosses language subdomains. |
-| `slow`        | Multi-step assertions; skip during local iteration. |
-| `flaky`       | Known to be timing-sensitive; usually paired with a `skip:` reason. |
-
-### Skipping a trail with a written reason
+## Skipping a trail with a written reason
 
 A trail's `config:` block can carry a `skip:` map — keyed by device classifier
 — to opt out until the reason is removed. Listing every device the trail
@@ -350,7 +319,6 @@ trail and shows up in `--verbose` output.
 ```yaml
 config:
   title: "Wikipedia: Autocomplete suggestions visible while typing search"
-  tags: [search, flaky]
   devices:
     web:
       driver: PLAYWRIGHT_NATIVE

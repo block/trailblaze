@@ -200,7 +200,7 @@ class PlaywrightElectronHostDriverDescriptor(
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
             if (!keepAlive) {
               electronTest.close()
-              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+              deviceManager.releaseDeviceAfterRun(trailblazeDeviceId)
             }
           }
         }

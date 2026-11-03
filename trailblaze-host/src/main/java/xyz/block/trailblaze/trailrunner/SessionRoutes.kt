@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.report.ReportSidecarFiles
 import xyz.block.trailblaze.report.utils.SessionEventsReader
 import xyz.block.trailblaze.ui.JvmLiveSessionDataProvider
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
@@ -33,6 +34,8 @@ internal const val WINDOW_PAD_MS: Long = 3_000L
 // Per-stream read caps for the session events endpoint (whichever hits first). A single stream file
 // can be tens of MB and the UI polls it every few seconds, so the endpoint returns at most a bounded
 // prefix per stream and flags it `truncated` rather than materializing the whole file each poll.
+// The live report (run-payload.js, DERIVED_STREAM_MAX_BYTES) builds a derived stream in full only
+// within this same byte cap.
 internal const val EVENTS_MAX_EVENTS_PER_STREAM: Int = 2_000
 internal const val EVENTS_MAX_BYTES_PER_STREAM: Long = 2_000_000L
 
@@ -254,7 +257,7 @@ internal fun writeSessionArchive(sessionDir: File, safeName: String, out: java.i
   val sessionCanon = sessionDir.canonicalPath
   ZipOutputStream(out).use { zip ->
     sessionDir.walkTopDown()
-      .filter { it.isFile }
+      .filter { it.isFile && !ReportSidecarFiles.isSidecar(it.name) }
       .filter { it.canonicalPath.startsWith(sessionCanon + File.separator) }
       .forEach { file ->
         val relative = file.relativeTo(sessionDir).invariantSeparatorsPath

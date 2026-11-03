@@ -59,6 +59,19 @@ class CliRunDriverResolverTest {
   }
 
   @Test
+  fun `every selectable driver's short name resolves, as trailblaze config takes it`() {
+    for (driver in TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS) {
+      val shortName = driver.cliShortName ?: continue
+      val resolution = CliRunDriverResolver.resolve(shortName)
+      assertIs<CliRunDriverResolution.Resolved>(resolution, "--driver $shortName")
+      assertEquals(driver, resolution.driverType)
+    }
+    val inProcess = CliRunDriverResolver.resolve("in-process")
+    assertIs<CliRunDriverResolution.Resolved>(inProcess)
+    assertEquals(TrailblazeDriverType.ANDROID_TEST, inProcess.driverType)
+  }
+
+  @Test
   fun `driver name matching is case-insensitive`() {
     val resolution = CliRunDriverResolver.resolve("ios_axe")
     assertIs<CliRunDriverResolution.Resolved>(resolution)
@@ -67,9 +80,9 @@ class CliRunDriverResolverTest {
 
   @Test
   fun `unrecognized driver name is rejected, naming the bad value and the valid drivers`() {
-    val resolution = CliRunDriverResolver.resolve("axe")
+    val resolution = CliRunDriverResolver.resolve("espresso")
     assertIs<CliRunDriverResolution.Unrecognized>(resolution)
-    assertTrue(resolution.message.contains("'axe'"), "message should name the bad value: ${resolution.message}")
+    assertTrue(resolution.message.contains("'espresso'"), "message should name the bad value: ${resolution.message}")
     for (driver in TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS) {
       assertTrue(
         resolution.message.contains(driver.name),

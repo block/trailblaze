@@ -9,11 +9,14 @@ import kotlin.test.Test
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -51,6 +54,36 @@ class CliRunTrailCancellationTest {
     withTimeout(HANG_GUARD_MS) { handler.cancelAndJoin() }
 
     assertThat(trail.isCancelled).isTrue()
+    deviceScope.coroutineContext[Job]!!.cancel()
+  }
+
+  @Test
+  fun `a cancelled run ends only once its trail has let go`() = runBlocking {
+    val trailStarted = CountDownLatch(1)
+    val trailEnded = CountDownLatch(1)
+    lateinit var trail: Job
+
+    val handler = launch(Dispatchers.IO) {
+      blockUntilTrailEndsOrCancelIt { onTrailStarted ->
+        trail = deviceScope.launch {
+          try {
+            awaitCancellation()
+          } finally {
+            // Cleanup that outlasts the cancel: a driver closing, capture finalizing.
+            withContext(NonCancellable) { delay(300) }
+            trailEnded.countDown()
+          }
+        }
+        onTrailStarted(trail)
+        trailStarted.countDown()
+        trailEnded.await()
+      }
+    }
+    trailStarted.await()
+
+    withTimeout(HANG_GUARD_MS) { handler.cancelAndJoin() }
+
+    assertThat(trail.isCompleted).isTrue()
     deviceScope.coroutineContext[Job]!!.cancel()
   }
 

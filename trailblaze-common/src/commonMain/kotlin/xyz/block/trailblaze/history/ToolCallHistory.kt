@@ -76,6 +76,8 @@ data class HistorySection(
 
 /** The section kinds the runner opens. Later kinds (loop iterations, custom sections) join these. */
 object HistorySectionKind {
+  /** The run's device setup (`trailblaze run --device-setup`), before the trailhead. Absent when none was sent. */
+  const val DEVICE_SETUP: String = "deviceSetup"
   const val TRAILHEAD: String = "trailhead"
   const val TRAIL: String = "trail"
   const val TEARDOWN: String = "teardown"
@@ -87,7 +89,7 @@ object HistorySectionKind {
   const val RUN: String = "run"
 
   /** The sections every trail run has, one of each; the names a script reads calls by. */
-  val RUN_SECTIONS: Set<String> = setOf(TRAILHEAD, TRAIL, TEARDOWN)
+  val RUN_SECTIONS: Set<String> = setOf(DEVICE_SETUP, TRAILHEAD, TRAIL, TEARDOWN)
 }
 
 /**

@@ -258,7 +258,7 @@ class PlaywrightTrailblazeAgent(
   ): TrailblazeToolResult = runBlocking {
     // Memory-interpolation boundary for the Playwright driver — the tool executes with
     // resolved args; the log carries resolved + authored so recordings keep their tokens.
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     val toolName = memoryResolvedTool::class.simpleName ?: "unknown"
     TrailblazeTracer.traceSuspend("executePlaywrightTool", "tool", mapOf("tool" to toolName)) {
       // Pre-action screenshot for the agent-driver overlay. captureScreenStateForLogging
@@ -453,7 +453,7 @@ class PlaywrightTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
     // Same memory boundary as executePlaywrightToolBlocking, for generic host-JVM executables.
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     val timeBeforeExecution = Clock.System.now()
     val result = memoryResolvedTool.execute(context)
     // Same rationale as the executeWithPlaywright path — host JVM, in-process browser.

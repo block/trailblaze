@@ -77,6 +77,8 @@ export interface NetworkRequest extends SessionRecord {
   responseFile?: string;
   /** Sidecar files the bodies were read out of, when the capture wrote them beside the index. */
   bodyFiles?: string[];
+  /** `device` when the device's clock stamped `timeMs`, as the capture said; absent means the host's. */
+  clock?: "device";
 }
 
 /** One analytics event, normalized from whatever stream shape the app's capture emits. */
@@ -92,6 +94,8 @@ export interface AnalyticsEvent extends SessionRecord {
   properties: Record<string, unknown>;
   /** The row exactly as captured. */
   raw: unknown;
+  /** `device` when the device's clock stamped `timeMs`, as the line said; absent means the host's. */
+  clock?: "device";
 }
 
 /**
@@ -102,6 +106,13 @@ export interface StreamEvent<T = unknown> extends SessionRecord {
   kind: "event";
   stream: string;
   data: T;
+  /** `device` when the device's clock stamped `timeMs`, as the line said; absent means the host's. */
+  clock?: "device";
+  /**
+   * Set when a `trailblaze.eventStream()` derived this row rather than the session capturing it: fresh
+   * from its definition when that is loaded, else as last written to the session's files.
+   */
+  derived?: true;
 }
 
 /** One Trailblaze log record with its parsed payload. */
@@ -173,6 +184,12 @@ export interface TraceSpan extends SessionRecord {
   ts: number;
   durationUs: number;
   args: Record<string, unknown>;
+  /**
+   * Present when `timeMs` is still on the clock of the device that recorded the span. Absent for a
+   * device span the logs' offset moved onto the host clock, as the trace viewer does when the session
+   * did not measure that device's clock.
+   */
+  clock?: "device";
 }
 
 /** What is known about a session before any survey runs. */

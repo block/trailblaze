@@ -162,7 +162,7 @@ object ServerEndpoints {
 
       // CLI endpoints (only registered if callbacks provided)
       cliCallbacks?.let { callbacks ->
-        val runManager = CliRunManager(callbacks.onRunRequest)
+        val runManager = CliRunManager(callbacks.onRunRequest, logsDir = logsRepo.logsDir.absolutePath)
         // Close the CliRunManager when the application stops to cancel its coroutine scope
         environment.monitor.subscribe(ApplicationStopped) {
           runManager.close()

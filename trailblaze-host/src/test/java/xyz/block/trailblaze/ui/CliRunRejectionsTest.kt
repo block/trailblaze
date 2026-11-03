@@ -58,6 +58,17 @@ class CliRunRejectionsTest {
   }
 
   @Test
+  fun `a run that could not be prepared exits INFRA_FAILED with its message`() {
+    val response = cliRunRunnerRejectionResponse(
+      TrailExecutionResult.Failed("Could not prepare LLM credentials: sign-in was refused", infrastructure = true),
+    )
+    assertNotNull(response)
+    assertFalse(response.success)
+    assertEquals(TrailblazeExitCode.INFRA_FAILED, daemonRunFailureExitCode(response))
+    assertTrue(response.error.orEmpty().contains("sign-in was refused"), "error: ${response.error}")
+  }
+
+  @Test
   fun `ordinary run outcomes keep the normal result flow`() {
     // An attempted-and-failed run, a success, and a cancellation are not rejections —
     // the handler must fall through to its session-based result handling.

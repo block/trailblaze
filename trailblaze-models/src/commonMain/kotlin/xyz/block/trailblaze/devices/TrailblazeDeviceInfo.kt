@@ -26,4 +26,15 @@ data class TrailblazeDeviceInfo(
 ) {
   val platform = trailblazeDriverType.platform
 
+  /**
+   * The `{{device.<name>}}` values a trail's tool arguments can name, by the names and values
+   * scripted tools read from `ctx.device`. They let a YAML step target this device, as in
+   * `exec: { argv: [xcrun, simctl, ui, "{{device.instanceId}}", appearance, dark] }`.
+   */
+  val tokenValues: Map<String, String>
+    get() = mapOf(
+      "platform" to platform.name.lowercase(),
+      "driverType" to trailblazeDriverType.yamlKey,
+      "instanceId" to trailblazeDeviceId.instanceId,
+    )
 }

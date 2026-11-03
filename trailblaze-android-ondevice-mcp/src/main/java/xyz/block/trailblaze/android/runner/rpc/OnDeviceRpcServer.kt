@@ -95,6 +95,10 @@ class OnDeviceRpcServer(
     val server = embeddedServer(
       factory = CIO,
       port = port,
+      // Loopback only: the host reaches this through an adb forward, which arrives on 127.0.0.1.
+      // With no host Ktor binds every interface, and a device on Wi-Fi exposes the port to the
+      // whole network.
+      host = "127.0.0.1",
     ) {
       install(WebSockets)
       install(ContentNegotiation) {

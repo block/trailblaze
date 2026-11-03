@@ -3,9 +3,6 @@ config:
   devices:
     web:
       driver: PLAYWRIGHT_NATIVE
-  tags:
-  - search
-  - flaky
   skip:
     web: 'Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands.'
   title: 'Wikipedia: Autocomplete suggestions visible while typing search'

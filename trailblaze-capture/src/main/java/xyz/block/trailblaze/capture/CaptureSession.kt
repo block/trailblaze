@@ -34,15 +34,35 @@ class CaptureSession internal constructor(
    */
   private var clockSampler: DeviceClockSampler? = null
 
+  /**
+   * Starts every stream and returns once each has started, so a caller that runs its first step
+   * after this returns has every stream recording through it.
+   *
+   * The streams start in parallel: each one's start is its own device round trips and subprocess
+   * spawn (the video recorder waits for its first picture), and none depends on another. A stream
+   * whose start fails is logged and the rest still record.
+   */
   fun startAll(sessionDir: File, deviceId: String, appId: String?) {
+    // First, so the readings bracket every stream.
     clockSampler = clockSamplerFactory?.invoke(sessionDir, deviceId)?.also { it.start() }
-    for (stream in streams) {
+    val startedAtMs = System.currentTimeMillis()
+    concurrently("start") { stream ->
       try {
         Console.log("Starting ${stream.type} capture...")
         stream.start(sessionDir, deviceId, appId)
       } catch (e: Exception) {
         Console.log("Failed to start ${stream.type} capture: ${e.message}")
       }
+    }
+    for (stream in streams) {
+      try {
+        stream.confirmRecording()
+      } catch (e: Exception) {
+        Console.log("Failed to confirm ${stream.type} capture: ${e.message}")
+      }
+    }
+    if (streams.isNotEmpty()) {
+      Console.log("Started ${streams.joinToString { it.type.name }} capture in ${System.currentTimeMillis() - startedAtMs}ms")
     }
   }
 
@@ -70,39 +90,38 @@ class CaptureSession internal constructor(
    *   `false` and writes the merged list itself with [CaptureMetadata.write], because each session
    *   writing its own would leave whichever stopped last as the only one on record.
    */
+  /**
+   * Marks the moment the session takes the device over, when its recording started earlier (while
+   * the device connected). A crash logged before it stays in the log but does not fail the run.
+   */
+  fun markSessionStart() {
+    streams.filterIsInstance<AppScopedCaptureStream>().forEach { it.markSessionStart() }
+  }
+
   fun stopAll(writeMetadata: Boolean = true): List<CaptureArtifact> {
+    // In parallel, as at start: each stream's stop is its own finalize (the video muxer flushing,
+    // a log reader draining), and the session waits for the slowest one rather than their sum.
+    val stoppedAtMs = System.currentTimeMillis()
+    val stopped = concurrently("stop") { stream -> stream to stopStream(stream) }
+    if (streams.isNotEmpty()) {
+      Console.log("Stopped ${streams.joinToString { it.type.name }} capture in ${System.currentTimeMillis() - stoppedAtMs}ms")
+    }
+    // Listed in stream order, whichever finished first.
     val artifacts = mutableListOf<CaptureArtifact>()
     var appScopedDeviceLog: CaptureArtifact? = null
     var appProcessName: String? = null
-    for (stream in streams) {
-      try {
-        Console.log("Stopping ${stream.type} capture...")
-        stream.stop(options)?.let { artifact ->
-          // A stream can finalize a file and still have captured nothing — the recorder's output
-          // is created when it is spawned, not when the first byte arrives. Registering an empty
-          // file gives the report a clip it cannot decode and ships a dead artifact in the session
-          // zip, so the file goes and the artifact is never listed. The session keeps its
-          // screenshots, which is what a session with no footage should show.
-          if (!artifact.file.isFile || artifact.file.length() == 0L) {
-            Console.log("${stream.type} captured nothing; discarding empty ${artifact.file.name}")
-            artifact.file.delete()
-            return@let
-          }
-          artifacts.add(artifact)
-          if (
-            artifact.type == xyz.block.trailblaze.capture.model.CaptureType.LOGCAT &&
-            stream is AppScopedCaptureStream &&
-            (stream.isAppScoped || stream.appProcessName != null)
-          ) {
-            appScopedDeviceLog = artifact
-            appProcessName = stream.appProcessName
-          }
-          Console.log(
-            "${stream.type} captured: ${artifact.file.name} (${artifact.file.length() / 1024}KB)"
-          )
-        }
-      } catch (e: Exception) {
-        Console.log("Failed to stop ${stream.type} capture: ${e.message}")
+    var bytesBeforeSessionStart = 0L
+    for ((stream, artifact) in stopped) {
+      if (artifact == null) continue
+      artifacts.add(artifact)
+      if (
+        artifact.type == xyz.block.trailblaze.capture.model.CaptureType.LOGCAT &&
+        stream is AppScopedCaptureStream &&
+        (stream.isAppScoped || stream.appProcessName != null)
+      ) {
+        appScopedDeviceLog = artifact
+        appProcessName = stream.appProcessName
+        bytesBeforeSessionStart = stream.bytesBeforeSessionStart
       }
     }
     // After the streams, so the final clock read never holds up finalizing a recording.
@@ -113,12 +132,77 @@ class CaptureSession internal constructor(
       if (writeMetadata) {
         artifacts.first().file.parentFile?.let { CaptureMetadata.write(it, artifacts) }
       }
-      writeCrashEvents(appScopedDeviceLog, appProcessName)
+      writeCrashEvents(appScopedDeviceLog, appProcessName, bytesBeforeSessionStart)
     }
     return artifacts
   }
 
-  private fun writeCrashEvents(deviceLogArtifact: CaptureArtifact?, appProcessName: String?) {
+  /** Stops one stream: its artifact, or null when it failed or captured nothing. */
+  private fun stopStream(stream: CaptureStream): CaptureArtifact? =
+    try {
+      Console.log("Stopping ${stream.type} capture...")
+      stream.stop(options)?.let { artifact ->
+        // A stream can finalize a file and still have captured nothing — the recorder's output
+        // is created when it is spawned, not when the first byte arrives. Registering an empty
+        // file gives the report a clip it cannot decode and ships a dead artifact in the session
+        // zip, so the file goes and the artifact is never listed. The session keeps its
+        // screenshots, which is what a session with no footage should show.
+        if (!artifact.file.isFile || artifact.file.length() == 0L) {
+          Console.log("${stream.type} captured nothing; discarding empty ${artifact.file.name}")
+          artifact.file.delete()
+          null
+        } else {
+          Console.log("${stream.type} captured: ${artifact.file.name} (${artifact.file.length() / 1024}KB)")
+          artifact
+        }
+      }
+    } catch (e: Exception) {
+      Console.log("Failed to stop ${stream.type} capture: ${e.message}")
+      null
+    }
+
+  /**
+   * Runs [action] for every stream at once and returns when all have returned, with the results in
+   * stream order. A single stream runs on the calling thread.
+   *
+   * An interrupt of the calling thread is passed on to every stream's thread, and this still waits
+   * for them: a stop's interrupted waits are what kill its subprocesses (see the session
+   * coordinator's `shutdownAll`), so returning first would leave them running.
+   */
+  private fun <R> concurrently(phase: String, action: (CaptureStream) -> R): List<R> {
+    if (streams.size <= 1) return streams.map(action)
+    val results = arrayOfNulls<Any?>(streams.size)
+    val failures = arrayOfNulls<Throwable>(streams.size)
+    val threads = streams.mapIndexed { index, stream ->
+      Thread(
+        { runCatching { action(stream) }.onSuccess { results[index] = it }.onFailure { failures[index] = it } },
+        "capture-$phase-${stream.type.name.lowercase()}",
+      ).apply { isDaemon = true; start() }
+    }
+    var interrupted = false
+    for (thread in threads) {
+      while (true) {
+        try {
+          thread.join()
+          break
+        } catch (e: InterruptedException) {
+          if (!interrupted) threads.forEach { it.interrupt() }
+          interrupted = true
+        }
+      }
+    }
+    if (interrupted) Thread.currentThread().interrupt()
+    // What escaped [action] is thrown here, as it would have been had the streams run in turn.
+    failures.firstOrNull { it != null }?.let { throw it }
+    @Suppress("UNCHECKED_CAST")
+    return results.toList() as List<R>
+  }
+
+  private fun writeCrashEvents(
+    deviceLogArtifact: CaptureArtifact?,
+    appProcessName: String?,
+    bytesBeforeSessionStart: Long,
+  ) {
     val devicePlatform = platform ?: return
     if (devicePlatform != TrailblazeDevicePlatform.ANDROID && devicePlatform != TrailblazeDevicePlatform.IOS) {
       return
@@ -130,6 +214,7 @@ class CaptureSession internal constructor(
       deviceLog = deviceLog,
       platform = devicePlatform,
       appProcessName = appProcessName,
+      bytesBeforeSessionStart = bytesBeforeSessionStart,
     )
   }
 

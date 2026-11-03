@@ -55,7 +55,8 @@ const ROOT_NETWORK_FILE_RE = /^network(?:\.[^/]+)?\.ndjson$/;
  * Network capture writes `network.ndjson` (`network.<device>.ndjson` per Android device) at the
  * session root, outside `events/`, so these are the root files to read as event streams too: the
  * Summary's network lane and run comparisons only see streams. A stream `events/` already carries
- * under the same name wins. Mirrors `SessionEventsReader.rootNetworkFiles`.
+ * under the same name wins. A plugin's capture of the same traffic (`com.example.plugin.network`)
+ * is read beside it; the Summary's lane shows the plugin's. Mirrors `SessionEventsReader.rootNetworkFiles`.
  */
 export function rootNetworkStreamFiles(rootFileNames: readonly string[], eventStreamNames: readonly string[]): string[] {
   const present = new Set(eventStreamNames);
@@ -68,7 +69,8 @@ export function rootNetworkStreamFiles(rootFileNames: readonly string[], eventSt
  * Decode one NDJSON line. Mirrors the JVM SessionEventsReader envelope rule: a top-level `timeMs`
  * marks the `{ timeMs, data }` envelope (payload is `data`); otherwise the whole object is a bare
  * rich payload ordered by its own `timestampMs` when present. A top-level `clock: "device"` says
- * the device's clock stamped `t` and is carried as `clock`; absent means the host's. Locked against
+ * the device's clock stamped `t` and is carried as `clock`; absent means the host's. With it, a
+ * `clockStream` names the stream whose device that was, when not the file's own. Locked against
  * the JVM reader by session-events-parity-fixtures.json.
  */
 export function decodeEventLine(line: string): FormatterEntry | null {
@@ -79,6 +81,8 @@ export function decodeEventLine(line: string): FormatterEntry | null {
     const t = envelope ? o.timeMs : typeof o.timestampMs === "number" ? o.timestampMs : null;
     const entry: FormatterEntry = { t, data: envelope ? (o.data ?? o) : o };
     if (o.clock === "device") entry.clock = "device";
+    if (o.clock === "device" && typeof o.clockStream === "string" && o.clockStream) entry.clockStream = o.clockStream;
+    if (envelope && o.row && typeof o.row === "object" && !Array.isArray(o.row)) entry.row = o.row;
     return entry;
   } catch {
     return null;
@@ -87,7 +91,8 @@ export function decodeEventLine(line: string): FormatterEntry | null {
 
 /**
  * `entry` with a device-clock `t` moved onto the host timeline by its device's measured clock
- * readings (`clockTrackForStream`), keeping the raw stamp as `deviceT`. Left on the device clock —
+ * readings (`clockTrackForStream`), keeping the raw stamp as `deviceT`. A row the line carries has
+ * its `endT` moved on the same readings, so an interval keeps its length. Left on the device clock —
  * still marked `clock: "device"` — when there is nothing to convert with (an on-device run, one from
  * before the measurement, or a device whose clock reads all failed).
  */
@@ -96,6 +101,10 @@ export function toHostClock(entry: FormatterEntry, clockTrack: DeviceClockTrack 
   const hostMs = trackToHostMs(clockTrack, entry.t);
   if (hostMs == null) return { ...entry, deviceT: entry.t };
   const { clock: _device, ...rest } = entry;
+  const endT = rest.row?.endT;
+  if (rest.row && typeof endT === "number" && Number.isFinite(endT)) {
+    rest.row = { ...rest.row, endT: trackToHostMs(clockTrack, endT) ?? endT + (hostMs - entry.t) };
+  }
   return { ...rest, t: hostMs, deviceT: entry.t };
 }
 
@@ -352,6 +361,35 @@ const clampRow = (row: FormatterRowInput | null | undefined): FormattedRow | nul
   return out;
 };
 
+const FOLDS: ReadonlyArray<NonNullable<LaneOptions["fold"]>> = ["any", "label", "none"];
+const MAX_LANE_TITLE = 80;
+
+/**
+ * [formatter]'s lane options for the stream [name]. A title names a stream a `prefix.*` pattern
+ * matched by what follows the prefix, the device of a pair session's `<stream>.<device>`.
+ */
+function formatterLane(formatter: EventStreamFormatter, name: string): ReturnType<typeof laneOptionsOf> {
+  const lane = laneOptionsOf(formatter.lane);
+  if (!lane.title || formatter.streams.includes(name)) return lane;
+  const prefix = formatter.streams.find((s) => s.endsWith(".*") && name.startsWith(s.slice(0, -1)))?.slice(0, -1);
+  const suffix = prefix ? name.slice(prefix.length) : "";
+  return suffix ? { ...lane, title: `${lane.title} (${suffix})` } : lane;
+}
+
+/**
+ * The lane facts a stream's owner declared ([options]: a formatter's `lane`, or a derived stream's
+ * in `events/derived.json`), keeping only the values the report knows, so a typo never breaks a lane.
+ */
+export function laneOptionsOf(options: unknown): { title?: string; shown?: true; fold?: NonNullable<LaneOptions["fold"]> } {
+  if (!options || typeof options !== "object") return {};
+  const { title, shown, fold } = options as { title?: unknown; shown?: unknown; fold?: unknown };
+  return {
+    ...(typeof title === "string" && title.trim() ? { title: title.trim().slice(0, MAX_LANE_TITLE) } : {}),
+    ...(shown === true ? { shown: true as const } : {}),
+    ...(typeof fold === "string" && (FOLDS as readonly string[]).includes(fold) ? { fold: fold as NonNullable<LaneOptions["fold"]> } : {}),
+  };
+}
+
 /**
  * Run a formatter over a stream's decoded entries. Null (→ generic fallback) when the formatter
  * throws, returns a non-array, or produces no usable rows — a formatter can never lose data, only
@@ -411,11 +449,26 @@ export function buildEventStream(
   const entries = nonBlank
     .map(decodeEventLine)
     .filter((e): e is FormatterEntry => e != null)
-    .map((e) => toHostClock(e, clockTrack));
+    // A line naming the stream whose clock stamped it converts on that one's device, even when it has no readings.
+    .map((e) => toHostClock(e, e.clockStream ? clockTrackForStream(clockSync, e.clockStream) : clockTrack));
   if (!entries.length) return null;
 
   const formatter = formatterForStream(formatters, name);
   const rows = formatter ? formatRows(formatter, entries, ctx) : null;
+  // The lane is the formatter's whether or not it improved the rows, so it behaves as declared either way.
+  const lane = formatter ? formatterLane(formatter, name) : {};
+  // Not a line still on the device clock with no reading to move it: the generic path keeps those off the step timeline.
+  if (!formatter && entries.every((e) => e.row && e.clock !== "device")) {
+    // Every line carries its own row, each keeping its payload, so the rows lose nothing. A row that
+    // cannot be read leaves the stream to the generic path below, never out of the report.
+    let own: FormattedRow[] = [];
+    try {
+      own = entries.map((e) => clampRow({ ...e.row!, t: e.t, raw: [e.data] })).filter((r): r is FormattedRow => r != null);
+    } catch {
+      own = [];
+    }
+    if (own.length === entries.length) return { name, total: own.length, truncated: own.length > CAPS.rows, events: [], rows: own.slice(0, CAPS.rows) };
+  }
   if (rows) {
     const comparisonNames = formatter?.comparisonNames;
     const declaredComparisonName = comparisonNames && Object.prototype.hasOwnProperty.call(comparisonNames, name)
@@ -437,6 +490,7 @@ export function buildEventStream(
       truncated: false,
       events: [],
       rows,
+      ...lane,
     };
   }
 
@@ -457,5 +511,54 @@ export function buildEventStream(
     total: nonBlank.length,
     truncated: false,
     events,
+    ...lane,
   };
+}
+
+/** The session's `events/derived.json`: the streams a survey file's `stream()` wrote there. */
+export const DERIVED_STREAMS_FILE = "derived.json";
+/** Far past any real manifest (a few hundred bytes a stream); a bigger one is not read into memory. */
+export const DERIVED_STREAMS_MAX_BYTES = 1024 * 1024;
+
+/** Far past the sources any real stream names; a longer list is cut, never read in full. */
+export const DERIVED_FROM_MAX = 20;
+
+/**
+ * Lane facts for the derived streams `events/derived.json` lists: each one's title and fold, when it
+ * has them, and the streams and logs it was derived from (empty when the manifest predates recording them).
+ * Empty for a file that is absent, unreadable, or not that manifest.
+ */
+export function derivedLanes(json: string | null): Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]> }> {
+  const out = new Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]> }>();
+  if (!json) return out;
+  try {
+    const m = JSON.parse(json);
+    const streams = m && typeof m === "object" ? m.streams : null;
+    if (!streams || typeof streams !== "object" || Array.isArray(streams)) return out;
+    for (const name of Object.keys(streams)) {
+      const entry = streams[name];
+      const title = entry?.title;
+      const from = Array.isArray(entry?.derivedFrom) ? entry.derivedFrom : [];
+      const derivedFrom = [...new Set(from.filter((s: unknown): s is string => typeof s === "string" && s !== "").map((s: string) => clampText(s, CAPS.label)))].slice(0, DERIVED_FROM_MAX) as string[];
+      const { fold } = laneOptionsOf(entry?.lane);
+      out.set(name, { ...(typeof title === "string" && title ? { title: clampText(title, CAPS.label) } : {}), derivedFrom, ...(fold ? { fold } : {}) });
+    }
+  } catch {
+    // Not the manifest: no stream is derived.
+  }
+  return out;
+}
+
+/**
+ * Marks each of [streams] that `events/derived.json` ([json]) lists as derived: its lane opens by
+ * default, under the stream's title, saying what it was derived from, and folding as it declares
+ * unless the formatter that owns it already set a fold. Shared by the CLI report and
+ * the archive viewer, so one session shows the same lanes in both.
+ */
+export function applyDerivedLanes(streams: EventStream[], json: string | null): void {
+  const lanes = derivedLanes(json);
+  for (const stream of streams) {
+    const lane = lanes.get(stream.name);
+    if (lane) Object.assign(stream, { shown: true, derivedFrom: lane.derivedFrom }, lane.title ? { title: lane.title } : {}, lane.fold && !stream.fold ? { fold: lane.fold } : {});
+  }
 }

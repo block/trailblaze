@@ -48,12 +48,15 @@ object AndroidViewHierarchyCollector {
     val composeRootSemanticsIdByNodeId: Map<Long, Int>,
   )
 
-  /** [rootView] is the focused window's root — see `AndroidHybridHierarchyCollector.focusedWindowRoot`. */
-  fun collect(rootView: View): Collected = onMainThread {
+  /**
+   * [rootView] is one window's root — see `AndroidHybridHierarchyCollector.windowRoots`. Node ids
+   * start at [firstNodeId], so several windows' trees can share one capture.
+   */
+  fun collect(rootView: View, firstNodeId: Long = 1L): Collected = onMainThread {
     val composeHosts = mutableListOf<View>()
     val viewByNodeId = mutableMapOf<Long, View>()
     val composeRootSemanticsIdByNodeId = mutableMapOf<Long, Int>()
-    var nextId = 1L
+    var nextId = firstNodeId
     val tree =
       mapView(rootView, { nextId++ }, composeHosts, viewByNodeId, composeRootSemanticsIdByNodeId)
     Collected(
@@ -162,11 +165,11 @@ object AndroidViewHierarchyCollector {
    * collection position anyway.
    *
    * The SUPERCLASS CHAIN is walked rather than the leaf class, and that direction is the one that
-   * costs something. An app subclass need not keep the name — Square's grids are one — while it
+   * costs something. An app subclass need not keep the name — a custom grid is one — while it
    * still carries RecyclerView's item accessibility delegate, so a leaf-name test leaves its items
    * with no `collectionItemRowIndex` at all. The strict bridge then turns every recorded
    * grid-position selector into a failed match, and a grid of untitled tiles has no other handle
-   * (a real trail's empty favourites tiles are exactly that). The false-positive direction the
+   * (a grid of empty placeholder tiles is exactly that). The false-positive direction the
    * paragraph above tolerates is cheap; this one silently loses the only selector that works.
    */
   private fun Any?.isRecyclerViewLike(): Boolean {
@@ -209,6 +212,10 @@ object AndroidViewHierarchyCollector {
     if (visibility != View.VISIBLE || !isShown) return null
     val visible = Rect()
     if (!getGlobalVisibleRect(visible) || visible.width() <= 0 || visible.height() <= 0) return null
+    // `getGlobalVisibleRect` is relative to this view's window, which is off the screen origin for
+    // a dialog, sheet or popup; shift it to screen coordinates, like the accessibility tree.
+    val windowOrigin = IntArray(2).also(rootView::getLocationOnScreen)
+    visible.offset(windowOrigin[0], windowOrigin[1])
     return TrailblazeNode.Bounds(visible.left, visible.top, visible.right, visible.bottom)
   }
 

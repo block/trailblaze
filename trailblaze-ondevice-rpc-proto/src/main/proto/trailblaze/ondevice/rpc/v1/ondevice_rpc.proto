@@ -117,6 +117,10 @@ message RunYamlRequest {
   // Run in the device's current language unless the trail declares a locale: a CLI or MCP prompt or
   // tool drives the device by hand, so its run is not reset to the default language.
   bool keep_device_language = 25;
+  // The host session's trail config and app under test, as JSON, for a host-driven session whose
+  // start log the host writes. A survey run by an on-device tool reads its trail fields from this.
+  // Absent when the device writes the start itself, and from older hosts.
+  optional bytes session_start_json = 26;
 }
 
 message RunYamlResponse {

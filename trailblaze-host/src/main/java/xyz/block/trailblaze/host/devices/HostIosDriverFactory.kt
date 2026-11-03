@@ -23,6 +23,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import xyz.block.trailblaze.util.Console
 
 internal object HostIosDriverFactory {
@@ -111,6 +112,25 @@ internal object HostIosDriverFactory {
    */
   fun isRunnerReachable(port: Int): Boolean =
     HostDriverPortUtils.isPortReachable(defaultXctestHost, port, timeoutMs = 500)
+
+  private val discardListeners = CopyOnWriteArrayList<(String) -> Unit>()
+
+  /** Calls [listener] with the device id after each [discard], so anything else holding that driver lets go of it. */
+  fun onDiscard(listener: (String) -> Unit) {
+    discardListeners += listener
+  }
+
+  /**
+   * Closes [deviceId]'s cached driver, so its next [createIOS] builds and connects a new one. A
+   * replacement runner answers on the same port, so a holder that only checks the port would keep
+   * using the closed driver; [onDiscard] listeners are told instead.
+   */
+  fun discard(deviceId: String) {
+    drivers.evict(deviceId) { true }
+    discardListeners.forEach { listener ->
+      runCatching { listener(deviceId) }.onFailure { Console.log("Discarded iOS driver listener failed for $deviceId: ${it.message}") }
+    }
+  }
 
   fun createIOS(
     deviceId: String,

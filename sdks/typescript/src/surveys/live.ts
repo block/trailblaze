@@ -7,10 +7,11 @@
 // files — throws when read, naming `requiresFinishedSession`, the flag that moves the survey to
 // after the run.
 
-import { type LogRecords, Records, matchAnalytics, matchEvent, matchNetwork } from "./match.js";
+import { type EventQuery, type LogRecords, Records, matchAnalytics, matchEvent, matchNetwork } from "./match.js";
 import { analyticsFrom, networkFromRows, redactUrl } from "./parse.js";
-import { NO_RECORD, READ_EVERYTHING, TABLE_ROW, planReads, type ReadPlan, type StreamRead } from "./live-plan.js";
+import { NO_RECORD, READ_EVERYTHING, TABLE_ROW, planReads, streamMayMatch, type ReadPlan, type StreamRead } from "./live-plan.js";
 import { runSurvey } from "./run-one.js";
+import { isEventStream, withLazyDerivedStreams, type EventStreamDefinition } from "./stream.js";
 import type { SurveySession } from "./session.js";
 import { surveyApplies, type TargetCatalog } from "./scope.js";
 import { explainFinding, findingOf, hasFindPhase, isDeclarative, isSurvey, provesOnlyPresence, withId, type FindingExplanation, type SurveyDefinition } from "./survey.js";
@@ -30,13 +31,20 @@ interface LiveScanResult {
   scan?: { lines?: number };
 }
 
+/** One record as the host returns it: its time on the host clock, unless `clock` says the host had no measurement to move it there. */
+export interface LiveRecord {
+  timeMs: number;
+  data: unknown;
+  clock?: "device";
+}
+
 /** What a live session reads through: `ctx.events`, or a fake of it in a test. */
 export interface LiveEventSource {
   list(): Promise<string[]>;
   query(
     stream: string,
     options?: { match?: Record<string, unknown>; since?: string; after?: number; waitMs?: number; limit?: number },
-  ): Promise<LiveScanResult & { events: Array<{ timeMs: number; data: unknown }>; truncated?: boolean }>;
+  ): Promise<LiveScanResult & { events: Array<LiveRecord>; truncated?: boolean }>;
   /**
    * How many records match, none of them returned. Without it every stream is read whole, as is
    * every stream when a host answers without a `count`.
@@ -77,8 +85,10 @@ export interface LiveSessionOptions {
   since?: string;
   /** This session's id, for findings. */
   id?: string;
-  /** What is already known about the run: platform, target, app, driver, device classifiers. */
-  summary?: Partial<Pick<SessionSummary, "title" | "trailId" | "target" | "platform" | "appId" | "driver" | "deviceClassifiers">>;
+  /** What is already known about the run: the trail, its metadata, platform, target, app, driver, device classifiers. */
+  summary?: Partial<
+    Pick<SessionSummary, "title" | "trailId" | "testKey" | "target" | "platform" | "appId" | "appVersion" | "driver" | "deviceClassifiers" | "metadata">
+  >;
   /** The most records a read may hold. Default 20,000. */
   maxRecords?: number;
   /** The most characters of record JSON a read may hold. Default 16,000,000. */
@@ -108,7 +118,7 @@ const RANK = { health: 0, filtered: 1, full: 2 } as const;
  * narrows what each stream contributes; the host filters, so only what the plan keeps reaches here.
  */
 export class LiveSessionReader {
-  private readonly rows = new Map<string, Array<{ timeMs: number; data: unknown }>>();
+  private readonly rows = new Map<string, Array<LiveRecord>>();
   private readonly cursors = new Map<string, number>();
   private readonly losses = new Map<string, string>();
   private readonly files = new Map<string, string>();
@@ -235,7 +245,7 @@ export class LiveSessionReader {
     return true;
   }
 
-  private hold(stream: string, events: Array<{ timeMs: number; data: unknown }>, chars = charsOf(events)): void {
+  private hold(stream: string, events: Array<LiveRecord>, chars = charsOf(events)): void {
     if (events.length === 0) return;
     // One push per record: spreading a stream's worth of matches would pass the engine's argument limit.
     const rows = this.rows.get(stream)!;
@@ -296,7 +306,7 @@ export class LiveSessionReader {
     const start = this.cursors.get(stream);
     const from = (after: number | undefined) => (after === undefined ? this.startingPoint(stream) : { after });
     let cursor = start;
-    const kept: Array<{ timeMs: number; data: unknown }> = [];
+    const kept: Array<LiveRecord> = [];
     let keptChars = 0;
     let settled = false;
     if (read.absentOnly) {
@@ -346,13 +356,16 @@ export class LiveSessionReader {
     for (const [stream, rows] of this.rows) {
       if (stream === NETWORK_STREAM) continue;
       const file = this.files.get(stream) ?? `events/${stream}.ndjson`;
-      for (const r of rows) events.push({ kind: "event", stream, data: r.data, file, timeMs: r.timeMs, summary: `${stream} event` });
+      for (const r of rows) {
+        events.push({ kind: "event", stream, data: r.data, file, timeMs: r.timeMs, ...(r.clock === "device" ? { clock: "device" as const } : {}), summary: `${stream} event` });
+      }
     }
     events.sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
     // The host moved each record onto its clock (`timeMs`); the row's own stamp is the device's, so
-    // network and other streams would order differently on a device whose clock is off.
+    // network and other streams would order differently on a device whose clock is off. The row's
+    // clock is the host's answer: still the device's only when it had no measurement to move it by.
     const networkRows = (this.rows.get(NETWORK_STREAM) ?? []).map((r) => ({
-      row: typeof r.timeMs === "number" ? { ...(r.data as object), timestampMs: r.timeMs } : r.data,
+      row: typeof r.timeMs === "number" ? { ...(r.data as object), timestampMs: r.timeMs, clock: r.clock === "device" ? "device" : undefined } : r.data,
     }));
     // A body the capture kept in its own file is not read mid-run; an inline body is. Reading one
     // that is in a file throws, so neither a presence nor an absence check is judged without it.
@@ -416,6 +429,8 @@ function liveSession(
     ...options.summary,
   } as Partial<SessionSummary>;
   for (const field of ["outcome", "failureReason", "startedAtMs", "endedAtMs", "durationMs", "appVersion", "ci", "hasDeviceLog"] as const) {
+    // The app version is known from the start when the host sent it.
+    if (field === "appVersion" && options.summary?.appVersion !== undefined) continue;
     Object.defineProperty(summary, field, { enumerable: false, get: ended(`summary.${field}`) });
   }
   // Any use of a collection that only exists at the end throws, whichever method a survey calls.
@@ -439,7 +454,10 @@ function liveSession(
     screenText: unavailable<SurveySession["screenText"]>("screenText"),
     deviceLog: unavailable<SurveySession["deviceLog"]>("deviceLog"),
     trace: unavailable<SurveySession["trace"]>("trace"),
-    stream: <T = unknown>(name: string) => session.events.filter({ stream: name }) as StreamEvent<T>[],
+    // `this`, so a view of this session with derived streams added (`withDerivedStreams`) reads its own events.
+    stream<T = unknown>(this: SurveySession, name: string) {
+      return this.events.filter({ stream: name }) as StreamEvent<T>[];
+    },
     hasFile: ended("session.hasFile()"),
     readText: ended("session.readText()"),
     readJson: ended("session.readJson()"),
@@ -458,6 +476,8 @@ export interface LiveSurveyOptions {
   log?: (message: string) => void;
   /** The workspace's targets, so a survey scoped to a target applies to every session on its apps. */
   targets?: TargetCatalog;
+  /** Derived event streams to add to each read, as offline surveys get them: the survey file's own. */
+  streams?: ReadonlyArray<EventStreamDefinition<any>>;
   /** Clock, for tests. */
   now?: () => number;
 }
@@ -488,6 +508,25 @@ function withUncaptured(read: LiveRead, streams: string[]): LiveRead {
   if (missing.length === 0) return read;
   const reason = `${missing.join(", ")} ${missing.length === 1 ? "was" : "were"} never captured`;
   return { ...read, complete: false, incompleteReason: read.incompleteReason ? `${read.incompleteReason}; ${reason}` : reason };
+}
+
+/**
+ * The derived streams of [streams] that [def] could read: for a finding, those an events query can
+ * match; for a handler, every one, since it derives a stream only when it reads it.
+ */
+function streamsReadBy(def: SurveyDefinition, streams: ReadonlyArray<EventStreamDefinition<any>>): ReadonlyArray<EventStreamDefinition<any>> {
+  if (!isDeclarative(def)) return streams;
+  const f = findingOf(def.spec);
+  if (!f) return [];
+  const queries = [f.events, f.absent?.events].flatMap((q) => (q === undefined ? [] : Array.isArray(q) ? q : [q]));
+  return streams.filter((d) => queries.some((q) => streamMayMatch(d.name, (q as EventQuery).stream)));
+}
+
+/** [def]'s name and those of the streams it depends on, however deep. */
+function namesOf(def: EventStreamDefinition<any>, seen = new Set<EventStreamDefinition<any>>()): string[] {
+  if (seen.has(def)) return [];
+  seen.add(def);
+  return [def.name, ...(def.spec.dependsOn ?? []).flatMap((d) => namesOf(d, seen))];
 }
 
 /** Stream names a survey's finding queries filter on, so their capture health is read too. */
@@ -554,23 +593,35 @@ export async function runLiveSurvey(def: SurveyDefinition, reader: LiveSessionRe
       message: `Survey ${name} is scoped to ${scopeOf(def.spec)}, and this session is ${describeSession(about)}, so it does not apply here.`,
     };
   }
-  const named = streamsNamedBy(def);
+  // A survey gets the derived streams it could read, each derived again from every read. One it
+  // never reads is never derived, so a stream that works only after the session cannot fail it.
+  const streams = streamsReadBy(def, options.streams ?? []);
+  const derivedNames = new Set(streams.flatMap((d) => namesOf(d)));
+  // A derived stream is never captured, so it is no stream to read or to wait on.
+  const named = streamsNamedBy(def).filter((s) => !derivedNames.has(s));
   // Run against one read, collecting what the survey reports through `ctx.error()`.
   const judge = async (read: LiveRead) => {
     const errors: string[] = [];
+    // Kept on the read, so a failure explains itself over the rows the survey saw.
+    read.session = withLazyDerivedStreams(read.session, streams, (stream, message) => errors.push(`stream ${stream}: ${message}`));
     const all = await runSurvey(def, read.session, name, options.log, (e) => errors.push(e.message));
     const findings = options.expected === undefined ? all : all.filter((f) => matchesExpected(f, options.expected));
     return { findings, errors };
   };
   // Evidence can imply absence (for example an in-flight request whose response was lost).
   // Only expectations on the fixed fields of a declarative finding preserve presence-only proof.
-  const presenceOnly = provesOnlyPresence(def) && Object.keys(options.expected ?? {}).every((key) =>
+  // A derived row can stand for anything, an absence included, and what it reads is not known
+  // here, so a survey that derives streams is judged as a handler is: on a complete read of every
+  // stream it could rest on.
+  const derives = streams.length > 0;
+  const presenceOnly = !derives && provesOnlyPresence(def) && Object.keys(options.expected ?? {}).every((key) =>
     ["survey", "summary", "data"].includes(key),
   );
   // A presence-only survey needs no stream it does not find a record on; any other needs every
   // stream its absence rests on to be captured.
-  const needed = presenceOnly ? [] : absenceStreams(def, named);
-  const plan = planReads(def);
+  const needed = presenceOnly ? [] : derives ? [...new Set([...ALWAYS_READ, ...named])] : absenceStreams(def, named);
+  // A stream's `derive` may read any record, so a read that derives one leaves nothing out.
+  const plan = streams.length > 0 ? READ_EVERYTHING : planReads(def);
   const readAll = async () => withUncaptured(await reader.read(named, plan), needed);
   const waitedMs = () => now() - started;
   const errorResult = (errors: string[]) => ({
@@ -709,6 +760,7 @@ export async function runNamedLiveSurvey(
     throw new Error(`No survey is exported as ${name}. This file exports: ${found.join(", ") || "(none)"}.`);
   }
   const reader = new LiveSessionReader(events, { id: options.sessionId, summary: options.summary, since: options.since });
-  const result = await runLiveSurvey(withId(def, name), reader, { waitMs: options.waitMs, expected: options.expected, targets: options.targets, log: options.log });
+  const streams = Object.values(module).filter(isEventStream);
+  const result = await runLiveSurvey(withId(def, name), reader, { waitMs: options.waitMs, expected: options.expected, targets: options.targets, log: options.log, streams });
   return { survey: name, ...result };
 }

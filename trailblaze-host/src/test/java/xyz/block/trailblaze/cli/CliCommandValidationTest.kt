@@ -105,64 +105,12 @@ class CliCommandValidationTest {
     assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
-  @Scenario(
-    title = "Save session as trail file",
-    commands =
-      [
-        "trailblaze step --save trails/test.trail.yaml",
-        "trailblaze step --save trails/test.trail.yaml --setup 1-3",
-        "trailblaze step --save trails/test.trail.yaml --no-setup",
-      ],
-    description =
-      "The --save flag writes the session to a trail file. Use --setup to mark leading steps as setup, or --no-setup to mark none. One of --setup or --no-setup is required with --save.",
-    category = "Trail Management",
-  )
   @Test
-  fun `step --setup without save returns USAGE`() {
+  fun `step still accepts the retired --no-setup`() {
     val cmd = StepCommand()
-    cmd.setup = "1-3"
-    cmd.savePath = null
+    CommandLine(cmd).parseArgs("--save", "trail.yaml", "--no-setup")
 
-    val exitCode = cmd.call()
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-  }
-
-  @Test
-  fun `step --no-setup without save returns USAGE`() {
-    val cmd = StepCommand()
-    cmd.noSetup = true
-    cmd.savePath = null
-
-    val exitCode = cmd.call()
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-  }
-
-  @Test
-  fun `step --setup and no-setup together returns USAGE`() {
-    val cmd = StepCommand()
-    cmd.savePath = "trail.yaml"
-    cmd.setup = "1-3"
-    cmd.noSetup = true
-
-    val exitCode = cmd.call()
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-  }
-
-  @Test
-  fun `step --setup without save takes precedence over mutual exclusion check`() {
-    // When --setup is provided without --save, the "requires --save" check
-    // fires first, before the mutual-exclusion check with --no-setup.
-    val cmd = StepCommand()
-    cmd.setup = "1-3"
-    cmd.noSetup = true
-    cmd.savePath = null
-
-    val exitCode = cmd.call()
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+    assertEquals("trail.yaml", cmd.savePath)
   }
 
   // ---------------------------------------------------------------------------
@@ -610,30 +558,18 @@ class CliCommandValidationTest {
     assertEquals(listOf("Check", "the", "button", "is", "visible"), cmd.stepWords)
   }
 
+  @Scenario(
+    title = "Save session as trail file",
+    commands = ["trailblaze step --save trails/test.trail.yaml"],
+    description = "The --save flag writes every step of the session to a trail file.",
+    category = "Trail Management",
+  )
   @Test
   fun `picocli parses step save flag`() {
     val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--save", "my-trail.yaml")
 
     assertEquals("my-trail.yaml", cmd.savePath)
-  }
-
-  @Test
-  fun `picocli parses step setup flag`() {
-    val cmd = StepCommand()
-    CommandLine(cmd).parseArgs("--save", "trail.yaml", "--setup", "1-3")
-
-    assertEquals("trail.yaml", cmd.savePath)
-    assertEquals("1-3", cmd.setup)
-  }
-
-  @Test
-  fun `picocli parses step no-setup flag`() {
-    val cmd = StepCommand()
-    CommandLine(cmd).parseArgs("--save", "trail.yaml", "--no-setup")
-
-    assertEquals("trail.yaml", cmd.savePath)
-    assertEquals(true, cmd.noSetup)
   }
 
   @Scenario(
@@ -746,8 +682,6 @@ class CliCommandValidationTest {
 
     assertEquals(emptyList(), cmd.stepWords)
     assertNull(cmd.savePath)
-    assertNull(cmd.setup)
-    assertEquals(false, cmd.noSetup)
     assertEquals(false, cmd.verify)
     assertEquals(false, cmd.verbose)
     assertEquals(false, cmd.noScreenshots)
@@ -800,119 +734,6 @@ class CliCommandValidationTest {
     assertFailsWith<CommandLine.UnmatchedArgumentException> {
       CommandLine(cmd).parseArgs("target", "myapp", "--device=web")
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // parseStepRange
-  // ---------------------------------------------------------------------------
-
-  @Test
-  fun `parseStepRange single index`() {
-    val cmd = StepCommand()
-    assertEquals(setOf(2), cmd.parseStepRange("2", 5))
-  }
-
-  @Test
-  fun `parseStepRange range`() {
-    val cmd = StepCommand()
-    assertEquals(setOf(1, 2, 3), cmd.parseStepRange("1-3", 5))
-  }
-
-  @Test
-  fun `parseStepRange comma-separated`() {
-    val cmd = StepCommand()
-    assertEquals(setOf(1, 3, 5), cmd.parseStepRange("1,3,5", 5))
-  }
-
-  @Test
-  fun `parseStepRange mixed ranges and indices`() {
-    val cmd = StepCommand()
-    assertEquals(setOf(1, 2, 3, 5), cmd.parseStepRange("1-3,5", 5))
-  }
-
-  @Test
-  fun `parseStepRange out of bounds returns null`() {
-    val cmd = StepCommand()
-    assertNull(cmd.parseStepRange("0-3", 5))
-    assertNull(cmd.parseStepRange("1-6", 5))
-  }
-
-  @Test
-  fun `parseStepRange invalid format returns null`() {
-    val cmd = StepCommand()
-    assertNull(cmd.parseStepRange("abc", 5))
-    assertNull(cmd.parseStepRange("1-2-3", 5))
-    assertNull(cmd.parseStepRange("", 5))
-  }
-
-  @Test
-  fun `parseStepRange reversed range returns null`() {
-    val cmd = StepCommand()
-    assertNull(cmd.parseStepRange("3-1", 5))
-  }
-
-  // ---------------------------------------------------------------------------
-  // restructureWithSetup
-  // ---------------------------------------------------------------------------
-
-  @Test
-  fun `restructureWithSetup splits steps into setup and trail`() {
-    val cmd = StepCommand()
-    val yaml =
-      """
-      - prompts:
-          - step: Login to the app
-          - step: Navigate to settings
-          - step: Change the name
-      """
-        .trimIndent()
-
-    val result = cmd.restructureWithSetup(yaml, setOf(1))
-
-    assert(result.contains("# setup (trailhead)")) { "Should have setup section" }
-    assert(result.contains("# trail")) { "Should have trail section" }
-    assert(result.contains("Login to the app")) { "Setup step should be present" }
-    assert(result.contains("Navigate to settings")) { "Trail step should be present" }
-    assert(result.contains("Change the name")) { "Trail step should be present" }
-  }
-
-  @Test
-  fun `restructureWithSetup preserves config header`() {
-    val cmd = StepCommand()
-    val yaml =
-      """
-      - config:
-          title: My test
-      - prompts:
-          - step: Step one
-          - step: Step two
-      """
-        .trimIndent()
-
-    val result = cmd.restructureWithSetup(yaml, setOf(1))
-
-    assert(result.contains("title: My test")) { "Config should be preserved" }
-    assert(result.contains("# setup (trailhead)")) { "Should have setup section" }
-    assert(result.contains("# trail")) { "Should have trail section" }
-  }
-
-  @Test
-  fun `restructureWithSetup with no setup indices puts all in trail`() {
-    val cmd = StepCommand()
-    val yaml =
-      """
-      - prompts:
-          - step: Step one
-          - step: Step two
-      """
-        .trimIndent()
-
-    val result = cmd.restructureWithSetup(yaml, emptySet())
-
-    assert(!result.contains("# setup (trailhead)")) { "Should not have setup section" }
-    assert(result.contains("# trail")) { "Should have trail section" }
-    assert(result.contains("Step one")) { "Step should be present" }
-    assert(result.contains("Step two")) { "Step should be present" }
   }
 
   // ---------------------------------------------------------------------------

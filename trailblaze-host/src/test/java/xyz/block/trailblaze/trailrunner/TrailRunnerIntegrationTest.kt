@@ -813,6 +813,18 @@ class TrailRunnerIntegrationTest {
   }
 
   @Test
+  fun `GET session archive leaves out the report's event sidecars`() = withTrailRunner {
+    File(logsDir, "sess_sidecar").mkdirs()
+    File(logsDir, "sess_sidecar/0001.json").writeText("""{"ok":true}""")
+    File(logsDir, "sess_sidecar/report-events-0123456789abcdef.js").writeText("self.__tbReportSidecar&&1;")
+
+    val response = client.get("/trailrunner/api/session/sess_sidecar/export.zip")
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    assertEquals(setOf("sess_sidecar/0001.json"), zipEntryNames(response.bodyAsBytes()))
+  }
+
+  @Test
   fun `POST session import accepts a session zip archive`() = withTrailRunner {
     val bytes = zipBytes(mapOf("import_sess/0001.json" to """{"ok":true}"""))
 

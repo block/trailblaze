@@ -42,6 +42,12 @@ data class DirectionStep(
    * session logs and never appears in a `.trail.yaml`.
    */
   val isTeardown: Boolean = false,
+  /**
+   * Marks the objective that wraps a run's setup tool calls (`trailblaze run --device-setup`),
+   * which run before the trailhead. Like [isTeardown], its calls are never written into a
+   * recording, and it only rides through session logs.
+   */
+  val isSetup: Boolean = false,
 ) : PromptStep {
   override val prompt: String = step
 }

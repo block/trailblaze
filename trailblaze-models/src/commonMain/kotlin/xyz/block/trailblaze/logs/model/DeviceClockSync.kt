@@ -145,15 +145,27 @@ data class DeviceClockSync(
    */
   fun trackForStream(streamName: String): DeviceClockTrack? {
     val file = SessionEvents.sanitizeName(streamName)
+    // The longest device name the stream ends in, after a '.'. Only the lengths device names have are
+    // tried, longest first, so a long name costs no more than the devices' own names.
     val owner =
-      devices
-        .mapNotNull { track -> track.deviceName?.let { SessionEvents.sanitizeName(it) to track } }
-        .filter { (name, _) -> file.endsWith(".$name") }
-        .maxByOrNull { (name, _) -> name.length }
-        ?.second
+      deviceNameLengths
+        .asSequence()
+        .filter { it < file.length && file[file.length - it - 1] == '.' }
+        .firstNotNullOfOrNull { devicesByName[file.substring(file.length - it)] }
         ?: return track()
     return owner.takeIf { it.samples.isNotEmpty() }
   }
+
+  /**
+   * Each device by its sanitized name, built once, so [trackForStream] never scans the devices. The
+   * first device listed under a name keeps it.
+   */
+  private val devicesByName: Map<String, DeviceClockTrack> by lazy {
+    buildMap { devices.forEach { track -> track.deviceName?.let { getOrPut(SessionEvents.sanitizeName(it)) { track } } } }
+  }
+
+  /** The distinct lengths of [devicesByName]'s names, longest first. */
+  private val deviceNameLengths: List<Int> by lazy { devicesByName.keys.map { it.length }.distinct().sortedDescending() }
 
   /** [deviceMs] on the host timeline, or null when no track applies. */
   fun toHostMs(deviceMs: Long, deviceId: String? = null): Long? = track(deviceId)?.toHostMs(deviceMs)

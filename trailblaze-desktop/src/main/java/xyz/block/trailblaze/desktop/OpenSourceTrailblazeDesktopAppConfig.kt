@@ -153,7 +153,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     )
   }
 
-  override suspend fun additionalInstrumentationArgs(): Map<String, String> {
+  override suspend fun additionalInstrumentationArgs(runCanReachLlm: Boolean): Map<String, String> {
     val config = LlmConfigLoader.load()
     val auths = LlmAuthResolver.resolveAll(config)
     val selected = selectedLlmInstrumentationArgs()

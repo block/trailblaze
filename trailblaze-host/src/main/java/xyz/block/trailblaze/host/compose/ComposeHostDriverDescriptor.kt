@@ -6,6 +6,7 @@ import java.net.URI
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -326,7 +327,7 @@ class ComposeHostDriverDescriptor(
         withContext(NonCancellable) {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
             agent.close()
-            deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+            deviceManager.releaseDeviceAfterRun(trailblazeDeviceId)
           }
         }
       },
@@ -416,6 +417,10 @@ class ComposeHostDriverDescriptor(
 
       // One trail: the trailhead's teardown runs after it, whatever the outcome.
       trailblazeRunnerUtil.runTrail {
+        // The run's setup tool calls, before anything else in the trail, the trailhead included.
+        DeviceSetupToolsMemory.read(agent.memory)?.let { setup ->
+          trailblazeRunnerUtil.runDeviceSetup(setup, { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } }, toolRepo)
+        }
         for (item in trailItems) {
           val itemResult = when (item) {
             // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded

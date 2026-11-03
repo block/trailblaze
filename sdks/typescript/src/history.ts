@@ -11,10 +11,13 @@
 /** Reserved host function behind [ToolHistory]. Mirrors `ToolCallHistoryHostFunctions.kt`. */
 export const HOST_FUNCTION_HISTORY_TOOL_CALLS = "trailblaze.history.toolCalls";
 
-/** The parts of a trail run: its setup, the trail itself, and the cleanup after it. */
-export type HistorySection = "trailhead" | "trail" | "teardown";
+/**
+ * The parts of a trail run: the run's setup tool calls (`trailblaze run --device-setup`, none unless the
+ * run sent some), the trailhead, the trail itself, and the cleanup after it.
+ */
+export type HistorySection = "deviceSetup" | "trailhead" | "trail" | "teardown";
 
-const SECTIONS: readonly HistorySection[] = ["trailhead", "trail", "teardown"];
+const SECTIONS: readonly HistorySection[] = ["deviceSetup", "trailhead", "trail", "teardown"];
 
 /**
  * One memory key a call set or deleted. A sensitive key's `value` is its token, such as

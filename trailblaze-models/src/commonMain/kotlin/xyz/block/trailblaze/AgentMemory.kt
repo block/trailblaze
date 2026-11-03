@@ -320,8 +320,15 @@ class AgentMemory {
    * typed text / assertion instead of silently blanking; a diagnostic is logged once per
    * distinct token per [AgentMemory] instance. Set `TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS=1`
    * (read per call) to restore the legacy resolve-to-empty-string behavior.
+   *
+   * [device] resolves `{{device.<name>}}` tokens: the values of the device the caller is dispatching
+   * to ([xyz.block.trailblaze.devices.TrailblazeDeviceInfo.tokenValues]). They are passed per call
+   * rather than remembered because one memory is shared by every device a session binds, and each
+   * device's tools must see their own. `device.` is reserved: a name the map lacks is an unknown token,
+   * never a remembered key of that name (`{{memory.device.x}}` still reads one).
    */
-  fun interpolateVariables(input: String): String = interpolateVariables(input, blankUnknownTokens = blankUnknownTokensRequestedViaEnv())
+  fun interpolateVariables(input: String, device: Map<String, String> = emptyMap()): String =
+    interpolateVariables(input, blankUnknownTokens = blankUnknownTokensRequestedViaEnv(), device = device)
 
   /**
    * [interpolateVariables] with the unknown-token behavior injected — the env read stays out
@@ -335,6 +342,7 @@ class AgentMemory {
     input: String,
     blankUnknownTokens: Boolean,
     warnUnknownTokens: Boolean = true,
+    device: Map<String, String> = emptyMap(),
   ): String =
     // One left-to-right pass, like Mustache: an inserted value is never scanned again, so a value
     // that happens to contain `{{x}}` comes out verbatim.
@@ -350,6 +358,9 @@ class AgentMemory {
           ArgTokenResolution.Unknown ->
             unknownTokenReplacement(match.value, variableName, blankUnknownTokens, warnUnknownTokens)
         }
+      } else if (variableName.startsWith(DEVICE_TOKEN_PREFIX)) {
+        device[variableName.removePrefix(DEVICE_TOKEN_PREFIX)]
+          ?: unknownTokenReplacement(match.value, variableName, blankUnknownTokens, warnUnknownTokens)
       } else {
         lookupVariable(variableName)
           ?: unknownTokenReplacement(match.value, variableName, blankUnknownTokens, warnUnknownTokens)
@@ -466,7 +477,8 @@ class AgentMemory {
 
   /**
    * Recursively resolves `${key}`/`{{key}}` tokens in every string scalar of [element] via
-   * [interpolateVariables]. No-op when [variables] is empty — consistent with the unknown-token
+   * [interpolateVariables], with [device] resolving `{{device.<name>}}`. No-op when [variables],
+   * the args and [device] are all empty — consistent with the unknown-token
    * leave-literal behavior (every token would be unknown and survive unchanged; only the
    * per-token diagnostic is skipped). Idempotent on a tree with no remaining tokens, so it is
    * safe to call on args already resolved upstream (the AI path interpolates before the tool
@@ -483,15 +495,16 @@ class AgentMemory {
     element: JsonElement,
     warnUnknownTokens: Boolean = true,
     renderWholeScalarArgTokensAsText: Boolean = false,
+    device: Map<String, String> = emptyMap(),
   ): JsonElement = when {
-    variables.isEmpty() && _args.isEmpty() -> element
+    variables.isEmpty() && _args.isEmpty() && device.isEmpty() -> element
     element is JsonPrimitive && element.isString ->
-      interpolateStringPrimitive(element, warnUnknownTokens, renderWholeScalarArgTokensAsText)
+      interpolateStringPrimitive(element, warnUnknownTokens, renderWholeScalarArgTokensAsText, device)
     element is JsonObject -> JsonObject(
-      element.mapValues { interpolateVariablesInJson(it.value, warnUnknownTokens, renderWholeScalarArgTokensAsText) },
+      element.mapValues { interpolateVariablesInJson(it.value, warnUnknownTokens, renderWholeScalarArgTokensAsText, device) },
     )
     element is JsonArray -> JsonArray(
-      element.map { interpolateVariablesInJson(it, warnUnknownTokens, renderWholeScalarArgTokensAsText) },
+      element.map { interpolateVariablesInJson(it, warnUnknownTokens, renderWholeScalarArgTokensAsText, device) },
     )
     else -> element
   }
@@ -508,6 +521,7 @@ class AgentMemory {
     element: JsonPrimitive,
     warnUnknownTokens: Boolean,
     renderWholeScalarArgTokensAsText: Boolean,
+    device: Map<String, String>,
   ): JsonElement {
     val wholeArgBody = if (renderWholeScalarArgTokensAsText) null else wholeScalarArgTokenBody(element.content)
     if (wholeArgBody != null) {
@@ -520,7 +534,7 @@ class AgentMemory {
       // place either way (deferred never blanks, even under the kill-switch) and logs once via
       // resolveArgToken.
     }
-    return JsonPrimitive(interpolateVariables(element.content, blankUnknownTokensRequestedViaEnv(), warnUnknownTokens))
+    return JsonPrimitive(interpolateVariables(element.content, blankUnknownTokensRequestedViaEnv(), warnUnknownTokens, device))
   }
 }
 
@@ -549,3 +563,11 @@ private fun blankUnknownTokensRequestedViaEnv(): Boolean {
  * TypeScript SDK's `ctx.memory.interpolate` (memory.ts); both sides must change together.
  */
 private const val MEMORY_TOKEN_PREFIX = "memory."
+
+/** Scope prefix of the read-only device namespace: `{{device.instanceId}}`. See [AgentMemory.interpolateVariables]. */
+private const val DEVICE_TOKEN_PREFIX = "device."
+
+/** Whether [text] holds a `device.*` token in any spelling [TrailArgTokens.TOKEN_REGEX] accepts. */
+fun containsDeviceToken(text: String): Boolean = TrailArgTokens.TOKEN_REGEX.findAll(text).any {
+  TrailArgTokens.tokenBody(it)?.startsWith(DEVICE_TOKEN_PREFIX) == true
+}

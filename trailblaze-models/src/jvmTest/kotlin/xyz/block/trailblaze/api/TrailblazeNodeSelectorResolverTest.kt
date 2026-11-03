@@ -675,6 +675,41 @@ class TrailblazeNodeSelectorResolverTest {
   }
 
   @Test
+  fun `Compose - a role carrier is not a second match for its button`() {
+    nextId = 1L
+    fun button(top: Int): TrailblazeNode {
+      val bounds = TrailblazeNode.Bounds(0, top, 100, top + 50)
+      val carrier = nodeOf(
+        detail = DriverNodeDetail.Compose(
+          role = "Button",
+          accessibilityClassName = "android.widget.Button",
+          accessibilityProjectionOnly = true,
+        ),
+        bounds = bounds,
+      )
+      return nodeOf(detail = DriverNodeDetail.Compose(role = "Button"), bounds = bounds, children = listOf(carrier))
+    }
+    val first = button(top = 0)
+    val second = button(top = 100)
+    val root = nodeOf(detail = DriverNodeDetail.Compose(), children = listOf(first, second))
+
+    val native = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.Compose(role = "Button"), index = 1),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(native)
+    assertEquals(second.nodeId, native.node.nodeId)
+
+    // The accessibility tree has the carrier, so a selector recorded against it still finds it.
+    val recorded = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(classNameRegex = "android\\.widget\\.Button"), index = 1),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(recorded)
+    assertEquals(second.children.single().nodeId, recorded.node.nodeId)
+  }
+
+  @Test
   fun `Compose - match by toggleableState`() {
     nextId = 1L
     val target = nodeOf(

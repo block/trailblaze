@@ -3,9 +3,6 @@ config:
   devices:
     web:
       driver: PLAYWRIGHT_NATIVE
-  tags:
-  - smoke
-  - main-page
   title: 'Wikipedia: On this day section visible on main page'
 
 trail:

@@ -19,6 +19,14 @@
 // phase turns findings into labels: what the runs add up to, each backed by the findings behind it.
 
 export { survey, explainFinding, isSurvey, matchFinding, withId } from "./survey.js";
+// Derived streams: one pure function from a session to a new event stream (`stream.ts`).
+export { isEventStream, eventStream, withDerivedStreams } from "./stream.js";
+export type { DerivedRow, DerivedRowInput, RowSource, RowView, EventStreamDefinition, EventStreamSpec } from "./stream.js";
+export { writeDerivedStreams } from "./stream-write.js";
+export type { StreamWriteOptions, StreamWriteResult } from "./stream-write.js";
+export { DERIVED_MANIFEST, derivedStreamNames } from "./derived-files.js";
+export { loadSurveyModules } from "./discover.js";
+export type { LoadedEventStream } from "./discover.js";
 export type { DataOf, LabelBatch, LabelOf, LabelResult, SurveyContext, SurveyDefinition, SurveyHandler, FindResult, SurveyResult, FindingExplanation, FindingSpec, FindingQueries, BatchFinding, Dependency } from "./survey.js";
 export { labelOrder, planSurveys, runLabelPhases } from "./labels.js";
 export type { LabelOutcome, PlannedSurvey } from "./labels.js";
@@ -28,7 +36,7 @@ export { runSurveyCli } from "./cli-main.js";
 // Running a survey while the trail runs, over `ctx.events`. Also the only part a survey bundle sees
 // in the sandbox (`./in-process.ts`).
 export { FinishedSessionRequiredError, LiveSessionReader, runNamedLiveSurvey, runLiveSurvey } from "./live.js";
-export type { LiveSurveyOptions, LiveSurveyResult, LiveEventSource, LiveRead, LiveSessionOptions, LiveSurveyOutcome } from "./live.js";
+export type { LiveSurveyOptions, LiveSurveyResult, LiveEventSource, LiveRecord, LiveRead, LiveSessionOptions, LiveSurveyOutcome } from "./live.js";
 export { SurveySession, isSessionDirectory, parseIsoMs } from "./session.js";
 export type { LogQuery } from "./session.js";
 export { Records } from "./match.js";
@@ -112,6 +120,7 @@ export type {
   TraceSpan,
 } from "./types.js";
 
+import { eventStream } from "./stream.js";
 import { survey } from "./survey.js";
 
 /**
@@ -120,4 +129,4 @@ import { survey } from "./survey.js";
  * This module runs on the host, not in a browser: it reads sessions through `node:fs`, and its
  * YAML readers (`loadYamlWaypoints`, trailmap targets) need Bun.
  */
-export const trailblaze = { survey };
+export const trailblaze = { survey, eventStream };

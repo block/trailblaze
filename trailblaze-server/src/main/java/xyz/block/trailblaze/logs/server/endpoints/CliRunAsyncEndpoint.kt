@@ -23,6 +23,16 @@ data class CliRunStatusResponse(
   val sessionId: String? = null,
   val progressMessage: String? = null,
   val result: CliRunResponse? = null,
+  /**
+   * The logs directory the daemon writes sessions into, so a client that gives up on a run still
+   * finds its session. Null from older daemons.
+   */
+  val logsDir: String? = null,
+  /**
+   * Whether the run has let go of its device, cleanup and capture included. A cancelled run reads
+   * [RunState.CANCELLED] at once, but finishes only once its trail stops. Null from older daemons.
+   */
+  val finished: Boolean? = null,
 )
 
 /** Lifecycle state of an async trail run. */

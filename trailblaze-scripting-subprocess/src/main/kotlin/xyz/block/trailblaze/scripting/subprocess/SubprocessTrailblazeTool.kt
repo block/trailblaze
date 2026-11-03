@@ -111,7 +111,7 @@ class SubprocessTrailblazeTool(
     // Resolve ${key}/{{key}} memory tokens in the recorded args before dispatch — same replay-path
     // gap as QuickJsTrailblazeTool (the AI path interpolates upstream; recorded-replay didn't).
     // Idempotent on the AI path. See AgentMemory.interpolateVariablesInJson.
-    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args) as? JsonObject) ?: args
+    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args, device = toolExecutionContext.trailblazeDeviceInfo.tokenValues) as? JsonObject) ?: args
     val argsWithContext = JsonObject(resolvedArgs + (TrailblazeContextEnvelope.RESERVED_KEY to legacyEnvelope))
     val session = sessionProvider()
     val sessionId = toolExecutionContext.sessionProvider.invoke().sessionId

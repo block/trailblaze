@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { SessionEvents } from "./session-events.js";
+import { HOST_FUNCTION_SESSION_EVENTS_LIST, HOST_FUNCTION_SESSION_EVENTS_QUERY, type SessionEvents } from "./session-events.js";
 import { createSessionSurveys, HOST_FUNCTION_SURVEYS_LOAD, type SurveyRunOptions, type SurveyRunResult } from "./session-surveys.js";
+import { fromMeta } from "./context.js";
+import { defineTypedTool } from "./tool-core.js";
 
 const SDK = resolve(import.meta.dir, "..");
 
@@ -203,6 +205,65 @@ export const shopDone = trailblaze.survey({ description: "shop.done", targets: [
     };
     expect((await run()).passed).toBe(false);
     expect((await run({ shop: { android: ["com.example.shop"] } })).passed).toBe(true);
+  });
+
+  test("a survey run from a tool sees the dispatching device's classifiers", async () => {
+    const byDevice = `
+import { trailblaze } from "@trailblaze/scripting/surveys";
+export const deviceType = trailblaze.survey({
+  description: "shop.device",
+  find: (session) => session.analytics.filter({ name: "checkout_done" }).map((e) => ({ summary: session.summary.deviceClassifiers.join("-") || "none", evidence: [e] })),
+});
+`;
+    const rows = events({ analytics: [{ name: "checkout_done" }], network: [] });
+    const host = {
+      [HOST_FUNCTION_SURVEYS_LOAD]: async () => bundleSurvey(byDevice),
+      [HOST_FUNCTION_SESSION_EVENTS_LIST]: () => rows.list(),
+      [HOST_FUNCTION_SESSION_EVENTS_QUERY]: ({ stream, count, ...options }: { stream: string; count?: boolean }) =>
+        count ? rows.count(stream, options) : rows.query(stream, options),
+    };
+    type Run = () => Promise<{ findings: Array<{ summary: string }> }>;
+    const tool = defineTypedTool(async (_input: object, ctx) => (ctx.surveys as unknown as Record<string, Run>).deviceType!());
+    const device = { platform: "android", driverType: "android-ondevice-accessibility", instanceId: "emulator-5554", widthPixels: 1600, heightPixels: 2560 };
+    const run = async (classifiers?: string[]) => {
+      // Parsed from the `_meta.trailblaze` envelope the host sends on the MCP path.
+      const legacyCtx = fromMeta({
+        trailblaze: { baseUrl: "http://localhost:52525", sessionId: "s1", invocationId: "i1", memory: {}, device: classifiers ? { ...device, classifiers } : device },
+      });
+      const result = await tool({}, legacyCtx as never, { tools: {}, host } as never);
+      return result.findings.map((f) => f.summary);
+    };
+    expect(await run(["android", "tablet"])).toEqual(["android-tablet"]);
+    // An envelope from a host that predates classifiers.
+    expect(await run()).toEqual(["none"]);
+  });
+
+  test("a survey mid-trail reads the running trail's id, title, metadata and app version", async () => {
+    const byTrail = `
+import { trailblaze } from "@trailblaze/scripting/surveys";
+const appVersion = (s) => { try { return s.appVersion; } catch { return "after the run"; } };
+export const whichTrail = trailblaze.survey({
+  description: "shop.trail",
+  find: (session) => session.analytics.filter({ name: "checkout_done" }).map((e) => ({
+    summary: [session.summary.trailId, session.summary.title, session.summary.metadata.priority, session.summary.metadata.tags, appVersion(session.summary)].join(" | "),
+    evidence: [e],
+  })),
+});
+`;
+    const rows = events({ analytics: [{ name: "checkout_done" }], network: [] });
+    const started = {
+      trailConfig: { id: "checkout/card", title: "Pay by card", metadata: { priority: "p0", tags: ["pay"] } },
+      targetAppInfo: { appId: "com.example.shop", versionName: "6.80" },
+    };
+    type Run = () => Promise<{ findings: Array<{ summary: string }> }>;
+    const run = async (fromHost?: object) => {
+      const host = { [HOST_FUNCTION_SURVEYS_LOAD]: async () => ({ ...bundleSurvey(byTrail), ...(fromHost ? { started: fromHost } : {}) }) };
+      const result = await (createSessionSurveys(host, rows, { platform: "android" }) as Record<string, Run>).whichTrail!();
+      return result.findings.map((f) => f.summary);
+    };
+    expect(await run(started)).toEqual(['checkout/card | Pay by card | p0 | ["pay"] | 6.80']);
+    // A host that predates the start record.
+    expect(await run()).toEqual([" |  |  |  | after the run"]);
   });
 
   test("awaiting the namespace itself does not call a survey named then", async () => {

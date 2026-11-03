@@ -85,7 +85,7 @@ class RevylTrailblazeAgent(
 
     // Memory-interpolation boundary for the Revyl cloud driver, applied host-side: the Revyl
     // CLI receives fully-resolved args (memory never crosses to the cloud device).
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     val timeBeforeExecution = Clock.System.now()
     val result = try {
       when (memoryResolvedTool) {

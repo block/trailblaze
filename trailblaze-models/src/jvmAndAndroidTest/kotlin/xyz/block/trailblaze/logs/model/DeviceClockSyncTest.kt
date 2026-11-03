@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** The conversion rules are pinned cross-language by `device-clock-parity-fixtures.json`. */
 class DeviceClockSyncTest {
@@ -111,5 +112,23 @@ class DeviceClockSyncTest {
     // Log discovery takes any `*.json` whose name starts with a hex digit.
     val first = DeviceClockSync.FILE_NAME.first()
     assertFalse(first.isDigit() || first.lowercaseChar() in 'a'..'f', DeviceClockSync.FILE_NAME)
+  }
+
+  @Test
+  fun `a stream finds its device among many, the longest name winning`() {
+    val tracks = (0 until 50_000).map { DeviceClockTrack(deviceId = "id$it", samples = listOf(DeviceClockSample(0, 0, 0)), deviceName = "d$it") }
+    val pair = DeviceClockTrack(deviceId = "pair", samples = listOf(DeviceClockSample(0, 0, 0)), deviceName = "pair.d7")
+    val sync = DeviceClockSync(devices = tracks + pair)
+    repeat(100_000) { assertEquals(tracks[it % 50_000], sync.trackForStream("app.screens.d${it % 50_000}")) }
+    assertEquals(pair, sync.trackForStream("network.pair.d7"))
+  }
+
+  @Test
+  fun `a megabyte stream name full of dots costs no more than the devices' own names`() {
+    val track = DeviceClockTrack(deviceId = "id7", samples = listOf(DeviceClockSample(0, 0, 0)), deviceName = "d7")
+    val sync = DeviceClockSync(devices = listOf(track))
+    val started = System.nanoTime()
+    assertEquals(track, sync.trackForStream("a.".repeat(500_000) + "d7"))
+    assertTrue(System.nanoTime() - started < 1_000_000_000L)
   }
 }

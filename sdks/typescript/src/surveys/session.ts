@@ -7,7 +7,7 @@
 // and on CI a `session_result.json` with the verdict. Everything is read eagerly so the survey
 // API stays synchronous; the runner keeps one session in memory at a time.
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 
 import type {
@@ -50,6 +50,9 @@ import {
   redactSecrets,
   streamEventOf,
 } from "./parse.js";
+import { metadataText, trailFieldsFromStarted } from "../session-start.js";
+import { derivedStreamNames } from "./derived-files.js";
+import { hostTimesOf, measuresStartDevice, sessionWideOffsetOf } from "./log-clock.js";
 export { redactSecrets, redactUrl } from "./parse.js";
 import type {
   AnalyticsEvent,
@@ -115,6 +118,26 @@ function readJsonIfPresent(path: string): unknown {
   }
 }
 
+/**
+ * [path]'s text when it is a regular file, not a link, of at most [maxBytes]; undefined otherwise.
+ * The cap holds while reading, so a file that grows past it is refused too.
+ */
+function readBoundedFile(path: string, maxBytes: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    if (!lstatSync(path).isFile()) return undefined;
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let read = 0;
+    for (let n; read <= maxBytes && (n = readSync(fd, buffer, read, maxBytes + 1 - read, null)) > 0; ) read += n;
+    return read > maxBytes ? undefined : buffer.toString("utf8", 0, read);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function readLines(path: string): string[] {
   const text = readFileSync(path, "utf8");
   const lines = text.split("\n");
@@ -159,6 +182,9 @@ function loadLogs(dir: string): LogRecord[] {
   // the last-matching-record lookups, the start/complete pairing below, and anything asking what
   // happened after what. Repeated ordinals mean they describe two runs rather than one sequence,
   // so the timestamps are used instead, being the only thing that still describes one.
+  // On the host clock, as the report places them, so a time copied from a log lines up with its step.
+  const times = hostTimesOf(parsed.map((p) => p.log));
+  const hostTimes = new Map(parsed.map((p, i) => [p, times[i]] as const));
   const seqs = parsed.map((p) => p.seq);
   const ordinalsAreAnOrder = parsed.length > 0 && seqs.every((s) => s !== undefined) && new Set(seqs).size === seqs.length;
   parsed.sort((a, b) => {
@@ -171,8 +197,8 @@ function loadLogs(dir: string): LogRecord[] {
     // by a different record. Its own ordinal is not a substitute time value (write-order numbers
     // are tiny next to an epoch-ms timestamp, so it would land at the front just the same); sorting
     // it last is the answer that doesn't fabricate a time nothing recorded.
-    const ta = parseIsoMs((a.log as { timestamp?: string }).timestamp) ?? Number.POSITIVE_INFINITY;
-    const tb = parseIsoMs((b.log as { timestamp?: string }).timestamp) ?? Number.POSITIVE_INFINITY;
+    const ta = hostTimes.get(a) ?? Number.POSITIVE_INFINITY;
+    const tb = hostTimes.get(b) ?? Number.POSITIVE_INFINITY;
     return ta - tb || a.name.localeCompare(b.name);
   });
   return parsed.map((p, index) => {
@@ -183,7 +209,7 @@ function loadLogs(dir: string): LogRecord[] {
       index,
       log: p.log,
       file: p.name,
-      timeMs: parseIsoMs((p.log as { timestamp?: string }).timestamp),
+      timeMs: hostTimes.get(p),
       summary: describeLog(type, p.log),
     };
   });
@@ -353,20 +379,61 @@ function loadNetwork(dir: string, streams: StreamEvent[]): NetworkRequest[] {
 // Event streams, analytics
 // ---------------------------------------------------------------------------------------------
 
-function loadStreams(dir: string): StreamEvent[] {
+/** A session's event streams: what it captured, and the rows its derived streams last wrote. */
+function loadStreams(dir: string): { captured: StreamEvent[]; derived: StreamEvent[] } {
   const eventsDir = join(dir, EVENTS_DIR);
-  if (!existsSync(eventsDir)) return [];
-  const out: StreamEvent[] = [];
+  if (!existsSync(eventsDir)) return { captured: [], derived: [] };
+  const captured: StreamEvent[] = [];
+  let derived: StreamEvent[] = [];
+  // A derived stream reads as an event stream like any other, marked derived. A survey run with its
+  // definition loaded re-derives it (`withDerivedStreams`); these rows stand only when it is not.
+  // A manifest that cannot be read throws: a derived stream would otherwise read as captured.
+  const names = derivedStreamNames(dir);
   for (const name of readdirSync(eventsDir).sort()) {
     if (!name.endsWith(".ndjson")) continue;
     const stream = name.slice(0, -".ndjson".length);
     const file = `${EVENTS_DIR}/${name}`;
+    // A derived file is rewritten from its definition whenever it is not what was written: a link or
+    // a pipe in its place is skipped, never read through.
+    if (names.has(stream) && !isRegularFile(join(eventsDir, name))) continue;
     for (const { line, row } of readNdjson(join(eventsDir, name))) {
-      out.push(streamEventOf(stream, row, file, line));
+      if (names.has(stream)) derived.push(derivedEventOf(stream, row, file, line));
+      else captured.push(streamEventOf(stream, row, file, line));
     }
   }
-  out.sort((a, b) => (a.timeMs ?? 0) - (b.timeMs ?? 0));
-  return out;
+  // A writer lists a stream before its file appears, so one written while this read is listed by now:
+  // half written, it is neither captured nor a stream its manifest vouches for.
+  const since = new Set([...derivedStreamNames(dir)].filter((n) => !names.has(n)));
+  const settled = (e: StreamEvent) => !since.has(e.stream);
+  const byTime = (a: StreamEvent, b: StreamEvent) => (a.timeMs ?? 0) - (b.timeMs ?? 0);
+  derived = derived.filter(settled).sort(byTime);
+  return { captured: captured.filter(settled).sort(byTime), derived };
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Two time-ordered event lists as one, ties keeping [a]'s first. */
+function mergeByTime(a: ReadonlyArray<StreamEvent>, b: ReadonlyArray<StreamEvent>): StreamEvent[] {
+  if (b.length === 0) return [...a];
+  if (a.length === 0) return [...b];
+  return [...a, ...b].sort((x, y) => (x.timeMs ?? 0) - (y.timeMs ?? 0));
+}
+
+/** A written derived row, citing the records its `from` names as the stream wrote them. */
+function derivedEventOf(stream: string, row: unknown, file: string, line: number): StreamEvent {
+  const event = streamEventOf(stream, row, file, line);
+  const sources = (row as { from?: unknown } | null)?.from;
+  const from = (Array.isArray(sources) ? sources : [])
+    .filter((s): s is { file: string; line?: number } => !!s && typeof s.file === "string")
+    .map((s) => ({ kind: "custom", summary: `${s.file}${typeof s.line === "number" ? `:${s.line}` : ""}`, file: s.file, ...(typeof s.line === "number" ? { line: s.line } : {}) }));
+  const clockStream = (row as { clockStream?: unknown } | null)?.clockStream;
+  return { ...event, derived: true, ...(typeof clockStream === "string" ? { clockStream } : {}), from } as StreamEvent;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -534,7 +601,22 @@ function loadDeviceLog(dir: string): { file?: string; lines: DeviceLogLine[] } {
   return { lines: [] };
 }
 
-function loadTrace(dir: string): TraceSpan[] {
+/** The clock file the report converts the start device's records with. */
+const DEVICE_CLOCK_FILE = "session_device_clock.json";
+const DEVICE_CLOCK_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The offset a device-stamped span takes onto the host clock here, as the trace viewer gives it: none
+ * when the session measured the start device's clock, which the report converts the span's row with,
+ * else the logs' session-wide offset. Undefined leaves the span on the device clock.
+ */
+function traceFallbackOffset(dir: string, logs: LogRecord[]): number | undefined {
+  if (measuresStartDevice(readBoundedFile(join(dir, DEVICE_CLOCK_FILE), DEVICE_CLOCK_MAX_BYTES))) return undefined;
+  return sessionWideOffsetOf(logs.map((l) => l.log)) ?? undefined;
+}
+
+function loadTrace(dir: string, logs: LogRecord[]): TraceSpan[] {
+  const fallbackMs = traceFallbackOffset(dir, logs);
   const json = readJsonIfPresent(join(dir, TRACE_FILE));
   if (!Array.isArray(json)) return [];
   const out: TraceSpan[] = [];
@@ -553,7 +635,12 @@ function loadTrace(dir: string): TraceSpan[] {
       args: asRecord(rec.args) ?? {},
       file: TRACE_FILE,
       line: i,
-      timeMs: Math.round(ts / 1000),
+      // A span the device stamped: on the host clock when the logs give an offset the clock file does not.
+      ...(rec.clock !== "device"
+        ? { timeMs: Math.round(ts / 1000) }
+        : fallbackMs !== undefined
+          ? { timeMs: Math.round(ts / 1000 + fallbackMs) }
+          : { timeMs: Math.round(ts / 1000), clock: "device" as const }),
       summary: `${category}: ${name}`,
     });
   });
@@ -618,6 +705,7 @@ function buildSummary(
   const device = started?.trailblazeDeviceInfo;
   const classifiers = device?.classifiers ?? [];
   const appInfo = asRecord(started?.targetAppInfo);
+  const fromStart = trailFieldsFromStarted(started);
 
   const platform =
     asString(result?.platform)?.toLowerCase() ??
@@ -631,10 +719,8 @@ function buildSummary(
     (startedAtMs !== undefined && endedAtMs !== undefined ? endedAtMs - startedAtMs : undefined);
 
   // A metadata value may be a list or map; keep it as JSON text rather than dropping it.
-  const metadataText = (v: unknown): string | undefined =>
-    typeof v === "string" ? v : v !== null && typeof v === "object" ? JSON.stringify(v) : undefined;
-  const metadata: Record<string, string> = {};
-  for (const [k, v] of Object.entries({ ...trailConfig?.metadata, ...asRecord(result?.metadata) })) {
+  const metadata: Record<string, string> = { ...fromStart.metadata };
+  for (const [k, v] of Object.entries(asRecord(result?.metadata) ?? {})) {
     const text = metadataText(v);
     if (text !== undefined) metadata[k] = text;
   }
@@ -642,13 +728,13 @@ function buildSummary(
   const summary: SessionSummary = {
     id: asString(result?.session_id) ?? asString(firstLog?.session) ?? basename(dir),
     path: dir,
-    title: asString(result?.title) ?? trailConfig?.title ?? undefined,
-    trailId: trailConfig?.id ?? undefined,
-    testKey: asString(result?.test_key) ?? trailConfig?.id ?? undefined,
-    target: trailConfig?.target ?? undefined,
+    title: asString(result?.title) ?? fromStart.title,
+    trailId: fromStart.trailId,
+    testKey: asString(result?.test_key) ?? fromStart.testKey,
+    target: fromStart.target,
     platform,
     appId: asString(result?.app_id) ?? asString(appInfo?.appId) ?? asString(appInfo?.packageName) ?? asString(appInfo?.bundleId),
-    appVersion: asString(result?.app_version_name) ?? asString(appInfo?.versionName) ?? asString(appInfo?.version),
+    appVersion: asString(result?.app_version_name) ?? fromStart.appVersion,
     driver: trailConfig?.driver ?? device?.trailblazeDriverType ?? undefined,
     deviceClassifiers: classifiers,
     outcome: normalizeOutcome(asString(result?.outcome)) ?? outcomeFromStatus(ended) ?? "UNKNOWN",
@@ -719,7 +805,8 @@ export class SurveySession {
   private constructor(dir: string) {
     this.dir = dir;
     const logs = loadLogs(dir);
-    const streams = loadStreams(dir);
+    // Network, analytics and the summary come from captured streams only; `events` holds both.
+    const { captured: streams, derived } = loadStreams(dir);
     const network = loadNetwork(dir, streams);
     const deviceLog = loadDeviceLog(dir);
     this.summary = buildSummary(dir, logs, streams, existsSync(join(dir, NETWORK_FILE)) || network.length > 0, deviceLog.file);
@@ -727,11 +814,11 @@ export class SurveySession {
     this.tools = new Records(toolCallsFrom(logs), matchTool);
     this.objectives = new Records(objectivesFrom(logs), matchObjective);
     this.network = new Records(network, matchNetwork);
-    this.events = new Records(streams, matchEvent);
+    this.events = new Records(mergeByTime(streams, derived), matchEvent);
     this.analytics = new Records(analyticsFrom(streams), matchAnalytics);
     this.screenText = new Records(loadScreenText(dir, logs), matchScreenText);
     this.deviceLog = new Records(deviceLog.lines, matchDeviceLog);
-    this.trace = new Records(loadTrace(dir), matchTrace);
+    this.trace = new Records(loadTrace(dir, logs), matchTrace);
   }
 
   /** Loads the session at `dir`. Throws when `dir` holds no Trailblaze log records. */

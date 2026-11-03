@@ -794,6 +794,63 @@ class CallbackDispatcherTest {
   }
 
   @Test
+  fun `FatalError from a nested tool maps to a fatal callback result`() = runBlocking {
+    val result = dispatchToolReturning(
+      "fatalProbe",
+      TrailblazeToolResult.Error.FatalError(errorMessage = "device disconnected"),
+    )
+    assertThat(result.success).isEqualTo(false)
+    assertThat(result.fatal).isEqualTo(true)
+    assertThat(result.errorMessage).isEqualTo("device disconnected")
+  }
+
+  @Test
+  fun `a recoverable error from a nested tool stays non-fatal`() = runBlocking {
+    val result = dispatchToolReturning(
+      "recoverableProbe",
+      TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "button missing"),
+    )
+    assertThat(result.success).isEqualTo(false)
+    assertThat(result.fatal).isEqualTo(false)
+    assertThat(result.errorMessage).isEqualTo("button missing")
+  }
+
+  private suspend fun dispatchToolReturning(
+    toolName: String,
+    toolResult: TrailblazeToolResult,
+  ): JsScriptingCallbackResult.CallToolResult {
+    val tool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        toolResult
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName(toolName)
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Test-only tool that returns a fixed result.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = tool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("dispatch-$toolName")
+    val handle = register(sessionId = sessionId, repo = repo)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(sessionId.value, handle.invocationId, toolName),
+      )
+      return result as? JsScriptingCallbackResult.CallToolResult
+        ?: error("Expected CallToolResult, got: $result")
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
   fun `END log line carries structured=true when producer populated a structured payload`() = runBlocking {
     // Pin the dispatcher's END log format — operators grep `structured=true` to find calls
     // that carried a typed payload (and `structured=false` for the legacy text-only shape).

@@ -7,6 +7,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.withExecutedToolSecretsRedacted
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
@@ -94,7 +95,7 @@ internal fun ToolCallHistory.beginDispatch(
   device: String?,
   memory: AgentMemory,
 ): HistoryDispatch? = try {
-  beginDispatch(context.sessionProvider.invoke().sessionId, toolName, tool, device, memory)
+  beginDispatch(context.sessionProvider.invoke().sessionId, toolName, tool, device, memory, context.trailblazeDeviceInfo)
 } catch (e: Exception) {
   Console.log("[ToolCallHistory] could not record $toolName: ${e::class.simpleName}: ${e.message}")
   null
@@ -107,6 +108,8 @@ internal fun ToolCallHistory.beginDispatch(
   tool: TrailblazeTool,
   device: String?,
   memory: AgentMemory,
+  /** The device the tool runs on, which resolves its `{{device.*}}` tokens as dispatch does. */
+  deviceInfo: TrailblazeDeviceInfo?,
 ): HistoryDispatch? = try {
   val memoryAtStart = memory.sensitiveSnapshot()
   // The two payloads the session log keeps, built the same way: declared sensitive args masked,
@@ -115,15 +118,17 @@ internal fun ToolCallHistory.beginDispatch(
   // sending any sensitive memory value back to its token.
   // A declared secret can itself be a token (`secrets: ["{{token}}"]`), so mask what the executed
   // instance declares, as the session log does.
-  val executed = runCatching { interpolateMemoryInTool(tool, memory) }.getOrDefault(tool)
+  val executed = runCatching { interpolateMemoryInTool(tool, memory, deviceInfo) }.getOrDefault(tool)
   val declaredSecrets = (tool.sensitiveValues() + executed.sensitiveValues()).distinct()
   // A secret arg the tool names is as secret as one it gives by value, wherever its value lands.
   // A scripted tool gets its args as written and resolves tokens itself, so resolve them here too.
-  val resolve = { value: String -> runCatching { memory.interpolateVariables(value) }.getOrNull() }
+  val resolve = { value: String ->
+    runCatching { memory.interpolateVariables(value, deviceInfo?.tokenValues.orEmpty()) }.getOrNull()
+  }
   val secretArgs = tool.sensitiveArgValues(resolve) + executed.sensitiveArgValues()
   val maskedSecrets = (declaredSecrets + secretArgs).distinct().withJsonEscapedForms()
   val raw = tool.toLogPayload().withExecutedToolSecretsRedacted(executed)
-  val rendered = buildLogSafeResolvedPayload(raw, memory)
+  val rendered = buildLogSafeResolvedPayload(raw, memory, deviceInfo)
   val scrubbing = listOf(memoryAtStart)
   HistoryDispatch(
     begin(
@@ -269,7 +274,7 @@ suspend fun ToolCallHistory.recordExecution(
   memory: AgentMemory = AgentMemory(),
   execute: suspend () -> TrailblazeToolResult,
 ): TrailblazeToolResult {
-  val dispatch = beginDispatch(sessionId, tool.resolveToolName(), tool, device, memory)
+  val dispatch = beginDispatch(sessionId, tool.resolveToolName(), tool, device, memory, deviceInfo = null)
   return finishExecution(dispatch, memory, execute)
 }
 

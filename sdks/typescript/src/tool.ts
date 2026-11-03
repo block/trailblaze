@@ -16,7 +16,7 @@ import { createClient, type TrailblazeClient } from "./client.js";
 import { fromMeta, type TrailblazeContext } from "./context.js";
 import { createLogger } from "./logger.js";
 import { attachMemoryDeltaToResult } from "./memory.js";
-import { toolErrorData } from "./tool-error.js";
+import { isFatalError, toolErrorData } from "./tool-error.js";
 import {
   defineTypedTool,
   formatAjvErrors,
@@ -691,10 +691,14 @@ export function registerPendingTools(server: McpServer): void {
           // when present so payload-less errors keep the exact wire shape they had before
           // the field existed.
           const structured = toolErrorData(e);
+          // A nested tool call that failed fatally stays fatal when the author lets the error
+          // propagate: the host maps `variant: "FatalError"` to `Error.FatalError`, which skips
+          // self-heal.
           return {
             isError: true,
             content: [{ type: "text", text: envelopeText }],
             ...(structured !== undefined ? { structuredContent: structured } : {}),
+            ...(isFatalError(e) ? { _meta: { trailblaze: { variant: "FatalError" } } } : {}),
           };
         }
         // Positional cast (`Parameters<...>[2]`) rather than the SDK's named `ToolCallback`

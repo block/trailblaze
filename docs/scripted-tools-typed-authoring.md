@@ -280,7 +280,7 @@ in the legacy YAML descriptor. Every field is optional:
 |---|---|
 | `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
-| `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with the `runtime` field below (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
+| `requiresHost?: boolean` | Hide an in-process tool from on-device Android. Only needed when an Android tool calls a host-only tool like `exec`. Not a runtime selector. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
 | `requiredClassifiers?: string[]` | Registration gate on the session device's classifier. The tool registers only when the device's classifiers include every listed segment — `["rig"]` registers on a device classified `android-phone-rig`, not on `android-phone`. Use for tools that need hardware or infrastructure only some devices have. A tool listing with no connected device still shows the tool. Empty/omitted = any device. |
 | `runtime?: "inProcess" \| "subprocess"` | Where the handler runs; the same values as a descriptor's `runtime:`, which wins when both are set. `"inProcess"` (embedded QuickJS) is the default. Must be a string literal: an unreadable or unknown value fails the build rather than silently running in-process. For `"subprocess"`, still set `runtime: subprocess` in a descriptor YAML as well: the in-process APK packagers decide what to bundle from the descriptor and don't read the spec. |
@@ -940,8 +940,7 @@ packagers read only the descriptor, so without one they'd bundle the tool for th
 script: ./myapp_writeArtifact.ts
 name: myapp_writeArtifact
 description: Write a text artifact on the host.
-runtime: subprocess      # the runtime selector — dispatch to a host bun subprocess (Node APIs)
-requiresHost: true       # separate visibility gate — also skip registering on-device
+runtime: subprocess      # host Bun process with Node APIs; host-only
 ```
 
 ```ts
@@ -953,16 +952,12 @@ export const myapp_writeArtifact = trailblaze.tool<WriteArtifactArgs>(async (inp
 });
 ```
 
-`runtime: subprocess` and `requiresHost: true` are **independent** flags, and a Node-API
-tool typically sets both:
+**Host-only rules**
 
-- **`runtime: subprocess`** is the *runtime selector* — it dispatches the handler to the
-  host Bun subprocess where `node:*` exists. Without it the tool defaults to in-process
-  QuickJS, where a `node:fs` import fails. A subprocess can't run on a device, so such a
-  tool is host-only by nature.
-- **`requiresHost: true`** is only an on-device *visibility* gate — it skips registering
-  the tool on-device. On its own it does **not** select a Node runtime, so it alone won't
-  give a tool Node APIs.
+- `runtime: subprocess`: host-only. Don't add `requiresHost`.
+- `requiresHost: true`: still runs in QuickJS, but only on the host. Use it when an Android
+  tool calls a host-only tool like `exec`. It doesn't give the tool Node APIs.
+- iOS, web, and desktop tools need neither. They always run on the host.
 
 #### A subprocess tool needs `// @ts-nocheck`
 

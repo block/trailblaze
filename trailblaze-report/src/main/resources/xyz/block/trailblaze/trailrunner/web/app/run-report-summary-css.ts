@@ -104,6 +104,7 @@ main.tabmountmain:has(> .tabmount[data-tabmount="summary"]) { padding: 0; overfl
 .streamsmenuname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .streamsmenucount,
 .streamslanecount { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+.streamsderived { flex: 0 0 auto; padding: 0 0.3125rem; border: 1px solid var(--line2); border-radius: var(--r-sm); color: var(--sub); font-size: 10px; font-weight: 500; letter-spacing: 0.03em; line-height: 1.5; cursor: help; }
 .streamsmenuhint { margin: 0.25rem 0 0; padding: 0.5rem 0.5rem 0.25rem; border-top: 1px solid var(--line); color: var(--sub); font-size: 12px; }
 
 /* Diagnosis -------------------------------------------------------------- */
@@ -201,7 +202,7 @@ main.tabmountmain:has(> .tabmount[data-tabmount="summary"]) { padding: 0; overfl
 .streamssteptoggle svg { flex: 0 0 auto; color: var(--sub); transform: rotate(90deg); transition: transform 120ms ease; }
 .streamssteptoggle[aria-expanded="false"] svg { transform: none; }
 .streamsstepchip { color: var(--txt); font-size: 11px; font-weight: 500; letter-spacing: 0.045em; text-transform: uppercase; }
-.streamsband[data-streams-kind="trailhead"] .streamsstepchip { color: var(--sub); }
+.streamsband[data-streams-kind="trailhead"] .streamsstepchip, .streamsband[data-streams-kind="setup"] .streamsstepchip { color: var(--sub); }
 .streamsband[data-streams-kind="heal"] .streamsstepchip { color: var(--warning-text); }
 .streamsband[data-streams-status="failed"] .streamsstepchip { color: var(--danger-text); }
 .streamssteptime { margin-left: auto; color: var(--sub); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -281,6 +282,7 @@ main.tabmountmain:has(> .tabmount[data-tabmount="summary"]) { padding: 0; overfl
 .streambadgetrail[data-streams-strong] { color: var(--txt); }
 .streamslane[data-streams-network] .streambadgetrail { min-inline-size: 2.75rem; text-align: end; }
 .streambadge[data-streams-tone="ok"] { border-color: var(--success-border); color: var(--success-text); }
+.streambadge[data-streams-tone="warn"] { border-color: var(--warning-border); color: var(--warning-text); }
 .streambadge[data-streams-tone="error"] { border-color: var(--danger-border); color: var(--danger-text); }
 
 /* A reading's bar runs behind its row on one scale for the lane, over a faint track marking the ceiling. */
@@ -311,6 +313,7 @@ main.tabmountmain:has(> .tabmount[data-tabmount="summary"]) { padding: 0; overfl
 .streamcardmeta .streamcardlink:first-of-type { margin-left: auto; }
 .streamcardlink { padding: 0; border: 0; background: none; color: var(--sub); font: inherit; text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
 .streamcardlink:hover { color: var(--txt); }
+.streamcardderived { color: var(--sub); font-size: 11px; overflow-wrap: anywhere; }
 .streamcardtitle { font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 .streamcardtitle[data-streams-tone="error"] { color: var(--danger-text); }
 .streamcarddetail { color: var(--sub); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }

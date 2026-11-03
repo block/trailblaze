@@ -94,7 +94,7 @@ class AssertToolNodeSelectorTest {
     val authored = AssertNotVisibleWithTextTrailblazeTool(
       text = "\${amount}",
     )
-    val tool = interpolateMemoryInTool(authored, context.memory)
+    val tool = interpolateMemoryInTool(authored, context.memory, null)
 
     tool.execute(context)
 
@@ -163,7 +163,7 @@ class AssertToolNodeSelectorTest {
         index = 2,
       ),
     )
-    interpolateMemoryInTool(authored, context.memory).execute(context)
+    interpolateMemoryInTool(authored, context.memory, null).execute(context)
 
     val captured = assertNotNull(agent.capturedAssertVisible)
     val match = assertIs<DriverNodeMatch.AndroidAccessibility>(captured.driverMatch)

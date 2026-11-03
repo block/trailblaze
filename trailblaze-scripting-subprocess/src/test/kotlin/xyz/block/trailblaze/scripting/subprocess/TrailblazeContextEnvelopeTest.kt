@@ -28,6 +28,8 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
 import xyz.block.trailblaze.util.HostPlatform
+import kotlinx.serialization.json.jsonArray
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import kotlin.test.Test
 
 class TrailblazeContextEnvelopeTest {
@@ -52,6 +54,16 @@ class TrailblazeContextEnvelopeTest {
     assertThat(device["widthPixels"]!!.jsonPrimitive.int).isEqualTo(1080)
     assertThat(device["heightPixels"]!!.jsonPrimitive.int).isEqualTo(2400)
     assertThat(device["instanceId"]!!.jsonPrimitive.content).isEqualTo("emulator-5554")
+  }
+
+  @Test fun `device block carries the device classifiers, empty when it has none`() {
+    val tablet = deviceInfo.copy(
+      classifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("tablet")),
+    )
+    val device = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), tablet)["device"]!!.jsonObject
+    assertThat(device["classifiers"]!!.jsonArray.map { it.jsonPrimitive.content }).isEqualTo(listOf("android", "tablet"))
+    val bare = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), deviceInfo)["device"]!!.jsonObject
+    assertThat(bare["classifiers"]!!.jsonArray.size).isEqualTo(0)
   }
 
   @Test fun `memory block mirrors AgentMemory variables as JSON string primitives`() {

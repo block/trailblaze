@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +20,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.JsonElement
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -27,6 +27,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import maestro.Driver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -35,7 +37,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
-import xyz.block.trailblaze.capture.logcat.CrashEventArtifactWriter
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
@@ -74,6 +75,8 @@ import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -574,13 +577,16 @@ class TrailblazeDeviceManager(
       initialMemorySeeds = initialMemorySeeds,
       initialMemorySensitiveSeeds = initialMemorySensitiveSeeds,
     )
+    // Prepared before the run starts, so a failure reaches this caller rather than only the run's
+    // background job. These runs never skip an LLM credential check, so they need no flag.
+    val instrumentationArgs = onDeviceInstrumentationArgsProvider()
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = forceStopTargetApp,
       runYamlRequest = runYamlRequest,
       targetTestApp = resolvedTargetTestApp,
       onProgressMessage = {},
       onConnectionStatus = {},
-      additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),
+      additionalInstrumentationArgs = { instrumentationArgs },
       captureVideo = captureVideoOverride,
       keepDeviceLanguage = keepDeviceLanguage,
       onComplete = onComplete,
@@ -602,8 +608,16 @@ class TrailblazeDeviceManager(
     val isNewSession: Boolean
   )
 
-  /** A run executing on a device, from [beginRun] until [endRun]. */
-  class RunInFlight internal constructor(val trailblazeDeviceId: TrailblazeDeviceId)
+  /**
+   * A run executing on a device, from [beginRun] until [endRun]. In the run's coroutine context it
+   * tells [releaseDeviceAfterRun] whose cleanup is calling.
+   */
+  class RunInFlight internal constructor(val trailblazeDeviceId: TrailblazeDeviceId) : AbstractCoroutineContextElement(Key) {
+    /** The session the run logs into, once known. */
+    @Volatile var sessionId: SessionId? = null
+
+    companion object Key : CoroutineContext.Key<RunInFlight>
+  }
 
   private val runsInFlight: MutableSet<RunInFlight> = ConcurrentHashMap.newKeySet()
 
@@ -617,8 +631,21 @@ class TrailblazeDeviceManager(
    * resolving and ends it once the runner has registered its own, so the run is never unregistered
    * while it holds a session. Such a caller passes it as `callerRun` to [getOrCreateSessionResolution].
    */
-  fun beginRun(trailblazeDeviceId: TrailblazeDeviceId): RunInFlight =
-    RunInFlight(trailblazeDeviceId).also(runsInFlight::add)
+  fun beginRun(trailblazeDeviceId: TrailblazeDeviceId): RunInFlight {
+    // Not while a run's cleanup is letting go of a device (see [releaseDeviceAfterRun]): that would
+    // take this run's scope and session with it. Bounded, so a driver that never closes fails the
+    // later runs instead of holding them, and refused rather than started mid-release.
+    val lock = deviceReleaseLock(trailblazeDeviceId)
+    check(lock.tryLock(deviceReleaseWaitMillis, TimeUnit.MILLISECONDS)) {
+      "${trailblazeDeviceId.instanceId} is still being released by an earlier run after ${deviceReleaseWaitMillis / 1000}s; " +
+        "not starting on it. Try again, or restart the daemon if it stays stuck."
+    }
+    try {
+      return RunInFlight(trailblazeDeviceId).also(runsInFlight::add)
+    } finally {
+      lock.unlock()
+    }
+  }
 
   /**
    * Ends [run]. Idempotent. The device's last run ending releases the sessions replaced while it ran
@@ -628,6 +655,7 @@ class TrailblazeDeviceManager(
     if (!runsInFlight.remove(run)) return
     val device = run.trailblazeDeviceId
     if (runsInFlight.any { it.trailblazeDeviceId == device }) return
+    releaseDeferredDevice(device)
     // Unbinds first: they mark a session this device still logged into, which holds its release.
     unbindPendingAfterRuns(device)
     releasePendingAfterRuns(device)
@@ -849,6 +877,18 @@ class TrailblazeDeviceManager(
     target: TrailblazeHostAppTarget?,
     candidateAppIds: List<String>,
     installedAppIdsProvider: (TrailblazeDeviceId) -> Set<String> = { probeInstalledAppIdsForCapture(it) },
+  ): String? = resolveInstalledCaptureAppId(trailblazeDeviceId, target, candidateAppIds, installedAppIdsProvider)
+    ?: candidateAppIds.firstOrNull()
+
+  /**
+   * [resolveCaptureAppId] without its fallback: null when the device could not say which declared
+   * id it has, so a caller can ask again once the device is ready rather than settle on a guess.
+   */
+  internal fun resolveInstalledCaptureAppId(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    target: TrailblazeHostAppTarget?,
+    candidateAppIds: List<String>,
+    installedAppIdsProvider: (TrailblazeDeviceId) -> Set<String> = { probeInstalledAppIdsForCapture(it) },
   ): String? {
     if (target == null || candidateAppIds.size < 2) return candidateAppIds.firstOrNull()
     val installed = installedAppIdsProvider(trailblazeDeviceId)
@@ -857,10 +897,10 @@ class TrailblazeDeviceManager(
       Console.log(
         "[TrailblazeDeviceManager] none of ${target.id}'s app ids [${candidateAppIds.joinToString()}] " +
           "are installed on ${trailblazeDeviceId.instanceId} (${installed.size} package(s) seen); " +
-          "capture will use ${candidateAppIds.first()}",
+          "capture falls back to ${candidateAppIds.first()}",
       )
     }
-    return resolved ?: candidateAppIds.first()
+    return resolved
   }
 
   /**
@@ -880,15 +920,27 @@ class TrailblazeDeviceManager(
    * comes back empty answers with the cached inventory — stale is
    * still better than nothing — and an empty set when there is no cache either, which
    * [resolveCaptureAppId] reads as "could not tell" and answers with the first declared id.
+   *
+   * [freshOnly] is the early probe that runs while the device connects: no cached fallback, and on
+   * Android its own adb connection, so it can never cost the connect the client it runs over.
    */
   internal fun probeInstalledAppIdsForCapture(
     deviceId: TrailblazeDeviceId,
     timeoutSeconds: Long = CAPTURE_APP_PROBE_TIMEOUT_SECONDS,
+    freshOnly: Boolean = false,
   ): Set<String> {
-    val fresh = runWithTimeout(timeoutSeconds, deviceId.instanceId, "installed apps for capture") {
-      installedAppIdsProviderBlocking(deviceId)
+    val fresh = if (freshOnly && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+      // Asked while instrumentation connects over the device's shared client, so on a connection
+      // of its own: a timeout or transport failure here would otherwise close that client.
+      AndroidHostAdbUtils.listInstalledPackagesOnOwnConnection(deviceId, timeoutSeconds * 1_000)?.toSet()
+    } else {
+      runWithTimeout(timeoutSeconds, deviceId.instanceId, "installed apps for capture") {
+        installedAppIdsProviderBlocking(deviceId)
+      }
     }
     if (!fresh.isNullOrEmpty()) return fresh
+    // A caller that can ask again later wants no answer over a stale one.
+    if (freshOnly) return emptySet()
     val cached = installedAppIdsByDeviceFlow.value[deviceId]?.takeIf { it.isNotEmpty() }
     Console.log(
       "[TrailblazeDeviceManager] installed-app probe " +
@@ -1087,42 +1139,13 @@ class TrailblazeDeviceManager(
     return message
   }
 
-  /**
-   * Fails a run's session that already ended succeeded when the app crashed during it, and returns
-   * the message to fail the run with; null when the session recorded no crash. The steps passed,
-   * but against an app that went down, so the run proved nothing. Call it once the session's
-   * capture has stopped: the crash index is only written then, which is also why, like a
-   * finalization failure, it replaces an end that is already written.
-   *
-   * Null too when the session already ended otherwise: an on-device run's result passes whatever
-   * its session's end, and a crash message would replace that run's own failure.
-   */
-  fun failSucceededSessionIfAppCrashed(sessionId: SessionId): String? {
-    val crash = CrashEventArtifactWriter.failure(logsRepo.getSessionDir(sessionId)) ?: return null
-    // The written end only: a run whose end never landed must still fail on its crash, not read as abandoned.
-    val end = logsRepo.persistedEndStatus(sessionId)
-    if (end != null && end !is SessionStatus.Ended.Succeeded && end !is SessionStatus.Ended.SucceededWithSelfHeal) {
-      return null
-    }
-    failSucceededSession(
-      sessionId,
-      crash.message,
-      exceptionStackTrace = null,
-      failureKind = CrashEventArtifactWriter.FAILURE_KIND,
-      failurePayload = crash.payload,
-    )
-    return crash.message
-  }
-
   private fun failSucceededSession(
     sessionId: SessionId,
     message: String,
     exceptionStackTrace: String?,
-    failureKind: String? = null,
-    failurePayload: JsonElement? = null,
   ) {
     try {
-      logsRepo.failSucceededEnd(sessionId, message, exceptionStackTrace, failureKind, failurePayload)
+      logsRepo.failSucceededEnd(sessionId, message, exceptionStackTrace)
     } catch (e: Exception) {
       // The run still fails: its result is marked a finalization failure, which disk can't override.
       Console.log("Failed to record the run's failure on session $sessionId: ${e.message}")
@@ -1901,6 +1924,91 @@ class TrailblazeDeviceManager(
       Console.log("Session cleanup after cancellation failed: ${it.message}")
     }
     return scopeCancelled || cancelledSessionId != null
+  }
+
+  /** How long a run waits for its device's release before giving up on it. */
+  internal var deviceReleaseWaitMillis = 60_000L
+
+  /** Per device: held while a run's cleanup lets go of it, and by [beginRun], so no run starts on a device mid-release. */
+  private val deviceReleaseLocks = ConcurrentHashMap<TrailblazeDeviceId, ReentrantLock>()
+
+  private fun deviceReleaseLock(trailblazeDeviceId: TrailblazeDeviceId): ReentrantLock =
+    deviceReleaseLocks.computeIfAbsent(trailblazeDeviceId) { ReentrantLock() }
+
+  /**
+   * Devices whose release [releaseDeviceAfterRun] left to another run, with the sessions of the runs
+   * that left it: performed once the device's last run ends, if one of those is still the device's.
+   * Each entry guarded by its device's [deviceReleaseLock].
+   */
+  private val pendingDeviceReleases = ConcurrentHashMap<TrailblazeDeviceId, MutableSet<SessionId>>()
+
+  /**
+   * What a run's own cleanup calls to let go of [trailblazeDeviceId]: [cancelSessionForDevice], unless
+   * another run is executing on the device. A cancelled run is reported over while its job is still
+   * unwinding, so the next run can take the device first, and cancelling by device would then close
+   * that run's driver and scope and end its session cancelled. The other run's own driver
+   * registration closes this run's driver (see [setActiveDriverForDevice]), and a release skipped
+   * for it happens when the device's last run ends (see [endRun]) unless a session that kept the
+   * device took it over meanwhile. No run begins on the device while this releases it.
+   *
+   * Call it from inside the run, between [beginRun] and [endRun], so the run counts itself.
+   */
+  suspend fun releaseDeviceAfterRun(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
+    val run = currentCoroutineContext()[RunInFlight]?.takeIf { it.trailblazeDeviceId == trailblazeDeviceId }
+    return deviceReleaseLock(trailblazeDeviceId).withLock {
+      if (runsInFlight.count { it.trailblazeDeviceId == trailblazeDeviceId } > 1) {
+        val owners = pendingDeviceReleases.getOrPut(trailblazeDeviceId, ::mutableSetOf)
+        (run?.sessionId ?: getCurrentSessionIdForDevice(trailblazeDeviceId))?.let(owners::add)
+        Console.log("Another run is executing on ${trailblazeDeviceId.instanceId}; leaving the device to it.")
+        return false
+      }
+      pendingDeviceReleases.remove(trailblazeDeviceId)
+      cancelSessionForDevice(trailblazeDeviceId)
+    }
+  }
+
+  /**
+   * Runs [release], a run's own letting go of [trailblazeDeviceId], under the same exclusion as
+   * [releaseDeviceAfterRun], and only while the device is still the run's: no other run executing
+   * there, and the device on [ownSession] or none. A session that took the device over and kept it
+   * (an interactive call, which unregisters between calls) owns it. No run begins on the device
+   * meanwhile. Whether it ran.
+   */
+  fun ifDeviceStillOnSession(trailblazeDeviceId: TrailblazeDeviceId, ownSession: SessionId?, release: () -> Unit): Boolean =
+    deviceReleaseLock(trailblazeDeviceId).withLock {
+      if (runsInFlight.count { it.trailblazeDeviceId == trailblazeDeviceId } > 1) return false
+      val current = getCurrentSessionIdForDevice(trailblazeDeviceId)
+      if (current != null && current != ownSession) return false
+      release()
+      true
+    }
+
+  /**
+   * The release [releaseDeviceAfterRun] skipped for [device], now that no run is executing on it.
+   * Dropped when the device is on a session none of the skipping runs had: that session kept the
+   * device (an interactive call) and is its owner's to end.
+   */
+  private fun releaseDeferredDevice(device: TrailblazeDeviceId) {
+    if (!pendingDeviceReleases.containsKey(device)) return
+    val lock = deviceReleaseLock(device)
+    if (!lock.tryLock(deviceReleaseWaitMillis, TimeUnit.MILLISECONDS)) {
+      Console.log("Releasing ${device.instanceId} after its last run waited too long for another release; leaving it.")
+      return
+    }
+    try {
+      if (runsInFlight.any { it.trailblazeDeviceId == device }) return
+      val owners = pendingDeviceReleases.remove(device) ?: return
+      val current = getCurrentSessionIdForDevice(device)
+      if (current != null && current !in owners) {
+        Console.log("${device.instanceId} is on session $current, which kept it; not releasing it after its last run.")
+        return
+      }
+      runCatching { cancelSessionForDevice(device) }.onFailure {
+        Console.log("Releasing ${device.instanceId} after its last run failed: ${it.message}")
+      }
+    } finally {
+      lock.unlock()
+    }
   }
 
   /**

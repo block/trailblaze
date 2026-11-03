@@ -228,6 +228,12 @@ abstract class TrailblazeHostAppTarget(
   open fun getAndroidTestInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget? = null
 
   /**
+   * Whether an ANDROID_TEST run clears this app's data before every trailhead that runs. YAML-backed
+   * targets return [xyz.block.trailblaze.config.AndroidTestInstrumentationConfig.clearDataBeforeTrailhead].
+   */
+  open fun clearsAppDataBeforeInProcessTrailhead(): Boolean = false
+
+  /**
    * We're provided with the original iOS Driver from Maestro
    * Then we are instantiating a downstream app-specific iOS driver, wrapped around the original
    *

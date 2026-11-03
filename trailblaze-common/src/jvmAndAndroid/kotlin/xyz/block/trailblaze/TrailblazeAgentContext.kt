@@ -129,7 +129,7 @@ fun TrailblazeAgentContext.logToolExecution(
   // arrived via memory out of the persisted log.
   val resolvedPayload =
     if (rawPayload != null) {
-      buildLogSafeResolvedPayload(rawPayload, memory).let { resolved ->
+      buildLogSafeResolvedPayload(rawPayload, memory, context.trailblazeDeviceInfo).let { resolved ->
         if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
           .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
         else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
@@ -294,7 +294,7 @@ fun TrailblazeAgentContext.logToolExecution(
   }
   // Same post-resolution value masking as the context-carrying overload, for the same reason.
   val resolvedPayload = if (rawPayload != null) {
-    buildLogSafeResolvedPayload(rawPayload, memory).let { resolved ->
+    buildLogSafeResolvedPayload(rawPayload, memory, device = null).let { resolved ->
       if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
         .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
       else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())

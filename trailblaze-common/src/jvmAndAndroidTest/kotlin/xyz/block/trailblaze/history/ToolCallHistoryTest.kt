@@ -875,7 +875,7 @@ class ToolCallHistoryTest {
     val notAString = hostCall(ToolCallHistoryHostFunctions.TOOL_CALLS, """{"section":3}""")
 
     assertThat((unknownSection as Outcome.Failure).message)
-      .contains("""section must be one of "trailhead", "trail", "teardown", not "s1"""")
+      .contains("""section must be one of "deviceSetup", "trailhead", "trail", "teardown", not "s1"""")
     assertThat((unknownArg as Outcome.Failure).message).contains("'since'")
     assertThat((notAString as Outcome.Failure).message).contains("section must be one of")
   }

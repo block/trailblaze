@@ -42,11 +42,17 @@ sealed class TrailExecutionResult {
    * finalized (e.g. a required capture recorded nothing, or the app's log showed it crashed). The
    * session's end on disk may still read succeeded, so a caller that reconciles against it must
    * keep this failure.
+   *
+   * [infrastructure] marks a run that could not be prepared, so it never reached the trail (e.g.
+   * its LLM credentials could not be obtained). Exit-code-surfacing callers map it to their
+   * infrastructure code (the CLI's `TrailblazeExitCode.INFRA_FAILED`, the daemon's
+   * `CliRunResponse.ERROR_KIND_INFRA`), not to a failed trail. No session was created for the run.
    */
   data class Failed(
     val errorMessage: String?,
     val misuse: Boolean = false,
     val sessionFinalizationFailed: Boolean = false,
+    val infrastructure: Boolean = false,
   ) : TrailExecutionResult()
 
   /** Trail was cancelled. */
@@ -59,7 +65,14 @@ class DesktopAppRunYamlParams(
   val targetTestApp: TrailblazeHostAppTarget?,
   val onProgressMessage: (String) -> Unit,
   val onConnectionStatus: (DeviceConnectionStatus) -> Unit,
-  val additionalInstrumentationArgs: Map<String, String>,
+  /**
+   * Builds the instrumentation args this run hands its device. The runner calls it once per run,
+   * after resolving which steps replay a recording on that device, with `runCanReachLlm = false`
+   * only when nothing in the run can call the AI: every step replays its recording and self-heal is
+   * off. A provider may then skip work only an AI call needs, such as checking an LLM token against
+   * its server.
+   */
+  val additionalInstrumentationArgs: suspend (runCanReachLlm: Boolean) -> Map<String, String>,
   /** Called when the trail execution completes (success, failure, or cancellation). */
   val onComplete: ((TrailExecutionResult) -> Unit)? = null,
   /** RPC port for Compose driver connections. */

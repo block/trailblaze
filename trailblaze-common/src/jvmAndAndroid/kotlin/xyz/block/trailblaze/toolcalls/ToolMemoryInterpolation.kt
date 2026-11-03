@@ -12,6 +12,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.containsDeviceToken
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.MalformedArgTokenException
@@ -56,17 +58,23 @@ import java.util.concurrent.ConcurrentHashMap
  * - Everything else — encode via the tool's concrete class serializer, interpolate the tree,
  *   decode back. Tools that can't round-trip (no serializer, contextual nested fields) pass
  *   through unchanged with a once-per-class diagnostic; they keep whatever behavior they had.
+ *
+ * [device] is the device this dispatch targets, and resolves `{{device.<name>}}` tokens
+ * ([TrailblazeDeviceInfo.tokenValues]). Each agent passes its own, so in a multi-device session a
+ * tool names the device it runs on, not the session's launch device.
  */
 fun <T : TrailblazeTool> interpolateMemoryInTool(
   tool: T,
   memory: AgentMemory,
+  device: TrailblazeDeviceInfo?,
   disabled: Boolean = isBoundaryMemoryInterpolationDisabled(),
 ): T {
-  if (disabled || (memory.variables.isEmpty() && memory.args.isEmpty())) return tool
+  val memoryEmpty = memory.variables.isEmpty() && memory.args.isEmpty()
+  if (disabled || (memoryEmpty && device == null)) return tool
   return when (tool) {
     is OtherTrailblazeTool -> tool
     is RawArgumentTrailblazeTool -> tool
-    else -> interpolateViaClassSerializer(tool, memory)
+    else -> interpolateViaClassSerializer(tool, memory, device?.tokenValues.orEmpty(), deviceTokensOnly = memoryEmpty)
   }
 }
 
@@ -264,7 +272,8 @@ internal fun scrubSensitivePayload(
  * (token-bearing) command identity ([withAuthoredCommandIdentity]) AND scrubs any resolved
  * `rememberSensitive` value a failing tool spliced into its free-form [errorMessage]
  * ([scrubSensitiveValues]) or its structured [TrailblazeToolResult.Error.ExceptionThrown.structuredPayload]
- * ([scrubSensitivePayload]). The command swap alone keeps STRUCTURED args safe; the message and
+ * ([scrubSensitivePayload]). A [TrailblazeToolResult.Error.FatalError]'s message and stack trace get
+ * the same scrub: a scripted tool's failure can be promoted to one. The command swap alone keeps STRUCTURED args safe; the message and
  * payload scrubs close the gap for a tool that interpolates a token into its diagnostics — e.g. a
  * remember tool's "Failed to find element for prompt: …" on a lookup miss, where the prompt arrives
  * boundary-resolved. Use this (not the bare identity swap) wherever a failure result leaves the
@@ -273,6 +282,15 @@ internal fun scrubSensitivePayload(
  */
 fun <R : TrailblazeToolResult> R.withAuthoredFailureContent(authored: TrailblazeTool, memory: AgentMemory): R {
   val identityRestored = withAuthoredCommandIdentity(authored)
+  if (identityRestored is TrailblazeToolResult.Error.FatalError) {
+    val scrubbedMessage = scrubSensitiveValues(identityRestored.errorMessage, memory)
+    val scrubbedTrace = identityRestored.stackTraceString?.let { scrubSensitiveValues(it, memory) }
+    if (scrubbedMessage == identityRestored.errorMessage && scrubbedTrace == identityRestored.stackTraceString) {
+      return identityRestored
+    }
+    @Suppress("UNCHECKED_CAST")
+    return identityRestored.copy(errorMessage = scrubbedMessage, stackTraceString = scrubbedTrace) as R
+  }
   if (identityRestored !is TrailblazeToolResult.Error.ExceptionThrown) return identityRestored
   val scrubbedMessage = scrubSensitiveValues(identityRestored.errorMessage, memory)
   val scrubbedPayload = identityRestored.structuredPayload?.let { scrubSensitivePayload(it, memory) }
@@ -315,8 +333,10 @@ fun isBoundaryMemoryInterpolationDisabled(): Boolean {
 fun buildLogSafeResolvedPayload(
   rawPayload: OtherTrailblazeTool,
   memory: AgentMemory,
+  /** The device the tool ran on, so `{{device.*}}` renders as it executed. */
+  device: TrailblazeDeviceInfo?,
 ): OtherTrailblazeTool {
-  if (memory.variables.isEmpty() && memory.args.isEmpty()) return rawPayload
+  if (memory.variables.isEmpty() && memory.args.isEmpty() && device == null) return rawPayload
   val scrubMemory = AgentMemory().apply {
     variables.putAll(memory.variables)
     // putArg (already-resolved values), not seedArgs: re-seeding would re-run token resolution.
@@ -331,7 +351,11 @@ fun buildLogSafeResolvedPayload(
   // unknown-token throttle always starts empty. The dispatch-boundary pass already logged any
   // unknown token once for the session against the real memory; re-logging here would defeat that
   // throttle and flood a poll loop (e.g. a retrying assertVisible) with a line per dispatch.
-  val scrubbed = scrubMemory.interpolateVariablesInJson(rawPayload.raw, warnUnknownTokens = false)
+  val scrubbed = scrubMemory.interpolateVariablesInJson(
+    rawPayload.raw,
+    warnUnknownTokens = false,
+    device = device?.tokenValues.orEmpty(),
+  )
   return if (scrubbed == rawPayload.raw) {
     rawPayload
   } else {
@@ -340,11 +364,23 @@ fun buildLogSafeResolvedPayload(
 }
 
 @OptIn(InternalSerializationApi::class)
-private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: AgentMemory): T = try {
+private fun <T : TrailblazeTool> interpolateViaClassSerializer(
+  tool: T,
+  memory: AgentMemory,
+  device: Map<String, String>,
+  /**
+   * Memory is empty, so only a `device.*` token can change the tool. A tool without one comes
+   * back untouched, and one that can't round-trip passes through silently, as it did before
+   * device tokens existed.
+   */
+  deviceTokensOnly: Boolean,
+): T = try {
   val concreteSerializer = @Suppress("UNCHECKED_CAST")
   (tool::class.serializer() as KSerializer<T>)
   val tree = INTERPOLATION_JSON.encodeToJsonElement(concreteSerializer, tool)
-  val interpolated = memory.interpolateVariablesInJson(tree)
+  val interpolated =
+    if (deviceTokensOnly && !containsDeviceToken(tree.toString())) tree
+    else memory.interpolateVariablesInJson(tree, device = device)
   if (interpolated == tree) {
     tool
   } else {
@@ -358,7 +394,7 @@ private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: 
       // rendered as text — reachable only when the native-typed tree already failed, so working
       // native substitutions (matching field types) are unaffected.
       // If this also fails, the outer catch's pass-through diagnostics apply as usual.
-      val textRendered = memory.interpolateVariablesInJson(tree, renderWholeScalarArgTokensAsText = true)
+      val textRendered = memory.interpolateVariablesInJson(tree, renderWholeScalarArgTokensAsText = true, device = device)
       INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, textRendered)
     }
   }
@@ -378,7 +414,7 @@ private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: 
   // passing through is the CORRECT behavior there, not just the safe one: nested tools hit
   // this boundary themselves when they're dispatched).
   val className = tool::class.simpleName ?: "<anonymous>"
-  if (interpolationFailureClassesLogged.add(className)) {
+  if (!deviceTokensOnly && interpolationFailureClassesLogged.add(className)) {
     // Console.info, not log: this is a correctness breadcrumb (a tool silently stopped resolving
     // its memory tokens), and CLI quiet mode suppresses Console.log. Without it, the only field
     // signal is literal {{tokens}} showing up in that tool's logged args.

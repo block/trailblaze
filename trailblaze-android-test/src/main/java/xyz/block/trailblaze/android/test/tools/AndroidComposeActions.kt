@@ -17,7 +17,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.AnnotatedString
 import xyz.block.trailblaze.android.test.AndroidTestTarget
+import xyz.block.trailblaze.android.test.isIdleTimeout
+import xyz.block.trailblaze.android.test.onMainThread
+import xyz.block.trailblaze.android.test.perf
 
 /**
  * Acts on a Compose semantics node that has already been chosen, by identity.
@@ -37,42 +41,61 @@ internal object AndroidComposeActions {
   /**
    * Taps the node with a touch, at the point on it a touch actually reaches.
    *
-   * A touch, not the `OnClick` semantics action, because on this app the action is not equivalent
-   * to it. Square's Market rows publish `OnClick` and act only on real pointer input, so
-   * dispatching the action to one succeeds, changes nothing, and leaves the trail believing it has
-   * navigated — two trails each spent their remaining steps on a More menu they thought they had
-   * left. It also matches the app build these recordings were made under: it gave that same
-   * Settings row a `GESTURE`, not an `ACTION_CLICK`.
+   * A touch, not the `OnClick` semantics action, because in some apps the action is not equivalent
+   * to it. A row can publish `OnClick` and act only on real pointer input, so dispatching the
+   * action to one succeeds, changes nothing, and leaves the trail believing it has navigated, its
+   * remaining steps spent on a menu it thought it had left. It also matches how the recordings were
+   * made: the recording driver tapped such a row with a `GESTURE`, not an `ACTION_CLICK`.
    *
    * The POINT is what moves instead. `performClick` taps the center, which goes wherever the hit
    * test sends it — through an overlay drawn later, onto that overlay — while this tool still
-   * reports success because its selector matched. Both drivers scroll the More menu until Settings
-   * is on screen and tap it; the recording driver's scroll overshot to 400px clear of the
-   * promotional banner and this one stops with the row 10px inside it. [reachablePoint] takes the
-   * nearest point on the row the touch still reaches, which is the same tap on the same row.
+   * reports success because its selector matched. Both drivers scroll a list until the row is on
+   * screen and tap it, but each scroll stops somewhere different: one can leave the row well clear
+   * of a banner drawn over the list and the other with the row just inside it. [reachablePoint]
+   * takes the nearest point on the row the touch still reaches, which is the same tap on the same
+   * row.
    *
    * Only a node with no reachable point at all — covered everywhere, so no touch can express the
    * tap — falls back to the action, and says so in its result.
    */
   suspend fun click(target: AndroidTestTarget, semanticsId: Int): String? {
     val rule = target.requireComposeRule()
-    val (site, relocation) = target.nearestWith(semanticsId, "clickable", SemanticsActions.OnClick)
-    val node = target.findSemanticsNode(site)
-    val point = node?.let { target.reachablePoint(it) }
+    // One read for the whole lookup: each [AndroidTestTarget.composeRoots] synchronizes with the
+    // app, and finding the site, its node and its reachable point are questions about one frame.
+    val roots = perf("click.roots") { target.composeRoots() }
+    val (site, relocation) = perf("click.nearestWith") { nearestWith(roots, semanticsId, "clickable", SemanticsActions.OnClick) }
+    val node = perf("click.findNode") { findSemanticsNode(roots, site) }
+    // The touch below is only delivered once the node has stopped moving; see [awaitStill].
+    node?.let { perf("click.awaitStill") { awaitStill { it.boundsInWindow } } }
+    val point = node?.let { perf("click.reachablePoint") { reachablePoint(roots, it) } }
     val moved = point != null && point != node.boundsInWindow.center
-    target.dispatchAndAwaitSettle {
-      when {
-        point != null ->
-          rule.nodeWithId(site).performTouchInput { click(point - node.boundsInWindow.topLeft) }
-        node != null && node.offersClickAction() ->
-          rule.nodeWithId(site).performSemanticsAction(SemanticsActions.OnClick)
-        else -> rule.nodeWithId(site).performClick()
-      }
+    val dispatched = runCatching {
+      perf("click.dispatchAndSettle") { target.dispatchAndAwaitSettle {
+        when {
+          point != null ->
+            rule.nodeWithId(site).performTouchInput { click(point - node.boundsInWindow.topLeft) }
+          node != null && node.offersClickAction() ->
+            rule.nodeWithId(site).performSemanticsAction(SemanticsActions.OnClick)
+          else -> rule.nodeWithId(site).performClick()
+        }
+      } }
+    }
+    // A rule action synchronizes with the app BEFORE it acts, so an idle timeout here means the
+    // tap never happened: the screen never went idle. A screen that recomposes
+    // without end loses taps that way. The accessibility driver taps
+    // there regardless, so this does too, with a raw touch at the same point. (A timeout in the
+    // settle AFTER the action is already absorbed by dispatchAndAwaitSettle.)
+    val unsynchronized = dispatched.exceptionOrNull()?.let { failure ->
+      if (!failure.isIdleTimeout() || node == null || point == null) throw failure
+      val windowToScreen = node.positionOnScreen - node.positionInWindow
+      AndroidScrollActions.injectTap(target, point + windowToScreen)
+      UNSYNCHRONIZED_TAP_NOTE
     }
     return listOfNotNull(
       relocation,
       RELOCATED_TAP_NOTE.takeIf { moved },
       COVERED_NOTE.takeIf { node != null && point == null },
+      unsynchronized,
     ).takeIf { it.isNotEmpty() }?.joinToString(" ")
   }
 
@@ -116,8 +139,7 @@ internal object AndroidComposeActions {
    * A covered center puts 64 probes behind that, so this is the difference between one timeout and
    * sixty-five.
    */
-  private fun AndroidTestTarget.reachablePoint(node: SemanticsNode): Offset? {
-    val roots = composeRoots()
+  private fun reachablePoint(roots: List<SemanticsNode>, node: SemanticsNode): Offset? {
     val box = node.boundsInWindow
     val center = box.center
     if (touchAtReaches(roots, node, center)) return center
@@ -142,6 +164,9 @@ internal object AndroidComposeActions {
     "Another element was drawn over this one's center, so the tap was moved to the nearest point " +
       "on it the touch still reaches."
 
+  private const val UNSYNCHRONIZED_TAP_NOTE =
+    "The screen never went idle, so the tap was sent as a plain touch without waiting for it."
+
   private const val COVERED_NOTE =
     "Another element was drawn over this one, so the click action was dispatched to it directly " +
       "rather than as a touch that would have landed on the overlay."
@@ -149,7 +174,7 @@ internal object AndroidComposeActions {
   /**
    * A press held past the long-press timeout, dispatched at the resolved node itself.
    *
-   * Deliberately NOT routed through [act]: a long press is a raw gesture on the driver these
+   * Deliberately NOT relocated through [nearestWith]: a long press is a raw gesture on the driver these
    * recordings were made under — a touch down at the element's center, held — and the node that
    * reacts to it is decided by Compose's own hit test, exactly as it would be for a finger. Moving
    * the gesture to an ancestor carrying `OnLongClick` would send it somewhere the recording never
@@ -161,10 +186,64 @@ internal object AndroidComposeActions {
     target.dispatchAndAwaitSettle { rule.nodeWithId(semanticsId).performTouchInput { longClick() } }
   }
 
-  suspend fun replaceText(target: AndroidTestTarget, semanticsId: Int, value: String): String? =
-    act(target, semanticsId, "a text input", SemanticsActions.SetText) {
-      it.performTextReplacement(value)
+  suspend fun replaceText(target: AndroidTestTarget, semanticsId: Int, value: String): String? {
+    val rule = target.requireComposeRule()
+    val roots = target.composeRoots()
+    val (site, relocation) = nearestWith(roots, semanticsId, "a text input", SemanticsActions.SetText)
+    val dispatched = runCatching {
+      target.dispatchAndAwaitSettle { rule.nodeWithId(site).performTextReplacement(value) }
     }
+    // The rule waits for idle before it acts, as in [click], so a timeout means no text was set.
+    // On a dialog over a screen that never settles, clearing a field fails that way with the
+    // field focused. Set the text through the node's own action, which
+    // is what the rule would have invoked.
+    val unsynchronized = dispatched.exceptionOrNull()?.let { failure ->
+      if (!failure.isIdleTimeout()) throw failure
+      val setText = findSemanticsNode(roots, site)?.config?.getOrNull(SemanticsActions.SetText)?.action
+        ?: throw failure
+      target.dispatchAndAwaitSettle { onMainThread { setText(AnnotatedString(value)) } }
+      UNSYNCHRONIZED_TEXT_NOTE
+    }
+    return listOfNotNull(relocation, unsynchronized).takeIf { it.isNotEmpty() }?.joinToString(" ")
+  }
+
+  /**
+   * Appends [text] at the end of a text input without rewriting what it holds: the cursor moves to
+   * the end and the text is inserted there. The field's semantics expose its text as displayed, so a
+   * password or formatted field reads back as its mask or formatting, and replacing the field with
+   * that plus [text] would write the mask into the app's state.
+   *
+   * False when the input has no insert action, so the caller falls back to a replacement.
+   */
+  suspend fun appendText(target: AndroidTestTarget, semanticsId: Int, text: String): Boolean {
+    val rule = target.requireComposeRule()
+    val node = findSemanticsNode(target.composeRoots(), semanticsId) ?: return false
+    val insert = node.config.getOrNull(SemanticsActions.InsertTextAtCursor)?.action ?: return false
+    val setSelection = node.config.getOrNull(SemanticsActions.SetSelection)?.action ?: return false
+    // The displayed end maps to the underlying end through the field's own offset mapping.
+    val end = node.config.getOrNull(SemanticsProperties.EditableText)?.length ?: 0
+    val dispatched = runCatching {
+      target.dispatchAndAwaitSettle {
+        rule.nodeWithId(semanticsId).performSemanticsAction(SemanticsActions.SetSelection) { it(end, end, false) }
+        rule.nodeWithId(semanticsId).performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString(text)) }
+      }
+    }
+    // As in [replaceText]: a screen that never settles gets the node's own actions without the wait.
+    dispatched.exceptionOrNull()?.let { failure ->
+      if (!failure.isIdleTimeout()) throw failure
+      target.dispatchAndAwaitSettle {
+        onMainThread {
+          setSelection(end, end, false)
+          insert(AnnotatedString(text))
+        }
+      }
+    }
+    return true
+  }
+
+  private const val UNSYNCHRONIZED_TEXT_NOTE =
+    "The screen never went idle, so the text was set through the field's own action without " +
+      "waiting for it."
 
   /**
    * Scrolls this node's own scrollable ancestor until the node is in view.
@@ -179,21 +258,23 @@ internal object AndroidComposeActions {
     }
   }
 
+  /**
+   * The rule's own check synchronizes with the app first, so on a screen that never goes idle it
+   * can only time out, as on a screen that animates without end. There the node is asked directly
+   * instead: still attached, placed, and with on-screen area, which is what `assertIsDisplayed`
+   * checks.
+   */
   fun assertDisplayed(target: AndroidTestTarget, semanticsId: Int) {
-    target.requireComposeRule().nodeWithId(semanticsId).assertExists().assertIsDisplayed()
-  }
-
-  private suspend fun act(
-    target: AndroidTestTarget,
-    semanticsId: Int,
-    capability: String,
-    action: SemanticsPropertyKey<*>,
-    perform: (SemanticsNodeInteraction) -> Unit,
-  ): String? {
-    val rule = target.requireComposeRule()
-    val (site, relocation) = target.nearestWith(semanticsId, capability, action)
-    target.dispatchAndAwaitSettle { perform(rule.nodeWithId(site)) }
-    return relocation
+    val checked = runCatching {
+      target.requireComposeRule().nodeWithId(semanticsId).assertExists().assertIsDisplayed()
+    }
+    val failure = checked.exceptionOrNull() ?: return
+    if (!failure.isIdleTimeout()) throw failure
+    val node = findSemanticsNode(target.composeRoots(), semanticsId) ?: throw failure
+    val displayed = onMainThread {
+      node.layoutInfo.isPlaced && node.layoutInfo.isAttached && !node.boundsInWindow.isEmpty
+    }
+    if (!displayed) throw AssertionError("The node is in the tree but not displayed.", failure)
   }
 
   /**
@@ -209,13 +290,14 @@ internal object AndroidComposeActions {
    * more than one, for the same reason [AndroidViewActions] does: the resolver refuses an ambiguous
    * selector, and taking the first of several equally close descendants would reinstate that guess.
    */
-  private fun AndroidTestTarget.nearestWith(
+  private fun nearestWith(
+    roots: List<SemanticsNode>,
     semanticsId: Int,
     capability: String,
     action: SemanticsPropertyKey<*>,
   ): Pair<Int, String?> {
     val resolved =
-      findSemanticsNode(semanticsId)
+      findSemanticsNode(roots, semanticsId)
         ?: error(
           "Compose node $semanticsId is no longer in the semantics tree; the screen changed " +
             "between observation and action.",
@@ -259,13 +341,13 @@ internal object AndroidComposeActions {
     return emptyList()
   }
 
-  private fun AndroidTestTarget.findSemanticsNode(semanticsId: Int): SemanticsNode? {
+  private fun findSemanticsNode(roots: List<SemanticsNode>, semanticsId: Int): SemanticsNode? {
     fun walk(node: SemanticsNode): SemanticsNode? {
       if (node.id == semanticsId) return node
       node.children.forEach { child -> walk(child)?.let { return it } }
       return null
     }
-    composeRoots().forEach { root -> walk(root)?.let { return it } }
+    roots.forEach { root -> walk(root)?.let { return it } }
     return null
   }
 

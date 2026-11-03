@@ -95,7 +95,7 @@ fun applyScriptedToolMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): 
 }
 
 /** Top-level `_meta` bucket holding the Trailblaze envelope. Mirrors the TS `META_KEY_TRAILBLAZE`. */
-private const val META_KEY_TRAILBLAZE: String = "trailblaze"
+internal const val META_KEY_TRAILBLAZE: String = "trailblaze"
 
 /** `_meta.trailblaze.memoryDelta` — sets. Mirrors the TS `META_KEY_MEMORY_DELTA`. */
 private const val META_KEY_MEMORY_DELTA: String = "memoryDelta"

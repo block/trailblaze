@@ -95,6 +95,7 @@ class TrailblazeLogger(
    * @param log The log event to emit
    */
   fun log(session: TrailblazeSession, log: TrailblazeLog) {
+    SessionStartRecords.observe(log)
     logEmitter.emit(log)
   }
 

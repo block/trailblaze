@@ -90,6 +90,7 @@ internal object LogWebSocketEndpoint {
   ) {
     val sessionDir = validatedSessionDir(logsRepo, session)
     requireSafeSegment(filename, "filename")
+    require(LogScreenshotPostEndpoint.isScreenshotFilename(filename)) { "Invalid filename" }
     val destination = File(sessionDir, filename)
     require(destination.canonicalPath.startsWith(sessionDir.canonicalPath + File.separator)) {
       "Invalid filename"

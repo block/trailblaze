@@ -202,6 +202,10 @@ interface TraceStep {
   /** True for the "Teardown" objective: the trailhead's teardown after the trail. Never a step
    * of the trail, never its verdict. */
   teardown?: boolean;
+  /** True for the run's device setup: the setup tool calls (`trailblaze run --setup`, a lane's
+   * `execution.setupTools`) that run before the trailhead. Never a step of the trail; rendered
+   * unnumbered, above the trailhead. */
+  setup?: boolean;
   /** True when recorded actions for this authored objective failed and self-heal took over. */
   selfHeal?: boolean;
   /** Recorded tool that triggered self-heal, retained for the recovery summary. */
@@ -392,7 +396,7 @@ interface LlmTranscripts {
   calls: LlmTranscriptMessage[][];
 }
 
-/** One network.ndjson event, reduced to the fields the Network tab renders. */
+/** One network.ndjson event, reduced to the fields the report reads. */
 interface NetworkEvent {
   method: string;
   statusCode: number | null;
@@ -461,8 +465,19 @@ interface FormattedRow {
 interface FormatterEntry {
   t: number | null;
   data: any;
+  /**
+   * The row the line describes itself with, as a derived stream writes it (`row` beside `data` in
+   * the envelope). A stream whose every line carries one is shown as those rows when no formatter
+   * claims it.
+   */
+  row?: FormatterRowInput;
   /** `"device"` when `t` is still on the device's clock (no measured offset to convert it with). */
   clock?: "device";
+  /**
+   * With `clock: "device"`, the stream whose device stamped `t`, when not the file's own: a derived
+   * row in a multi-device session converts on the clock of the device it was derived from.
+   */
+  clockStream?: string;
   /**
    * The device-clock stamp the line carried — the event's own emit time — before `t` was moved onto
    * the host clock. Absent for a host-stamped line. Tells a formatter that `t` is when the event
@@ -499,6 +514,22 @@ interface FormatterContext {
 }
 
 /**
+ * How a stream's lane behaves on the timeline, declared by whatever owns the stream (its formatter,
+ * or a derived stream's `lane`), so the report never special-cases a stream by name.
+ */
+interface LaneOptions {
+  /**
+   * The lane's name. A formatter's applies to every stream it owns; one a `prefix.*` pattern matched
+   * on a device suffix reads `<title> (<device>)`, so a pair session's lanes stay told apart.
+   */
+  title?: string;
+  /** Open on the timeline until the reader hides it, rather than waiting in the "+" menu. */
+  shown?: boolean;
+  /** How same-instant bursts fold: `any` folds every burst (the default), `label` only runs of one label, `none` keeps every row. */
+  fold?: 'any' | 'label' | 'none';
+}
+
+/**
  * The default export of an event-formatter module. RunReportGenerator discovers these on the JVM
  * classpath (xyz/block/trailblaze/report/event-formatters/*.formatter.ts|js), stages them beside
  * run-report-cli.ts, and the driver maps each `events/<name>.ndjson` stream to the first
@@ -517,6 +548,8 @@ interface EventStreamFormatter {
    */
   comparisonValues?(entries: FormatterEntry[], ctx?: FormatterContext): unknown[] | null;
   format(entries: FormatterEntry[], ctx?: FormatterContext): Array<FormatterRowInput | null | undefined>;
+  /** How the lane of every stream this formatter owns behaves. Unset, the report's defaults apply. */
+  lane?: LaneOptions;
 }
 
 /**
@@ -545,6 +578,17 @@ interface EventStream {
   events: SessionEvent[];
   /** Formatter-produced rows; when present the viewer renders these instead of `events`. */
   rows?: FormattedRow[] | null;
+  /** The lane's name, when the stream names it (a derived stream's `title`). */
+  title?: string;
+  /** Open on the timeline until the reader hides it, as every derived stream is, or as its formatter asks. */
+  shown?: boolean;
+  /** How the lane folds same-instant bursts, as the stream's owner declares; unset, it folds every burst. */
+  fold?: 'any' | 'label' | 'none';
+  /**
+   * Set only on a derived stream: the streams and logs its rows were derived from, as
+   * `events/derived.json` records them. Empty when the session's manifest predates recording them.
+   */
+  derivedFrom?: string[];
 }
 
 /**
@@ -731,6 +775,9 @@ interface SessionPayload {
   /** gzip(JSON.stringify(EventStream[])) as base64 — used instead of `events` past the driver's
    * inline threshold; the viewer inflates it lazily via DecompressionStream. */
   eventsGz?: string | null;
+  /** In a linked-media report, where `eventsGz` lives instead: a script file beside the session's
+   * screenshots that hands the same base64 payload to the viewer (see loadSidecarText). */
+  eventsHref?: string | null;
   /** The session's `trace.json` spans (see TracerSpan), inline below the driver's threshold. */
   spans?: TracerSpan[] | null;
   /** gzip(JSON.stringify(TracerSpan[])) as base64 — see deviceLogGz. */
@@ -783,6 +830,8 @@ interface SessionInput {
   events?: EventStream[] | null;
   /** See SessionPayload.eventsGz. */
   eventsGz?: string | null;
+  /** See SessionPayload.eventsHref. */
+  eventsHref?: string | null;
   spans?: TracerSpan[] | null;
   /** See SessionPayload.spansGz. */
   spansGz?: string | null;
@@ -810,7 +859,8 @@ interface SessionInput {
 /**
  * The run payload the self-contained report embeds. Chunked documents (buildMultiReportHtml)
  * split it across inert JSON script elements: `#tb-index` (this shape, with each session reduced
- * to a stub of meta + per-call LLM token/cost summaries + stepCount/toolCallCount) is JSON.parsed
+ * to a stub of meta + per-call LLM token/cost summaries + stepCount/toolCallCount, and the
+ * `eventsHref` of a session that links its event streams) is JSON.parsed
  * at boot, and each session's
  * full payload rides in its own `#tb-session-<i>` element, parsed into the stub when that run
  * opens. Fallback reads, in order: a monolithic `#tb-run-data` element (older exported files),

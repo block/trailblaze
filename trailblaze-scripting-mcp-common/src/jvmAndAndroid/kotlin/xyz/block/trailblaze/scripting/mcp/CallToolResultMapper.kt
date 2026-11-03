@@ -2,6 +2,7 @@ package xyz.block.trailblaze.scripting.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import xyz.block.trailblaze.scriptedToolResultIsFatal
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
@@ -28,10 +29,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * A TS tool opts in by throwing the SDK's `ToolError` with `data` (or returning an
  * `isError` envelope with `structuredContent` directly).
  *
- * `_meta.trailblaze.variant` rich-variant support (FatalError, MissingRequiredArgs, etc.
- * per conventions § 3 "future extension") is **not** implemented yet — authors who want
- * those variants should continue using the ExceptionThrown path for now. Lands additively
- * when a concrete author need surfaces.
+ * `_meta.trailblaze.variant == "FatalError"` on an `isError == true` result maps to
+ * [TrailblazeToolResult.Error.FatalError] instead (conventions § 3), so a recorded step skips
+ * self-heal. The TS SDK sets it when a nested `ctx.tools.*` call failed fatally and the tool let
+ * the error propagate. The other rich variants (MissingRequiredArgs, etc.) are **not** implemented
+ * yet and continue to use the ExceptionThrown path.
  *
  * Shared across the subprocess runtime (`:trailblaze-scripting-subprocess`) and the
  * on-device bundle runtime (`:trailblaze-scripting-bundle`) so both surfaces hand authors
@@ -43,7 +45,11 @@ fun CallToolResult.toTrailblazeToolResult(): TrailblazeToolResult {
     .firstOrNull()
     ?.text
   val hasError = isError == true
-  return if (hasError) {
+  return if (hasError && scriptedToolResultIsFatal(meta)) {
+    TrailblazeToolResult.Error.FatalError(
+      errorMessage = message ?: "Subprocess tool returned a fatal error with no text content.",
+    )
+  } else if (hasError) {
     // The scripted-caller channel ([JsScriptingCallbackResult.CallToolResult.errorMessage])
     // remains text-only: a TS tool calling BACK into Trailblaze doesn't receive the payload.
     // The trailhead flow doesn't need that direction — the tool's own failure crosses here,

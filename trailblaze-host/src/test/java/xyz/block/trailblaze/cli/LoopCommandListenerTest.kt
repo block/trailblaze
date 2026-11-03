@@ -12,6 +12,7 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -387,6 +388,31 @@ class LoopCommandListenerTest {
     assertTrue(stderr.lines().any { it.contains("--upload needs a workspace") }, "got: <<$stderr>>")
     assertFalse(ran)
     assertNull(starts.firstOrNull())
+  }
+
+  @Test
+  fun `a pass that finishes after the CLI abandoned its run is the failed pass, not a passed one`() {
+    val loop = loop(Recorder(), iterations = 3)
+    loop.yamlToRun(trail)
+    // Pass 2's last step stalled past the CLI's no-progress window and only finished as its run let go.
+    val abandoned = session(
+      trailhead to Ok(0, 100),
+      open to Ok(200, 300), check to Ok(310, 400),
+      open to Ok(500, 600), check to Ok(610, 9_000),
+    ).endedFailed(9_500)
+
+    loop.sessionStarting(abandoned)
+    val stalled = TrailCommand.FinishedRun(passed = false, sessionDir = abandoned, abandoned = "no progress for 600s", abandonedAtMs = 5_000)
+    assertTrue(loop.runAgain(stalled))
+
+    assertEquals(
+      listOf(Triple(0, true, null), Triple(1, false, "Failed with no progress: no progress for 600s")),
+      passes.map { Triple(it.index, it.ok, it.error) },
+    )
+    assertEquals(Instant.fromEpochMilliseconds(500) to Instant.fromEpochMilliseconds(9_500), passes[1].startedAt to passes[1].endedAt)
+    // The recovery runs the 1 pass left after the 2 used.
+    val yaml = createTrailblazeYaml()
+    assertEquals(yaml.decodeUnifiedTrail(trail).trail, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail)
   }
 
   private sealed interface Step

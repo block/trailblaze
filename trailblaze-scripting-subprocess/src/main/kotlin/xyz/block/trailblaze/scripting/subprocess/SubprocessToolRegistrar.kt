@@ -134,8 +134,7 @@ object SubprocessToolRegistrar {
 
   /**
    * The `_meta` an inline scripted tool advertises once it reaches `tools/list` — its authored
-   * `_meta` with the [InlineScriptToolConfig.requiresHost] shortcut folded in. `null` when the tool
-   * advertises no metadata at all.
+   * `_meta` with [InlineScriptToolConfig.hostOnly] folded in. `null` when the tool has no metadata.
    *
    * One source of truth for two consumers: [InlineScriptToolServerSynthesizer] emits it into the
    * generated wrapper, and [applicableInlineTools] gates on it before that wrapper exists. Keeping
@@ -144,7 +143,7 @@ object SubprocessToolRegistrar {
    * `_meta` at descriptor-load time (`TrailmapScriptedToolFile.toInlineScriptToolConfigs`).
    */
   fun advertisedMeta(config: InlineScriptToolConfig): JsonObject? {
-    if (!config.requiresHost) return config.meta
+    if (!config.hostOnly) return config.meta
     val merged = config.meta?.toMutableMap() ?: mutableMapOf()
     merged["trailblaze/requiresHost"] = JsonPrimitive(true)
     return JsonObject(merged)

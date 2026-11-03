@@ -8,8 +8,8 @@ application. Drives **Apple's built-in iOS Contacts app**
   open/create/delete, multi-step edit-mode forms, contact-shape assertions,
   plus a composition example.
 - **18 trails** under `trails/ios-contacts/` exercising those tools
-  + the built-in iOS interaction toolsets, with `tags` for selective runs
-  and one `skip:` example for opting out gracefully.
+  + the built-in iOS interaction toolsets, and one `skip:` example for
+  opting out gracefully.
 - **A target-scoped system prompt** that teaches the LLM when to reach for
   the scripted tools instead of inline-expanding to raw `tap` /
   `inputText` primitives.
@@ -266,7 +266,6 @@ verbatim:
     platform: ios
     driver: IOS_HOST
     target: contacts
-    tags: [search]
 - prompts:
     - step: |
         Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
@@ -320,34 +319,7 @@ source on success.
 
 ---
 
-## Filtering trails with `tags`
-
-Every trail's `config:` block carries a `tags:` list. `--tags` filters by them.
-
-```bash
-# Smoke pass (fast, deterministic, must-pass on every build):
-trailblaze run trails/ios-contacts --device ios --tags smoke
-
-# Anything in the search or crud suites:
-trailblaze run trails/ios-contacts --device ios --tags search,crud
-
-# Long-tail nightly:
-trailblaze run trails/ios-contacts --device ios --tags slow
-```
-
-Conventions used in this example:
-
-| Tag           | Meaning |
-|---------------|---------|
-| `smoke`       | Fast, deterministic, must-pass on every run. |
-| `search`      | Drives the pull-down search field. |
-| `contact`     | Asserts shape of a single contact's detail screen. |
-| `crud`        | Create / edit / delete flows that mutate the contacts db. |
-| `nav`         | In-app navigation primitives (back-stack, tab switching). |
-| `slow`        | Multi-step compositions; skip during local iteration. |
-| `flaky`       | Known to be timing-sensitive; usually paired with a `skip:` reason. |
-
-### Skipping a trail with a written reason
+## Skipping a trail with a written reason
 
 A trail's `config:` block can carry `skip: "reason..."` to opt out of every
 run until the reason is removed. Better than commenting trails out or
@@ -357,7 +329,6 @@ the trail and shows up in `--verbose` output.
 ```yaml
 - config:
     title: "Contacts (iOS): Autocomplete suggestions visible while typing"
-    tags: [search, flaky]
     skip: "Suggestion popup races simulator boot — remove `skip:` once the inline-suggestions probe lands."
 - prompts:
     - step: …

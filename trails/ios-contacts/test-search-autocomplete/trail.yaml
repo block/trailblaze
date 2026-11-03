@@ -3,9 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - search
-  - flaky
   # The inline suggestion list races simulator boot and per-keystroke debounce.
   # Without a deterministic "suggestions are now visible" signal we get
   # intermittent false negatives on slower simulators. Skipped until we either

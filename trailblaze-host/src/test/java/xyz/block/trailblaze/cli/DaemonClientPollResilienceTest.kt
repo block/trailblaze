@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isGreaterThan
 import assertk.assertions.isGreaterThanOrEqualTo
 import assertk.assertions.isLessThan
 import assertk.assertions.isNotNull
@@ -358,6 +359,31 @@ class DaemonClientPollResilienceTest {
       assertThat(response.error).isNotNull().contains("(run cancelled)")
       assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
       assertThat(daemon.cancelledRunIds.toList()).isEqualTo(listOf(daemon.runId))
+      // How `loop` tells this run, which it counts as a failed pass, from one a person cancelled.
+      assertThat(DaemonClient.abandonedForNoProgress(response)).isTrue()
+      // Stamped when the client gave up, before the cancel, so a pass finishing during it isn't counted.
+      assertThat(client.lastRunAbandonedAtMs).isNotNull()
+    }
+  }
+
+  /**
+   * Earlier progress buys no extra time: a run that advances step by step past the window and then
+   * hangs on one step is abandoned a window after that step's last progress.
+   */
+  @Test
+  fun runAsync_timesOutWhenAStepHangsAfterEarlierProgress() {
+    val hangsAt = 100 // ~1s at the 10ms poll interval = 2× the 500ms window
+    daemon.runStatusHandler = { n ->
+      HttpStatusCode.OK to runStatusJsonWithProgress("RUNNING", "step-${minOf(n, hangsAt)}", null)
+    }
+
+    DaemonClient(port = daemon.port, pollIntervalMs = 10L, runPollTimeoutMs = 500L).use { client ->
+      val response = client.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
+      assertThat(response.success).isFalse()
+      assertThat(response.error).isNotNull().contains("no progress")
+      assertThat(daemon.cancelledRunIds.toList()).isEqualTo(listOf(daemon.runId))
+      // Proves the earlier steps kept it alive past one window before the hang tripped it.
+      assertThat(daemon.runStatusResponder.get()).isGreaterThan(hangsAt)
     }
   }
 
@@ -377,6 +403,8 @@ class DaemonClientPollResilienceTest {
       val response = client.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
       assertThat(response.success).isFalse()
       assertThat(response.error).isNotNull().contains("(cancelling the run failed; it may still be running)")
+      // Not a run `loop` may recover from: it may still be executing on the device.
+      assertThat(DaemonClient.abandonedForNoProgress(response)).isFalse()
     }
   }
 
@@ -409,6 +437,26 @@ class DaemonClientPollResilienceTest {
       assertThat(response.error).isNotNull().contains("no progress")
       assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
     }
+  }
+
+  /** A status request that fails is not the daemon saying it can't tell: only the latter falls back. */
+  @Test
+  fun runReleaseTellsAFailedRequestFromADaemonThatCantSay() {
+    val finished = """{"runId":"${daemon.runId}","state":"CANCELLED","finished":true}"""
+    val holding = """{"runId":"${daemon.runId}","state":"CANCELLED","finished":false}"""
+    val answers = listOf(
+      (HttpStatusCode.OK to finished) to DaemonClient.RunRelease.LET_GO,
+      (HttpStatusCode.OK to holding) to DaemonClient.RunRelease.HOLDING,
+      (HttpStatusCode.OK to runStatusJson("CANCELLED", null)) to DaemonClient.RunRelease.UNKNOWN,
+      (HttpStatusCode.NotFound to "Unknown runId") to DaemonClient.RunRelease.UNKNOWN,
+      (HttpStatusCode.InternalServerError to "boom") to DaemonClient.RunRelease.UNREACHABLE,
+    )
+    for ((reply, expected) in answers) {
+      daemon.runStatusHandler = { reply }
+      assertThat(client.runReleaseBlocking(daemon.runId)).isEqualTo(expected)
+    }
+    daemon.stop()
+    assertThat(client.runReleaseBlocking(daemon.runId)).isEqualTo(DaemonClient.RunRelease.UNREACHABLE)
   }
 
   /** The constructor rejects a non-positive inactivity window (guards direct/mis-injection). */

@@ -23,6 +23,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
@@ -106,8 +107,8 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = [
     "Mechanically migrate a trail's selectors from one driver's dialect to another's.",
-    "Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector` is still",
-    "written in the source dialect is rewritten into the target dialect, using a recorded",
+    "Every `tapOnElementBySelector` / `assertVisibleBySelector` `nodeSelector` and `inputText`",
+    "`selector` still written in the source dialect is rewritten into the target dialect, using a recorded",
     "session that captured BOTH drivers' trees to resolve each selector the same way the",
     "runtime resolved it, then describe the element it landed on in the new dialect.",
     "The pair is read from the capture (e.g. androidMaestro -> androidAccessibility,",
@@ -514,6 +515,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     val nodeSelector = when (val tool = wrapper.trailblazeTool) {
       is TapOnByElementSelector -> tool.nodeSelector
       is AssertVisibleBySelectorTrailblazeTool -> tool.nodeSelector
+      is InputTextTrailblazeTool -> tool.selector
       else -> null // not a migration target
     } ?: return
     if (!needsMigration(nodeSelector, pair)) return
@@ -681,6 +683,15 @@ class WaypointMigrateTrailCommand : Callable<Int> {
         if (needsMigration(tool.nodeSelector, pair)) {
           val idx = cursor.index++
           migrations[idx]?.let { tool.copy(nodeSelector = it) }
+        } else {
+          null
+        }
+      }
+      is InputTextTrailblazeTool -> {
+        val selector = tool.selector
+        if (selector != null && needsMigration(selector, pair)) {
+          val idx = cursor.index++
+          migrations[idx]?.let { tool.copy(selector = it) }
         } else {
           null
         }
@@ -1382,6 +1393,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
   internal fun classNameFromYamlToolName(toolName: String): String = when (toolName) {
     "tapOnElementBySelector" -> "TapOnByElementSelector"
     "assertVisibleBySelector" -> "AssertVisibleBySelectorTrailblazeTool"
+    "inputText" -> "InputTextTrailblazeTool"
     else -> toolName // fallback — shouldn't happen given collectSourceSelectorsUnified's filter
   }
 

@@ -19,6 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -244,6 +245,28 @@ class QuickJsTrailblazeToolTest {
       ).getTrailblazeOnDeviceSpecificPort(),
       device["trailblazePort"]!!.jsonPrimitive.int,
     )
+  }
+
+  @Test
+  fun `execute ctx device carries the device classifiers`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readCtx"] = {
+        name: "readCtx",
+        spec: {},
+        handler: async (_args, ctx) => ({
+          content: [{ type: "text", text: JSON.stringify(ctx.device.classifiers) }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val tablet = buildContext().trailblazeDeviceInfo.copy(
+      classifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("tablet")),
+    )
+    val result = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
+      .execute(buildContext(deviceInfo = tablet))
+    assertEquals("""["android","tablet"]""", (result as TrailblazeToolResult.Success).message)
   }
 
   @Test

@@ -6,9 +6,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - nav
-  - flaky
   # iOS 26.4's Contacts dismisses the soft keyboard automatically after typing
   # into the search field (verified live 2026-05-22). The trail's step 2
   # assumption ("This leaves the keyboard up with text in the field") doesn't

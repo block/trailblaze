@@ -3,9 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - crud
-  - slow
   title: 'Contacts (iOS): Edit a contact to add a phone number'
 
 trail:

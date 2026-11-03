@@ -29,12 +29,15 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailheadException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ToolBatchScope
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -869,6 +872,52 @@ class TrailblazeRunnerUtilTest {
       sharedToolBatch = batch,
     )
   }
+
+  @Test
+  fun `setup naming a tool the device lacks fails before any call runs`() {
+    val ran = mutableListOf<List<TrailblazeTool>>()
+    val util = TrailblazeRunnerUtil(runTrailblazeTool = { ran += it; TrailblazeToolResult.Success() }, trailblazeRunner = FakeTestAgentRunner())
+
+    val e = assertFailsWith<TrailheadException> {
+      util.runDeviceSetup(
+        setupJson = """[{"inputText":{"text":"a"}},{"not_a_real_tool":{}}]""",
+        decode = { listOf(InputTextTrailblazeTool(text = "a"), OtherTrailblazeTool("not_a_real_tool")) },
+        toolRepo = emptyToolRepo(),
+      )
+    }
+
+    assertTrue(ran.isEmpty(), "no setup call may run when one is unavailable")
+    assertTrue(e.message!!.startsWith("TRAILHEAD FAILED: device setup failed"), e.message)
+    assertTrue(e.message!!.contains("call 2, `not_a_real_tool`"), e.message)
+  }
+
+  @Test
+  fun `setup runs its calls together, in order`() {
+    val ran = mutableListOf<List<TrailblazeTool>>()
+    val util = TrailblazeRunnerUtil(runTrailblazeTool = { ran += it; TrailblazeToolResult.Success() }, trailblazeRunner = FakeTestAgentRunner())
+    val calls = listOf(InputTextTrailblazeTool(text = "a"), InputTextTrailblazeTool(text = "b"))
+
+    util.runDeviceSetup(setupJson = "[]", decode = { calls }, toolRepo = emptyToolRepo())
+
+    assertEquals(listOf<List<TrailblazeTool>>(calls), ran)
+  }
+
+  @Test
+  fun `a failing setup call fails the trail with its error`() {
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "no run-as") },
+      trailblazeRunner = FakeTestAgentRunner(),
+    )
+
+    val e = assertFailsWith<TrailheadException> {
+      util.runDeviceSetup(setupJson = "[]", decode = { listOf(InputTextTrailblazeTool(text = "a")) }, toolRepo = emptyToolRepo())
+    }
+
+    assertTrue(e.message!!.contains("no run-as"), e.message)
+  }
+
+  private fun emptyToolRepo() =
+    TrailblazeToolRepo(trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(name = "empty", toolClasses = emptySet()))
 
   private fun tool(name: String): TrailblazeToolYamlWrapper =
     TrailblazeToolYamlWrapper(name = name, trailblazeTool = InputTextTrailblazeTool(text = name))

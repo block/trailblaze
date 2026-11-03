@@ -4,6 +4,7 @@ import android.os.SystemClock
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import xyz.block.trailblaze.AdbCommandUtil
+import xyz.block.trailblaze.device.AndroidAppLaunchHook
 import xyz.block.trailblaze.inprocessidle.InProcessIdle
 import xyz.block.trailblaze.inprocessidle.TurboMessages
 import xyz.block.trailblaze.util.Console
@@ -189,11 +190,16 @@ object InProcessIdleLaunchReattacher {
    * Returns true when an attach was started and [awaitAttachedAfterLaunch] should be called
    * once the foreground launch has been dispatched.
    */
-  fun attachBeforeLaunch(appId: String): Boolean {
+  fun attachBeforeLaunch(appId: String, mayRestartRunningApp: Boolean = true): Boolean {
     // Decided before any probing: launchApp runs on every trail, and a run that never opted
     // into idle detector mode must not pay a socket probe + shell exec per launch. [decide] keeps its
     // own SKIP_DISABLED leg so the policy stays complete (and unit-tested) on its own.
     if (!InProcessIdleSettleClient.isEnabled()) return false
+    // `am instrument` restarts the target, which a launch that just stopped or cleared the app
+    // loses nothing by. A launch that only brings the app to the front must not: if the app is
+    // running, or Android still keeps a task for it, leave everything as it is — including a
+    // confirmation still polling for this process. The end-of-trail check judges turbo as usual.
+    if (!mayRestartRunningApp && hasStateToKeep(appId)) return false
     // Before any decision: whatever this launch does to THIS app, a confirmation still polling from
     // a previous launch of it is now describing a process this launch is about to replace. Scoped
     // to [appId] — this runs on every launch, including ones for apps turbo never attached to.
@@ -526,5 +532,46 @@ object InProcessIdleLaunchReattacher {
    */
   private const val CONFIRM_SETTLE_GRACE_MS = PING_MAX_MS + PONG_POLL_INTERVAL_MS
 
+  /**
+   * Whether [appId] has a process or a retained task that an attach would destroy. A probe that
+   * fails answers true: it skips the attach, never the launch.
+   */
+  private fun hasStateToKeep(appId: String): Boolean {
+    val state = try {
+      when {
+        AdbCommandUtil.isAppRunning(appId) -> "is running"
+        mayRetainTask(AdbCommandUtil.execShellCommand("dumpsys activity activities"), appId) -> "may have a retained task"
+        else -> null
+      }
+    } catch (t: Throwable) {
+      "could not be checked (${t.message})"
+    }
+    state?.let { Console.log("[inprocess-idle-reattach] $appId $it — not re-attaching, which would restart it") }
+    return state != null
+  }
+
+  /**
+   * Whether `dumpsys activity activities` lists an activity record of [appId]'s, alive or not. A dump
+   * without its header did not complete, so it cannot show the task is gone and answers true.
+   */
+  internal fun mayRetainTask(dumpsys: String, appId: String): Boolean =
+    !dumpsys.contains(ACTIVITIES_DUMP_HEADER) ||
+      dumpsys.lineSequence().any { it.contains("ActivityRecord{") && it.contains(" $appId/") }
+
+  private const val ACTIVITIES_DUMP_HEADER = "ACTIVITY MANAGER ACTIVITIES"
+
   private fun ping(): String? = InProcessIdle.ping(PING_CONNECT_TIMEOUT_MS, readTimeoutMs = PING_READ_TIMEOUT_MS)
+}
+
+/**
+ * [InProcessIdleLaunchReattacher] as an [AndroidAppLaunchHook.Hook], so a launch the driver does
+ * not run itself (`openApp`) re-attaches and confirms the idle detector the same way — except that
+ * it never re-attaches to an app that is running or still has a task, because the attach would
+ * restart it.
+ */
+object InProcessIdleLaunchHook : AndroidAppLaunchHook.Hook {
+  override fun beforeLaunch(appId: String): Boolean =
+    InProcessIdleLaunchReattacher.attachBeforeLaunch(appId, mayRestartRunningApp = false)
+
+  override fun afterLaunch(appId: String) = InProcessIdleLaunchReattacher.confirmAttachedAfterLaunch(appId)
 }

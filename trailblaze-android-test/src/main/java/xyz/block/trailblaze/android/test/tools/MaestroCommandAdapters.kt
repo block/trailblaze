@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test.tools
 
+import maestro.orchestra.ScrollUntilVisibleCommand
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -67,7 +68,7 @@ object MaestroCommandYaml {
 /**
  * Interprets a recorded `mobile_maestro` tool onto this driver's own backends, command by command.
  *
- * The Square estate's scripted launch tools (and the recorded trails around them) fall back to raw
+ * Some targets' scripted launch tools (and the recorded trails around them) fall back to raw
  * Maestro commands on every driver that is not the accessibility one — but the command set they
  * emit is small and closed: visibility waits, text taps, typing, and animation settles, all of
  * which this driver expresses natively through the same selector resolver every `androidTest_*`
@@ -224,15 +225,14 @@ internal object MaestroCommandAdapters {
         ScrollOptionSupport.unsupportedVisibilityPercentage(percentage.toInt())
           ?.let { unsupported("scrollUntilVisible $it", tool) }
       }
-      args["centerElement"].booleanOrRefuse("centerElement", tool)?.let { centerElement ->
-        ScrollOptionSupport.unsupportedCenterElement(centerElement)
-          ?.let { unsupported("scrollUntilVisible $it", tool) }
-      }
       val element = args["element"] ?: unsupported("scrollUntilVisible without an element", tool)
       AndroidTestScrollUntilVisibleTool(
         nodeSelector = selectorFrom(element, tool = tool),
         timeoutMs = args["timeout"].longOrRefuse("timeout", tool)
           ?: ScrollOptionSupport.DEFAULT_TIMEOUT_MS,
+        // Unwritten means Maestro's own default, as the command reads on every other driver.
+        centerElement = args["centerElement"].booleanOrRefuse("centerElement", tool)
+          ?: ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
       ).executeWithAndroidTest(target, context)
     }
 
@@ -246,7 +246,7 @@ internal object MaestroCommandAdapters {
     }
 
     // Key-event injection into the focused window — the same semantics the canonical `inputText`
-    // arm in [CanonicalToolAdapters] gives, and the shape the estate's 2FA branch emits on
+    // arm in [CanonicalToolAdapters] gives, and the shape a scripted 2FA step emits on
     // non-accessibility drivers. Unlike the canonical tool there is no hide-keyboard half:
     // Maestro's own inputText types and leaves the IME as it stands.
     "inputText" -> {

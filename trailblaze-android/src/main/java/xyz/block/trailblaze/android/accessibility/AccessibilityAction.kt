@@ -172,7 +172,7 @@ sealed interface AccessibilityAction {
     val optional: Boolean = false,
     /**
      * Pins the dispatch route for this tap instead of letting [planActionClickRoute] choose it
-     * from the resolved node's fields. Carried from the recording; null means the gate decides.
+     * from the resolved node's fields. Set by `android_accessibilityClick`; null means the gate decides.
      */
     val tapRoute: TapRouteOverride? = null,
   ) : AccessibilityAction {

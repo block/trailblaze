@@ -86,8 +86,11 @@ abstract class TrailblazeDesktopAppConfig(
 
   /**
    * Additional instrumentation args to pass to YAML runs for this configuration.
+   *
+   * [runCanReachLlm] is false only for a run in which nothing can call the AI (every step replays
+   * its recording and self-heal is off), so an override can skip LLM credential checks for it.
    */
-  open suspend fun additionalInstrumentationArgs(): Map<String, String> = emptyMap()
+  open suspend fun additionalInstrumentationArgs(runCanReachLlm: Boolean): Map<String, String> = emptyMap()
 
   abstract fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList>
 

@@ -7,14 +7,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Pins the misuse-envelope contract for the three pre-dispatch validation paths in
- * [StepCommand.call] that do NOT enter [cliReusableWithDevice]:
+ * Pins the misuse-envelope contract for the pre-dispatch validation path in [StepCommand.call]
+ * that does NOT enter [cliReusableWithDevice]: a missing positional step description.
  *
- *  - missing positional step description
- *  - `--setup` / `--no-setup` passed without `--save`
- *  - `--setup` and `--no-setup` passed together
- *
- * Pre-fix these paths emitted bare `Error: …` prose via [xyz.block.trailblaze.util.Console]
+ * Pre-fix this path emitted bare `Error: …` prose via [xyz.block.trailblaze.util.Console]
  * and returned exit 3. The exit code was already correct; the rendering was not — every
  * other misuse case in the CLI follows the structured `✗ <Verb> failed / reason: … /
  * hint: …` envelope ([reportCliError]). The originally-reported regression was the
@@ -63,36 +59,5 @@ class StepCommandMisuseEnvelopeTest {
       "Error: step requires a description" in stderr,
       "stderr should not retain the legacy bare-prose `Error: …` form; got:\n$stderr",
     )
-  }
-
-  @Test
-  fun `setup without save emits structured envelope with MISUSE code`() {
-    val (exitCode, stderr) = runWithArgs("--setup", "1-3")
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-    assertTrue(stderr.startsWith("✗ Step failed"), stderr)
-    assertTrue("reason: --setup / --no-setup require --save" in stderr, stderr)
-    assertTrue("--save <path>" in stderr, stderr)
-    assertFalse("Error: --setup and --no-setup require --save" in stderr, stderr)
-  }
-
-  @Test
-  fun `no-setup without save emits structured envelope with MISUSE code`() {
-    val (exitCode, stderr) = runWithArgs("--no-setup")
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-    assertTrue(stderr.startsWith("✗ Step failed"), stderr)
-    assertTrue("reason: --setup / --no-setup require --save" in stderr, stderr)
-  }
-
-  @Test
-  fun `setup and no-setup together emits mutually-exclusive envelope`() {
-    val (exitCode, stderr) = runWithArgs("--save", "out.trail.yaml", "--setup", "1-3", "--no-setup")
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-    assertTrue(stderr.startsWith("✗ Step failed"), stderr)
-    assertTrue("reason: --setup and --no-setup are mutually exclusive" in stderr, stderr)
-    assertTrue("pass one or the other" in stderr, stderr)
-    assertFalse("Error: --setup and --no-setup are mutually exclusive" in stderr, stderr)
   }
 }

@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import kotlinx.datetime.Instant
 import picocli.CommandLine
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -10,6 +14,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.ui.JvmLiveSessionDataProvider.Companion.MANUAL_CANCELLATION_MESSAGE
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.VerificationStep
@@ -26,6 +31,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.concurrent.thread
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 class LoopCommandTest {
 
@@ -128,13 +137,376 @@ class LoopCommandTest {
   }
 
   @Test
-  fun `loop requires an iteration count`() {
+  fun `loop requires an iteration count, a time limit, or both`() {
     val file = Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) }
 
-    val (exit, stderr) = captureStderr { root().execute("loop", file.path) }
+    for ((args, reason) in mapOf(
+      listOf(file.path) to "loop needs --iterations, --time-limit, or both",
+      listOf(file.path, "--time-limit", "soon") to
+        "--time-limit must be a positive duration in hours, minutes and seconds, such as 8h, 90m or 1h30m (got soon)",
+    )) {
+      val (exit, stderr) = captureStderr { root().execute("loop", "--verbose", *args.toTypedArray()) }
+      assertEquals(TrailblazeExitCode.MISUSE.code, exit, "trailblaze loop ${args.joinToString(" ")}")
+      assertTrue(stderr.lines().any { it == "  reason: $reason" }, "expected `$reason`, got: <<$stderr>>")
+    }
+  }
 
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
-    assertTrue("--iterations" in stderr, "expected a missing --iterations error, got: <<$stderr>>")
+  @Test
+  fun `a time limit is hours, minutes and seconds`() {
+    assertEquals(8.hours, LoopCommand.parseTimeLimit("8h"))
+    assertEquals(90.minutes, LoopCommand.parseTimeLimit("90m"))
+    assertEquals(90.minutes, LoopCommand.parseTimeLimit("1h30m"))
+    assertEquals(45.seconds, LoopCommand.parseTimeLimit("45s"))
+    for (bad in listOf("", "0m", "8", "1.5h", "30m1h", "ten minutes")) {
+      assertEquals(null, LoopCommand.parseTimeLimit(bad), "'$bad'")
+    }
+  }
+
+  @Test
+  fun `with --reuse-trailhead the loop starts no pass once the time limit is up, though passes are left`() {
+    var now = 0L
+    val loop = LoopCommand().apply {
+      iterations = 100
+      reuseTrailhead = true
+      timeLimit = "10m"
+      nowMs = { now }
+      cancelPassInFlight = { false }
+    }
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+
+    now = 10.minutes.inWholeMilliseconds
+    val output = captureConsoleInfo {
+      assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+    }
+
+    assertTrue("Stopping: the time limit is up." in output, output)
+    assertTrue("Loop: 2 of 2 pass(es) passed, 0 failed." in output, output)
+  }
+
+  @Test
+  fun `with only a time limit each session runs a batch of passes, and the loop keeps starting sessions until it is up`() {
+    var now = 0L
+    val loop = LoopCommand().apply {
+      timeLimit = "1h"
+      nowMs = { now }
+      cancelPassInFlight = { false }
+      runsCancellable = { true }
+    }
+    val yaml = createTrailblazeYaml()
+    val steps = yaml.decodeUnifiedTrail(trail).trail.size
+
+    assertEquals(PASSES_PER_SESSION_WITHOUT_A_COUNT * steps, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail.size)
+    loop.sessionStarting(sessionDir())
+    assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    now = 1.hours.inWholeMilliseconds
+    assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+  }
+
+  @Test
+  fun `at the time limit the pass still running is cancelled, is not a failure, and the loop exits clean`() {
+    val file = Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) }
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    var now = 0L
+    val cancelled = java.util.concurrent.CountDownLatch(1)
+    val loop = LoopCommand().apply {
+      trailFiles = listOf(file)
+      reuseTrailhead = true
+      timeLimit = "5m"
+      onFailure = "printf '%s' >> '${out.path}'"
+      nowMs = { now }
+      deadlinePollMillis = 10
+      cancelPassInFlight = { cancelled.countDown(); true }
+      envReader = { null }
+      abandonedSessionWaitMillis = 50
+      passPollMillis = 10
+    }
+    loop.runTrails = {
+      loop.yamlToRun(trail)
+      loop.sessionStarting(sessionDir())
+      now = 5.minutes.inWholeMilliseconds
+      assertTrue(cancelled.await(5, java.util.concurrent.TimeUnit.SECONDS), "the running pass was never cancelled")
+      val stopped = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null).also { cancel(it) }
+      assertFalse(loop.runAgain(cutRun(stopped)))
+      // What a run that ended cancelled exits with.
+      TrailblazeExitCode.ASSERTION_FAILED.code
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, loop.call())
+    assertEquals("", out.readText())
+  }
+
+  @Test
+  fun `a pass that failed before the time limit cancelled its cleanup still counts as failed`() {
+    val file = Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) }
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    var now = 0L
+    val cancelled = java.util.concurrent.CountDownLatch(1)
+    val loop = LoopCommand().apply {
+      trailFiles = listOf(file)
+      reuseTrailhead = true
+      timeLimit = "5m"
+      onFailure = "printf 'hook' >> '${out.path}'"
+      nowMs = { now }
+      deadlinePollMillis = 10
+      cancelPassInFlight = { cancelled.countDown(); true }
+      envReader = { null }
+    }
+    loop.runTrails = {
+      loop.yamlToRun(trail)
+      // The step failed first; the cancel then lands during the failure's teardown.
+      val failed = sessionDir(
+        DirectionStep("Launch signed in", isTrailhead = true) to null,
+        DirectionStep("Open the menu") to "no Menu",
+      )
+      loop.sessionStarting(failed)
+      now = 5.minutes.inWholeMilliseconds
+      assertTrue(cancelled.await(5, java.util.concurrent.TimeUnit.SECONDS), "the running pass was never cancelled")
+      cancel(failed)
+      val run = TrailCommand.FinishedRun(
+        passed = false,
+        sessionDir = failed,
+        letGo = { DaemonClient.RunRelease.LET_GO },
+        cancelled = true,
+      )
+      assertFalse(loop.runAgain(run))
+      TrailblazeExitCode.ASSERTION_FAILED.code
+    }
+
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, loop.call())
+    assertEquals("hook", out.readText())
+  }
+
+  @Test
+  fun `a failed end the session records while the cut run cleans up still counts as failed`() {
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, cutLoopExit { session ->
+      val ended = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Failed(durationMs = 0, exceptionMessage = "app crashed"),
+        session = SessionId("loop-session"),
+        timestamp = Instant.fromEpochMilliseconds(9),
+      )
+      File(session, "999_TrailblazeSessionStatusChangeLog.json").writeText(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), ended))
+    })
+  }
+
+  @Test
+  fun `a session someone stopped just before the time limit's cancel keeps the exit failed`() {
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, cutLoopExit(stoppedFirst = true) { cancel(it) })
+  }
+
+  @Test
+  fun `a cut run whose session never started keeps the exit failed`() {
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, cutLoopExit(emptySession = true) {})
+  }
+
+  @Test
+  fun `a session that recorded its success before the cut lands is a passed pass`() {
+    val output = captureConsoleInfo {
+      assertEquals(TrailblazeExitCode.SUCCESS.code, cutLoopExit { endWith(it, SessionStatus.Ended.Succeeded(durationMs = 0)) })
+    }
+    assertTrue("Loop: 1 of 1 pass(es) passed, 0 failed." in output, output)
+  }
+
+  @Test
+  fun `a failure cleanup records after the session's success keeps the exit failed`() {
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, cutLoopExit { session ->
+      endWith(session, SessionStatus.Ended.Succeeded(durationMs = 0))
+      endWith(session, SessionStatus.Ended.Failed(durationMs = 0, exceptionMessage = "capture failed"), name = "9999")
+    })
+  }
+
+  @Test
+  fun `a failure cleanup records while the session still holds the device keeps the exit failed`() {
+    assertEquals(
+      TrailblazeExitCode.ASSERTION_FAILED.code,
+      cutLoopExit(onRelease = { endWith(it, SessionStatus.Ended.Failed(durationMs = 0, exceptionMessage = "app crashed"), name = "9999") }) {
+        endWith(it, SessionStatus.Ended.Succeeded(durationMs = 0))
+      },
+    )
+  }
+
+  @Test
+  fun `an on-device handler timeout before the cut keeps the exit failed`() {
+    assertEquals(
+      TrailblazeExitCode.ASSERTION_FAILED.code,
+      cutLoopExit { cancel(it, message = OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MESSAGE) },
+    )
+  }
+
+  @Test
+  fun `a successful session that never lets go of the device keeps the exit failed`() {
+    assertEquals(
+      TrailblazeExitCode.ASSERTION_FAILED.code,
+      cutLoopExit(release = DaemonClient.RunRelease.HOLDING) { endWith(it, SessionStatus.Ended.Succeeded(durationMs = 0)) },
+    )
+  }
+
+  private fun endWith(session: File, status: SessionStatus, name: String = "999") {
+    val ended = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = status,
+      session = SessionId("loop-session"),
+      timestamp = Instant.fromEpochMilliseconds(9),
+    )
+    File(session, "${name}_TrailblazeSessionStatusChangeLog.json").writeText(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), ended))
+  }
+
+  /** Runs a timed loop whose one session the time limit cuts, then [afterCut] writes what it recorded after; returns the exit. */
+  private fun cutLoopExit(
+    stoppedFirst: Boolean = false,
+    emptySession: Boolean = false,
+    release: DaemonClient.RunRelease = DaemonClient.RunRelease.LET_GO,
+    onRelease: (File) -> Unit = {},
+    afterCut: (File) -> Unit,
+  ): Int {
+    val file = Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) }
+    var now = 0L
+    val cancelled = java.util.concurrent.CountDownLatch(1)
+    val loop = LoopCommand().apply {
+      trailFiles = listOf(file)
+      reuseTrailhead = true
+      timeLimit = "5m"
+      nowMs = { now }
+      deadlinePollMillis = 10
+      cancelPassInFlight = { cancelled.countDown(); true }
+      envReader = { null }
+    }
+    loop.runTrails = {
+      loop.yamlToRun(trail)
+      val session = if (emptySession) sessionDir() else sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null)
+      if (stoppedFirst) cancel(session)
+      loop.sessionStarting(session)
+      now = 5.minutes.inWholeMilliseconds
+      assertTrue(cancelled.await(5, java.util.concurrent.TimeUnit.SECONDS), "the running pass was never cancelled")
+      afterCut(session)
+      loop.runAgain(cutRun(session).copy(letGo = { onRelease(session); release }))
+      TrailblazeExitCode.ASSERTION_FAILED.code
+    }
+    return loop.call()
+  }
+
+  @Test
+  fun `the exit code a time-limit cut ends the process with is success when no pass failed`() {
+    var now = 0L
+    val loop = LoopCommand().apply {
+      reuseTrailhead = true
+      timeLimit = "10m"
+      nowMs = { now }
+      cancelPassInFlight = { false }
+    }
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    now = 10.minutes.inWholeMilliseconds
+    assertFalse(loop.runAgain(cutRun(sessionDir().also { cancel(it) })))
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, loop.finalExitCode(TrailblazeExitCode.ASSERTION_FAILED.code))
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, loop.finalExitCode(TrailblazeExitCode.INFRA_FAILED.code))
+  }
+
+  @Test
+  fun `someone else's cancel on one device keeps the exit failed when another device is cut at the time limit`() {
+    var now = 0L
+    val loop = LoopCommand().apply {
+      reuseTrailhead = true
+      timeLimit = "10m"
+      nowMs = { now }
+      cancelPassInFlight = { false }
+    }
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = sessionDir().also { cancel(it) })))
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    now = 10.minutes.inWholeMilliseconds
+    assertFalse(loop.runAgain(cutRun(sessionDir().also { cancel(it) })))
+
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, loop.finalExitCode(TrailblazeExitCode.ASSERTION_FAILED.code))
+  }
+
+  @Test
+  fun `a session is failing once a step failed or it ended failed, but not while self-heal takes the step over`() {
+    val failedStep = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null, DirectionStep("Open the menu") to "no Menu")
+    assertTrue(LoopCommand.failedSoFar(failedStep))
+
+    val healing = sessionDir(DirectionStep("Open the menu") to "no Menu")
+    val heal = TrailblazeLog.SelfHealInvokedLog(
+      promptStep = DirectionStep("Open the menu"),
+      session = SessionId("loop-session"),
+      timestamp = Instant.fromEpochMilliseconds(5),
+      recordingResult = PromptRecordingResult.Failure(
+        successfulTools = emptyList(),
+        failedTool = TrailblazeToolYamlWrapper(name = "tapOn", trailblazeTool = OtherTrailblazeTool(toolName = "tapOn")),
+        failureResult = TrailblazeToolResult.Error.ExceptionThrown("no Menu"),
+      ),
+    )
+    File(healing, "900_SelfHealInvokedLog.json").writeText(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), heal))
+    assertFalse(LoopCommand.failedSoFar(healing))
+
+    val endedFailed = sessionDir(DirectionStep("Open the menu") to null)
+    val ended = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = SessionStatus.Ended.Failed(durationMs = 0, exceptionMessage = "app crashed"),
+      session = SessionId("loop-session"),
+      timestamp = Instant.fromEpochMilliseconds(9),
+    )
+    File(endedFailed, "999_TrailblazeSessionStatusChangeLog.json").writeText(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), ended))
+    assertTrue(LoopCommand.failedSoFar(endedFailed))
+  }
+
+  @Test
+  fun `in process, where nothing can cut a session, a timed loop runs one pass per session`() {
+    val loop = LoopCommand().apply {
+      timeLimit = "1h"
+      runsCancellable = { false }
+    }
+    val yaml = createTrailblazeYaml()
+
+    assertEquals(yaml.decodeUnifiedTrail(trail).trail.size, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail.size)
+  }
+
+  @Test
+  fun `a device that never ran keeps the exit failed when another device stops at the time limit`() {
+    var now = 0L
+    val loop = LoopCommand().apply {
+      reuseTrailhead = true
+      timeLimit = "10m"
+      nowMs = { now }
+      cancelPassInFlight = { false }
+    }
+    // The first device was unavailable: no session started.
+    loop.yamlToRun(trail)
+    assertFalse(loop.runAgain(null))
+    // The second ran clean until the time limit.
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+    now = 10.minutes.inWholeMilliseconds
+    assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, loop.finalExitCode(TrailblazeExitCode.ASSERTION_FAILED.code))
+  }
+
+  @Test
+  fun `a full batch of passes between first-pass failures resets the failure streak`() {
+    val loop = LoopCommand().apply {
+      timeLimit = "8h"
+      nowMs = { 0L }
+      cancelPassInFlight = { false }
+    }
+    val firstPassFailed = { sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch") }
+    repeat(2) {
+      loop.yamlToRun(trail)
+      loop.sessionStarting(sessionDir())
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = firstPassFailed())))
+      loop.yamlToRun(trail)
+      loop.sessionStarting(sessionDir())
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir())))
+    }
+    loop.yamlToRun(trail)
+    loop.sessionStarting(sessionDir())
+
+    assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = firstPassFailed())))
   }
 
   @Test
@@ -283,6 +655,166 @@ class LoopCommandTest {
     assertEquals(yaml.decodeUnifiedTrail(trail).trail, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail)
     loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir()))
     assertEquals(timedOut.absolutePath, out.readText())
+  }
+
+  /** What the CLI reports for a run it gave up on after its no-progress window. */
+  private val noProgress = "Timed out waiting for run to complete: no progress for 600s (run cancelled)"
+
+  @Test
+  fun `a pass the CLI abandoned for making no progress recovers like a failure, though its session ended cancelled`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 3
+      onFailure = "printf '%s' >> '${out.path}'"
+    }
+    val yaml = createTrailblazeYaml()
+    loop.yamlToRun(trail)
+    // Pass 1 finished; pass 2 hung on its first step, and the CLI's cancel ended the session.
+    val abandoned = sessionDir(
+      DirectionStep("Launch signed in", isTrailhead = true) to null,
+      DirectionStep("Open the menu") to null,
+      VerificationStep("The menu is open") to null,
+    ).also { cancel(it, "Session cancelled by user - driver forcefully closed") }
+
+    val output = captureConsoleInfo {
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = abandoned, abandoned = noProgress, abandonedAtMs = 500)))
+    }
+
+    assertEquals(yaml.decodeUnifiedTrail(trail).trail, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail)
+    assertTrue("Pass 2/3 failed with no progress: $noProgress" in output, output)
+    loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir()))
+    assertEquals(abandoned.absolutePath, out.readText())
+  }
+
+  @Test
+  fun `with --reuse-trailhead an abandoned pass recovers from scratch, and abandoned passes in a row stop the loop`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 100
+      reuseTrailhead = true
+      onFailure = "printf '%s ' >> '${out.path}'"
+    }
+    val abandoned = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null).also { cancel(it) }
+
+    val reruns = generateSequence {
+      loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = abandoned, abandoned = noProgress))
+    }.takeWhile { it }.onEach { assertEquals(false, loop.trailheadReuse) }.count()
+
+    assertEquals(MAX_SESSIONS_WITHOUT_A_PASS - 1, reruns)
+    assertEquals(List(MAX_SESSIONS_WITHOUT_A_PASS) { abandoned.absolutePath }.joinToString(" ", postfix = " "), out.readText())
+  }
+
+  @Test
+  fun `an abandoned pass waits for its session to end before the hook and the recovery`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 3
+      onFailure = "printf '%s' >> '${out.path}'"
+      passPollMillis = 10
+    }
+    loop.yamlToRun(trail)
+    val unwinding = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null)
+    val ending = thread {
+      Thread.sleep(300)
+      cancel(unwinding)
+    }
+
+    assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = unwinding, abandoned = noProgress)))
+
+    assertTrue(LoopCommand.sessionEnded(unwinding), "the recovery must not start before the abandoned session ended")
+    ending.join()
+    loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = sessionDir()))
+    assertEquals(unwinding.absolutePath, out.readText())
+  }
+
+  @Test
+  fun `an abandoned run that never lets go of the device stops the loop without running --on-failure`() {
+    val out = Files.createTempFile("on-failure", ".txt").toFile()
+    val loop = LoopCommand().apply {
+      iterations = 3
+      onFailure = "printf '%s' >> '${out.path}'"
+      passPollMillis = 10
+      abandonedSessionWaitMillis = 200
+    }
+    loop.yamlToRun(trail)
+    val wedged = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null)
+
+    val output = captureConsoleInfo {
+      assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = wedged, abandoned = noProgress)))
+    }
+
+    assertTrue("still holds the device" in output, output)
+    assertEquals("", out.readText())
+  }
+
+  @Test
+  fun `an abandoned pass waits for its run to let go of the device, not only for its session to end`() {
+    val loop = LoopCommand().apply {
+      iterations = 3
+      passPollMillis = 10
+    }
+    loop.yamlToRun(trail)
+    val ended = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null).also { cancel(it) }
+    val letGoAt = System.currentTimeMillis() + 300
+
+    val run = TrailCommand.FinishedRun(false, ended, abandoned = noProgress, abandonedAtMs = 500, letGo = {
+      if (System.currentTimeMillis() >= letGoAt) DaemonClient.RunRelease.LET_GO else DaemonClient.RunRelease.HOLDING
+    })
+    assertTrue(loop.runAgain(run))
+
+    assertTrue(System.currentTimeMillis() >= letGoAt, "the recovery must not start while the abandoned run holds the device")
+  }
+
+  @Test
+  fun `a failed status request keeps waiting rather than taking the ended session as let go`() {
+    val loop = LoopCommand().apply {
+      iterations = 3
+      passPollMillis = 10
+    }
+    loop.yamlToRun(trail)
+    val ended = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null).also { cancel(it) }
+    val letGoAt = System.currentTimeMillis() + 300
+    val answers = ArrayDeque(listOf(DaemonClient.RunRelease.HOLDING))
+
+    val run = TrailCommand.FinishedRun(false, ended, abandoned = noProgress, abandonedAtMs = 500, letGo = {
+      answers.removeFirstOrNull() ?: if (System.currentTimeMillis() >= letGoAt) {
+        DaemonClient.RunRelease.LET_GO
+      } else {
+        DaemonClient.RunRelease.UNREACHABLE
+      }
+    })
+    assertTrue(loop.runAgain(run))
+
+    assertTrue(System.currentTimeMillis() >= letGoAt, "a failed status poll released the recovery before the run let go")
+  }
+
+  @Test
+  fun `an abandoned run with no session and a daemon that can't say is not waited for`() {
+    val loop = LoopCommand().apply { iterations = 3 }
+    loop.yamlToRun(trail)
+    val missing = File(Files.createTempDirectory("loop-logs").toFile(), "never-written")
+
+    val started = System.currentTimeMillis()
+    assertTrue(loop.runAgain(TrailCommand.FinishedRun(false, missing, abandoned = noProgress, letGo = { DaemonClient.RunRelease.UNKNOWN })))
+
+    assertTrue(System.currentTimeMillis() - started < 10_000, "waited for a session that does not exist")
+  }
+
+  @Test
+  fun `a person's stop still stops the loop when the CLI also gave up on the run`() {
+    val stoppedFromTrailRunner = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null)
+      .also { cancel(it, MANUAL_CANCELLATION_MESSAGE) }
+    val stoppedBeforeTheCliGaveUp = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to null)
+      .also { cancel(it, "Test cancelled") }
+
+    for ((session, abandonedAt) in listOf(stoppedFromTrailRunner to 500L, stoppedBeforeTheCliGaveUp to 5_000L)) {
+      val loop = LoopCommand().apply { iterations = 3 }
+      loop.yamlToRun(trail)
+      val output = captureConsoleInfo {
+        assertFalse(loop.runAgain(TrailCommand.FinishedRun(false, session, abandoned = noProgress, abandonedAtMs = abandonedAt)))
+      }
+      assertTrue("Stopping: the session was cancelled." in output, output)
+    }
   }
 
   @Test
@@ -585,6 +1117,14 @@ class LoopCommandTest {
     }
     return dir
   }
+
+  /** A run the time limit cancelled, as the daemon path hands it back once the run let go of the device. */
+  private fun cutRun(sessionDir: File) = TrailCommand.FinishedRun(
+    passed = false,
+    sessionDir = sessionDir,
+    letGo = { DaemonClient.RunRelease.LET_GO },
+    cancelled = true,
+  )
 
   /** Marks [sessionDir] cancelled, by default as Trail Runner's Stop does. */
   private fun cancel(sessionDir: File, message: String = "Stopped") {

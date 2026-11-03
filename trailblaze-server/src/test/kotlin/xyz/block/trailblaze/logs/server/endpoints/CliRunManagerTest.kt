@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -67,6 +70,33 @@ class CliRunManagerTest {
     manager.cancelRun(runId)
     awaitUntil { manager.getStatus(runId)?.state == RunState.CANCELLED }
     assertEquals(0, manager.activeRunCount())
+  }
+
+  @Test
+  fun `a cancelled run reads cancelled at once and finished only once it has let go`() {
+    val letGo = CompletableDeferred<Unit>()
+    val manager = CliRunManager(
+      onRunRequest = { _, _ ->
+        try {
+          releaseRun.await()
+        } finally {
+          withContext(NonCancellable) { letGo.await() }
+        }
+        CliRunResponse(success = true)
+      },
+      logsDir = "/daemon/logs",
+    )
+    val runId = manager.submitRun(CliRunRequest(trailFilePath = "test.trail.yaml"))
+    awaitUntil { manager.getStatus(runId)?.state == RunState.RUNNING }
+    assertEquals("/daemon/logs", manager.getStatus(runId)?.logsDir)
+
+    manager.cancelRun(runId)
+    assertEquals(RunState.CANCELLED, manager.getStatus(runId)?.state)
+    assertFalse(manager.getStatus(runId)?.finished == true)
+
+    letGo.complete(Unit)
+    awaitUntil { manager.getStatus(runId)?.finished == true }
+    manager.close()
   }
 
   /**

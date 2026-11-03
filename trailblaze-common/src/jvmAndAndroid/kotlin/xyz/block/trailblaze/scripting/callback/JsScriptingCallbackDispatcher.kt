@@ -387,6 +387,7 @@ object JsScriptingCallbackDispatcher {
               JsScriptingCallbackResult.CallToolResult(
                 success = false,
                 errorMessage = result.errorMessage,
+                fatal = result is TrailblazeToolResult.Error.FatalError,
               )
           }
         }

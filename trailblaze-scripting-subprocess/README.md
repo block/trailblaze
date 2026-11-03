@@ -27,8 +27,7 @@ on execution model:
   `runtime: subprocess` (see `ScriptedToolRuntime.resolve`). There is no extension
   heuristic — in-process QuickJS is the default, and a `.js`/`.mjs`/`.cjs` entrypoint is
   not auto-routed here. The framework synthesizes an MCP wrapper script per tool at session
-  start. (`requiresHost: true` is a separate, on-device visibility gate — not the
-  runtime selector.)
+  start. A subprocess tool is host-only; it needs no `requiresHost`.
 - At session start, Trailblaze spawns the subprocess, runs the MCP handshake
   (`initialize` → `tools/list`), and registers each returned tool under the name
   it advertised — no prefixing or renaming (per conventions § 4).

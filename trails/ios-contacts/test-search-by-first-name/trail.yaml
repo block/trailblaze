@@ -3,9 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - smoke
-  - search
   title: 'Contacts (iOS): Search by first name'
 
 trail:

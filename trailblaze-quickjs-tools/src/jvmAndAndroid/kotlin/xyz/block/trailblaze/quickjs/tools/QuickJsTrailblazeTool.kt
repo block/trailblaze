@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.applyScriptedToolMemoryDelta
+import xyz.block.trailblaze.scriptedToolResultIsFatal
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
@@ -113,7 +114,7 @@ class QuickJsTrailblazeTool(
     // bundle as the literal token and was typed as "undefined". Idempotent on the AI path (already-
     // resolved args carry no tokens). rawToolArguments stays un-interpolated so replaying a tokenized
     // trail keeps the token in a re-recording (on the AI path, args were already resolved upstream).
-    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args) as? JsonObject) ?: args
+    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args, device = toolExecutionContext.trailblazeDeviceInfo.tokenValues) as? JsonObject) ?: args
     // A trailhead invocation consumes this device's hand-off before any of its code runs, and
     // receives it as `ctx.previousRun` on an exact, reusable match. Null for every other call.
     val trailheadInvocation = TrailheadRuns.beginInvocation(toolExecutionContext, this, resolvedArgs)
@@ -255,6 +256,7 @@ class QuickJsTrailblazeTool(
         heightPixels = deviceInfo.heightPixels,
         trailblazePort =
           trailblazePortOrNull(deviceInfo.trailblazeDeviceId),
+        classifiers = deviceInfo.classifiers.map { it.classifier },
       ),
       target = target,
       memory = nonSensitiveMemory,
@@ -302,6 +304,11 @@ internal fun JsonObject.toTrailblazeToolResult(toolName: String? = null): Trailb
   }
   if (envelope.isError) {
     val rendered = envelope.renderContent()
+    if (scriptedToolResultIsFatal(this["_meta"] as? JsonObject)) {
+      return TrailblazeToolResult.Error.FatalError(
+        errorMessage = rendered.ifBlank { "QuickJS tool returned a fatal error without text content" },
+      )
+    }
     return TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = rendered.ifBlank { "QuickJS tool returned isError without text content" },
       // Mirror of the Success branch below: an isError envelope's `structuredContent`

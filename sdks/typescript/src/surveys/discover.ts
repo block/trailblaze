@@ -7,6 +7,7 @@ import { availableParallelism, tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { type EventStreamDefinition, isEventStream, withEventStreamVersion } from "./stream.js";
 import { type SurveyDefinition, isSurvey, withId } from "./survey.js";
 import { planSurveys } from "./labels.js";
 import { isSessionDirectory } from "./session.js";
@@ -266,6 +267,25 @@ export async function loadSurveys(
   log?: (message: string) => void,
   options: LoadSurveysOptions = {},
 ): Promise<LoadedSurvey[]> {
+  return (await loadSurveyModules(inputs, log, options)).surveys;
+}
+
+/** A derived stream exported by a survey file, versioned like the file's surveys. */
+export interface LoadedEventStream {
+  definition: EventStreamDefinition;
+  file: string;
+  exportName: string;
+}
+
+/**
+ * [loadSurveys], plus every derived event stream (`eventStream()`) the same files export. Two streams of one
+ * name, in any files, are an error: they would write the same `events/<name>.ndjson`.
+ */
+export async function loadSurveyModules(
+  inputs: ReadonlyArray<string>,
+  log?: (message: string) => void,
+  options: LoadSurveysOptions = {},
+): Promise<{ surveys: LoadedSurvey[]; streams: LoadedEventStream[] }> {
   const fromTrailmaps = findTrailmapFiles(options.trailmaps ?? [], log)
     .map((file) => join(dirname(file), "surveys"))
     .filter((dir) => existsSync(dir) && statSync(dir).isDirectory());
@@ -292,7 +312,9 @@ export async function loadSurveys(
 
   serveSdkToSurveys();
   const loaded: LoadedSurvey[] = [];
+  const streams: LoadedEventStream[] = [];
   const byId = new Map<string, string>();
+  const streamFiles = new Map<string, string>();
   // A directory and one of its children both name the same file; load it once or every finding doubles.
   for (const file of [...new Set(files)]) {
     // Edit the file or a module it imports and its stored findings stop being current. A module
@@ -304,6 +326,16 @@ export async function loadSurveys(
     const mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
     let count = 0;
     for (const [exportName, value] of Object.entries(mod)) {
+      if (isEventStream(value)) {
+        // A stream another survey file imports is exported by that file too: load it once, from its own.
+        if (streams.some((l) => l.definition.spec === value.spec)) continue;
+        const prior = streamFiles.get(value.name);
+        if (prior) throw new Error(`stream "${value.name}" is declared by both ${prior} and ${file}; stream names must be unique`);
+        streamFiles.set(value.name, file);
+        streams.push({ definition: withEventStreamVersion(value, version), file, exportName });
+        count += 1;
+        continue;
+      }
       if (!isSurvey(value)) continue;
       const prior = byId.get(exportName);
       if (prior && prior !== file) {
@@ -313,11 +345,11 @@ export async function loadSurveys(
       loaded.push({ definition: withId(value, exportName, version), file, exportName });
       count += 1;
     }
-    if (count === 0) log?.(`no surveys exported by ${file}`);
+    if (count === 0) log?.(`no surveys or streams exported by ${file}`);
   }
   // A cycle through `dependsOn`, or an `dependsOn` naming a survey no file exports, fails here, at load.
   planSurveys(loaded.map((l) => ({ def: l.definition, id: l.exportName })));
-  return loaded;
+  return { surveys: loaded, streams };
 }
 
 /** A module as read: its text, and the files its relative imports resolved to. */

@@ -115,6 +115,15 @@ export interface TrailblazeDevice {
    * knows the port), and from older daemons. Guard before use.
    */
   trailblazePort?: number;
+  /**
+   * The device's classifiers, broad first — `["android", "phone"]`, `["ios", "iphone"]` — the same
+   * list a finished session's log records. Live surveys read it as `summary.deviceClassifiers`.
+   *
+   * In a multi-device session this is the device the tool is dispatched against, like the rest of
+   * `ctx.device`; a finished session's summary records the device the session started on.
+   * Optional because older hosts don't carry it — treat absent as `[]`.
+   */
+  classifiers?: string[];
 }
 
 /**
@@ -376,6 +385,12 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
   const portRaw = deviceRecord["trailblazePort"];
   const trailblazePort =
     typeof portRaw === "number" && Number.isInteger(portRaw) ? portRaw : undefined;
+  // Optional: older hosts omit it. A non-array, or any non-string entry, reads as absent.
+  const classifiersRaw = deviceRecord["classifiers"];
+  const classifiers =
+    Array.isArray(classifiersRaw) && classifiersRaw.every((c) => typeof c === "string")
+      ? (classifiersRaw as string[])
+      : undefined;
 
   // `_meta.trailblaze.memory` is a `Record<string, string>` snapshot of the host's
   // `AgentMemory.variables` at envelope build time. Wrap it in a `TrailblazeMemory` so
@@ -407,6 +422,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
       driverType,
       instanceId,
       trailblazePort,
+      classifiers,
     },
     target,
     hostPlatform: parseHostPlatform(tb["hostPlatform"]) ?? undefined,

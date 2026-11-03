@@ -134,7 +134,13 @@ class PerformanceAnalysisGenerator(
       val inputFile = File(workDir, "input.json").apply { writeText(inputJson.toString()) }
       val outputFile = File(workDir, "report.html")
 
-      val exit = runBun(bun, workDir, inputFile, outputFile)
+      val exit = runBun(
+        bun,
+        workDir,
+        inputFile,
+        outputFile,
+        RunReportGenerator.subprocessTimeoutSeconds(sessionsJson.size, environment),
+      )
       if (exit != 0 || !outputFile.exists() || outputFile.length() == 0L) {
         Console.error("[PerformanceAnalysisGenerator] report subprocess failed (exit=$exit).")
         return null
@@ -165,7 +171,7 @@ class PerformanceAnalysisGenerator(
   }
 
   /** Run `bun perf-report-cli.ts <input> <output>`, draining output, bounded by a timeout. */
-  private fun runBun(bun: File, workDir: File, input: File, output: File): Int {
+  private fun runBun(bun: File, workDir: File, input: File, output: File, timeoutSeconds: Long): Int {
     val proc = ProcessBuilder(
       bun.absolutePath,
       "perf-report-cli.ts",
@@ -178,10 +184,13 @@ class PerformanceAnalysisGenerator(
       proc.inputStream.bufferedReader().forEachLine { line -> synchronized(sink) { sink.appendLine(line) } }
     }.apply { isDaemon = true; start() }
 
-    val finished = proc.waitFor(SUBPROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
     if (!finished) {
       proc.destroyForcibly()
-      Console.error("[PerformanceAnalysisGenerator] report subprocess timed out after ${SUBPROCESS_TIMEOUT_SECONDS}s.")
+      Console.error(
+        "[PerformanceAnalysisGenerator] report subprocess timed out after ${timeoutSeconds}s. " +
+          "Set ${RunReportGenerator.SUBPROCESS_TIMEOUT_ENV} to allow longer.",
+      )
       return -1
     }
     drain.join(1_000)
@@ -195,7 +204,6 @@ class PerformanceAnalysisGenerator(
     // "trailrunner" path-segment convention as RunReportGenerator's resources (see its note).
     private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/perf-core.js"
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/perf-report-cli.ts"
-    private const val SUBPROCESS_TIMEOUT_SECONDS = 120L
     private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
   }

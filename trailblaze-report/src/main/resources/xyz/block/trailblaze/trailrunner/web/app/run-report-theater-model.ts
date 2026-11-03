@@ -71,7 +71,7 @@ export interface TheaterDevice {
   activeMs: number;
 }
 
-export type ChapterKind = 'trailhead' | 'step' | 'verify' | 'teardown';
+export type ChapterKind = 'setup' | 'trailhead' | 'step' | 'verify' | 'teardown';
 export type Outcome = 'passed' | 'failed' | 'healed' | 'unknown';
 
 export interface TheaterChapter {
@@ -571,7 +571,7 @@ export function buildTheaterStory(input: TheaterInput): TheaterStory {
       // A failed self-heal retried under the same objective is still that one authored step.
       const last = drafts.at(-1);
       const base = last?.row;
-      if (last && base && base.selfHeal && !base.ok && !(last.retry && last.retry.ok) && !row.trailhead && !row.teardown && !base.trailhead && !base.teardown && base.label === row.label) {
+      if (last && base && base.selfHeal && !base.ok && !(last.retry && last.retry.ok) && !row.trailhead && !row.teardown && !row.setup && !base.trailhead && !base.teardown && !base.setup && base.label === row.label) {
         last.retry = row;
         last.healing = true;
         open = last;
@@ -609,7 +609,8 @@ export function buildTheaterStory(input: TheaterInput): TheaterStory {
 
   // A tool exception or run-level error can fail the run before its objective logs a completion, so
   // the objective keeps ok=true. When no step failed itself, blame the chapter the trace's shared
-  // failure anchor sits in (a crash fails a run whose steps passed, so it names none). Failed
+  // failure anchor sits in (a session from before crashes stopped failing runs may have failed as
+  // `app_crashed` with every step passed, so it names none). Failed
   // self-heal attempts are tolerated by their step, so they cannot stand in for the run's failure.
   const status = (meta.status || '').toLowerCase();
   const runFailed = status === 'failed' || status === 'error';
@@ -625,7 +626,7 @@ export function buildTheaterStory(input: TheaterInput): TheaterStory {
   let ordinal = 0;
   const chapters: TheaterChapter[] = drafts.map((draft, index) => {
     const row = draft.row;
-    const kind: ChapterKind = row.trailhead ? 'trailhead' : row.teardown ? 'teardown' : 'step';
+    const kind: ChapterKind = row.setup ? 'setup' : row.trailhead ? 'trailhead' : row.teardown ? 'teardown' : 'step';
     const next = drafts[index + 1];
     const actionEnd = largest(draft.startMs, draft.actions.map((action) => action.t + action.durMs));
     const endMs = next ? Math.max(draft.startMs, next.startMs) : Math.max(actionEnd, lastEnd);
@@ -717,13 +718,13 @@ export function labelParts(text: string): Array<string | { variable: string }> {
 
 // ---- Reads over a story ---------------------------------------------------------------------------
 
-/** The trailhead is setup, step 0; a teardown is not a step of the trail either. */
-const counted = (chapter: TheaterChapter) => chapter.kind !== 'trailhead' && chapter.kind !== 'teardown';
+/** The trailhead is step 0; the device setup before it and a teardown are not steps of the trail. */
+const counted = (chapter: TheaterChapter) => chapter.kind !== 'setup' && chapter.kind !== 'trailhead' && chapter.kind !== 'teardown';
 
 export const stepNumber = (chapters: TheaterChapter[], index: number): string => {
   const chapter = chapters[index];
   if (chapter?.kind === 'trailhead') return '0';
-  if (chapter?.kind === 'teardown') return '';
+  if (chapter?.kind === 'teardown' || chapter?.kind === 'setup') return '';
   return String(chapters.slice(0, index + 1).filter(counted).length);
 };
 
@@ -844,11 +845,14 @@ export interface Act {
   chapters: number[];
 }
 
-/** The trailhead's chapters, then the trail's. A run without a trailhead is one trail. */
+/** The device setup's chapters, the trailhead's, then the trail's. A run with none of the first two
+ * is one trail. */
 export function acts(story: TheaterStory): Act[] {
+  const setup = story.chapters.filter((chapter) => chapter.kind === 'setup').map((chapter) => chapter.index);
   const trailhead = story.chapters.filter((chapter) => chapter.kind === 'trailhead').map((chapter) => chapter.index);
-  const trail = story.chapters.filter((chapter) => chapter.kind !== 'trailhead').map((chapter) => chapter.index);
+  const trail = story.chapters.filter((chapter) => chapter.kind !== 'trailhead' && chapter.kind !== 'setup').map((chapter) => chapter.index);
   return [
+    { title: 'Device setup', chapters: setup },
     { title: 'Trailhead', chapters: trailhead },
     { title: 'Trail', chapters: trail },
   ].filter((act) => act.chapters.length > 0);

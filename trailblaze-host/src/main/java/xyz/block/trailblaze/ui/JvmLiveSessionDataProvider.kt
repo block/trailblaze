@@ -148,7 +148,7 @@ class JvmLiveSessionDataProvider(
         timestamp = kotlinx.datetime.Clock.System.now(),
         sessionStatus = SessionStatus.Ended.Cancelled(
           durationMs = 0L,
-          cancellationMessage = "Session manually cancelled by user via Trailblaze Desktop App",
+          cancellationMessage = MANUAL_CANCELLATION_MESSAGE,
         ),
       )
       logsRepo.saveLogToDisk(cancellationLog)
@@ -159,6 +159,9 @@ class JvmLiveSessionDataProvider(
   }
 
   companion object {
+    /** How a session a person stopped from Trail Runner ends. */
+    const val MANUAL_CANCELLATION_MESSAGE = "Session manually cancelled by user via Trailblaze Desktop App"
+
     /** Drains before killing, because a killed runner can't finish the uploads the drain waits for. */
     internal suspend fun stopOnDeviceRunner(drain: suspend () -> Unit, forceStop: () -> Unit) {
       drain()

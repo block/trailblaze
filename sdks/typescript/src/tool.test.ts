@@ -413,6 +413,90 @@ describe("ToolError structured payload on the error envelope", () => {
   });
 });
 
+describe("a nested tool's fatal error propagating out of the calling tool", () => {
+  // A Kotlin tool can fail fatally (`TrailblazeToolResult.Error.FatalError`), which tells the host
+  // to skip self-heal. The callback reply carries `fatal: true`; when the calling tool lets the
+  // thrown error escape, its own result must say `variant: "FatalError"` so the host stays fatal.
+  // A tool that catches the error and returns normally is unaffected.
+
+  async function invokeWithCallbackReply(
+    reply: Record<string, unknown>,
+    handler: (args: Record<string, unknown>, ctx: unknown, client: any) => unknown,
+  ): Promise<EnvelopeResult & { _meta?: { trailblaze?: { variant?: string } } }> {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ result: { type: "call_tool_result", ...reply } }),
+    });
+    try {
+      const extra = {
+        request: {
+          params: {
+            _meta: {
+              trailblaze: {
+                sessionId: "s",
+                invocationId: "i",
+                baseUrl: `http://127.0.0.1:${server.port}`,
+                device: { platform: "android", widthPixels: 1, heightPixels: 1, driverType: "t" },
+              },
+            },
+          },
+        },
+      };
+      return (await invokeTool("fatal_caller", handler, {}, extra)) as EnvelopeResult & {
+        _meta?: { trailblaze?: { variant?: string } };
+      };
+    } finally {
+      server.stop(true);
+    }
+  }
+
+  const fatalReply = { success: false, text_content: "", error_message: "device disconnected", fatal: true };
+  const recoverableReply = { success: false, text_content: "", error_message: "button missing" };
+
+  test("an uncaught fatal nested failure marks the result as FatalError", async () => {
+    const result = await invokeWithCallbackReply(fatalReply, async (_args, _ctx, client) => {
+      await client.tools.some_tool({});
+      return { content: [] };
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("device disconnected");
+    expect(result._meta?.trailblaze?.variant).toBe("FatalError");
+  });
+
+  test("a rethrown fatal nested failure stays fatal", async () => {
+    const result = await invokeWithCallbackReply(fatalReply, async (_args, _ctx, client) => {
+      try {
+        await client.tools.some_tool({});
+      } catch (e) {
+        throw e;
+      }
+    });
+    expect(result._meta?.trailblaze?.variant).toBe("FatalError");
+  });
+
+  test("a fatal nested failure the tool catches and handles does not fail the tool", async () => {
+    const result = await invokeWithCallbackReply(fatalReply, async (_args, _ctx, client) => {
+      try {
+        await client.tools.some_tool({});
+      } catch {
+        return { content: [{ type: "text", text: "handled" }] };
+      }
+      return { content: [{ type: "text", text: "unreachable" }] };
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toBe("handled");
+    expect(result._meta?.trailblaze?.variant).toBeUndefined();
+  });
+
+  test("a recoverable nested failure is not marked fatal", async () => {
+    const result = await invokeWithCallbackReply(recoverableReply, async (_args, _ctx, client) => {
+      await client.tools.some_tool({});
+    });
+    expect(result.isError).toBe(true);
+    expect("_meta" in result).toBe(false);
+  });
+});
+
 describe("tool() overload — typed authoring surface", () => {
   // The `tool()` export is overloaded at compile time: 3-arg `(name, spec, handler)` is the
   // imperative MCP-registration form (returns void, side-effects pendingTools), and 1-arg

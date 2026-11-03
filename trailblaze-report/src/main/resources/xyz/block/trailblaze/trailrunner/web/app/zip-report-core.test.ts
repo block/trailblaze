@@ -476,7 +476,13 @@ describe("run meta derivation", () => {
     expect(withClassifiers(null).deviceClassifier).toBeUndefined();
   });
 
-  test("title falls back through config id, trail path, then test class:name", () => {
+  test("title falls back through metadata title, config id, trail path, then test class:name", () => {
+    const metadataTitle = startedLog({}, { trailConfig: { id: "suite/case_1", metadata: { title: "Sign in" } } });
+    expect(Zip.buildRunMeta([metadataTitle], {}).title).toBe("Sign in");
+
+    const blankMetadataTitle = startedLog({}, { trailConfig: { id: "suite/case_1", metadata: { title: " " } } });
+    expect(Zip.buildRunMeta([blankMetadataTitle], {}).title).toBe("suite/case_1");
+
     const noTitle = startedLog({}, { trailConfig: { id: "suite/case_1" } });
     expect(Zip.buildRunMeta([noTitle], {}).title).toBe("suite/case_1");
 
@@ -749,6 +755,52 @@ describe("session events and the attachments they reference", () => {
     expect(JSON.parse(session.events[0].events[0].d).audio.path).toBe("attachments/utterance_1.wav");
   });
 
+  test("a derived stream opens under its title, as in a report the CLI built", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "events/screens.ndjson", text: JSON.stringify({ timeMs: 1, data: { screen: "Home" } }) + "\n" },
+      { name: dir + "events/speech.ndjson", text: JSON.stringify({ timeMs: 1, data: { text: "hi" } }) + "\n" },
+      { name: dir + "events/derived.json", text: JSON.stringify({ format: 1, streams: { screens: { rows: 1, title: "Screens" } } }) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events.map((s: { name: string; title?: string; shown?: boolean }) => [s.name, s.title, s.shown])).toEqual([
+      ["screens", "Screens", true],
+      ["speech", undefined, undefined],
+    ]);
+  });
+
+  test("reads the session-root network capture as a stream beside a plugin's capture", async () => {
+    const dir = SESSION_ID + "/";
+    const hit = JSON.stringify({ id: "r1", timestampMs: 1_700_000_000_000, phase: "REQUEST_START" }) + "\n";
+    const zip = (extra: Array<{ name: string; text: string }>) => buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "network.ndjson", text: hit },
+      { name: dir + "network.seller.ndjson", text: hit },
+      ...extra,
+    ]);
+    const names = async (extra: Array<{ name: string; text: string }>) =>
+      (await Zip.buildSessionInputsFromZipBytes(zip(extra), { render: derivationOnly, inflateRaw, generatedAt: "T" }))
+        .sessions[0].events.map((s: { name: string }) => s.name);
+
+    expect(await names([])).toEqual(["network", "network.seller"]);
+    expect(await names([{ name: dir + "events/com.example.plugin.network.ndjson", text: hit }]))
+      .toEqual(["com.example.plugin.network", "network", "network.seller"]);
+  });
+
+  test("an events/ stream that can't be read leaves the session-root capture of that name in place", async () => {
+    const dir = SESSION_ID + "/";
+    const hit = JSON.stringify({ id: "r1", timestampMs: 1_700_000_000_000, phase: "REQUEST_START" }) + "\n";
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "network.ndjson", text: hit },
+      { name: dir + "events/network.ndjson", text: hit.repeat(10) },
+    ]);
+    const render = { ...derivationOnly, MAX_EVENT_STREAM_BYTES: hit.length * 2 };
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events.map((s: { name: string }) => s.name)).toEqual(["network"]);
+  });
+
   test("an event stream too big to inflate is skipped instead of decompressing into the tab", async () => {
     // A stream is inflated whole before its first line is decoded, so the archive's declared size is
     // the only thing standing between a highly compressible ndjson and the tab's memory. Squeezed to
@@ -779,6 +831,25 @@ describe("session events and the attachments they reference", () => {
     const tight = { ...derivationOnly, MAX_EVENT_STREAMS_TOTAL_CHARS: JSON.stringify(all.sessions[0].events[0]).length };
     const built = await Zip.buildSessionInputsFromZipBytes(twoStreams(), { render: tight, inflateRaw, generatedAt: "T" });
     expect(built.sessions[0].events.map((s: { name: string }) => s.name)).toEqual(["a"]);
+  });
+
+  test("root-level network captures read as streams under their full names; an events/ stream of the same name wins", async () => {
+    const dir = SESSION_ID + "/";
+    const line = (url: string) => JSON.stringify({ timeMs: 1, data: { url } }) + "\n";
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "network.ndjson", text: line("https://root.example/") },
+      { name: dir + "network.seller.ndjson", text: line("https://seller.example/") },
+      { name: dir + "events/network.seller.ndjson", text: line("https://events.example/") },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    const byName = Object.fromEntries(
+      built.sessions[0].events.map((s: { name: string; events: { d: string }[] }) => [s.name, s.events.map((e) => JSON.parse(e.d).url)]),
+    );
+    expect(byName).toEqual({
+      network: ["https://root.example/"],
+      "network.seller": ["https://events.example/"],
+    });
   });
 
   // The session's trace.json rides into an archive-built report the way it rides into a CLI-built

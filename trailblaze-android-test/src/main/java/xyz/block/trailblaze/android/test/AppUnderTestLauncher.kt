@@ -27,6 +27,38 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object AppUnderTestLauncher {
 
+  /** Whether this process has launched the app yet — the first launch is a real cold start. */
+  @Volatile
+  var hasLaunched: Boolean = false
+    private set
+
+  /**
+   * True from this process's first launch until any tool other than `launchApp` runs. The screen
+   * is then the entry point on whatever data the process started with, so a trailhead's restart
+   * or reinstall launch would only repeat the cold start the instrumentation just paid for.
+   */
+  @Volatile
+  var untouchedSinceColdLaunch: Boolean = false
+    private set
+
+  /**
+   * True once a UI tool other than `launchApp` acted on the app in this process, so its data may
+   * have changed since the host cleared it. Setup tools that do not touch the app's UI leave it.
+   */
+  @Volatile
+  var usedSinceProcessStart: Boolean = false
+    private set
+
+  /** A UI tool other than `launchApp` acted on the app; see [usedSinceProcessStart]. */
+  fun markUsed() {
+    usedSinceProcessStart = true
+  }
+
+  /** A tool other than `launchApp` ran, so the app may no longer be at its fresh entry point. */
+  fun markTouched() {
+    untouchedSinceColdLaunch = false
+  }
+
   /**
    * Launches (or relaunches) the app under test at its entry point and waits for the launched
    * Activity to reach RESUMED.
@@ -54,8 +86,11 @@ object AppUnderTestLauncher {
     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     if (clearTask) launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
     val beforeLaunch = if (clearTask) resumedActivityOrNull() else null
+    val coldLaunch = !hasLaunched
     targetContext.startActivity(launchIntent)
     awaitResumedActivity(otherThan = beforeLaunch)
+    hasLaunched = true
+    if (coldLaunch) untouchedSinceColdLaunch = true
   }
 
   /**

@@ -12,6 +12,9 @@ const __client = {
       // The call never reached the tool (unknown name, bad arguments, a cycle), as opposed to the
       // tool running and failing. `runIf` treats the first as an authoring error.
       if (result.dispatchFailed === true) err.dispatchFailed = true;
+      // The tool returned a fatal error. The marker rides on the thrown error so the host keeps the
+      // failure fatal when it propagates out of this tool; same registry key as `tool-error.ts`.
+      if (result.fatal === true) Object.defineProperty(err, Symbol.for("trailblaze.FatalError"), { value: true });
       throw err;
     }
     if (result && typeof result.type === "string" && result.type.indexOf("Error") >= 0) {

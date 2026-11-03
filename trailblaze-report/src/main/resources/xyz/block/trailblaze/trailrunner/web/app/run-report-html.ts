@@ -105,6 +105,9 @@ function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, sel
     llm: s.llm.map(({ inputTokens, outputTokens, totalCost }) => ({ inputTokens, outputTokens, totalCost })),
     stepCount: s.trace.length ? traceStepCount(s.trace) : null,
     toolCallCount: s.trace.length ? traceToolCallCount(s.trace) : (s.meta.steps != null ? s.meta.steps : null),
+    // A short URL, carried so the index can tell a report that keeps files beside it (see
+    // SessionPayload.eventsHref) before any session chunk is parsed: Download report reads it.
+    ...(s.eventsHref ? { eventsHref: s.eventsHref } : {}),
   }));
   // Every embedded JSON chunk is an inert <script type="application/json"> the viewer reads back
   // with JSON.parse. That keeps megabytes of data out of the JS parser on the critical boot path

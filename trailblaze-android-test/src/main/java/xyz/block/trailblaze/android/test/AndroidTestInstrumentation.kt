@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import android.app.UiAutomation
 import android.graphics.Bitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -71,6 +72,12 @@ internal object AndroidTestInstrumentation {
    * trail that produced it.
    */
   fun deviceScreenshot(): Bitmap? =
-    runCatching { InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot() }
-      .getOrNull()
+    runCatching {
+      // The same flags every other UiAutomation caller here uses. `getUiAutomation()` with
+      // different flags reconnects, and each reconnect switches accessibility off and on for every
+      // app, so alternating with the shell-command path cost a reconnect per screenshot.
+      InstrumentationRegistry.getInstrumentation()
+        .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+        .takeScreenshot()
+    }.getOrNull()
 }

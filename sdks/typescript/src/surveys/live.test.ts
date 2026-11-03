@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FinishedSessionRequiredError, LiveSessionReader, runLiveSurvey, type LiveEventSource } from "./live.js";
+import { eventStream } from "./stream.js";
 import { survey, withId } from "./survey.js";
 
 /**
@@ -656,5 +657,34 @@ describe("runLiveSurvey judges only what it can see", () => {
     expect(analytics.file).toBe("events/analytics@pixel-7.ndjson");
     expect(analytics.line).toBeUndefined();
     expect(result.findings[0]!.session).toBe("s1");
+  });
+});
+
+describe("runLiveSurvey over derived streams", () => {
+  /** Each request still waiting on its response: a row that stands for an absence. */
+  const pending = eventStream({
+    name: "pending",
+    derive: (session) => session.network.filter({}).filter((r) => r.status === undefined).map((r) => ({ timeMs: r.timeMs!, data: { path: r.path }, from: r })),
+  });
+  /** Every request the app made. */
+  const requests = eventStream({
+    name: "requests",
+    derive: (session) => session.network.all().map((r) => ({ timeMs: r.timeMs!, data: { path: r.path }, from: r })),
+  });
+
+  test("a finding on a derived row does not pass on a capture that lost data, since the row may stand for an absence", async () => {
+    const { source, now } = fakeEvents({ network: [request("1", "/v2/payments")[0]], analytics: [] }, { incomplete: { network: "queue overflowed" } });
+    const stuck = withId(survey({ finding: { events: { stream: "pending" } } }), "stuck");
+    const result = await runLiveSurvey(stuck, new LiveSessionReader(source), { now, streams: [pending] });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("the capture lost data");
+  });
+
+  test("an absence on a derived stream fails when what it could derive from was never captured", async () => {
+    const { source, now } = fakeEvents({ analytics: [{ name: "checkout_done" }] });
+    const noPayment = withId(survey({ finding: { analytics: { name: "checkout_done" }, absent: { events: { stream: "requests" } } } }), "noPayment");
+    const result = await runLiveSurvey(noPayment, new LiveSessionReader(source), { now, streams: [requests] });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("network was never captured");
   });
 });

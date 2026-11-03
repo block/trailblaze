@@ -14,6 +14,8 @@ import xyz.block.trailblaze.surveys.SurveySourceText
  *    `node:*` or Bun APIs), or it reads something that exists only once the session has finished
  *    (the outcome, tool calls, logs, screen text, session files).
  *  - Two files exporting the same survey name, since `ctx.surveys` names a survey by its export.
+ *  - Two derived event streams of one name, which the survey loader refuses when it runs, and a
+ *    stream whose name is not a plain string, which only running it could tell apart.
  *  - A survey whose spec still says `footprint`, the old name of `finding`, which the SDK no longer
  *    reads.
  *
@@ -39,12 +41,31 @@ object SurveyLint {
       )
     }
 
+  /** Stream names declared more than once across the workspace, and names this cannot read. */
+  private fun streamNames(configDir: File): List<Finding> {
+    val declared = WorkspaceSurveyBundleSource.surveyFiles(configDir).flatMap { file ->
+      val relative = file.relativeTo(configDir).invariantSeparatorsPath
+      SurveyBundles.declaredStreams(file.readText()).map { "$relative:${it.line}" to it.name }
+    }
+    val unreadable = declared.filter { it.second == null }.map { (at, _) ->
+      Finding(
+        at,
+        "This derived event stream's name is not a plain string, so trailblaze check cannot tell whether another " +
+          "stream has it. Write name as a string literal.",
+      )
+    }
+    val duplicated = declared.mapNotNull { (at, name) -> name?.let { it to at } }
+      .groupBy({ it.first }, { it.second }).filterValues { it.size > 1 }
+      .map { (name, places) -> Finding(places.first(), "Stream $name is declared at ${places.joinToString(" and ")}. Stream names must be unique, so rename one.") }
+    return unreadable + duplicated
+  }
+
   /**
-   * Both checks over every survey file under [configDir]. [bundle] builds a file for the sandbox and
+   * Every check over every survey file under [configDir]. [bundle] builds a file for the sandbox and
    * throws when it cannot; null skips the build half (no toolchain).
    */
   fun lintSurveyFiles(configDir: File, bundle: ((File) -> Unit)?): List<Finding> =
-    duplicates(configDir) + WorkspaceSurveyBundleSource.surveyFiles(configDir).flatMap { file ->
+    duplicates(configDir) + streamNames(configDir) + WorkspaceSurveyBundleSource.surveyFiles(configDir).flatMap { file ->
       val relative = file.relativeTo(configDir).invariantSeparatorsPath
       val text = file.readText()
       val code = SurveySourceText.codeOnly(text)

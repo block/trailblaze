@@ -31,6 +31,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -575,6 +576,32 @@ class SessionClipperTest {
     // Still device work, starting at the device time past the step that reads as the window's start.
     assertEquals((from + 2_000) * 1000 to (T + 16_000 - from) * 1000, span("device"))
     assertEquals("device", trace.getValue("device").getValue("clock").jsonPrimitive.content)
+  }
+
+  @Test
+  fun `a stream a survey derived is left out, so the next report derives it again`() {
+    writeLog("001", status(started(TrailblazeDevicePlatform.ANDROID), T))
+    writeLines("events/app.ndjson", """{"timeMs":${WINDOW_START + 1_000},"data":{"note":"captured"}}""")
+    writeLines("events/screens.ndjson", """{"timeMs":${WINDOW_START + 1_000},"data":{"note":"derived"}}""")
+    writeLines("events/derived.json", """{"format":1,"streams":{"screens":{"rows":1}}}""")
+
+    clip()
+
+    assertEquals(listOf("captured"), notes(File(out, "events/app.ndjson")))
+    assertFalse(File(out, "events/screens.ndjson").exists())
+    assertFalse(File(out, "events/derived.json").exists())
+  }
+
+  @Test
+  fun `a session whose derived-stream list cannot be read is not clipped, so no derived stream passes for captured`() {
+    writeLog("001", status(started(TrailblazeDevicePlatform.ANDROID), T))
+    writeLines("events/screens.ndjson", """{"timeMs":${WINDOW_START + 1_000},"data":{"note":"derived"}}""")
+    for (manifest in listOf("not json", """{"format":2,"streams":{"screens":{"rows":1}}}""", """{"format":1}""")) {
+      writeLines("events/derived.json", manifest)
+
+      assertFailsWith<IllegalStateException> { clip() }
+      assertFalse(out.exists())
+    }
   }
 
   @Test

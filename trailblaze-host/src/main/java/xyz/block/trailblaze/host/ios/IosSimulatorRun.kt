@@ -143,7 +143,7 @@ internal suspend fun runIosSimulatorYaml(
             Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
             deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
           } else {
-            deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+            deviceManager.releaseDeviceAfterRun(trailblazeDeviceId)
           }
         }
       }
@@ -174,6 +174,7 @@ internal suspend fun runIosSimulatorYaml(
     )?.let { subprocessRuntimes += it }
 
     onProgressMessage("Executing YAML test...")
+    var stepsStarted = 0
     Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
     val yamlRun = hostTbRunner.runTrailblazeYamlSuspend(
       yaml = runYamlRequest.yaml,
@@ -188,6 +189,9 @@ internal suspend fun runIosSimulatorYaml(
       initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
       initialArgs = runYamlRequest.initialArgs,
       trailSourceUrl = runYamlRequest.trailSourceUrl,
+      // Numbered across the run: each trail item restarts its own count, and the watchdog ignores a
+      // message identical to the last one.
+      onStepProgress = { _, _, text -> onProgressMessage("Step ${++stepsStarted}: $text") },
     )
     // Surface the last successful tool's payload back out through HostYamlRunResult.
     lastToolResult = yamlRun.lastToolResult

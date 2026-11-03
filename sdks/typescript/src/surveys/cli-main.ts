@@ -6,9 +6,10 @@ import { realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { discoverSessions, loadSurveys, type LoadedSurvey } from "./discover.js";
+import { discoverSessions, loadSurveyModules, type LoadedEventStream, type LoadedSurvey } from "./discover.js";
 import { renderMarkdown, renderSummaryLines } from "./report.js";
 import { runSurveys } from "./runner.js";
+import { type StreamWriteResult, writeDerivedStreams } from "./stream-write.js";
 import { STORED_SURVEYS_FILE, writeStoredSurveys } from "./stored.js";
 import { loadTargetCatalog, sessionMatchesTarget, type TargetCatalog } from "./targets.js";
 import type { SessionSummary } from "./types.js";
@@ -31,6 +32,10 @@ Options:
       --no-evidence         Omit evidence lines from the markdown report
       --extract-dir <dir>   Where zips are unpacked (default: a temp dir)
       --write               Store each session's findings and run-level labels in its surveys.json
+      --streams             Run no surveys: write every derived event stream (eventStream()) the surveys' files
+                            declare into each session's events/<name>.ndjson, for the report to show
+      --allow-stream-errors A stream that fails to derive is reported, but only surveys' own errors
+                            make the exit nonzero
       --survey <name>       Only run the survey exported under this name (repeatable)
       --platform <p>        Only sessions on this platform: android, ios, web, ... (repeatable)
       --device <classifier> Only sessions whose device carries this classifier: iphone, ipad, tablet, ... (repeatable)
@@ -58,6 +63,8 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
       "no-evidence": { type: "boolean" },
       "extract-dir": { type: "string" },
       write: { type: "boolean" },
+      streams: { type: "boolean" },
+      "allow-stream-errors": { type: "boolean" },
       survey: { type: "string", multiple: true },
       platform: { type: "string", multiple: true },
       device: { type: "string", multiple: true },
@@ -80,23 +87,54 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
   const log = values.quiet ? undefined : (m: string) => process.stderr.write(m + "\n");
 
   let loaded: LoadedSurvey[];
+  let streams: LoadedEventStream[];
   let catalog: TargetCatalog | undefined;
   let lookedIn = "the paths given";
-  if (surveyPaths.length > 0 || trailmapPaths.length > 0) {
-    loaded = await loadSurveys(surveyPaths, log, { trailmaps: trailmapPaths });
-    catalog = trailmapPaths.length ? loadTargetCatalog(trailmapPaths, log) : undefined;
-  } else {
-    const configDir = findWorkspaceConfigDir();
-    if (!configDir) {
-      process.stderr.write("Not inside a Trailblaze workspace (no trailblaze-config/ or trails/config/ above here); pass --surveys or --trailmaps.\n");
-      return 2;
+  try {
+    if (surveyPaths.length > 0 || trailmapPaths.length > 0) {
+      ({ surveys: loaded, streams } = await loadSurveyModules(surveyPaths, log, { trailmaps: trailmapPaths }));
+      catalog = trailmapPaths.length ? loadTargetCatalog(trailmapPaths, log) : undefined;
+    } else {
+      const configDir = findWorkspaceConfigDir();
+      if (!configDir) {
+        process.stderr.write("Not inside a Trailblaze workspace (no trailblaze-config/ or trails/config/ above here); pass --surveys or --trailmaps.\n");
+        return 2;
+      }
+      log?.(`workspace: ${configDir}`);
+      const workspace = await loadWorkspace(configDir, log);
+      loaded = workspace.surveys;
+      streams = workspace.streams;
+      catalog = workspace.targets;
+      lookedIn = `${join(configDir, "surveys")} or any trailmap's surveys/`;
     }
-    log?.(`workspace: ${configDir}`);
-    const workspace = await loadWorkspace(configDir, log);
-    loaded = workspace.surveys;
-    catalog = workspace.targets;
-    lookedIn = `${join(configDir, "surveys")} or any trailmap's surveys/`;
+  } catch (e) {
+    if (!values.streams) throw e;
+    // With no current definitions, every stream written before is one nobody vouches for, and the
+    // report would show its rows as current. Each can be rebuilt, so all go.
+    const why = e instanceof Error ? e.message : String(e);
+    // Which sessions a target names takes the trailmaps, which may be what failed to load: none is touched then.
+    if (values.target?.length) {
+      process.stderr.write(`Could not load the surveys' derived streams, and without them which sessions --target names is unknown, so none is changed: ${why}\n`);
+      return 1;
+    }
+    process.stderr.write(`Could not load the surveys' derived streams, so every one written before is removed: ${why}\n`);
+    const only = sessionFilter(undefined, {
+      platform: values.platform,
+      device: values.device,
+      appId: values["app-id"],
+      outcome: values.outcome,
+    });
+    await writeStreams([], sessionPaths, only, values["extract-dir"], log);
+    return 1;
   }
+  const where = sessionFilter(catalog, {
+    platform: values.platform,
+    device: values.device,
+    appId: values["app-id"],
+    target: values.target,
+    outcome: values.outcome,
+  });
+  if (values.streams) return writeStreams(streams, sessionPaths, where, values["extract-dir"], log);
   const available = loaded.map((l) => l.definition);
   let surveys = available;
   const unknown = (values.survey ?? []).filter((name) => !available.some((c) => c.id === name));
@@ -108,6 +146,11 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
   if (values.target?.length) surveys = surveys.filter((c) => !c.spec.targets || c.spec.targets.some((t) => values.target!.includes(t)));
   if (values.survey?.length) surveys = surveys.filter((c) => c.id !== undefined && values.survey!.includes(c.id));
   if (surveys.length === 0) {
+    // A workspace of streams alone is valid: `report --surveys` has written them, and there is nothing more to run.
+    if (!values.survey?.length && !values.target?.length && streams.length > 0) {
+      process.stderr.write(`No surveys in ${lookedIn}, only derived streams; nothing to run.\n`);
+      return 0;
+    }
     process.stderr.write(`No surveys found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);
     return 2;
   }
@@ -122,14 +165,6 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
 
   if (catalog) log?.(`${Object.keys(catalog).length} target(s) from trailmaps: ${Object.keys(catalog).join(", ")}`);
 
-  const where = sessionFilter(catalog, {
-    platform: values.platform,
-    device: values.device,
-    appId: values["app-id"],
-    target: values.target,
-    outcome: values.outcome,
-  });
-
   const report = await runSurveys({
     surveys,
     available,
@@ -137,6 +172,7 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
     where,
     targets: catalog,
     log,
+    streams: streams.map((s) => s.definition),
     onSession: log ? ({ index, total, path }) => log(`[${index + 1}/${total}] ${path}`) : undefined,
   });
 
@@ -193,9 +229,51 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
   // Two recordings of one session: the batch surveyed only one of them, so it is not complete.
   const conflicts = report.unreadable.filter((u) => u.conflictsWith !== undefined);
   for (const u of conflicts) process.stderr.write(`Left out ${u.path}: it ${u.message}\n`);
+  // `trailblaze report` has already written the streams and recorded on each session why one failed.
+  const counted = (e: { survey: string }) => !(values["allow-stream-errors"] && e.survey.startsWith("stream:"));
   const errorCount =
-    report.sessions.reduce((n, s) => n + s.errors.length, 0) + report.labelErrors.length + unstored.length + conflicts.length;
+    report.sessions.reduce((n, s) => n + s.errors.filter(counted).length, 0) + report.labelErrors.length + unstored.length + conflicts.length;
   return errorCount > 0 ? 1 : 0;
+}
+
+/**
+ * `--streams`: writes every stream into every session the filter flags accept, and removes the ones
+ * it wrote before that no file declares now. Exits 1 when any failed.
+ */
+async function writeStreams(
+  streams: LoadedEventStream[],
+  sessionPaths: string[],
+  where: ((s: SessionSummary) => boolean) | undefined,
+  extractDir: string | undefined,
+  log: ((m: string) => void) | undefined,
+): Promise<number> {
+  log?.(`${streams.length} derived stream(s)${streams.length ? `: ${streams.map((s) => s.definition.name).join(", ")}` : ""}`);
+  const dirs = await discoverSessions(sessionPaths, { extractDir, log });
+  if (dirs.length === 0) {
+    process.stderr.write("No sessions found.\n");
+    return 2;
+  }
+  const definitions = streams.map((s) => s.definition);
+  let failures = 0;
+  for (const dir of dirs) {
+    let r: StreamWriteResult;
+    try {
+      r = writeDerivedStreams(dir, definitions, { where });
+    } catch (e) {
+      process.stderr.write(`Could not read ${dir}: ${e instanceof Error ? e.message : String(e)}\n`);
+      failures += 1;
+      continue;
+    }
+    const id = r.session?.id ?? dir;
+    if (r.unfinished) log?.(`${id}: has not ended, so no derived stream is written into it`);
+    if (r.written.length) log?.(`${id}: wrote ${r.written.map((n) => `events/${n}.ndjson`).join(", ")}`);
+    if (r.removed.length) log?.(`${id}: removed ${r.removed.map((n) => `events/${n}.ndjson`).join(", ")}, which no stream declares`);
+    for (const e of r.errors) {
+      process.stderr.write(`${id}: stream ${e.stream} failed: ${e.message}\n`);
+      failures += 1;
+    }
+  }
+  return failures > 0 ? 1 : 0;
 }
 
 /** Builds the session predicate from the CLI's filter flags; undefined when none were given. */

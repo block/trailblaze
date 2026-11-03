@@ -94,6 +94,7 @@ import xyz.block.trailblaze.host.OnDeviceRpcClientPool
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.networkcapture.androidCaptureRequiresTraffic
 import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetAppIds
+import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetId
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
@@ -1748,6 +1749,26 @@ class TrailblazeMcpBridgeImpl(
     )
   }
 
+  init {
+    HostIosDriverFactory.onDiscard(::forgetDiscardedIosDriver)
+  }
+
+  /**
+   * Drops the persistent connection holding an iOS simulator's discarded driver (a reboot for a
+   * language change), so later tools connect to the replacement runner rather than capture through
+   * the closed driver, which [iosRunnerStatus] cannot tell apart once the new runner answers. A
+   * host-native connection holds no such driver (it builds its device manager per call), so it
+   * stays: native tools need it in the registry.
+   */
+  private fun forgetDiscardedIosDriver(instanceId: String) {
+    val device = persistentDevices[instanceId] as? MaestroConnectedDevice ?: return
+    if (device.trailblazeDeviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.IOS) return
+    Console.log("[MCP Bridge] iOS driver on $instanceId was discarded; the next connect rebuilds it")
+    cachedScreenStates.remove(instanceId)
+    closePersistentDevice(device.trailblazeDeviceId)
+    trailblazeDeviceManager.forgetActiveDriverForDevice(device.trailblazeDeviceId)
+  }
+
   /**
    * [deviceId]'s stopped-runner status, dropping its persistent iOS driver first if the runner has
    * just been found dead, so the next connect builds a fresh one instead of reusing a driver every
@@ -3014,6 +3035,7 @@ class TrailblazeMcpBridgeImpl(
               // A cast member's streams carry its name, as in a trail's multi-device run.
               deviceLabel = trailblazeDeviceManager.castMemberName(trailblazeDeviceId),
               requireTraffic = androidCaptureRequiresTraffic(TrailblazeReferrer.MCP),
+              targetId = androidCaptureTargetId(resolvedTargetAppId),
             )
           }
             .onFailure {

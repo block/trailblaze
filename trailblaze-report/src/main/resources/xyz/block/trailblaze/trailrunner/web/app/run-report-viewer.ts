@@ -11,14 +11,14 @@ import { captureFrameFile, declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
 import { buildStringsModel, carryStringsSelection, DEFAULT_STRING_KINDS, DEFAULT_STRING_VISIBILITY, resolveStringsSelection, shownHits, stillCaptureIds, stringCrops, stringsTabHtml, type StringCrops, type StringKind, type StringsModel, type StringsScreen, type StringVisibility } from './run-report-strings';
 import { grabClipFrames, type FrameRequest } from './run-report-strings-frames';
-import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay, withoutRuntimeAttachments } from './run-report-payload';
+import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, inflateEventsGz, loadSidecarText, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay, withoutRuntimeAttachments } from './run-report-payload';
 import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, videoEndMs } from './run-report-playback';
 import { adjacentMark, entryAtOrBefore, fractionToOffset, snapFraction, timelineTracks, trackMarks, type TimelineTrack, type TrackMark } from './run-report-timeline-tracks';
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
 import { externalComparisonUrl, hasExternalComparison, isExternalRunComparable } from './run-report-index-links';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
 import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, rowPhase, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
-import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, type DeviceLaneTrace, type TrailCell, type TrailFrame, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
+import { buildTrailMatrix, captureShotFile, trailStepLabel, trailStepToken, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, type DeviceLaneTrace, type TrailCell, type TrailFrame, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
 import { buildPerfettoTrace, handToPerfetto, openPerfettoWindow, perfettoBuffer, perfettoMemoryFrom, perfettoTraceJson, type PerfettoHost, type PerfettoLane, type PerfettoMemory, type PerfettoStream } from './run-report-perfetto';
 import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipsTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayChipFor, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayOpeningMs, replayRecordingStartsMs, replayRulerStep, replayTrackKey, replayTrackOpen, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
 import { adjacentFrameTime, clipFrameSource, FRAME_TIME_SLACK_SEC, installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
@@ -1265,8 +1265,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // is read off the payload as carried: a hoisted (embedded) one reads as '' here, which is neither
   // a link nor a claim of embedded bytes, and resolving the #tb-clip-<i> chunk just to answer this
   // would be the boot cost the hoist exists to avoid.
+  // A linked event-stream payload dies with the server the same way.
   const linksItsFrames = (session) => Object.keys(session.shots || {}).some((f) => linkedFrame(session.shots[f]))
-    || linkedFrame(session.video && session.video.clip ? session.video.clip.uri : '');
+    || linkedFrame(session.video && session.video.clip ? session.video.clip.uri : '')
+    || !!session.eventsHref;
   const exportScreenshots = (session) => {
     const screenshots = screenshotEntries(session);
     if (!screenshots.length) return;
@@ -1302,8 +1304,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return { cache, inflight, ensure, settled };
   };
   const eventsInflater = makeInflater(
-    (session) => session.eventsGz && !session.events,
-    (session) => inflateEventsGz(session.eventsGz),
+    (session) => (session.eventsGz || session.eventsHref) && !session.events,
+    async (session) => {
+      const gz = session.eventsGz || await loadSidecarText(session.eventsHref);
+      return gz ? inflateEventsGz(gz) : null;
+    },
   );
   const ensureEventsInflated = eventsInflater.ensure;
   // An app crash the session recorded (`events/crash.ndjson`, or `crash.<device>`). Its rows are a
@@ -1349,7 +1354,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
   // The session has events to show: inflated (or inline) streams, or a compressed payload that
   // will inflate once the session opens.
-  const hasEvents = (session) => Boolean((sessionEvents(session) || []).length || session.eventsGz);
+  const hasEvents = (session) => Boolean((sessionEvents(session) || []).length || session.eventsGz || session.eventsHref);
+  // The session carries an event payload that finished loading without producing streams: a linked
+  // file that is missing or blocked, or bytes that don't decode. A run that captured no events has
+  // no payload at all, and one that captured an empty set inflates to [] — neither reads as this.
+  const sessionEventsUnavailable = (session) => Boolean((session.eventsGz || session.eventsHref) && !session.events
+    && eventsInflater.cache.has(session) && !eventsInflater.cache.get(session));
   const logsInflater = makeInflater(
     (session) => session.deviceLogGz || session.networkGz,
     async (session) => {
@@ -1401,7 +1411,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     run: session.meta || {},
     deviceLog: sessionDeviceLog(session),
     network: sessionNetwork(session) || [],
-    events: sessionEvents(session) || [],
+    // `null` plus a note, not `[]`: an empty list reads as a run that captured no events.
+    ...(sessionEventsUnavailable(session)
+      ? { events: null, eventsError: 'The event streams could not be loaded: the file the report links them from is missing, blocked or undecodable.' }
+      : { events: sessionEvents(session) || [] }),
     llm: session.llm || [],
     // The pooled transcript shape, exported as-is ({texts, calls[]} with calls aligned to `llm`
     // by index; resolve a message's text as texts[m.t]). Deliberately NOT resolved per call:
@@ -1470,7 +1483,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, deviceSetupOpen: true, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1667,7 +1680,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const firstFail = runFailed ? failureAnchorIndex() : -1;
     st.step = firstFail >= 0 ? D.trace[firstFail].i : ((D.trace[0] && D.trace[0].i) || 0);
     const trailheadStart = D.trace.findIndex((t) => t.objective && t.trailhead);
-    const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
+    const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead && !t.setup);
     // How many ROWS the trailhead phase would render, which is what the threshold below is about:
     // how much of the screen setup takes. Deliberately not the step cards' dispatch count — a folded
     // row's dispatches stay collapsed inside it, so they cost no height. Per-call LLM rows are not
@@ -1681,6 +1694,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // authored Trail remains the dominant content. A setup failure overrides that default.
     st.trailheadOpen = trailStart < 0 || failureIsInTrailhead || trailheadRows <= 12;
     if (firstFail < 0 && !st.trailheadOpen && trailStart >= 0) st.step = D.trace[trailStart].i;
+    // The run's device setup ran before the trail and is not part of it: collapsed unless it failed,
+    // and then the selection opens past it.
+    const deviceSetupStart = D.trace.findIndex((t) => t.objective && t.setup);
+    const deviceSetupEnd = deviceSetupStart >= 0 ? D.trace.findIndex((t, i) => i > deviceSetupStart && t.objective) : -1;
+    st.deviceSetupOpen = deviceSetupStart >= 0 && firstFail >= deviceSetupStart && (deviceSetupEnd < 0 || firstFail < deviceSetupEnd);
+    if (firstFail < 0 && deviceSetupStart >= 0 && !st.deviceSetupOpen) {
+      const after = st.trailheadOpen && trailheadStart >= 0 ? trailheadStart : trailStart;
+      if (after >= 0) st.step = D.trace[after].i;
+    }
     // A clean teardown is a footnote under the verdict; a failed one is worth reading, so only a
     // failure opens the phase.
     const teardownStart = D.trace.findIndex((t) => t.objective && t.teardown);
@@ -1757,6 +1779,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (index == null) return;
     const phase = rowPhase(D.trace, traceModel(), index);
     if (phase === 'teardown') st.teardownOpen = true;
+    else if (phase === 'setup') st.deviceSetupOpen = true;
     else if (phase === 'trail') st.trailOpen = true;
     else if (phase === 'trailhead') st.trailheadOpen = true;
     // Navigating into a step the reader had collapsed re-opens it, so a selection is never stranded
@@ -1873,9 +1896,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     pendingLlmHistoryBacked = false;
     // `grid` was the Lightbox's old name; `map` was a trail tab the Grid replaced, and the viewer
     // wrote it into every URL while it was open, so shared links carry it.
-    // Legacy 'events' routes land on the timeline, where inline event streams now live.
-    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab === 'map' ? 'steps' : r.tab === 'events' ? 'timeline' : r.tab;
-    const allowed = ['timeline', ...MOUNTED_TABS, ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'strings', 'info'];
+    // Legacy 'events' routes land on the timeline, where inline event streams now live. The Network
+    // tab's requests are on the Summary's network lane, or the Timeline where there's no Summary.
+    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab === 'map' ? 'steps' : r.tab === 'events' ? 'timeline'
+      : r.tab === 'network' ? (summaryAvailable(D) ? 'summary' : 'timeline') : r.tab;
+    const allowed = ['timeline', ...MOUNTED_TABS, ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'strings', 'info'];
     // A mounted tab opens exactly where its nav entry renders: a shared `?tab=theater` on a run
     // without objectives keeps the seeded default. `step` is a Timeline concept, so a hand-built
     // link carrying it with no tab lands there rather than on the Theater default.
@@ -1927,7 +1952,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // is still inflating, so the consumer owns the clamp (streamEvents ignores unknown tlStreams
     // indices).
     if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0);
+    // An old Network link that lands on the Timeline opens with the session's network streams shown.
+    else if (r.tab === 'network' && st.tab === 'timeline') {
+      st.tlStreams = (sessionEvents(D) || []).flatMap((stream, i) => (stream && NETWORK_STREAM_NAME.test(stream.name) ? [i] : []));
+    }
   };
+  // The built-in capture (`network`, `network.<device>`) and a plugin's (`<plugin>.network…`).
+  const NETWORK_STREAM_NAME = /(?:^|\.)network(?:\.|$)/i;
   const applyRoute = (fromHistory = false) => {
     let r = readRoute();
     if (!r) return;
@@ -3227,9 +3258,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const tone = e.row.tone === 'error' ? ' e' : e.row.tone === 'warn' ? ' w' : '';
         return `<details class="timelineevent${tone}${sel}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(e.row.label)}</span>${badges ? `<span class="fmtbadges">${badges}</span>` : '<span></span>'}<span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tlbody"></div></details>`;
       }
-      const { semanticLabel } = normalizeEventPayload(e);
+      const { semanticLabel, failed } = normalizeEventPayload(e);
       const label = semanticLabel || 'Event';
-      return `<details class="timelineevent${sel}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
+      return `<details class="timelineevent${failed ? ' e' : ''}${sel}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
     }).join('')}</div>`;
   };
 
@@ -3238,9 +3269,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const scrubValueText = (pos) => {
     const entries = timelineEntries();
     const current = entries[pos];
-    const trailStart = entries.findIndex((e) => e.row.objective && !e.row.trailhead);
+    const trailStart = entries.findIndex((e) => e.row.objective && !e.row.trailhead && !e.row.setup);
     const hasTrailhead = entries.some((e) => e.row.objective && e.row.trailhead);
-    const phase = hasTrailhead && (trailStart < 0 || pos < trailStart) ? 'Trailhead' : 'Trail';
+    const inDeviceSetup = !!(current && traceModel().groupByRow.get(current.row)?.header?.setup);
+    const phase = inDeviceSetup ? 'Device setup' : hasTrailhead && (trailStart < 0 || pos < trailStart) ? 'Trailhead' : 'Trail';
     const label = current ? (current.child ? `${current.row.label} · ${current.child.label}` : current.row.label) : null;
     return `${phase}, item ${pos + 1} of ${entries.length}: ${label || 'Timeline item'}`;
   };
@@ -3283,7 +3315,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const endIndex = next ? entryIndexOfRow(next.header.i) : -1;
       const range = {
         group: g,
-        token: g.header.trailhead ? 'Trailhead' : `Step ${g.num}`,
+        token: g.header.setup ? 'Device setup' : g.header.trailhead ? 'Trailhead' : `Step ${g.num}`,
         start: axis.stepFrac[startIndex] || 0,
         end: endIndex >= 0 ? (axis.stepFrac[endIndex] || 0) : 1,
         tone: selfHealed ? 'selfhealed' : failed ? 'failed' : '',
@@ -3391,8 +3423,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const seekMs = tlSeekMs();
     const seekFrac = seekMs != null ? axis.tsFrac(seekMs) : null;
     const frac = seekFrac != null ? seekFrac : (axis.stepFrac[pos] || 0);
-    const trailStart = timelineEntries().findIndex((e) => e.row.objective && !e.row.trailhead);
-    const hasTrailhead = D.trace.some((t) => t.objective && t.trailhead);
+    const trailStart = timelineEntries().findIndex((e) => e.row.objective && !e.row.trailhead && !e.row.setup);
+    // The box spans everything before the trail: the device setup and the trailhead.
+    const hasTrailhead = D.trace.some((t) => t.objective && (t.trailhead || t.setup));
     const trailFrac = trailStart >= 0 ? (axis.stepFrac[trailStart] || 0) : 1;
     const rail = hasTrailhead && trailStart < 0
       ? `<div class="scrubphasebox" style="width:100%"></div>`
@@ -3571,9 +3604,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const streamChooser = streams.length ? `<details class="streamselect" data-streamselect${st.tlMenuOpen ? ' open' : ''}><summary aria-label="Streams, ${st.tlStreams.length} of ${streams.length} selected">${TIMELINE_FILTER_ICON_SVG}<span>Streams</span><span class="streamselectcount">${st.tlStreams.length}/${streams.length}</span></summary><div class="streammenu"><div class="streammenuhead"><span>Event streams · ${st.tlStreams.length}/${streams.length}</span><span class="streammenuactions"><button type="button" data-tlstreams="all">All</button><button type="button" data-tlstreams="none">None</button></span></div>${streams.map((stream, i) => `<label class="streamoption" style="--stream-color:${streamColor(i)}" title="${esc(stream.name)}"><input type="checkbox" data-tlstream="${i}"${st.tlStreams.indexOf(i) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${esc(streamDisplayName(stream.name))}</span><span class="streamcount">${stream.total || (stream.events || []).length}</span>${TIMELINE_CHECK_ICON_SVG}</label>`).join('')}</div></details>` : '';
     const outcome = indexOutcome(D);
     const outcomeLabel = outcome === 'failed' && failureGroup && failureGroup.header
-      ? (failureGroup.header.trailhead ? 'failed trailhead' : `failed step ${failureGroup.num}`)
+      ? (failureGroup.header.setup ? 'failed device setup' : failureGroup.header.trailhead ? 'failed trailhead' : `failed step ${failureGroup.num}`)
       : indexOutcomeLabel(outcome);
-    const failureStepToken = failureGroup && failureGroup.header && failureGroup.header.trailhead ? 'TRAILHEAD' : failureGroup ? `STEP ${failureGroup.num}` : 'ERROR';
+    const failureStepToken = failureGroup && failureGroup.header && failureGroup.header.setup ? 'DEVICE SETUP' : failureGroup && failureGroup.header && failureGroup.header.trailhead ? 'TRAILHEAD' : failureGroup ? `STEP ${failureGroup.num}` : 'ERROR';
     const selfHealStepToken = healedGroup && healedGroup.header && healedGroup.header.trailhead ? 'TRAILHEAD' : healedGroup ? `STEP ${healedGroup.num}` : 'RECOVERY';
     const outcomeControl = outcome === 'failed' && failureAnchor
       ? `<button type="button" class="statusjump failedjump" data-failure-step="${esc(failureAnchor.i)}" title="Go to ${esc(outcomeLabel)}" aria-label="Go to ${esc(outcomeLabel)}"><span class="statusjumplabel">Failed</span><span class="statusjumptoken">${esc(failureStepToken)}</span></button>`
@@ -3620,8 +3653,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           actionCount ? `${actionCount} action${actionCount === 1 ? '' : 's'}` : '',
           fmtDur(durationMs),
         ].filter(Boolean).join(' · ');
-        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}" data-group="${g.header.i}" aria-expanded="${open}" data-group-leads="${leads}">
-            <span class="stepheaderrail"><span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : g.header.teardown ? 'TEARDOWN' : `STEP ${g.num}`}</span><span class="grpdisclosure">${STEP_DISCLOSURE_SVG}</span></span>
+        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : g.header.setup ? ' devicesetup' : ''}" data-group="${g.header.i}" aria-expanded="${open}" data-group-leads="${leads}">
+            <span class="stepheaderrail"><span class="chip ${mood}">${g.header.setup ? 'DEVICE SETUP' : isTrailhead ? 'TRAILHEAD' : g.header.teardown ? 'TEARDOWN' : `STEP ${g.num}`}</span><span class="grpdisclosure">${STEP_DISCLOSURE_SVG}</span></span>
             <span class="lbl">${esc(g.header.label)}</span>
             <span class="grpstatus ${mood}">${STEP_STATUS_ICON_SVG[mood]}${esc(status)}</span>
           </button>` : '';
@@ -3633,10 +3666,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         // paints the moving selection in place, and it has to find the row it is moving to.
         return `<div class="stepgroup${selfHealed ? ' selfhealed' : failed ? ' failed' : ''}">${hdr}<div class="stepgroupbody"${open ? '' : ' hidden'}>${headerEvents}${inlineHeaderFailure}${inlineHeaderSelfHeal}${items}</div></div>`;
       }).join('');
+      // The run's device setup (`--setup`, a lane's `execution.setupTools`) runs before the trailhead
+      // and is not part of the trail: its own phase above the trailhead, never a numbered step.
+      const deviceSetupGroups = groups.filter((g) => g.header && g.header.setup);
       const trailheadGroups = groups.filter((g) => g.header && g.header.trailhead);
       // The trailhead's teardown runs after the verdict: its own phase, never a numbered step.
       const teardownGroups = groups.filter((g) => g.header && g.header.teardown);
-      const trailGroups = groups.filter((g) => !g.header || (!g.header.trailhead && !g.header.teardown));
+      const trailGroups = groups.filter((g) => !g.header || (!g.header.trailhead && !g.header.teardown && !g.header.setup));
       const trailStepCount = trailGroups.filter((g) => g.header).length;
       // The steps a failure cut off. Nothing in the logs records them — a step that never started
       // emitted no objective — so the timeline used to just stop, taking with it the "which stage
@@ -3668,6 +3704,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const duration = phaseGroups.reduce((ms, g) => ms + g.items.reduce((sum, t) => sum + (t.ms || 0), 0), 0);
         return { actions: `${actions} action${actions === 1 ? '' : 's'}`, duration: duration ? fmtDur(duration) : '' };
       };
+      const deviceSetupStats = phaseStats(deviceSetupGroups);
+      // The same rule as each step's header: the objective's own outcome, or the failed run's
+      // failure anchor inside it. A tool that fails a row and recovers did not fail setup.
+      const deviceSetupFailed = deviceSetupGroups.some((g) => !g.header.ok || (runFailed && g.items.indexOf(failureAnchor) >= 0));
+      const deviceSetupStatus = deviceSetupGroups.length
+        ? `<span class="phasestatus ${deviceSetupFailed ? 'fail' : 'pass'}">${STEP_STATUS_ICON_SVG[deviceSetupFailed ? 'fail' : 'pass']}${deviceSetupFailed ? 'Failed' : 'Applied'}</span>`
+        : '';
       const trailheadStats = phaseStats(trailheadGroups);
       const trailStats = phaseStats(trailGroups);
       const teardownStats = phaseStats(teardownGroups);
@@ -3676,6 +3719,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const teardownStatus = teardownGroups.length
         ? `<span class="phasestatus ${teardownFailed ? 'warn' : 'pass'}">${teardownFailed ? PHASE_WARNING_ICON_SVG : STEP_STATUS_ICON_SVG.pass}${teardownFailed ? 'Failed' : 'Clean'}</span>`
         : '';
+      // After a chain of reuses, also name the session that ran the setup: its requests are in that session's capture.
       const setupDecisions = trailheadSetupDecisions(D);
       // A failed reuse outranks a successful one: it is the line a triager needs first.
       const setupKind = setupDecisions.some((d) => d.kind === 'reuseFailed') ? 'reuseFailed' : setupDecisions.some((d) => d.kind === 'reused') ? 'reused' : 'full';
@@ -3683,10 +3727,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ? `<span class="phasestatus ${setupKind === 'reuseFailed' ? 'fail' : setupKind}">${setupKind === 'reuseFailed' ? `${STEP_STATUS_ICON_SVG.fail}Reuse failed` : setupKind === 'reused' ? 'Reused' : 'Full setup'}</span>`
         : '';
       const setupDecisionsHtml = setupDecisions.length
-        ? `<div class="setupdecisions">${setupDecisions.map((d) => `<div class="setupdecision ${d.kind}"><span class="setupdecisionverdict">${d.kind === 'full' ? 'Full setup' : `${d.kind === 'reuseFailed' ? 'Failed while reusing setup from' : 'Reused from'} <code>${esc(d.sessionId || 'the previous trail')}</code>`}</span><span class="setupdecisiontool">${esc(d.tool)}</span>${d.reason ? `<span class="setupdecisionreason">${esc(d.reason)}</span>` : ''}${d.error ? `<span class="setupdecisionreason setupdecisionerror">${esc(d.error)}</span>` : ''}</div>`).join('')}</div>`
+        ? `<div class="setupdecisions">${setupDecisions.map((d) => `<div class="setupdecision ${d.kind}"><span class="setupdecisionverdict">${d.kind === 'full' ? 'Full setup' : `${d.kind === 'reuseFailed' ? 'Failed while reusing setup from' : 'Reused from'} <code>${esc(d.sessionId || 'the previous trail')}</code>${d.trailheadSessionId && d.trailheadSessionId !== d.sessionId ? `, first set up in <code>${esc(d.trailheadSessionId)}</code>` : ''}`}</span><span class="setupdecisiontool">${esc(d.tool)}</span>${d.reason ? `<span class="setupdecisionreason">${esc(d.reason)}</span>` : ''}${d.error ? `<span class="setupdecisionreason setupdecisionerror">${esc(d.error)}</span>` : ''}</div>`).join('')}</div>`
         : '';
       const phaseDisclosure = '<span class="phasedisclosure" aria-hidden="true"><svg class="phasechev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       stepsHtml = `<div class="timelinephases">
+        ${deviceSetupGroups.length ? `<section class="tlphase devicesetup" aria-labelledby="devicesetup-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="setup" aria-expanded="${st.deviceSetupOpen}">${phaseDisclosure}<span class="name" id="devicesetup-heading">Device setup</span>${deviceSetupStatus}<span class="desc">${deviceSetupStats.actions}</span>${deviceSetupStats.duration ? `<span class="phaseduration">${deviceSetupStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.deviceSetupOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(deviceSetupGroups)}</div></div></section>` : ''}
         ${trailheadGroups.length ? `<section class="tlphase trailhead" aria-labelledby="trailhead-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trailhead" aria-expanded="${st.trailheadOpen}">${phaseDisclosure}<span class="name" id="trailhead-heading">Trailhead</span>${trailheadStatus}<span class="desc">${trailheadStats.actions}</span>${trailheadStats.duration ? `<span class="phaseduration">${trailheadStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailheadOpen ? '' : ' hidden'}>${setupDecisionsHtml}<div class="steps">${groupsHtml(trailheadGroups)}</div></div></section>` : ''}
         ${trailGroups.length || skippedSteps.length ? `<section class="tlphase" aria-labelledby="trail-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trail" aria-expanded="${st.trailOpen}">${phaseDisclosure}<span class="name" id="trail-heading">Trail</span><span class="counttoken">${trailStepCount}${skippedSteps.length ? `/${trailStepCount + skippedSteps.length}` : ''}</span><span class="desc">${trailStats.actions}</span>${trailStats.duration ? `<span class="phaseduration">${trailStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailGroups)}${skippedHtml}</div></div></section>` : ''}
         ${teardownGroups.length ? `<section class="tlphase teardown" aria-labelledby="teardown-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="teardown" aria-expanded="${st.teardownOpen}">${phaseDisclosure}<span class="name" id="teardown-heading">Teardown</span>${teardownStatus}<span class="desc">${teardownStats.actions}</span>${teardownStats.duration ? `<span class="phaseduration">${teardownStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.teardownOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(teardownGroups)}</div></div></section>` : ''}
@@ -3833,7 +3878,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       || rows.find((item) => item && item.ok === false && item.err)
       || (group && group.header && group.header.selfHealError ? group.header : null);
     const parsed = parseFailure(errorRow && (errorRow.err || errorRow.selfHealError));
-    const stepToken = group && group.header && group.header.trailhead ? 'TRAILHEAD'
+    const stepToken = group && group.header && group.header.setup ? 'DEVICE SETUP'
+      : group && group.header && group.header.trailhead ? 'TRAILHEAD'
       : group && group.num ? `STEP ${group.num}` : 'UNSCOPED';
     // A legacy/unscoped call has no authored step outcome to report. Avoid presenting that missing
     // relationship as a passed step: the transcript still opens, but only scoped calls get a
@@ -4133,7 +4179,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const { trace, group, kid, kidIndex } = entry;
       const clip = shotClipMark(st.session, trace.i, kid ? kidIndex ?? null : null, lightboxStepStartMs(group), lightboxCapturedAt(entry));
       const trailhead = Boolean(group.header && group.header.trailhead);
-      const token = trailhead ? 'TRAILHEAD' : (group.num ? `STEP ${group.num}` : 'RUN');
+      const token = group.header && group.header.setup ? 'DEVICE SETUP' : trailhead ? 'TRAILHEAD' : (group.num ? `STEP ${group.num}` : 'RUN');
       const label = (group.header && group.header.label) || trace.label;
       const tool = kid ? `${trace.label} · ${kid.label}` : (trace !== group.header ? trace.label : '');
       const file = captureShotFile(kid || trace);
@@ -4193,66 +4239,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <button class="evchip" data-lvl="e">Errors</button>
         <span class="count" id="dlcount"></span></div>
       <div class="logpane" id="dlpane">${html}</div>`, 'logview');
-  };
-
-  const NETWORK_PHASE_LABELS = { trailhead: 'Trailhead', trail: 'Trail', teardown: 'Teardown' };
-  // One line per trailhead tool that reused a setup: the requests that built it were made by the
-  // session that ran it in full (after any chain of reuses), so they are in that session's log.
-  const networkReuseNotice = () => {
-    const reused = trailheadSetupDecisions(D).filter((d) => d.kind === 'reused');
-    if (!reused.length) return '';
-    const here = D.meta && D.meta.sessionId;
-    const lines = reused.map((d) => {
-      // Successive trails in one session (an MCP session, say) can reuse a setup it ran itself.
-      if (here && d.trailheadSessionId === here) {
-        return `<div><code>${esc(d.tool)}</code> reused the setup an earlier trail in this session ran, so the requests that setup made are earlier in this log.</div>`;
-      }
-      // Logs from before the setup's own session was recorded name only the session that handed it
-      // on, which in a chain of reuses did not run it: leave the origin unknown, not guessed.
-      if (!d.trailheadSessionId) {
-        const via = d.sessionId ? ` handed on by <code>${esc(d.sessionId)}</code>` : '';
-        return `<div><code>${esc(d.tool)}</code> reused a setup${via}. This log does not record which session ran that setup; the requests it made are in that session's network log, not here.</div>`;
-      }
-      const from = `<code>${esc(d.trailheadSessionId)}</code>`;
-      const via = d.sessionId && d.sessionId !== d.trailheadSessionId ? ` (handed on by <code>${esc(d.sessionId)}</code>)` : '';
-      return `<div><code>${esc(d.tool)}</code> reused the setup ${from} ran${via}, so the requests that setup made are in that session's network log, not here.</div>`;
-    }).join('');
-    return `<div class="netcoverage">${lines}</div>`;
-  };
-  const renderNetwork = () => {
-    const network = sessionNetwork(D);
-    const coverage = networkReuseNotice();
-    if (!network || !network.length) {
-      // A multi-device session captures each device's traffic into its own `network.<device>`
-      // stream, which the Timeline shows; this tab reads only the session's own log.
-      const deviceStreams = (sessionEvents(D) || []).filter((s) => s && /^network\..+/.test(s.name) && s.total > 0);
-      const none = deviceStreams.length
-        ? `This session captured each device's traffic separately: ${deviceStreams.map((s) => `<code>${esc(s.name)}</code> (${s.total} events)`).join(', ')}. Those requests are on the Timeline.`
-        // Not "nothing was captured": reports built in the browser (live, Share, a session ZIP)
-        // carry no network log, and the tab still opens there for the reuse notice.
-        : 'This report has no network log for this session.';
-      return viewPage('Network', '', `${coverage}<div class="empty">${gzEmptyNote('network log', D.networkGz, none)}</div>`);
-    }
-    // Each request carries the trail phase it started in, so one the trailhead sent stays the
-    // trailhead's even when its response landed during the trail. Older sessions carry none.
-    const phaseOf = (e) => (e.trailPhase && NETWORK_PHASE_LABELS[e.trailPhase] ? e.trailPhase : '');
-    const phases = Object.keys(NETWORK_PHASE_LABELS).filter((p) => network.some((e) => phaseOf(e) === p));
-    const rows = network.map((e) => {
-      const fail = e.phase === 'FAILED' || (e.statusCode != null && e.statusCode >= 400);
-      const status = e.phase === 'FAILED' ? 'FAILED' : (e.statusCode != null ? String(e.statusCode) : (e.phase === 'REQUEST_START' ? '→' : ''));
-      const dur = e.durationMs != null ? ` ${e.durationMs}ms` : '';
-      const ph = phaseOf(e);
-      const phaseCell = phases.length ? `<span class="netphase ${ph}">${ph ? NETWORK_PHASE_LABELS[ph] : ''}</span>` : '';
-      return `<div class="ln ${fail ? 'e' : ''}"${ph ? ` data-netphase="${ph}"` : ''}>${phaseCell}<span class="meth">${esc(e.method)}</span><span class="m">${esc(status)}${esc(dur)}</span><span>${esc(e.urlPath)}</span></div>`;
-    }).join('');
-    return viewPage('Network', `${network.length} events`, `
-      <div class="lfilter" id="nlbar"><input id="nlq" type="search" placeholder="Filter by method, path, status…" />
-        <button class="evchip on" data-lvl="">All</button>
-        <button class="evchip" data-lvl="e">Failed</button>
-        ${phases.length > 1 ? phases.map((p) => `<button class="evchip" data-netphase="${p}">${NETWORK_PHASE_LABELS[p]}</button>`).join('') : ''}
-        <span class="count" id="nlcount"></span></div>
-      ${coverage}
-      <div class="logpane net" id="nlpane">${rows}</div>`, 'logview');
   };
 
   // The Strings tab: every string the run's screens showed, each tied to its screenshots and box.
@@ -4613,7 +4599,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
   };
 
-  // Shared text + severity filtering for the device/network log panes. Filters rows in place
+  // Text + severity filtering for the device log pane. Filters rows in place
   // (display:none) rather than re-rendering, so typing keeps input focus and stays fast on
   // thousands of lines. Severity rides on the row's coloring class: 'e' = error, 'w' = warning.
   const wireLogFilter = (paneId: string, inputId: string, barId: string, countId: string) => {
@@ -4622,18 +4608,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const input = document.getElementById(inputId) as HTMLInputElement | null;
     const countEl = document.getElementById(countId);
     const chips = Array.from(root.querySelectorAll<HTMLElement>(`#${barId} [data-lvl]`));
-    // Phase chips narrow by the row's data-netphase on top of the level; a second click clears one.
-    const phaseChips = Array.from(root.querySelectorAll<HTMLElement>(`#${barId} [data-netphase]`));
     let lvl = '';
-    let phase = '';
     const apply = () => {
       const q = ((input && input.value) || '').toLowerCase();
       let shown = 0;
       for (const r of Array.from(pane.children) as HTMLElement[]) {
         const okLvl = !lvl || (lvl === 'e' ? r.classList.contains('e') : (r.classList.contains('e') || r.classList.contains('w')));
         const okQ = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
-        const okPhase = !phase || r.dataset.netphase === phase;
-        const on = okLvl && okQ && okPhase;
+        const on = okLvl && okQ;
         r.style.display = on ? '' : 'none';
         if (on) shown++;
       }
@@ -4641,7 +4623,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     };
     if (input) input.oninput = apply;
     chips.forEach((c) => c.onclick = () => { lvl = c.dataset.lvl; chips.forEach((x) => x.classList.toggle('on', x === c)); apply(); });
-    phaseChips.forEach((c) => c.onclick = () => { phase = phase === c.dataset.netphase ? '' : c.dataset.netphase; phaseChips.forEach((x) => x.classList.toggle('on', x.dataset.netphase === phase)); apply(); });
     apply();
   };
 
@@ -5856,7 +5837,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
   const trailRowOpen = (num) => (num in st.trailRowsOpen ? !!st.trailRowsOpen[num] : st.trailAll);
-  const trailStepToken = (num) => num === 0 ? 'TRAILHEAD' : `STEP ${num}`;
   // Every trail control names its device: these surfaces exist to compare N devices' takes on one
   // step, so a label that only says which STEP it belongs to is ambiguous by construction.
   // `session` (not the lane position) keys `data-shot-run`: the Lightbox resolves frames straight
@@ -5918,7 +5898,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <span class="tgstatus ${esc(lane.outcome)}">${esc(lane.outcomeLabel)}</span>
         <span class="tgmeta">${esc(trailGalleryMeta(lane, shotCounts[pos]))}</span>
       </div></header>`).join('');
-    const rows = matrix.rows.map((row, col) => { const token = row.num === 0 ? 'Trailhead' : `Step ${row.num}`; return `<div class="trailrowgroup"><div class="tgstep${single ? ' below' : ''}" style="${single ? 'grid-row:3;' : ''}grid-column:${col + 1}" title="${esc(row.label)}"><span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span>${row.label && row.label !== token ? `<span class="tgsteptext">${esc(row.label)}</span>` : ''}</div>${row.cells.map((cell, pos) => {
+    const rows = matrix.rows.map((row, col) => { const token = trailStepLabel(row.num); return `<div class="trailrowgroup"><div class="tgstep${single ? ' below' : ''}" style="${single ? 'grid-row:3;' : ''}grid-column:${col + 1}" title="${esc(row.label)}"><span class="galchip${row.num <= 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span>${row.label && row.label !== token ? `<span class="tgsteptext">${esc(row.label)}</span>` : ''}</div>${row.cells.map((cell, pos) => {
       const place = `grid-row:${single ? 2 : 2 * pos + 3};grid-column:${col + 1}`;
       const lane = lanes[pos] || {};
       if (!cell) return `<div class="tgcard missing" style="${place}"><span>${matrix.join === 'position' ? 'no step here' : 'not reached'}</span></div>`;
@@ -5941,7 +5921,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const open = trailRowOpen(row.num);
       const label = `<div class="trailstep">
           <button class="trailsteptoggle" type="button" data-trail-row="${row.num}" aria-expanded="${open}" aria-label="${open ? 'Show final frame only for' : 'Show every frame of'} ${esc(trailStepToken(row.num))}">
-            <span class="trailstepdisclosure" aria-hidden="true"><span class="trailstepchev${open ? ' open' : ''}"></span></span><span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span>
+            <span class="trailstepdisclosure" aria-hidden="true"><span class="trailstepchev${open ? ' open' : ''}"></span></span><span class="galchip${row.num <= 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span>
           </button>
           <div class="trailsteplabel" title="${esc(row.label)}">${esc(row.label)}</div>
         </div>`;
@@ -6976,14 +6956,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const srcs = await Promise.all(lane.captures.map((capture) => captureSrcFor(session, capture.file)));
         const entries = lane.captures.map((capture, i) => ({
           src: srcs[i],
-          token: capture.stepNum === 0 ? 'TRAILHEAD' : `STEP ${capture.stepNum}`,
+          token: trailStepToken(capture.stepNum),
           label: capture.stepLabel,
           tool: capture.label,
           device: (lanes[lane.index] || {}).label,
         })).filter((entry) => entry.src);
         if (!entries.length) return;
         const state = laneStateAt(lane, st.trailT);
-        const index = Math.max(0, entries.findIndex((entry) => state.capture && entry.tool === state.capture.label && entry.token === (state.capture.stepNum === 0 ? 'TRAILHEAD' : `STEP ${state.capture.stepNum}`)));
+        const index = Math.max(0, entries.findIndex((entry) => state.capture && entry.tool === state.capture.label && entry.token === trailStepToken(state.capture.stepNum)));
         openZoom(entries[index].src, '', entries, index);
       };
     });
@@ -7378,8 +7358,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const baselineStep = baselineGroup && baselineGroup.header;
       const currentStep = currentGroup && currentGroup.header;
       const canonicalGroup = (baselineGroup || currentGroup)!;
+      const canonicalHeader = canonicalGroup.header!;
       anchors.push({
-        key: String(canonicalGroup.num),
+        // Device setup, the trailhead and teardown all carry num 0, and selection takes the first
+        // matching key, so the unnumbered phases other than the trailhead get their own keys.
+        key: canonicalHeader.setup ? 'setup' : canonicalHeader.teardown ? 'teardown' : String(canonicalGroup.num),
         label: String((baselineStep && baselineStep.label) || (currentStep && currentStep.label) || `Step ${at + 1}`),
         baselineT: baselineStep && typeof baselineStep.ts === 'number' && Number.isFinite(baselineStep.ts) ? baselineStep.ts : null,
         currentT: currentStep && typeof currentStep.ts === 'number' && Number.isFinite(currentStep.ts) ? currentStep.ts : null,
@@ -7497,7 +7480,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         .then(() => { if (st.view === 'compare') render(true); });
     }
     // Settled with nothing to show: the payload was there but could not be decoded.
-    const eventsUnavailable = !pendingInflate && comparedSessions.some((s) => (s.eventsGz && !sessionEvents(s)) || (s.networkGz && !sessionNetwork(s)));
+    const eventsUnavailable = !pendingInflate && comparedSessions.some((s) => ((s.eventsGz || s.eventsHref) && !sessionEvents(s)) || (s.networkGz && !sessionNetwork(s)));
 
     const tools = compareToolTimelines(a.trace || [], b.trace || []);
     const eventCache = multiRun || st.cmpTab !== 'events' || pendingInflate ? null : cachedCompareEvents(a, b);
@@ -7867,7 +7850,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const rows = candidates.map((step) => {
           const stepChanged = step.streams.filter((stream) => stream.changed).length;
           const delta = step.currentCount - step.baselineCount;
-          return `<button class="cmpmasterrow cmpsteprow${selectedStep === step ? ' selected' : ''}" type="button" data-cmp-event-step="${esc(step.key)}" aria-current="${selectedStep === step ? 'true' : 'false'}"><span class="cmpsteplabel"><i>${step.unattributed ? '?' : esc(step.key)}</i><span><strong>${esc(step.label)}</strong><small>${step.unattributed ? 'Timestamp unavailable' : `${stepChanged} changed stream${stepChanged === 1 ? '' : 's'}`}</small></span></span><span class="cmpmastercounts"><b>${step.baselineCount} → ${step.currentCount}</b><em>${delta > 0 ? '+' : ''}${delta}</em></span></button>`;
+          return `<button class="cmpmasterrow cmpsteprow${selectedStep === step ? ' selected' : ''}" type="button" data-cmp-event-step="${esc(step.key)}" aria-current="${selectedStep === step ? 'true' : 'false'}"><span class="cmpsteplabel"><i>${step.unattributed ? '?' : /^\d+$/.test(step.key) ? esc(step.key) : '·'}</i><span><strong>${esc(step.label)}</strong><small>${step.unattributed ? 'Timestamp unavailable' : `${stepChanged} changed stream${stepChanged === 1 ? '' : 's'}`}</small></span></span><span class="cmpmastercounts"><b>${step.baselineCount} → ${step.currentCount}</b><em>${delta > 0 ? '+' : ''}${delta}</em></span></button>`;
         }).join('');
         if (!selectedStep) return '<div class="cmpeventnomatch">No trail steps match the current filter.</div>';
         const stepStreams = rankedStreams(selectedStep.streams.filter((stream) => (!st.cmpEventDiffOnly || stream.changed)));
@@ -8340,7 +8323,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ...(yamlRootSection(D.recordingYaml, 'config') || yamlRootSection(D.originalYaml, 'config') ? [['config', 'Config']] : []),
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
       ...(D.deviceLog || D.deviceLogGz ? [['device', 'Device logs']] : []),
-      ...((D.network && D.network.length) || D.networkGz || trailheadSetupDecisions(D).some((d) => d.kind === 'reused') ? [['network', 'Network']] : []),
       ...(D.visibleStrings && D.visibleStrings.length ? [['strings', 'Strings']] : []),
       ['info', 'Info'],
     ];
@@ -8355,7 +8337,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : st.tab === 'config' ? renderConfig()
       : st.tab === 'recording' ? renderRecording()
       : st.tab === 'device' ? renderDevice()
-      : st.tab === 'network' ? renderNetwork()
       : st.tab === 'strings' ? renderStrings()
       : renderInfo();
     const shotCount = screenshotEntries(D).length;
@@ -8398,8 +8379,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
             : ''}${renderThemeToggle()}${exportMenu}</div></div>
         ${sourceLine}${tabsNav}${trailToolbar}
       </header>`;
+    // The Streams menu and the event rows simply vanish when the payload can't be read, which looks
+    // exactly like a run that captured none; Compare says so in the same words.
+    const eventsNotice = !galleryOnly && sessionEventsUnavailable(D)
+      ? '<div class="cmpdegraded detailnotice" role="alert"><strong>Event streams are unavailable.</strong> This run\'s event payload could not be loaded or decoded, so the absence of streams here does not mean none were captured.</div>'
+      : '';
     root.innerHTML = `
       ${header}
+      ${eventsNotice}
       <main class="${trailLanesLoading ? '' : MOUNTED_TABS.indexOf(st.tab) >= 0 ? 'tabmountmain' : st.tab === 'timeline' ? 'timelinemain' : trailTab ? `trailmain${st.tab === 'replay' ? ' trailreplaymain' : ''}` : ''}">${body}</main>
       ${!trailLanesLoading && st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), selectedEntryIndex()) : ''}
       ${galleryOnly ? '' : `<footer class="detailfooter"><div class="detailfootermeta" tabindex="0" aria-label="Run metadata">${footerItems}${runOn}</div></footer>`}`;
@@ -9654,7 +9641,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const revealTimelineStepInPlace = () => {
     revealTimelineStep(st.step);
     root.querySelectorAll<HTMLElement>('.phasecontrol[data-phase]').forEach((control) => {
-      const open = control.dataset.phase === 'trailhead' ? st.trailheadOpen : control.dataset.phase === 'teardown' ? st.teardownOpen : st.trailOpen;
+      const open = control.dataset.phase === 'setup' ? st.deviceSetupOpen : control.dataset.phase === 'trailhead' ? st.trailheadOpen : control.dataset.phase === 'teardown' ? st.teardownOpen : st.trailOpen;
       control.setAttribute('aria-expanded', String(open));
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;
@@ -10648,6 +10635,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     root.querySelectorAll<HTMLElement>('.phasecontrol[data-phase]').forEach((control) => control.onclick = () => {
       const phase = control.dataset.phase;
       const open = control.getAttribute('aria-expanded') !== 'true';
+      if (phase === 'setup') st.deviceSetupOpen = open;
       if (phase === 'trailhead') st.trailheadOpen = open;
       if (phase === 'trail') st.trailOpen = open;
       if (phase === 'teardown') st.teardownOpen = open;
@@ -10904,7 +10892,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     wireTimelineShotZoom();
     if (st.tab === 'video') wireVideo();
     if (st.tab === 'device') wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
-    if (st.tab === 'network') wireLogFilter('nlpane', 'nlq', 'nlbar', 'nlcount');
     if (st.tab === 'strings') wireStrings(); else unmountStringCrops();
     if (st.tab === 'timeline') wireLazyTimelineBodies();
     const copycmd = document.getElementById('copycmd');

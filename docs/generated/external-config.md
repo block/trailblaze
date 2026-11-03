@@ -124,6 +124,11 @@ trail_validation:
   exempt: "mcp-tools-demo records MCP-subprocess tools not present in the generated typed surface"
 target:
   display_name: Trailblaze Sample App
+  # The in-process test APK `--driver in-process` drives: built by
+  # a test module that instruments the sample app.
+  android_test:
+    test_app_id: xyz.block.trailblaze.uitests.inprocess
+    fq_test_name: xyz.block.trailblaze.uitests.inprocess.SampleAppRpcServerTest
   platforms:
     android:
       app_ids:
@@ -165,7 +170,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 9 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 23 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
 | `ios_primitives` | Yes | `ios-axe`, `ios-host` | 5 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 2 |
@@ -209,7 +214,7 @@ target:
         - yourDebugOnlyTool
 ```
 
-Runtime selection happens per descriptor: tools run in-process (QuickJS) by default; set `runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. The file extension is not a runtime hint. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
+Runtime selection happens per descriptor: tools run in-process (QuickJS) by default; set `runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. The file extension is not a runtime hint. A subprocess tool is host-only; it needs no `requiresHost`.
 
 A tool that composes other tools is a scripted tool too: call them from its handler. A `.tool.yaml` with a `tools:` body (a YAML list of tool calls) fails to load.
 

@@ -12,7 +12,9 @@ import kotlinx.serialization.Serializable
  * given API level. When they are, no global predicate separates them and the recording is the only
  * place that knows which route actually actuates the row.
  *
- * Leave unset unless a specific step has been measured to need it. Only the leaf-vs-container
+ * Trails reach it only through `android_accessibilityClick`, which pins [ACTION_CLICK]; the shared
+ * `tapOnElementBySelector` carries no pin. Leave unset unless a specific step has been measured to
+ * need it. Only the leaf-vs-container
  * judgement is overridable: the conditions that make `ACTION_CLICK` dispatchable at all (the node
  * advertises the action, is enabled, visible, and not editable; the tap is not a long-press) still
  * apply, so a pin that contradicts one of them routes to gesture rather than dispatching an action
@@ -31,7 +33,8 @@ enum class TapRouteOverride {
   ACTION_CLICK,
 
   /**
-   * Dispatch via coordinate gesture.
+   * Dispatch via coordinate gesture. No tool pins this any more; it stays so session logs that
+   * recorded it still decode.
    *
    * For the mirror-image shape: a container that does publish state, and so would be granted
    * `ACTION_CLICK`, but whose `ACTION_CLICK` performs a *different* action than a real touch — an

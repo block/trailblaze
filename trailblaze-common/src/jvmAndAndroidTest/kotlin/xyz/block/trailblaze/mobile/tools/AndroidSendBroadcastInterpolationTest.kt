@@ -39,7 +39,7 @@ class AndroidSendBroadcastInterpolationTest {
       ),
     )
 
-    val dispatched = interpolateMemoryInTool(authored, memory)
+    val dispatched = interpolateMemoryInTool(authored, memory, null)
 
     assertThat(dispatched.action).isEqualTo("com.example.LOGIN")
     assertThat(dispatched.extras[0].value).isEqualTo("owner@example.com")
@@ -56,7 +56,7 @@ class AndroidSendBroadcastInterpolationTest {
 
     val dispatched = interpolateMemoryInTool(
       tool(extras = listOf(BroadcastExtra(key = "password", value = "{{account_password}}"))),
-      memory,
+      memory, null,
     )
 
     assertThat(dispatched.extras.single().value).isEqualTo("s3cret-pw")
@@ -71,7 +71,7 @@ class AndroidSendBroadcastInterpolationTest {
 
     val dispatched = interpolateMemoryInTool(
       tool(extras = listOf(BroadcastExtra(key = "password", value = "{{missing}}"))),
-      memory,
+      memory, null,
     )
 
     assertThat(dispatched.extras.single().value).isEqualTo("{{missing}}")

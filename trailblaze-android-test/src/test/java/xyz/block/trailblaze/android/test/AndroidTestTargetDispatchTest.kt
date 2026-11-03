@@ -33,8 +33,8 @@ class AndroidTestTargetDispatchTest {
 
     override val composeTestRule: AndroidComposeTestRule<*, *>? = null
     override fun currentActivity(): Activity = error("not used")
-    override fun performViewAction(matcher: Matcher<View>, action: ViewAction) = error("not used")
-    override fun checkView(matcher: Matcher<View>, assertion: ViewAssertion) = error("not used")
+    override fun performViewAction(matcher: Matcher<View>, action: ViewAction, root: View?) = error("not used")
+    override fun checkView(matcher: Matcher<View>, assertion: ViewAssertion, root: View?) = error("not used")
     override fun composeRoots(): List<SemanticsNode> = error("not used")
     override fun captureScreenshot(): Bitmap? = error("not used")
   }

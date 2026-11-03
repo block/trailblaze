@@ -425,6 +425,19 @@ class QuickJsToolHost internal constructor(
             if (__structured !== undefined) {
               __envelope.structuredContent = __structured;
             }
+            // A nested tool call that failed fatally keeps its fatal marker on the error the SDK
+            // threw (`client.ts` / the in-process wrapper). Lifting it as `variant: 'FatalError'`
+            // lets the host map this tool's own failure to `Error.FatalError` too, so a recorded
+            // step skips self-heal. Same engine-global `Symbol.for` registry key as the SDK's.
+            const __trailblazeMeta = {};
+            try {
+              if (__e !== null && __e !== undefined && typeof __e === 'object' &&
+                  __e[Symbol.for('trailblaze.FatalError')] === true) {
+                __trailblazeMeta.variant = 'FatalError';
+              }
+            } catch (__fatalError) {
+              // A hostile accessor degrades to a recoverable error, never a lost envelope.
+            }
             // The reuse report of a trailhead handler that threw (tool-core.ts marks the error), so
             // a failed reuse is still recorded as one.
             try {
@@ -432,10 +445,13 @@ class QuickJsToolHost internal constructor(
                 ? __e[Symbol.for('trailblaze.trailhead.report')]
                 : undefined;
               if (__report !== undefined && __report !== null && typeof __report === 'object') {
-                __envelope._meta = { trailblaze: { trailhead: __report } };
+                __trailblazeMeta.trailhead = __report;
               }
             } catch (__reportError) {
               // A hostile accessor loses the report, never the envelope.
+            }
+            if (Object.keys(__trailblazeMeta).length > 0) {
+              __envelope._meta = { trailblaze: __trailblazeMeta };
             }
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__envelope);

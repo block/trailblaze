@@ -2,6 +2,7 @@ package xyz.block.trailblaze.capture.logcat
 
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import xyz.block.trailblaze.capture.AppScopedCaptureStream
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
@@ -38,12 +39,19 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override var appProcessName: String? = null
     private set
 
-  private var process: Process? = null
+  @Volatile private var process: Process? = null
   private var outputFile: File? = null
   private var startTimestampMs: Long = 0
+  @Volatile private var stopped = false
+  @Volatile private var bootWait: Process? = null
+
+  /** Bumped by each [start], so a follower left from an earlier capture never relaunches into this one. */
+  @Volatile private var generation = 0
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
+    stopped = false
+    val capture = ++generation
     isAppScoped = false
     appProcessName = null
     startTimestampMs = System.currentTimeMillis()
@@ -69,16 +77,61 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
       )
     }
 
+    val file = outputFile ?: return
+    process = launch(command, file, append = false) ?: return
+    // A reboot (an iPad's language change) ends `log stream`; follow the device back up.
+    thread(isDaemon = true, name = "ios-log-capture-$deviceId") {
+      followIosLogAcrossReboots(
+        isStopped = { stopped || generation != capture },
+        awaitExit = { process?.waitFor() },
+        awaitBoot = { awaitBoot(deviceId) },
+        relaunch = {
+          synchronized(this) {
+            if (stopped || generation != capture) return@synchronized false
+            Console.log("iOS log capture: `log stream` on $deviceId ended with the simulator; capturing again")
+            process = launch(command, file, append = true)
+            process != null
+          }
+        },
+      )
+    }
+  }
+
+  private fun launch(command: List<String>, file: File, append: Boolean): Process? = try {
+    val output = if (append) ProcessBuilder.Redirect.appendTo(file) else ProcessBuilder.Redirect.to(file)
+    ProcessBuilder(command).redirectOutput(output).redirectErrorStream(true).start()
+  } catch (e: Exception) {
+    Console.log("Failed to start iOS log capture: ${e.message}")
+    null
+  }
+
+  /** Blocks until [deviceId] has booted; false when it does not within [BOOT_WAIT_SECONDS] or capture stops. */
+  private fun awaitBoot(deviceId: String): Boolean {
+    val wait = try {
+      ProcessBuilder("xcrun", "simctl", "bootstatus", deviceId)
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectErrorStream(true)
+        .start()
+    } catch (_: Exception) {
+      return false
+    }
+    bootWait = wait
     try {
-      val pb = ProcessBuilder(command).redirectOutput(outputFile).redirectErrorStream(true)
-      process = pb.start()
-    } catch (e: Exception) {
-      Console.log("Failed to start iOS log capture: ${e.message}")
+      if (stopped) return false
+      if (!wait.waitFor(BOOT_WAIT_SECONDS, TimeUnit.SECONDS)) return false
+      return wait.exitValue() == 0
+    } finally {
+      wait.destroyForcibly()
+      bootWait = null
     }
   }
 
   override fun stop(options: CaptureOptions): CaptureArtifact? {
-    val p = process
+    val p = synchronized(this) {
+      stopped = true
+      process
+    }
+    bootWait?.destroyForcibly()
     if (p != null) {
       // Try a graceful SIGTERM first so xcrun has a chance to flush its buffered output to
       // device.log; only escalate to SIGKILL if it refuses to exit. Forced termination mid-write
@@ -110,7 +163,31 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   private companion object {
     /** How long to give `xcrun simctl spawn log stream` to drain after `destroy()`. */
     const val SHUTDOWN_TIMEOUT_SECONDS = 2L
+
+    /** How long to wait for a restarted simulator to finish booting before giving up on its log. */
+    const val BOOT_WAIT_SECONDS = 180L
   }
+}
+
+/**
+ * Keeps a `log stream` going across simulator reboots: each time it ends while capture is still
+ * running, waits for the device to boot and starts it again, up to [maxRestarts] times so a stream
+ * that keeps failing cannot spin. Returns how many times it restarted.
+ */
+internal fun followIosLogAcrossReboots(
+  isStopped: () -> Boolean,
+  awaitExit: () -> Unit,
+  awaitBoot: () -> Boolean,
+  relaunch: () -> Boolean,
+  maxRestarts: Int = 5,
+): Int {
+  var restarts = 0
+  while (restarts < maxRestarts) {
+    awaitExit()
+    if (isStopped() || !awaitBoot() || isStopped() || !relaunch()) break
+    restarts++
+  }
+  return restarts
 }
 
 /** The `log stream` argv for [deviceId], and whether it is scoped to the app under test. */

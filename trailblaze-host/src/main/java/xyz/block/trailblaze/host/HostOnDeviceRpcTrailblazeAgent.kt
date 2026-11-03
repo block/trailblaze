@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host
 
 import java.io.File
+import xyz.block.trailblaze.logs.client.SessionStartRecords
 import xyz.block.trailblaze.host.util.BufferedImageUtils
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -8,9 +9,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
+import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
@@ -31,6 +34,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
 import xyz.block.trailblaze.model.TapRouteOverride
+import xyz.block.trailblaze.android.tools.AndroidAccessibilityClickTrailblazeTool
 import xyz.block.trailblaze.host.recording.StreamFrameMonitor
 import xyz.block.trailblaze.host.recording.StreamScreenshotScreenState
 import xyz.block.trailblaze.host.recording.DeviceStreamScreenshotSource
@@ -514,7 +518,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           // Host-local tools (subprocess MCP, QuickJS scripted, cbot / dip-slot ADB tools,
           // `requiresHost = true` class-backed tools) run on the host JVM — so the host IS their
           // memory boundary: resolve here, dispatch resolved, log raw + resolved.
-          val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory)
+          val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory, context.trailblazeDeviceInfo)
           executeHostLocalWithLogging(
             memoryResolvedTool,
             context,
@@ -536,7 +540,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             // Host-local subtools must not be RPCed to the device — they read/write
             // host-side files and credentials that have no meaning on the device JVM.
             // Memory boundary is here (host) for them.
-            val memoryResolvedExpanded = interpolateMemoryInTool(expandedTool, memory)
+            val memoryResolvedExpanded = interpolateMemoryInTool(expandedTool, memory, context.trailblazeDeviceInfo)
             executeHostLocalWithLogging(
               memoryResolvedExpanded,
               context,
@@ -604,16 +608,16 @@ class HostOnDeviceRpcTrailblazeAgent(
     // re-enters [executeNodeSelectorTap] there and resolves the selector against the
     // live accessibility tree. No infinite loop — the host and device sides are
     // distinct agent instances.
-    if (nodeSelector.androidAccessibility != null) {
-      return executeToolViaRpc(
-        tool = TapOnByElementSelector(
-          nodeSelector = nodeSelector,
-          longPress = longPress,
-          tapRoute = tapRoute,
-          timeoutMs = timeoutMs,
-        ),
-        traceId = traceId,
-      )
+    //
+    // An ACTION_CLICK pin travels as `android_accessibilityClick`, the one tool that carries it.
+    // The whole tree is checked because a `containsChild:` / `childOf:` selector nests its match.
+    if (nodeSelector.allDriverMatches().any { it is DriverNodeMatch.AndroidAccessibility }) {
+      val tool = if (tapRoute == TapRouteOverride.ACTION_CLICK && !longPress) {
+        AndroidAccessibilityClickTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = timeoutMs)
+      } else {
+        TapOnByElementSelector(nodeSelector = nodeSelector, longPress = longPress, timeoutMs = timeoutMs)
+      }
+      return executeToolViaRpc(tool = tool, traceId = traceId)
     }
     // Non-accessibility-shaped selectors (Maestro-shaped, etc.) — let the caller fall
     // through to [executeMaestroCommands] via [super.execute]. Same behavior as before
@@ -719,6 +723,8 @@ class HostOnDeviceRpcTrailblazeAgent(
           argsSnapshot = TrailArgBinder.encodeProvided(memory.args),
           sensitiveArgNames = memory.sensitiveArgNames.toList(),
           traceParent = dispatchTraceParent,
+          // The host owns this session's start log, so the device learns the trail from this.
+          sessionStart = SessionStartRecords.forSession(sessionProvider.invoke().sessionId),
         )
 
         val name = tool::class.simpleName ?: "unknown"

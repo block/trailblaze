@@ -54,6 +54,7 @@ import xyz.block.trailblaze.util.HostPlatform
  *     driverType: string;
  *     instanceId: string; // emulator serial / simulator UDID — what host CLIs name the device by
  *     trailblazePort?: number; // host-computed; android/ios only, never on-device
+ *     classifiers: string[]; // e.g. ["android", "phone"]; empty when the session has none
  *   };
  *   hostPlatform?: { os: "macos" | "windows" | "linux"; arch: string }; // never on-device
  *   target?: {
@@ -288,6 +289,9 @@ object TrailblazeContextEnvelope {
       put("driverType", device.trailblazeDriverType.yamlKey)
       // What `adb -s` / `xcrun simctl` need, so a tool composing `exec` can name this device.
       put("instanceId", device.trailblazeDeviceId.instanceId)
+      // The same list a finished session's log records, so a survey run mid-trail can branch on
+      // device type (phone vs tablet) the way it does over the finished session.
+      putJsonArray("classifiers") { device.classifiers.forEach { add(it.classifier) } }
       // The port the device's Trailblaze server (the Android runner, or an iOS app's in-app
       // server) is bridged on. Host-only: it hashes in the host's ADB server port, which a process
       // on the device doesn't have. Web devices have no such server.

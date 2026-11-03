@@ -1732,8 +1732,9 @@ internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): A
  *   what the tap does. A misrouting node is diagnosable from the `[tap-route]` log and the
  *   whole route is revertible with `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE`.
  *
- * [tapRoute] lets a single recorded step pin its own route for the case this gate cannot decide:
- * two rows that need opposite routes presenting identical fields (see [TapRouteOverride]). The pin
+ * [tapRoute] lets a single step pin its own route for the case this gate cannot decide: two rows
+ * that need opposite routes presenting identical fields (see [TapRouteOverride]). Trails set it
+ * only through `android_accessibilityClick`. The pin
  * reaches only the leaf-vs-container judgement above. Every check before it is a precondition for
  * `ACTION_CLICK` being dispatchable at all, so a step that pins `ACTION_CLICK` on a long-press, an
  * editable field, an invisible node, or a node that doesn't advertise the action still routes to

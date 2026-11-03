@@ -14,12 +14,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
  * A host-app target parsed from a target yaml the test APK bundles as an asset — how an in-process
  * module turns the committed `targets/<id>.yaml` it stages into the target its trails run under.
  *
- * It exists to feed exactly two consumers:
+ * It exists to feed three consumers:
  *  - `OnDeviceScriptedToolBundleLauncher`, which reads [getInlineScriptTools] — the target's
  *    `tools:` list — to register the trailmap's in-process scripted tools by name at session
  *    start, from the QuickJS bundles the test APK packages (the build's `trailmap { }` block);
  *  - the scripted tools' own `ctx.target` envelope, whose `appIds` come from
  *    [getPossibleAppIdsForPlatform].
+ *  - the session tool repo, which adds the Kotlin tools the test APK passes to [fromAsset].
  *
  * Deliberately NOT a `YamlBackedHostAppTarget`: that class also honors the manifest's per-platform
  * `tool_sets:` scoping, and trailmap toolsets commonly declare `drivers: [android]`, which the
@@ -31,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
  */
 class AssetBackedHostAppTarget private constructor(
   private val config: AppTargetYamlConfig,
+  private val customTools: Set<KClass<out TrailblazeTool>>,
 ) : TrailblazeHostAppTarget(
   id = config.id,
   displayName = config.displayName,
@@ -47,7 +49,7 @@ class AssetBackedHostAppTarget private constructor(
 
   override fun internalGetCustomToolsForDriver(
     driverType: TrailblazeDriverType,
-  ): Set<KClass<out TrailblazeTool>> = emptySet()
+  ): Set<KClass<out TrailblazeTool>> = customTools
 
   override fun getInlineScriptTools(): List<InlineScriptToolConfig> = config.tools.orEmpty()
 
@@ -61,13 +63,20 @@ class AssetBackedHostAppTarget private constructor(
     /**
      * Parses the target yaml at [assetPath] from the TEST APK's assets (the instrumentation
      * context, not the app's — the config is the test module's to stage, never the app's to carry).
+     *
+     * [customTools] are the Kotlin tools the test APK compiles in for this target. A target yaml
+     * can only name scripted tools, so a class-backed tool its trails call has to be passed here.
      */
-    fun fromAsset(assetPath: String): AssetBackedHostAppTarget {
+    fun fromAsset(
+      assetPath: String,
+      customTools: Set<KClass<out TrailblazeTool>> = emptySet(),
+    ): AssetBackedHostAppTarget {
       val yaml = InstrumentationRegistry.getInstrumentation().context.assets
         .open(assetPath)
         .use { it.readBytes().decodeToString() }
       return AssetBackedHostAppTarget(
         TrailblazeConfigYaml.instance.decodeFromString(AppTargetYamlConfig.serializer(), yaml),
+        customTools,
       )
     }
   }

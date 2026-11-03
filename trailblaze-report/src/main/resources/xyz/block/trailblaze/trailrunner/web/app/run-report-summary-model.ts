@@ -80,7 +80,7 @@ export function clockTime(ms: number): string {
 
 export interface NoteBadge {
   text: string;
-  tone?: 'ok' | 'error';
+  tone?: 'ok' | 'warn' | 'error';
   /** A plain badge worth the eye, such as a heavy payload. */
   strong?: boolean;
 }
@@ -137,11 +137,15 @@ export interface StreamLane {
   id: string;
   name: string;
   total: number;
+  /** Open until the reader hides it, beside the default lanes: a derived stream's. */
+  shown?: boolean;
+  /** Set only on a derived stream's lane: the streams and logs it was derived from (possibly none recorded). */
+  derivedFrom?: string[];
   /** Notes bucketed by step band, in time order. */
   bands: StreamNote[][];
 }
 
-export type StepKind = 'trailhead' | 'step' | 'heal' | 'teardown';
+export type StepKind = 'setup' | 'trailhead' | 'step' | 'heal' | 'teardown';
 
 export interface StreamStep {
   kind: StepKind;
@@ -163,7 +167,7 @@ export interface StreamShot {
   aspect?: number;
 }
 
-export type DiagnosisStepKind = 'trailhead' | 'step' | 'teardown' | 'end';
+export type DiagnosisStepKind = 'setup' | 'trailhead' | 'step' | 'teardown' | 'end';
 
 export interface DiagnosisStep {
   kind: DiagnosisStepKind;
@@ -203,6 +207,12 @@ export interface StreamsModel {
 
 export const TOOLS_LANE = 'tools';
 export const LLM_LANE = 'llm';
+/** What a derived lane says it was made from, for its header and cards; null for a captured stream's lane. */
+export function derivedFromText(lane: Pick<StreamLane, 'derivedFrom'>): string | null {
+  if (!lane.derivedFrom) return null;
+  return lane.derivedFrom.length > 0 ? `Derived from ${lane.derivedFrom.join(', ')}` : 'Derived from this session\'s events';
+}
+
 /** Lanes shown until the reader picks; every other stream waits in the "+" menu. */
 export const DEFAULT_VISIBLE: readonly string[] = [TOOLS_LANE, LLM_LANE, 'network'];
 const MAX_FIELDS = 12;
@@ -220,6 +230,8 @@ const KNOWN_STREAMS: Array<[pattern: RegExp, key: string, name: string]> = [
 /** `network`, a plugin name ending in `.network`, and device-scoped `network.<device>` streams. */
 const NETWORK_STREAM = /^(?:.*\.)?network(?:\.(.+))?$/i;
 export const isNetworkLane = (id: string) => id === 'network' || id.startsWith('network.');
+/** The default-lane entry a lane answers to: a device-scoped lane counts as its unscoped stream. */
+export const defaultLaneKey = (id: string): string => (isNetworkLane(id) ? 'network' : id);
 
 /** Any other stream becomes a lane named for its last dotted segment, in words. */
 export function laneIdentity(streamName: string): { id: string; name: string } {
@@ -393,6 +405,8 @@ interface TraceEntry {
   objective: boolean;
   trailhead: boolean;
   teardown: boolean;
+  /** The run's device setup, before the trailhead. */
+  setup: boolean;
   selfHeal: boolean;
   selfHealTool?: string;
   selfHealError?: string;
@@ -793,6 +807,13 @@ function summaryValue(tool: string): string {
  * `none` keeps every note. */
 export type FoldPolicy = 'any' | 'label' | 'none';
 
+/** [value] when it is a [FoldPolicy], as a stream's owner may declare one; else undefined. */
+const foldOf = (value: unknown): FoldPolicy | undefined =>
+  value === 'any' || value === 'label' || value === 'none' ? value : undefined;
+
+/** How many rows of a burst each [FoldPolicy] keeps apart, least to most. */
+const FOLD_RESTRAINT: Record<FoldPolicy, number> = { any: 0, label: 1, none: 2 };
+
 interface BuiltLane {
   notes: StreamNote[];
   /** What the lane header counts, when that isn't one per note. */
@@ -862,7 +883,7 @@ function rowNote(row: Json): StreamNote | undefined {
     ? row.badges.filter(isRecord).flatMap((badge): NoteBadge[] => {
       const text = str(badge.text);
       if (!text) return [];
-      return [{ text, ...(badge.tone === 'ok' || badge.tone === 'error' ? { tone: badge.tone } : {}) }];
+      return [{ text, ...(badge.tone === 'ok' || badge.tone === 'warn' || badge.tone === 'error' ? { tone: badge.tone } : {}) }];
     })
     : [];
   const fields = Array.isArray(row.fields)
@@ -898,13 +919,13 @@ interface HttpEvent {
   value: Json;
 }
 
-function unwrapEnum(value: unknown): { tag?: string; body: Json } | undefined {
+function unwrapEnum(value: unknown): { tag?: string; body: Json; wrapper?: Json } | undefined {
   if (!isRecord(value)) return undefined;
   const keys = Object.keys(value);
   if (keys.length === 1 && isRecord(value[keys[0]])) {
     const inner = value[keys[0]] as Json;
     const body = isRecord(inner._0) ? inner._0 : inner;
-    return { tag: keys[0], body };
+    return { tag: keys[0], body, wrapper: inner };
   }
   return { body: value };
 }
@@ -912,12 +933,14 @@ function unwrapEnum(value: unknown): { tag?: string; body: Json } | undefined {
 function httpEvent(raw: unknown): HttpEvent | undefined {
   const wrapped = unwrapEnum(raw);
   if (!wrapped) return undefined;
-  const { tag, body } = wrapped;
+  const { tag, body, wrapper } = wrapped;
   const phase = str(body.phase);
-  const id = str(body.id) ?? str(body.requestID) ?? str(body.requestId);
+  // An error variant can carry its request id beside `_0` (`{error: {requestID, _0: {...}}}`).
+  const idOf = (record: Json | undefined) => record && (str(record.id) ?? str(record.requestID) ?? str(record.requestId));
+  const id = idOf(body) ?? idOf(wrapper);
   if (!id) return undefined;
   const status = num(body.statusCode);
-  const isResponse = phase === 'RESPONSE_END' || phase === 'FAILED' || /response|finish|end|fail/i.test(tag ?? '') || (!phase && !tag && status !== undefined);
+  const isResponse = phase === 'RESPONSE_END' || phase === 'FAILED' || /response|finish|end|fail|error/i.test(tag ?? '') || (!phase && !tag && status !== undefined);
   if (isResponse) {
     const failed = phase === 'FAILED' || /fail|error/i.test(tag ?? '');
     return { kind: failed ? 'failed' : 'response', id, status, durationMs: num(body.durationMs), value: body };
@@ -928,7 +951,8 @@ function httpEvent(raw: unknown): HttpEvent | undefined {
   return { kind: 'request', id, method, url, urlPath: str(body.urlPath), value: body };
 }
 
-function networkCallNote(t: number, request: HttpEvent | undefined, end: HttpEvent | undefined, device: string | undefined): StreamNote {
+/** [endT] is when a formatter says the call ended, for an end record that carries no `durationMs`. */
+function networkCallNote(t: number, request: HttpEvent | undefined, end: HttpEvent | undefined, device: string | undefined, endT?: number): StreamNote {
   const url = request?.url;
   let parsed: URL | undefined;
   try {
@@ -942,7 +966,7 @@ function networkCallNote(t: number, request: HttpEvent | undefined, end: HttpEve
   const badges: NoteBadge[] = [];
   if (end?.kind === 'failed') badges.push({ text: 'FAILED', tone: 'error' });
   else if (status !== undefined) badges.push({ text: String(status), tone: status >= 400 ? 'error' : 'ok' });
-  const ms = end?.durationMs;
+  const ms = end?.durationMs ?? (request && end && endT !== undefined ? endT - t : undefined);
   if (ms !== undefined && ms >= 0) badges.push({ text: `${Math.round(ms)}ms` });
   const fields: NoteField[] = [];
   if (url) fields.push({ k: 'URL', v: clip(url, 600) });
@@ -964,7 +988,7 @@ function networkRowNote(row: Json, device: string | undefined): StreamNote | und
   const raw = Array.isArray(row.raw) ? row.raw.map(httpEvent).filter((event): event is HttpEvent => event !== undefined) : [];
   const request = raw.find((event) => event.kind === 'request');
   if (t === undefined || !request) return rowNote(row);
-  return networkCallNote(t, request, raw.find((event) => event !== request), device);
+  return networkCallNote(t, request, raw.find((event) => event !== request), device, num(row.endT));
 }
 
 /** Capture writes each request and its response as separate lines, keyed by id. Pair them here and
@@ -1499,6 +1523,7 @@ function traceEntries(value: unknown): TraceEntry[] {
       objective: entry.objective === true,
       trailhead: entry.trailhead === true,
       teardown: entry.teardown === true,
+      setup: entry.setup === true,
       selfHeal: entry.selfHeal === true,
       selfHealTool: str(entry.selfHealTool),
       selfHealError: str(entry.selfHealError),
@@ -1534,7 +1559,7 @@ function problemDetail(...texts: Array<string | undefined>): string | undefined 
 
 function objectiveStepRef(step: StreamStep, bandIndex: number): DiagnosisStep {
   return {
-    kind: step.kind === 'trailhead' ? 'trailhead' : step.kind === 'teardown' ? 'teardown' : 'step',
+    kind: step.kind === 'setup' ? 'setup' : step.kind === 'trailhead' ? 'trailhead' : step.kind === 'teardown' ? 'teardown' : 'step',
     ...(step.number !== undefined ? { number: step.number } : {}),
     title: step.title,
     bandIndex,
@@ -1659,8 +1684,8 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
       shot = addShot(child.screenshotFile, t, child.label) ?? shot;
     });
     if (entry.objective) {
-      const heal = healPending !== undefined && healPending.title === entry.label && !entry.trailhead && !entry.teardown;
-      const kind: StepKind = heal ? 'heal' : entry.teardown ? 'teardown' : entry.trailhead ? 'trailhead' : 'step';
+      const heal = healPending !== undefined && healPending.title === entry.label && !entry.trailhead && !entry.teardown && !entry.setup;
+      const kind: StepKind = heal ? 'heal' : entry.setup ? 'setup' : entry.teardown ? 'teardown' : entry.trailhead ? 'trailhead' : 'step';
       if (kind === 'step') number++;
       const step: StreamStep = {
         kind,
@@ -1692,14 +1717,24 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
     }
   }
 
-  const streams = new Map<string, { name: string; total: number; notes: StreamNote[]; fold: FoldPolicy }>();
+  const streams = new Map<string, { name: string; total: number; notes: StreamNote[]; fold: FoldPolicy; declaredFold?: boolean; shown?: boolean; derivedFrom?: string[] }>();
   if (tools.length > 0) streams.set(TOOLS_LANE, { name: 'Tools', total: tools.length, notes: tools, fold: 'any' });
   if (llm.length > 0) streams.set(LLM_LANE, { name: 'LLM', total: llm.length, notes: llm, fold: 'any' });
   const rawStreams = ((input.events ?? []) as unknown[]).filter(isRecord);
+  // Trailblaze's own network capture (`network`, `network.<device>`) is a default. A stream the app
+  // provides for the same lane (`<plugin>.network…`, from an HTTP interceptor, say) replaces it, so
+  // the lane shows the app's view of its traffic, once.
+  const providedLanes = new Set(rawStreams.flatMap((stream) => {
+    const name = str(stream.name);
+    const id = name ? laneIdentity(name).id : undefined;
+    return name && id && name !== id && isNetworkLane(id) ? [id] : [];
+  }));
   for (const stream of rawStreams) {
     const streamName = str(stream.name);
     if (!streamName) continue;
-    const identity = laneIdentity(streamName);
+    const named = laneIdentity(streamName);
+    if (streamName === named.id && providedLanes.has(named.id)) continue;
+    const identity = str(stream.title) ? { id: named.id, name: str(stream.title)! } : named;
     // A device-clock event has no offset to the run's clock, so it can't be placed beside the rest.
     const events = (Array.isArray(stream.events) ? stream.events.filter(isRecord) : []).filter((event) => event.clock !== 'device');
     const rows = Array.isArray(stream.rows) ? stream.rows.filter(isRecord) as Json[] : undefined;
@@ -1718,12 +1753,23 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
         return t === undefined || typeof event.d !== 'string' ? [] : [parsedEvent(t, event.d)];
       }));
     if (notes.length === 0) continue;
+    // A fold the stream's owner declares wins over the lane's own default.
+    const declared = foldOf(stream.fold);
     const existing = streams.get(identity.id);
     if (existing) {
       existing.notes.push(...notes);
       existing.total += built?.total ?? notes.length;
+      // Streams sharing a lane come in no set order: a declared fold beats a default, and of two
+      // declared folds the one that keeps more rows apart wins.
+      if (declared && (!existing.declaredFold || FOLD_RESTRAINT[declared] > FOLD_RESTRAINT[existing.fold])) {
+        existing.fold = declared;
+        existing.declaredFold = true;
+      }
+      if (stream.shown === true) existing.shown = true;
     } else {
-      streams.set(identity.id, { name: identity.name, total: built?.total ?? notes.length, notes, fold: built?.fold ?? 'any' });
+      const fold = declared ?? built?.fold ?? 'any';
+      const derivedFrom = Array.isArray(stream.derivedFrom) ? stream.derivedFrom.filter((source): source is string => typeof source === 'string') : undefined;
+      streams.set(identity.id, { name: identity.name, total: built?.total ?? notes.length, notes, fold, ...(declared ? { declaredFold: true } : {}), ...(stream.shown === true ? { shown: true } : {}), ...(derivedFrom ? { derivedFrom } : {}) });
     }
   }
 
@@ -1833,7 +1879,7 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
     const bands: StreamNote[][] = steps.map(() => []);
     const sorted = stream.notes.slice().sort((a, b) => a.t - b.t);
     for (const note of steps.length > 0 ? foldBursts(sorted, stream.fold) : []) bands[bandOf(note.t)].push(note);
-    return { id, name: stream.name, total: stream.total, bands };
+    return { id, name: stream.name, total: stream.total, ...(stream.shown ? { shown: true } : {}), ...(stream.derivedFrom ? { derivedFrom: stream.derivedFrom } : {}), bands };
   });
 
   return {
@@ -1880,7 +1926,7 @@ export function arrangeLanes<T extends { id: string; name: string }>(lanes: T[],
   const rank = (id: string): number => {
     const saved = preference.order.indexOf(id);
     if (saved !== -1) return saved;
-    const preferred = defaults.indexOf(isNetworkLane(id) ? 'network' : id);
+    const preferred = defaults.indexOf(defaultLaneKey(id));
     return preference.order.length + (preferred === -1 ? defaults.length : preferred);
   };
   return lanes
@@ -1890,13 +1936,21 @@ export function arrangeLanes<T extends { id: string; name: string }>(lanes: T[],
 }
 
 export function isLaneVisible(id: string, preference: LaneLayoutPreference, defaults: readonly string[] = DEFAULT_VISIBLE): boolean {
-  return preference.visible[id] ?? defaults.includes(isNetworkLane(id) ? 'network' : id);
+  return preference.visible[id] ?? defaults.includes(defaultLaneKey(id));
+}
+
+/** The lanes a run opens on when the reader hasn't chosen: the defaults and every lane that asks to
+ * be shown, or, for a run with none of them, its first few lanes so the board is never empty. */
+export function openingLanes(lanes: Array<{ id: string; shown?: boolean }>): readonly string[] {
+  const shown = lanes.filter((lane) => lane.shown).map((lane) => lane.id);
+  if (shown.length === 0 && !lanes.some((lane) => DEFAULT_VISIBLE.includes(defaultLaneKey(lane.id)))) return defaultLaneIds(lanes);
+  return [...DEFAULT_VISIBLE, ...shown];
 }
 
 /** The lanes a run opens on when the reader hasn't chosen: the defaults, or, for a run with none of
  * them, its first few lanes so the board is never empty. */
 export function defaultLaneIds(lanes: Array<{ id: string }>, defaults: readonly string[] = DEFAULT_VISIBLE): string[] {
-  const present = lanes.filter((lane) => defaults.includes(isNetworkLane(lane.id) ? 'network' : lane.id));
+  const present = lanes.filter((lane) => defaults.includes(defaultLaneKey(lane.id)));
   return (present.length > 0 ? present : lanes.slice(0, 3)).map((lane) => lane.id);
 }
 

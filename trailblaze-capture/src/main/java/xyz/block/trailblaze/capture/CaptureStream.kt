@@ -30,6 +30,13 @@ interface CaptureStream {
    * @param options The session's capture options, for streams whose finalize step depends on them.
    */
   fun stop(options: CaptureOptions = CaptureOptions.NONE): CaptureArtifact?
+
+  /**
+   * Called once every stream of the session has started. The streams start in parallel, so one
+   * whose start lost the device's connection can have ended a stream that started before it; a
+   * stream that can tell it stopped recording starts again here.
+   */
+  fun confirmRecording() {}
 }
 
 /**
@@ -47,6 +54,16 @@ internal interface AppScopedCaptureStream {
    */
   val appProcessName: String?
     get() = null
+
+  /**
+   * Bytes of output written before [markSessionStart], such as while the device connected. They
+   * stay in the log, but a crash in them is not the session's and does not fail its run.
+   */
+  val bytesBeforeSessionStart: Long
+    get() = 0
+
+  /** Marks where the session's own output begins; see [bytesBeforeSessionStart]. */
+  fun markSessionStart() {}
 }
 
 /** Which side of a tool call a [ToolCallAwareCaptureStream] is being told about. */

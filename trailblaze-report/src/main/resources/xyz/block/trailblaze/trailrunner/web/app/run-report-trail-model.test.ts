@@ -3,7 +3,7 @@
 // lane's own clock, and frame selection matches the Lightbox's rules.
 import { describe, expect, test } from "bun:test";
 import { buildReportTraceModel, failureAnchorIndex } from "./run-report-trace-model";
-import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, videoShotKey, type TrailCandidate } from "./run-report-trail-model";
+import { buildTrailMatrix, captureShotFile, DEVICE_SETUP_ROW, trailStepToken, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, videoShotKey, type TrailCandidate } from "./run-report-trail-model";
 
 const row = (i: number, patch: Partial<TraceStep> = {}): TraceStep => ({
   i,
@@ -225,6 +225,23 @@ describe("buildTrailMatrix", () => {
     const matrix = buildTrailMatrix([model], everyShot, isLlmTurn);
 
     expect(matrix.rows[0].cells[0]?.durationMs).toBe(2000);
+  });
+
+  test("the run's device setup gets its own row above the trailhead and leaves the step numbers alone", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, setup: true, label: "Setup: setAppearance", ts: 0 }),
+      row(2, { ts: 0, ms: 300 }),
+      row(3, { objective: true, trailhead: true, label: "Prepare", ts: 1000 }),
+      row(4, { ts: 1000, ms: 500 }),
+      row(5, { objective: true, label: "Sign in", ts: 2000 }),
+      row(6, { ts: 2000, ms: 1000 }),
+    ], 0);
+
+    const matrix = buildTrailMatrix([model], everyShot, isLlmTurn);
+
+    expect(matrix.rows.map((r) => r.num)).toEqual([DEVICE_SETUP_ROW, 0, 1]);
+    expect(matrix.rows[0].cells[0]?.durationMs).toBe(300);
+    expect([DEVICE_SETUP_ROW, 0, 1].map(trailStepToken)).toEqual(["DEVICE SETUP", "TRAILHEAD", "STEP 1"]);
   });
 
   test("a failed teardown stays off the matrix, so the Trailhead row keeps its own verdict and span", () => {

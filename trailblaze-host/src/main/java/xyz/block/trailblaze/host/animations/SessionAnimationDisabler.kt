@@ -74,8 +74,12 @@ object SessionAnimationDisabler {
    * No-ops when the gate is off, on unsupported platforms (web), and when the session is already
    * set up (idempotent).
    */
-  fun startForSession(sessionId: SessionId, deviceId: TrailblazeDeviceId) {
-    if (!DisableAnimationsGate.enabled()) return
+  fun startForSession(
+    sessionId: SessionId,
+    deviceId: TrailblazeDeviceId,
+    driverDefault: Boolean = false,
+  ) {
+    if (!DisableAnimationsGate.enabled(driverDefault)) return
     when (deviceId.trailblazeDevicePlatform) {
       TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> Unit
       else -> return

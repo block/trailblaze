@@ -22,7 +22,6 @@ import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.ReportTiming
 import xyz.block.trailblaze.report.RunReportGenerator
-import xyz.block.trailblaze.report.SessionLogSnapshot
 import xyz.block.trailblaze.report.toSessionResult
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
@@ -39,6 +38,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.displayTitle
 
 /**
  * Generates a pass/fail summary and optional HTML report after CLI trail execution.
@@ -175,25 +175,18 @@ open class CliReportGenerator(
    * [generateInteractiveReport] seam so subclass overrides apply. Returns null when it could not
    * be produced, which means a broken `bun` — a required dependency, not an optional one.
    *
-   * The session logs are parsed ONCE here (into immutable [SessionLogSnapshot]s) and handed to
-   * the generator, because the daemon repo's parse cache is deliberately evicted the moment a
-   * session ends and the generator would otherwise trigger a full re-parse.
+   * The generator captures each session's logs as it reaches that session and drops them once it
+   * is written, so a report over many sessions never holds all their logs at once.
    */
   fun generateHtmlReports(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
+    imageBaseUrl: String? = null,
     skips: List<SkippedTrail> = emptyList(),
   ): File? {
-    // Skip the capture when nothing would consume it: with bun missing the generator resolves to
-    // null before touching the snapshots.
-    val snapshots = if (runReportGenerator.isBunAvailable) {
-      SessionLogSnapshot.captureAll(logsRepo, sessionIds)
-    } else {
-      null
-    }
-    return generateInteractiveReport(logsRepo, sessionIds, snapshots, shareUrl, fullEventPayloads, skips)
+    return generateInteractiveReport(logsRepo, sessionIds, shareUrl, fullEventPayloads, imageBaseUrl, skips)
   }
 
   /**
@@ -205,14 +198,13 @@ open class CliReportGenerator(
    * renderer). Returns null when it can't be produced — a broken `bun` (a required Trailblaze
    * dependency), or a subprocess failure — with the cause logged; the fix is to repair the install.
    *
-   * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports],
-   *   which shares one parse with this seam). Null — e.g. a direct call to this seam —
-   *   means the generator captures its own.
    * @param shareUrl Optional canonical hosted URL baked into the report so its Copy link
    *   produces deep links against that URL (the `report --share-url` path).
    * @param fullEventPayloads When true (the `--full-report-payloads` flag), event formatters
    *   embed full payloads even for passed sessions instead of applying their report size
    *   budgets. Failed sessions always embed full payloads regardless.
+   * @param imageBaseUrl When non-null (the `--link-images` flag), screenshots and recordings are
+   *   linked at `<imageBaseUrl><sessionId>/<file>` instead of embedded. Null embeds them.
    * @param skips Trails the runner declined to run, already scoped by the caller to the same work
    *   [sessionIds] covers. Empty — the default — is the safe answer for a report over a SUBSET of a
    *   logs directory, which is why this is passed in rather than read from the directory here.
@@ -220,15 +212,11 @@ open class CliReportGenerator(
   open fun generateInteractiveReport(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
-    snapshots: List<SessionLogSnapshot>? = null,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
+    imageBaseUrl: String? = null,
     skips: List<SkippedTrail> = emptyList(),
-  ): File? = if (snapshots != null) {
-    runReportGenerator.generateFromSnapshots(logsRepo, snapshots, shareUrl, fullEventPayloads, skips = skips)
-  } else {
-    runReportGenerator.generate(logsRepo, sessionIds, shareUrl, fullEventPayloads, skips = skips)
-  }
+  ): File? = runReportGenerator.generate(logsRepo, sessionIds, shareUrl, fullEventPayloads, imageBaseUrl, skips)
 
   /**
    * Generates a markdown report for the given session IDs.
@@ -523,8 +511,7 @@ open class CliReportGenerator(
 
     val platform = sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase() ?: "unknown"
     val outcome = mapStatusToOutcome(status)
-    val title = sessionInfo.trailConfig?.title
-      ?: sessionInfo.trailConfig?.id
+    val title = sessionInfo.trailConfig?.displayTitle()
       ?: sessionInfo.trailFilePath?.let { TrailRecordings.shortTrailName(it) }
       ?: sessionInfo.testName?.takeIf { it.isNotBlank() }?.let { name ->
         sessionInfo.testClass?.let { cls -> "$cls:$name" } ?: name

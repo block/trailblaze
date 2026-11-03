@@ -78,10 +78,16 @@ class AndroidComposeClassProjectionOnDeviceTest {
     val field = composeNodeWithTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG)
     assertEquals("android.widget.EditText", field.accessibilityClassName)
 
-    // A button is a container here — its label is a child node — so the role does not apply and it
-    // publishes the plain view class, exactly as the accessibility tree shows a Market row.
-    val button = composeNodeWithTag(MixedUiFixtureActivity.COMPOSE_BUTTON_TAG)
-    assertEquals("android.view.View", button.accessibilityClassName)
+    // A Material button holds its label as a child, so the accessibility tree shows it as a plain
+    // view with the role on a synthetic last child. A recording names it either way: by its label,
+    // or as the nth `android.widget.Button`, which counts those synthetic children.
+    val button = nodes.first {
+      (it.driverDetail as? DriverNodeDetail.Compose)?.testTag == MixedUiFixtureActivity.COMPOSE_BUTTON_TAG
+    }
+    assertEquals("android.view.View", (button.driverDetail as DriverNodeDetail.Compose).accessibilityClassName)
+    val roleCarrier = button.children.last().driverDetail as DriverNodeDetail.Compose
+    assertEquals("android.widget.Button", roleCarrier.accessibilityClassName)
+    assertNull(roleCarrier.testTag, "the synthetic child carries the role and nothing else of its button")
   }
 
   @Test

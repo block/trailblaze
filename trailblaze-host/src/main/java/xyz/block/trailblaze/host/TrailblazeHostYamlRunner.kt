@@ -9,6 +9,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.api.ScreenState
@@ -68,6 +69,7 @@ import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.renderMultiDevicePromptSection
@@ -260,7 +262,7 @@ object TrailblazeHostYamlRunner {
     metadata: SessionMetadata = SessionMetadata(),
     cleanup: suspend () -> Unit = {},
     execute: suspend (TrailblazeSession) -> SessionId?,
-  ): SessionId? {
+  ): SessionId? = TrailExecution.within(metadata.trailId) {
     val sessionManager = loggingRule.sessionManager
     val session = if (overrideSessionId != null) {
       sessionManager.createSessionWithId(overrideSessionId, metadata)
@@ -283,7 +285,7 @@ object TrailblazeHostYamlRunner {
     }
 
     var executionFailure: Throwable? = null
-    return try {
+    try {
       execute(session)
     } catch (e: TrailblazeSessionCancelledException) {
       executionFailure = e
@@ -1191,6 +1193,10 @@ object TrailblazeHostYamlRunner {
 
       // One trail: the trailhead's teardown runs after it, whatever the outcome.
       runnerUtil.runTrail {
+        // The run's setup tool calls, before anything else in the trail, the trailhead included.
+        DeviceSetupToolsMemory.read(memory)?.let { setup ->
+          runnerUtil.runDeviceSetup(setup, { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } }, toolRepo)
+        }
         for (item in trailItems) {
           val itemResult = when (item) {
             is TrailYamlItem.PromptsTrailItem ->

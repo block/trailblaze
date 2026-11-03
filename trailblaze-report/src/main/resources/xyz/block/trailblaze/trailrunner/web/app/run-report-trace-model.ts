@@ -98,10 +98,10 @@ function teardownRows(trace: TraceStep[]): boolean[] {
  * end-of-run row logged after the teardown is the trail's. A row outside any step falls back to
  * where it sits in the trace. Null when the run has no trailhead and the row precedes the trail.
  */
-export function rowPhase(trace: TraceStep[], model: ReportTraceModel, index: number): 'trailhead' | 'trail' | 'teardown' | null {
+export function rowPhase(trace: TraceStep[], model: ReportTraceModel, index: number): 'setup' | 'trailhead' | 'trail' | 'teardown' | null {
   const header = model.groupByRow.get(trace[index])?.header;
-  if (header) return header.teardown ? 'teardown' : header.trailhead ? 'trailhead' : 'trail';
-  const trailStart = trace.findIndex((t) => t.objective && !t.trailhead);
+  if (header) return header.setup ? 'setup' : header.teardown ? 'teardown' : header.trailhead ? 'trailhead' : 'trail';
+  const trailStart = trace.findIndex((t) => t.objective && !t.trailhead && !t.setup);
   const teardownStart = trace.findIndex((t) => t.objective && t.teardown);
   if (teardownStart >= 0 && index >= teardownStart) return 'teardown';
   if (trailStart >= 0 && index >= trailStart) return 'trail';
@@ -153,7 +153,7 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
 
     if (row.objective) {
       const retry = current && current.header && current.header.selfHeal && !current.header.ok
-        && !row.trailhead && !row.teardown && current.header.label === row.label;
+        && !row.trailhead && !row.teardown && !row.setup && current.header.label === row.label;
       if (retry && current) {
         current.retryAt.push(current.items.length);
         current.retryHeaders.push(row);
@@ -163,7 +163,7 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
       if (current && !(current.header && current.header.teardown)) beforeTeardown = current;
       current = {
         header: row,
-        num: row.trailhead || row.teardown ? 0 : ++authoredStepNumber,
+        num: row.trailhead || row.teardown || row.setup ? 0 : ++authoredStepNumber,
         items: [],
         retryAt: [],
         retryHeaders: [],

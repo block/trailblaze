@@ -12,14 +12,16 @@
 //
 // `logs` is the verbatim array of a session's Trailblaze log records (the same JSON the daemon serves
 // to the web app at /trailrunner/api/session/{id}/logs). `sessionDir` is where screenshots live.
+import { createHash } from "crypto";
 import { createRequire } from "module";
-import { spawnSync } from "child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "fs";
+import { spawn, spawnSync } from "child_process";
+import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
+import { availableParallelism } from "os";
 import { basename, join, sep } from "path";
 import { gzipSync } from "zlib";
 import {
   ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES,
-  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs, rootNetworkStreamFiles,
+  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs, DERIVED_STREAMS_FILE, DERIVED_STREAMS_MAX_BYTES, applyDerivedLanes, rootNetworkStreamFiles,
   isSafeSessionRelativePath, resolveFormatterModule,
 } from "./run-report-events";
 import { MAX_TRACE_BYTES, parseTraceFileText } from "./run-report-trace-spans";
@@ -88,6 +90,7 @@ type ReportCore = {
   // only reachable through it.
   extractVisibleStrings(logs: unknown[] | null | undefined): VisibleStringsScreen[] | null;
   visibleStringsShotFiles(lines: VisibleStringsScreen[] | null | undefined): string[];
+  sidecarScript(text: string): string;
   buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; allRunsUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string;
 };
 
@@ -187,7 +190,9 @@ function clipDataUri(path: string, budget?: MediaBudget): { uri: string; mime: s
 // assumes it on PATH) — but external report generation must not require it, so every failure
 // (no ffmpeg, decode error, result not actually smaller) falls back to inlining the original
 // bytes. Screenshots at or under SCREENSHOT_RECOMPRESS_MIN_BYTES (already-compressed WEBPs from
-// the Android path are ~30-50KB) skip the subprocess entirely.
+// the Android path are ~30-50KB) skip the subprocess entirely. One ffmpeg per screenshot is the
+// bulk of a large report's generation time, so they run as a pool across cores before the
+// sessions are assembled (see recompressScreenshots).
 const SCREENSHOT_MAX_HEIGHT = 900;
 const SCREENSHOT_JPEG_QSCALE = 5; // mjpeg qscale 2(best)..31; 5 ≈ libjpeg quality ~80
 const SCREENSHOT_RECOMPRESS_MIN_BYTES = 100 * 1024;
@@ -207,20 +212,82 @@ function hasFfmpeg(ffmpeg: string): boolean {
 }
 
 /** Re-encode one screenshot to a bounded JPEG; null on any failure (caller falls back). */
-function recompressScreenshot(path: string, originalBytes: number, ffmpeg: string): Buffer | null {
-  if (!hasFfmpeg(ffmpeg)) return null;
+export function recompressScreenshot(path: string, originalBytes: number, ffmpeg: string): Promise<Buffer | null> {
   // scale=-2:min(ih,MAX): downscale to MAX px tall (keeping aspect, even width for the encoder);
   // an already-short screenshot passes through at its own height. The JPEG is written to stdout
-  // (-f mjpeg pipe:1), which spawnSync captures - no temp files.
-  const res = spawnSync(ffmpeg, [
-    "-i", path,
-    "-vf", `scale=-2:'min(ih,${SCREENSHOT_MAX_HEIGHT})'`,
-    "-frames:v", "1", "-qscale:v", String(SCREENSHOT_JPEG_QSCALE),
-    "-f", "mjpeg", "pipe:1",
-  ], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-  if (res.status !== 0 || !res.stdout) return null;
-  // A tiny/flat original (or one already smaller than its JPEG) keeps its original bytes.
-  return res.stdout.length && res.stdout.length < originalBytes ? res.stdout : null;
+  // (-f mjpeg pipe:1) and collected here - no temp files. The pool already runs one ffmpeg per
+  // core, so each is pinned to one thread per stage; left to auto-size, every process spawns a
+  // thread per core in the decoder, filter graph and encoder.
+  return new Promise((resolve) => {
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(ffmpeg, [
+        "-threads", "1", "-i", path,
+        "-vf", `scale=-2:'min(ih,${SCREENSHOT_MAX_HEIGHT})'`, "-filter_threads", "1",
+        "-frames:v", "1", "-qscale:v", String(SCREENSHOT_JPEG_QSCALE),
+        "-threads", "1", "-f", "mjpeg", "pipe:1",
+      ], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      // spawn throws synchronously for arguments it rejects (e.g. a NUL byte in the path); one
+      // screenshot that cannot be encoded must not fail the whole report.
+      return resolve(null);
+    }
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let discarded = false;
+    proc.stdout!.on("data", (chunk: Buffer) => {
+      if (discarded) return;
+      received += chunk.length;
+      // A JPEG that is not smaller than the original is thrown away below, so stop buffering it.
+      if (received >= originalBytes) {
+        discarded = true;
+        chunks.length = 0;
+        proc.kill();
+        return resolve(null);
+      }
+      chunks.push(chunk);
+    });
+    proc.on("error", () => resolve(null));
+    proc.on("close", (code) => {
+      if (code !== 0) return resolve(null);
+      const jpeg = Buffer.concat(chunks);
+      // A tiny/flat original keeps its original bytes.
+      resolve(jpeg.length ? jpeg : null);
+    });
+  });
+}
+
+/**
+ * Re-encode every screenshot in [paths] that is over the budget, [concurrency] ffmpeg processes
+ * at a time, keyed by path. A path missing from the result (under the budget, unreadable, or a
+ * failed or larger encode) is one [screenshotDataUri] inlines as its original bytes.
+ */
+export async function recompressScreenshots(
+  paths: string[],
+  ffmpeg: string = "ffmpeg",
+  concurrency: number = availableParallelism(),
+): Promise<Map<string, Buffer>> {
+  const recompressed = new Map<string, Buffer>();
+  const jobs: Array<{ path: string; size: number }> = [];
+  for (const path of new Set(paths)) {
+    try {
+      const size = statSync(path).size;
+      if (size > SCREENSHOT_RECOMPRESS_MIN_BYTES) jobs.push({ path, size });
+    } catch {
+      // Unreadable here is unreadable when inlining too; screenshotDataUri reports it as missing.
+    }
+  }
+  if (jobs.length === 0 || !hasFfmpeg(ffmpeg)) return recompressed;
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const { path, size } = jobs[next++];
+      const jpeg = await recompressScreenshot(path, size, ffmpeg);
+      if (jpeg) recompressed.set(path, jpeg);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), jobs.length) }, worker));
+  return recompressed;
 }
 
 /**
@@ -298,17 +365,11 @@ function encodePathSegments(value: string): string {
     .join("/");
 }
 
-export function screenshotDataUri(sessionDir: string, file: string, ffmpeg: string = "ffmpeg"): string | null {
+/** A screenshot's data URI: its [recompressScreenshots] JPEG when it has one, else the original bytes. */
+export function screenshotDataUri(sessionDir: string, file: string, recompressed: ReadonlyMap<string, Buffer>): string | null {
   const path = join(sessionDir, file);
-  try {
-    const size = statSync(path).size;
-    if (size > SCREENSHOT_RECOMPRESS_MIN_BYTES) {
-      const jpeg = recompressScreenshot(path, size, ffmpeg);
-      if (jpeg) return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
-    }
-  } catch {
-    return null;
-  }
+  const jpeg = recompressed.get(path);
+  if (jpeg) return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
   return dataUri(path);
 }
 
@@ -421,6 +482,12 @@ export function readEvents(
   try {
     const dir = join(sessionDir, "events");
     const clockSync = readDeviceClockSync(sessionDir);
+    let derived: string | null = null;
+    try {
+      // Lane titles only: a manifest that cannot be read costs them, never the captured streams.
+      const derivedPath = join(dir, DERIVED_STREAMS_FILE);
+      if (existsSync(derivedPath) && statSync(derivedPath).isFile() && statSync(derivedPath).size <= DERIVED_STREAMS_MAX_BYTES) derived = readFileSync(derivedPath, "utf8");
+    } catch { /* no derived lanes */ }
     const streams: EventStream[] = [];
     let totalChars = 0;
     // False once the total budget is spent, so later streams are skipped too.
@@ -452,6 +519,7 @@ export function readEvents(
         if (!add(join(sessionDir, file), file)) break;
       }
     }
+    applyDerivedLanes(streams, derived);
     return streams.length ? streams : null;
   } catch {
     return null;
@@ -574,6 +642,45 @@ function packGz<T>(value: T | null, encode: (value: T) => string, maxInlineChars
 function packEvents(streams: EventStream[] | null): { events: EventStream[] | null; eventsGz: string | null } {
   const { inline, gz } = packGz(streams, (s) => JSON.stringify(s), EVENTS_INLINE_MAX_CHARS);
   return { events: inline, eventsGz: gz };
+}
+
+/**
+ * Named from the payload, so every render's report keeps linking the events it was built with: a
+ * later render (other `fullEventPayloads`, a session that gained events) writes a file of its own
+ * instead of replacing the one an earlier report points at. The Kotlin side recognizes these names
+ * (ReportSidecarFiles) to keep them out of session archives.
+ */
+export function eventsSidecarFile(eventsGz: string): string {
+  return `report-events-${createHash("sha256").update(eventsGz).digest("hex").slice(0, 16)}.js`;
+}
+
+/**
+ * In linked-media mode, moves a session's packed events out of the report into a content-named
+ * sidecar (see [eventsSidecarFile]) in its session directory, linked the way its screenshots are
+ * (SessionPayload.eventsHref). They are most of a linked report's bytes, and the report is built as
+ * one string the runtime caps at 2^31 characters. Embedded mode, or a session directory that can't
+ * be written, keeps them inline.
+ */
+export function linkEventsGz(
+  eventsGz: string | null,
+  sessionDir: string,
+  sessionId: string,
+  imageBaseUrl: string | null,
+  toScript: (text: string) => string,
+): { eventsGz: string | null; eventsHref: string | null } {
+  if (eventsGz == null || imageBaseUrl == null) return { eventsGz, eventsHref: null };
+  const name = eventsSidecarFile(eventsGz);
+  const file = join(sessionDir, name);
+  // Renamed into place, so a viewer reading the previous report's sidecar never sees half of one.
+  const partial = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(partial, toScript(eventsGz));
+    renameSync(partial, file);
+  } catch {
+    rmSync(partial, { force: true });
+    return { eventsGz, eventsHref: null };
+  }
+  return { eventsGz: null, eventsHref: localShotUrl(imageBaseUrl, sessionId, name) };
 }
 
 /** Splits a device log into inline `deviceLog` vs compressed `deviceLogGz` at the threshold. */
@@ -787,7 +894,7 @@ function readVideoArtifact(sessionDir: string, art: any, clipValue: (path: strin
   return video;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [, , inputPath, outputPath] = process.argv;
   if (!inputPath || !outputPath) {
     console.error("usage: bun run-report-cli.ts <input.json> <output.html>");
@@ -805,7 +912,7 @@ function main(): void {
   // rather than granted to each of those.
   const embedBudget = newMediaBudget();
   const embedClip = budgetedClipValue(embedBudget);
-  const sessions: SessionInput[] = (input.sessions || []).map((s) => {
+  const prepared = (input.sessions || []).map((s) => {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
     const llmLogs = core.extractLlmLogs(logs);
@@ -824,18 +931,26 @@ function main(): void {
       imageBaseUrl != null && existsSync(join(s.sessionDir, file))
         ? localShotUrl(imageBaseUrl, sessionId, file)
         : null;
+    return { s, trace, llmLogs, visibleStrings, files, sessionId, linkedShot };
+  });
+  // Every screenshot that will be embedded, encoded up front in parallel; the sessions are then
+  // assembled in order exactly as before, so the shared media budget is spent in the same order.
+  const recompressed = await recompressScreenshots(prepared.flatMap(({ s, files, linkedShot }) =>
+    files.filter((f) => !isRemoteScreenshot(f) && linkedShot(f) == null).map((f) => join(s.sessionDir, f))));
+  const sessions: SessionInput[] = prepared.map(({ s, trace, llmLogs, visibleStrings, files, sessionId, linkedShot }) => {
     const shots: Record<string, string> = {};
     for (const f of files) {
       if (isRemoteScreenshot(f)) {
         shots[f] = remoteShotValue(f);
         continue;
       }
-      const uri = linkedShot(f) ?? screenshotDataUri(s.sessionDir, f);
+      const uri = linkedShot(f) ?? screenshotDataUri(s.sessionDir, f, recompressed);
       if (uri) shots[f] = uri;
     }
     const ctx = formatterContext(s.meta?.status, input.fullEventPayloads === true);
     const streams = readEvents(s.sessionDir, formatters, ctx);
-    const { events, eventsGz } = packEvents(streams);
+    const { events, eventsGz: packedEventsGz } = packEvents(streams);
+    const { eventsGz, eventsHref } = linkEventsGz(packedEventsGz, s.sessionDir, sessionId, imageBaseUrl, core.sidecarScript);
     // Before the attachments, deliberately: both draw on `embedBudget`, and the recording is the
     // one whose fallback (per-step screenshots) is embedded anyway.
     const video = readVideo(s.sessionDir, (path) => linkedShot(basename(path)) ?? embedClip(path));
@@ -863,6 +978,7 @@ function main(): void {
       networkGz,
       events,
       eventsGz,
+      eventsHref,
       spans,
       spansGz,
       visibleStrings,
@@ -885,4 +1001,4 @@ function main(): void {
 }
 
 // Entry-point guard so the test suite can import the exported helpers without running the CLI.
-if (import.meta.main) main();
+if (import.meta.main) await main();

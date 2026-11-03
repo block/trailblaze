@@ -6,9 +6,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - contact
-  - slow
   title: 'Contacts (iOS): Verify a contact has required fields'
 
 trail:

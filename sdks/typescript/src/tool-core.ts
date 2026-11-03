@@ -473,6 +473,7 @@ export function defineTypedTool<TInput, TResult>(
         driver: device?.driverType,
         target: legacyCtx?.target?.id,
         appId: legacyCtx?.target?.appId,
+        deviceClassifiers: device?.classifiers,
       }),
       history: createToolHistory(client.host),
     };
@@ -531,6 +532,7 @@ export function defineTypedTool<TInput, TResult>(
           driver: device?.driverType,
           target: legacyCtx?.target?.id,
           appId: legacyCtx?.target?.appId,
+          deviceClassifiers: device?.classifiers,
         }),
         history: createToolHistory(client.host),
       };

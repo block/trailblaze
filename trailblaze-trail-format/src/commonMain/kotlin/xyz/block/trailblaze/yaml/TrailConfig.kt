@@ -93,6 +93,15 @@ data class TrailConfig(
   val locale: String? = null,
 )
 
+/**
+ * The trail's human-readable label: [TrailConfig.title], then `metadata.title`, then
+ * [TrailConfig.id].
+ */
+fun TrailConfig.displayTitle(): String? =
+  title?.takeIf { it.isNotBlank() }
+    ?: metadata?.string("title")?.takeIf { it.isNotBlank() }
+    ?: id?.takeIf { it.isNotBlank() }
+
 @Serializable
 data class ElectronAppConfig(
   /** Path to the Electron app executable. If null, [cdpUrl] must be set. */

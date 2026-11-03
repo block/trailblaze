@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import xyz.block.trailblaze.logs.model.SessionStartFields
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenshotScalingConfig as ModelScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
@@ -154,6 +155,9 @@ object OnDeviceRpcProtoCodec {
       device_classifier_override = deviceClassifierOverride,
       trail_source_url = trailSourceUrl,
       keep_device_language = keepDeviceLanguage,
+      session_start_json = sessionStart?.let {
+        sessionStartJson.encodeToString(SessionStartFields.serializer(), it).encodeToByteArray().toByteString()
+      },
     )
 
   fun RunYamlRequest.toModel(): ModelRunYamlRequest =
@@ -184,6 +188,7 @@ object OnDeviceRpcProtoCodec {
       deviceClassifierOverride = device_classifier_override,
       trailSourceUrl = trail_source_url,
       keepDeviceLanguage = keep_device_language,
+      sessionStart = session_start_json?.let { sessionStartJson.decodeFromString(SessionStartFields.serializer(), it.utf8()) },
     )
 
   fun ModelRunYamlResponse.toProto(): RunYamlResponse =
@@ -640,6 +645,9 @@ object OnDeviceRpcProtoCodec {
       else -> error("Binary ProgressEvent omitted its event payload")
     }
   }
+
+  // A device may predate a field a newer host adds to the trail config, so unknown keys are skipped.
+  private val sessionStartJson = Json { ignoreUnknownKeys = true }
 
   private fun JsonElement.toProtoJson(): ByteString = toString().encodeToByteArray().toByteString()
 

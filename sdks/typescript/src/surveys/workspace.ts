@@ -5,7 +5,7 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { loadSurveys, type LoadedSurvey } from "./discover.js";
+import { loadSurveyModules, type LoadedEventStream, type LoadedSurvey } from "./discover.js";
 import { loadTargetCatalog, type TargetCatalog } from "./targets.js";
 
 /** The two config-dir layouts, checked in this order at each ancestor, as the CLI does. */
@@ -42,6 +42,8 @@ export interface Workspace {
   configDir: string;
   /** `<configDir>/surveys/` (surveys for any target) plus every trailmap's `surveys/`. */
   surveys: LoadedSurvey[];
+  /** The derived streams the same files declare. */
+  streams: LoadedEventStream[];
   /** Which app ids each of the workspace's targets owns. */
   targets: TargetCatalog;
 }
@@ -53,6 +55,6 @@ export async function loadWorkspace(configDir: string, log?: (message: string) =
   const hasShared = existsSync(shared) && statSync(shared).isDirectory();
   // A workspace without trailmaps is normal; passing the missing dir would log it on every run.
   const trailmapDirs = existsSync(trailmaps) ? [trailmaps] : [];
-  const surveys = await loadSurveys(hasShared ? [shared] : [], log, { trailmaps: trailmapDirs });
-  return { configDir, surveys, targets: trailmapDirs.length ? loadTargetCatalog(trailmapDirs, log) : {} };
+  const { surveys, streams } = await loadSurveyModules(hasShared ? [shared] : [], log, { trailmaps: trailmapDirs });
+  return { configDir, surveys, streams, targets: trailmapDirs.length ? loadTargetCatalog(trailmapDirs, log) : {} };
 }

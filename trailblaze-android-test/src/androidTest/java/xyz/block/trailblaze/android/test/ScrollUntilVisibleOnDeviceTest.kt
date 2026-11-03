@@ -102,7 +102,7 @@ class ScrollUntilVisibleOnDeviceTest {
   /**
    * The whole option set a recorded scroll actually carries, together.
    *
-   * Estate recordings do not write the bare command — they write the direction, a scroll speed, the
+   * Recordings do not write the bare command — they write the direction, a scroll speed, the
    * default full-visibility ask, an explicit `centerElement: false`, a timeout and an `optional`
    * flag, all at once. Accepting each option in isolation would not say this list is accepted, and
    * this driver refuses a command the moment ONE of its options is unreadable.
@@ -182,6 +182,28 @@ class ScrollUntilVisibleOnDeviceTest {
     assertTrue(error.contains("500ms"), "The failure must name the bound it hit, got: $error")
   }
 
+  /** `centerElement: true` scrolls to the target and leaves it on screen, from both entry points. */
+  @Test
+  fun canonicalCenterElementScrollsToTheTarget() {
+    run(ScrollUntilTextIsVisibleTrailblazeTool(text = ScrollFixtureActivity.TARGET_LABEL, centerElement = true))
+    run(AndroidTestAssertVisibleTool(viewText(ScrollFixtureActivity.TARGET_LABEL)))
+  }
+
+  @Test
+  fun maestroCenterElementScrollsToTheTarget() {
+    run(
+      maestro(
+        """
+        - scrollUntilVisible:
+            element:
+              text: "${ScrollFixtureActivity.TARGET_LABEL}"
+            centerElement: true
+        """.trimIndent(),
+      ),
+    )
+    run(AndroidTestAssertVisibleTool(viewText(ScrollFixtureActivity.TARGET_LABEL)))
+  }
+
   /**
    * The options this driver cannot carry out refuse from EITHER entry point.
    *
@@ -193,10 +215,6 @@ class ScrollUntilVisibleOnDeviceTest {
   @Test
   fun anOptionTheScrollLoopCannotCarryOutIsRefusedFromEitherEntryPoint() {
     val refusals = listOf(
-      "canonical centerElement" to ScrollUntilTextIsVisibleTrailblazeTool(
-        text = ScrollFixtureActivity.TARGET_LABEL,
-        centerElement = true,
-      ),
       "canonical visibilityPercentage" to ScrollUntilTextIsVisibleTrailblazeTool(
         text = ScrollFixtureActivity.TARGET_LABEL,
         visibilityPercentage = 50,
@@ -204,14 +222,6 @@ class ScrollUntilVisibleOnDeviceTest {
       "canonical scrollStartPosition" to ScrollUntilTextIsVisibleTrailblazeTool(
         text = ScrollFixtureActivity.TARGET_LABEL,
         scrollStartPosition = TrailblazeScrollStartPosition.TOP,
-      ),
-      "maestro centerElement" to maestro(
-        """
-        - scrollUntilVisible:
-            element:
-              text: "${ScrollFixtureActivity.TARGET_LABEL}"
-            centerElement: true
-        """.trimIndent(),
       ),
       "maestro visibilityPercentage" to maestro(
         """
@@ -225,8 +235,7 @@ class ScrollUntilVisibleOnDeviceTest {
     for ((what, tool) in refusals) {
       val error = runExpectingError(tool)
       assertTrue(
-        error.contains("centerElement") || error.contains("visibilityPercentage") ||
-          error.contains("scrollStartPosition"),
+        error.contains("visibilityPercentage") || error.contains("scrollStartPosition"),
         "The $what refusal must name the option it refused, got: $error",
       )
     }

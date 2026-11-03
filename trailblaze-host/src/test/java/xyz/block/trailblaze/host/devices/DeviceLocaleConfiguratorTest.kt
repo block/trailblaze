@@ -305,6 +305,8 @@ class DeviceLocaleConfiguratorTest {
     val applyWrites: Boolean = true,
     val stopSucceeds: Boolean = true,
     var killsInterrupted: Int = 0,
+    val ipad: Boolean? = false,
+    val rebootSucceeds: Boolean = true,
   ) : DeviceLocaleConfigurator.IosSimulatorHost {
     val events = mutableListOf<String>()
     private var startedPid: Long = springBoardPid ?: 400L
@@ -333,6 +335,13 @@ class DeviceLocaleConfiguratorTest {
     override fun primaryLanguage(udid: String): String? = language.also { events += "read" }
 
     override fun springBoardPid(udid: String): Long? = springBoardPid
+
+    override fun isIpad(udid: String): Boolean? = ipad
+
+    override fun reboot(udid: String): SimctlCli.Result {
+      events += "reboot"
+      return SimctlCli.Result(if (rebootSucceeds) 0 else 1, "", if (rebootSucceeds) "" else "boot failed")
+    }
 
     override fun terminate(pid: Long): Boolean {
       if (killsInterrupted-- > 0) throw InterruptedException()
@@ -374,6 +383,70 @@ class DeviceLocaleConfiguratorTest {
       ),
       simulator.events,
     )
+  }
+
+  @Test
+  fun `an iPad reboots after the language changes instead of restarting SpringBoard`() {
+    val simulator = FakeSimulator(language = "en-US", ipad = true)
+
+    assertTrue(DeviceLocaleConfigurator.applyIosSimulator("IPAD-UDID", "es", simulator))
+
+    assertEquals(
+      listOf("read", "defaults write -g AppleLanguages -array es", "read", "reboot"),
+      simulator.events,
+    )
+  }
+
+  @Test
+  fun `a simulator whose model cannot be read keeps its language and restarts nothing`() {
+    val simulator = FakeSimulator(language = "en-US", ipad = null)
+
+    assertFailsWith<IllegalStateException> {
+      DeviceLocaleConfigurator.applyIosSimulator("UNKNOWN-MODEL-UDID", "es", simulator)
+    }
+
+    assertEquals(listOf("read"), simulator.events)
+    assertEquals("en-US", simulator.language)
+  }
+
+  @Test
+  fun `an iPad that cannot reboot counts as partial and gets its old language back`() {
+    val simulator = FakeSimulator(language = "en-US", ipad = true, rebootSucceeds = false)
+
+    val failure = assertFailsWith<TrailDeviceLocale.PartiallyAppliedException> {
+      DeviceLocaleConfigurator.applyIosSimulator("IPAD-FAIL-UDID", "es", simulator)
+    }
+
+    assertTrue(failure.message.orEmpty().contains("could not reboot it: boot failed"))
+    assertEquals("en-US", simulator.language)
+  }
+
+  @Test
+  fun `an iPad whose reboot failed partway reboots again for its old language`() {
+    val failing = FakeSimulator(language = "en-US", ipad = true, rebootSucceeds = false)
+    assertFailsWith<TrailDeviceLocale.PartiallyAppliedException> {
+      DeviceLocaleConfigurator.applyIosSimulator("IPAD-PARTWAY-UDID", "es", failing)
+    }
+
+    // The failed reboot may have started SpringBoard in Spanish, so en-US reading as set is not enough.
+    val retry = FakeSimulator(language = "en-US", ipad = true)
+    assertTrue(DeviceLocaleConfigurator.applyIosSimulator("IPAD-PARTWAY-UDID", "en-US", retry))
+    assertEquals(listOf("read", "reboot"), retry.events)
+  }
+
+  @Test
+  fun `accepts only a latitude and longitude pair as the location to restore`() {
+    assertEquals("37.7749,-122.4194", DeviceLocaleConfigurator.iosSimulatorLocation(" 37.7749, -122.4194 "))
+    assertEquals(null, DeviceLocaleConfigurator.iosSimulatorLocation("San Francisco"))
+    assertEquals(null, DeviceLocaleConfigurator.iosSimulatorLocation(null))
+  }
+
+  @Test
+  fun `tells an iPad from an iPhone by its simulator device type`() {
+    assertTrue(DeviceLocaleConfigurator.isIpadDeviceType("com.apple.CoreSimulator.SimDeviceType.iPad-A16"))
+    assertTrue(DeviceLocaleConfigurator.isIpadDeviceType("com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M4-8GB\n"))
+    assertFalse(DeviceLocaleConfigurator.isIpadDeviceType("com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"))
+    assertFalse(DeviceLocaleConfigurator.isIpadDeviceType(null))
   }
 
   @Test

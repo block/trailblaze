@@ -6,6 +6,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import xyz.block.trailblaze.android.test.tools.AndroidTestExecutableTool
+import xyz.block.trailblaze.android.test.tools.CanonicalToolAdapters
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -97,7 +100,7 @@ class AndroidTestTrailAssetContractTest {
       val recordedTools = steps.flatMap { it.recording?.tools.orEmpty() }
       assertTrue(recordedTools.isNotEmpty(), "${asset.name} recorded zero tools.")
       recordedTools.forEach { wrapper ->
-        if (wrapper.trailblazeTool !is AndroidTestExecutableTool) {
+        if (!wrapper.trailblazeTool.isDispatchable()) {
           fail(
             "${asset.name} records `${wrapper.name}`, which decoded to " +
               "${wrapper.trailblazeTool::class.simpleName} rather than a tool this driver can " +
@@ -152,4 +155,9 @@ class AndroidTestTrailAssetContractTest {
   }
 
   private fun PromptStep.isReplayable(): Boolean = recordable && recording != null
+
+  /** A native `androidTest_*` tool, or a canonical one (`launchApp`, `tapOnBySelector`, ...) this driver runs. */
+  private fun TrailblazeTool.isDispatchable(): Boolean =
+    this is AndroidTestExecutableTool ||
+      (this is ExecutableTrailblazeTool && CanonicalToolAdapters.adapt(this) != null)
 }

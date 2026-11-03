@@ -176,4 +176,14 @@ class TrailRunnerPathsTest {
     assertFalse(isInside("$sibling${File.separator}secret.trail.yaml", root))
     assertFalse(isSameOrInside(sibling, root))
   }
+
+  @Test
+  fun `event stream labels keep a device network capture whole`() {
+    assertEquals("network", eventStreamLabel("com.example.network"))
+    assertEquals("feature_flags", eventStreamLabel("feature_flags"))
+    assertEquals("network", eventStreamLabel("network"))
+    assertEquals("network.seller", eventStreamLabel("network.seller"))
+    assertEquals("network.buyer", eventStreamLabel("com.example.plugin.network.buyer"))
+    assertEquals("network", eventStreamLabel("com.example.Network"))
+  }
 }

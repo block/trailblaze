@@ -11,7 +11,7 @@
 // axis would flatten exactly the differences the view exists to show. Idle stretches are skipped
 // with the speed control and the boundary-jump keys instead.
 
-import type { TrailAction, TrailCell, TrailFrame, TrailMatrix } from './run-report-trail-model';
+import { trailStepToken, type TrailAction, type TrailCell, type TrailFrame, type TrailMatrix } from './run-report-trail-model';
 
 export type ReplayOutcome = 'passed' | 'failed' | 'selfheal';
 
@@ -212,7 +212,7 @@ export interface ReplayChip {
  * whatever step was last shown — scrubbing back must not name a step the device had not reached.
  */
 export const replayChipFor = (step: ReplayStep | null): ReplayChip => step
-  ? { num: step.num === 0 ? 'TRAILHEAD' : `STEP ${step.num}`, label: step.label, outcome: step.outcome, openHeaderId: step.headerId }
+  ? { num: trailStepToken(step.num), label: step.label, outcome: step.outcome, openHeaderId: step.headerId }
   : { num: '—', label: '', outcome: null, openHeaderId: null };
 
 /**

@@ -33,6 +33,12 @@ object HostAndroidDeviceConnectUtils {
   const val MAESTRO_APP_ID = "dev.mobile.maestro"
   const val MAESTRO_TEST_APP_ID = "dev.mobile.maestro.test"
   private const val INSTRUMENTATION_START_TIMEOUT_MS = 15_000L
+
+  /**
+   * An in-process harness starts inside the app's own process, so its start includes the app's
+   * cold start: a large debug app on an emulator took 19 s to reach the test.
+   */
+  private const val IN_PROCESS_INSTRUMENTATION_START_TIMEOUT_MS = 60_000L
   private const val INSTRUMENTATION_PROCESS_VERIFY_ATTEMPTS = 5
   private const val INSTRUMENTATION_PROCESS_VERIFY_DELAY_MS = 1_000L
   private const val INSTRUMENTATION_OUTPUT_TAIL_LINES = 20
@@ -141,6 +147,7 @@ object HostAndroidDeviceConnectUtils {
     deviceId: TrailblazeDeviceId,
     deviceApiLevel: Int?,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
+    runnerClass: String = DEFAULT_INSTRUMENTATION_RUNNER,
   ): List<String> = buildList {
     val testAppId = trailblazeOnDeviceInstrumentationTarget.testAppId
     addAll(
@@ -190,8 +197,22 @@ object HostAndroidDeviceConnectUtils {
       addAll(listOf("-e", key.shellEscape(), value.shellEscape()))
     }
 
-    add("$testAppId/androidx.test.runner.AndroidJUnitRunner".shellEscape())
+    add("$testAppId/$runnerClass".shellEscape())
   }
+
+  internal const val DEFAULT_INSTRUMENTATION_RUNNER = "androidx.test.runner.AndroidJUnitRunner"
+
+  /**
+   * The runner [testAppId]'s manifest declares, from `pm list instrumentation`, or null when it is
+   * not listed. An app's own test APK may declare a runner of its own, to prepare the app before
+   * it starts, and `am instrument` names the runner exactly.
+   */
+  internal fun declaredInstrumentationRunner(pmList: String, testAppId: String): String? =
+    pmList.lineSequence()
+      .map { it.trim().substringAfter("instrumentation:", "").substringBefore(' ') }
+      .firstOrNull { it.substringBefore('/') == testAppId }
+      ?.substringAfter('/', "")
+      ?.takeIf { it.isNotBlank() }
 
   internal const val NO_HIDDEN_API_CHECKS_FLAG = "--no-hidden-api-checks"
 
@@ -587,6 +608,18 @@ object HostAndroidDeviceConnectUtils {
         // arg from the caller still wins.
         additionalInstrumentationArgs =
           NextMoveDecisionLlmClient.instrumentationArgs() + additionalInstrumentationArgs,
+        // A bundled runner is always AndroidJUnitRunner. A harness the app's own build installs
+        // may declare its own, so ask the device which.
+        runnerClass =
+          if (trailblazeOnDeviceInstrumentationTarget.installedExternally) {
+            runCatching {
+              AndroidHostAdbUtils.execAdbShellCommand(trailblazeDeviceId, listOf("pm", "list", "instrumentation"))
+            }.getOrNull()
+              ?.let { declaredInstrumentationRunner(it, trailblazeOnDeviceInstrumentationTarget.testAppId) }
+              ?: DEFAULT_INSTRUMENTATION_RUNNER
+          } else {
+            DEFAULT_INSTRUMENTATION_RUNNER
+          },
       ).joinToString(" ")
       val handle = AndroidHostAdbUtils.streamingShell(
         deviceId = trailblazeDeviceId,
@@ -641,7 +674,13 @@ object HostAndroidDeviceConnectUtils {
       }
     }
 
-    val result = withTimeoutOrNull(INSTRUMENTATION_START_TIMEOUT_MS) {
+    val startTimeoutMs =
+      if (trailblazeOnDeviceInstrumentationTarget.hostProcessAppId != null) {
+        IN_PROCESS_INSTRUMENTATION_START_TIMEOUT_MS
+      } else {
+        INSTRUMENTATION_START_TIMEOUT_MS
+      }
+    val result = withTimeoutOrNull(startTimeoutMs) {
       completableDeferred.await()
     }
     if (result != null) {
@@ -649,7 +688,7 @@ object HostAndroidDeviceConnectUtils {
     }
 
     val timeoutMessage = buildInstrumentationFailureMessage(
-      prefix = "Timed out waiting ${INSTRUMENTATION_START_TIMEOUT_MS / 1000}s for Android instrumentation to start.",
+      prefix = "Timed out waiting ${startTimeoutMs / 1000}s for Android instrumentation to start.",
       outputLines = outputLines,
     )
     val timeoutStatus = DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
@@ -885,6 +924,11 @@ object HostAndroidDeviceConnectUtils {
     forceRestart: Boolean = false,
     /** See [planConnectForceStop]. Not defaulted, for the reason given on [connectToInstrumentation]. */
     additionalForceStopTargets: Set<TrailblazeOnDeviceInstrumentationTarget>,
+    /**
+     * Runs under this device's connect lock, before the connect itself: device cleanup that must
+     * not interleave with another caller's connect, which it could otherwise tear down.
+     */
+    beforeConnect: suspend () -> Unit = {},
   ): DeviceConnectionStatus {
     val devicePort = deviceId.getTrailblazeOnDeviceSpecificPort()
     adbPortForward(deviceId, devicePort)
@@ -900,6 +944,7 @@ object HostAndroidDeviceConnectUtils {
       forceRestart = forceRestart,
       sendProgressMessage = sendProgressMessage,
     ) { effectiveForceRestart ->
+      beforeConnect()
       // Reuses existing on-device server if already running; only force-stops and
       // reinstalls when the server is not running (or a restart is required).
       connectToInstrumentationExclusive(

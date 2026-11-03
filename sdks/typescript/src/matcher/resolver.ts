@@ -462,6 +462,8 @@ function matchesCompose(
   detail: DriverNodeDetailCompose,
   match: DriverNodeMatchCompose,
 ): boolean {
+  // A role carrier mirrors its parent's semantics; counting it would make one button two matches.
+  if (detail.accessibilityProjectionOnly === true) return false;
   if (!requireEqual(match.testTag, detail.testTag ?? null)) return false;
   if (!requireEqual(match.role, detail.role ?? null)) return false;
   if (!requirePattern(match.textRegex, resolveText(detail))) return false;

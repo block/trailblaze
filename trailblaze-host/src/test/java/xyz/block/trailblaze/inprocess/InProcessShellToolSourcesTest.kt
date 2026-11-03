@@ -19,6 +19,17 @@ class InProcessShellToolSourcesTest {
   private val toolBody = "export const foo = trailblaze.tool(async () => \"ok\");\n"
 
   @Test
+  fun `ignores tool registrations mentioned only in full line comments`() {
+    val comment = "  // Imported, not registered: this helper holds no trailblaze.tool().\n"
+    val dir = trailmap("tools/accounts.ts" to comment + "export const account = { name: 'sandbox' };\n")
+
+    assertThat(InProcessShellPackager.carriesTypeScriptToolSource(listOf(dir))).isEqualTo(false)
+
+    File(dir, "tools/realTool.ts").writeText(comment + toolBody)
+    assertThat(InProcessShellPackager.carriesTypeScriptToolSource(listOf(dir))).isEqualTo(true)
+  }
+
+  @Test
   fun `a same-basename yaml for another script does not make a tool subprocess`() {
     val dir = trailmap(
       "tools/foo.ts" to toolBody,

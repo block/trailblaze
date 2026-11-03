@@ -28,6 +28,8 @@ const ev = require("./run-report-events.ts") as {
   attachmentRefOf: (value: unknown) => AttachmentRef | null;
   findAttachmentRefs: (value: unknown) => AttachmentRef[];
   collectStreamAttachmentRefs: (streams: EventStream[] | null | undefined) => AttachmentRef[];
+  derivedLanes: (json: string | null) => Map<string, { title?: string; derivedFrom: string[] }>;
+  applyDerivedLanes: (streams: EventStream[], json: string | null) => void;
 };
 
 // A request/response-pairing formatter, the shape a real network formatter takes: it sees the whole
@@ -203,6 +205,13 @@ describe("rootNetworkStreamFiles", () => {
     expect(ev.rootNetworkStreamFiles(["network.ndjson", "network.buyer.ndjson"], ["network"])).toEqual(["network.buyer.ndjson"]);
   });
 
+  test("a plugin's capture of the same traffic doesn't hide the root capture", () => {
+    expect(ev.rootNetworkStreamFiles(
+      ["network.ndjson", "network.buyer.ndjson"],
+      ["com.example.plugin.network", "com.example.plugin.network.buyer", "visible-strings"],
+    )).toEqual(["network.buyer.ndjson", "network.ndjson"]);
+  });
+
   test("ignores other ndjson files at the root", () => {
     expect(ev.rootNetworkStreamFiles(["visible-strings.ndjson", "mynetwork.ndjson"], [])).toEqual([]);
   });
@@ -308,6 +317,19 @@ describe("buildEventStream with a formatter", () => {
     ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [observing], { sessionPassed: true });
     ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [observing]);
     expect(seen).toEqual([{ sessionPassed: true }, { sessionPassed: false }]);
+  });
+
+  test("a formatter's lane options open its lane and set how it folds", () => {
+    const lane = (options: unknown) => ({ id: "lane", streams: ["s"], lane: options, format: () => [{ t: 1, label: "row" }] }) as EventStreamFormatter;
+    const built = (options: unknown) => ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [lane(options)])!;
+    expect(built({ shown: true, fold: "none" })).toMatchObject({ shown: true, fold: "none" });
+    const plain = built(undefined);
+    expect(plain.shown).toBeUndefined();
+    expect(plain.fold).toBeUndefined();
+    // A value the viewer does not know is dropped, so the lane keeps its defaults.
+    const odd = built({ shown: "yes", fold: "sideways" });
+    expect(odd.shown).toBeUndefined();
+    expect(odd.fold).toBeUndefined();
   });
 
   test("failed responses carry the error tone", () => {
@@ -452,6 +474,41 @@ describe("buildEventStream without a formatter (generic shape)", () => {
   });
 });
 
+describe("buildEventStream with a line naming its clock's stream", () => {
+  // The phone (the start device) runs 5s ahead and the tablet 9s; a derived `screens` row copied the tablet's time.
+  const sync = {
+    startDeviceId: "phone-id",
+    devices: [
+      { deviceId: "phone-id", deviceName: "phone", samples: [{ hostBeforeMs: 1000, hostAfterMs: 1010, deviceMs: 6005 }] },
+      { deviceId: "tablet-id", deviceName: "tablet", samples: [{ hostBeforeMs: 1000, hostAfterMs: 1010, deviceMs: 10005 }] },
+    ],
+  };
+
+  test("converts it on that stream's device, and the rest on the file's", () => {
+    const stream = ev.buildEventStream("screens.ndjson", [
+      '{"timeMs":10100,"clock":"device","clockStream":"analytics.tablet","data":{"screen":"cart"}}',
+      '{"timeMs":6100,"clock":"device","data":{"screen":"home"}}',
+    ], [], undefined, sync)!;
+    expect(stream.events).toEqual([
+      { t: 1100, d: '{"screen":"cart"}' },
+      { t: 1100, d: '{"screen":"home"}' },
+    ]);
+  });
+
+  test("moves a row's end with its start, so an interval keeps its length", () => {
+    const stream = ev.buildEventStream("spans.ndjson", [
+      '{"timeMs":10100,"clock":"device","clockStream":"analytics.tablet","data":{},"row":{"label":"load","endT":10200}}',
+    ], [], undefined, sync)!;
+    expect(stream.rows!.map((r) => [r.t, r.endT])).toEqual([[1100, 1200]]);
+  });
+
+  test("stays on the device clock when that device measured nothing, never another's", () => {
+    const none = { ...sync, devices: [sync.devices[0], { ...sync.devices[1], samples: [] }] };
+    const stream = ev.buildEventStream("screens.ndjson", ['{"timeMs":10100,"clock":"device","clockStream":"analytics.tablet","data":{}}'], [], undefined, none)!;
+    expect(stream.events).toEqual([{ t: 10100, d: "{}", clock: "device" }]);
+  });
+});
+
 describe("buildEventStream with device clock readings", () => {
   // Device 5000ms ahead of the host, measured once.
   const sync = { devices: [{ deviceId: "emulator-5554", samples: [{ hostBeforeMs: 1000, hostAfterMs: 1010, deviceMs: 6005 }] }] };
@@ -488,5 +545,84 @@ describe("buildEventStream with device clock readings", () => {
       [1100, null],
       [1200, null],
     ]);
+  });
+});
+
+describe("a stream whose lines carry their own rows", () => {
+  const line = (t: number, screen: string, row?: unknown) => JSON.stringify({ timeMs: t, data: { screen }, ...(row ? { row } : {}) });
+
+  test("is shown as those rows, each keeping its payload", () => {
+    const stream = ev.buildEventStream("screens.ndjson", [line(5, "Home", { label: "Home", badges: [{ text: "tab", tone: "ok" }] }), line(9, "Cart", { label: "Cart" })])!;
+    expect(stream.rows!.map((r) => [r.t, r.label])).toEqual([[5, "Home"], [9, "Cart"]]);
+    expect(stream.rows![0].badges).toEqual([{ text: "tab", tone: "ok" }]);
+    expect(stream.rows![0].raw).toEqual([{ screen: "Home" }]);
+    expect(stream.events).toEqual([]);
+  });
+
+  test("says so when it holds more rows than a lane keeps", () => {
+    const lines = Array.from({ length: 100_001 }, (_, i) => line(i, "Home", { label: "Home" }));
+    const stream = ev.buildEventStream("screens.ndjson", lines)!;
+    expect(stream.rows!.length).toBe(100_000);
+    expect(stream).toMatchObject({ total: 100_001, truncated: true });
+  });
+
+  test("stays generic when any line has no usable row, so no payload is hidden", () => {
+    expect(ev.buildEventStream("screens.ndjson", [line(5, "Home", { label: "Home" }), line(9, "Cart")])!.rows).toBeUndefined();
+    expect(ev.buildEventStream("screens.ndjson", [line(5, "Home", { label: "" })])!.rows).toBeUndefined();
+  });
+
+  test("stays generic when a row cannot be read, rather than dropping the stream", () => {
+    const stream = ev.buildEventStream("screens.ndjson", [line(5, "Home", { label: "Home", badges: [{ text: { toString: null } }] })])!;
+    expect(stream.rows).toBeUndefined();
+    expect(stream.events.length).toBe(1);
+  });
+
+  test("stays generic while a line is on the device clock with no reading to move it", () => {
+    const device = JSON.stringify({ timeMs: 5, clock: "device", data: { screen: "Home" }, row: { label: "Home" } });
+    expect(ev.buildEventStream("screens.ndjson", [device])!.rows).toBeUndefined();
+  });
+
+  test("defers to a formatter that claims the stream", () => {
+    const formatter: EventStreamFormatter = { id: "screens", streams: ["screens"], format: (entries) => entries.map((e) => ({ t: e.t, label: `fmt ${e.data.screen}` })) };
+    expect(ev.buildEventStream("screens.ndjson", [line(5, "Home", { label: "Home" })], [formatter])!.rows!.map((r) => r.label)).toEqual(["fmt Home"]);
+  });
+});
+
+describe("derivedLanes", () => {
+  test("lists each derived stream with its title", () => {
+    const lanes = ev.derivedLanes(JSON.stringify({ format: 1, streams: { screens: { rows: 3, title: "Screens" }, flags: { rows: 0 } } }));
+    expect([...lanes]).toEqual([["screens", { title: "Screens", derivedFrom: [] }], ["flags", { derivedFrom: [] }]]);
+  });
+
+  test("says what each derived stream was derived from, keeping only names", () => {
+    const lanes = ev.derivedLanes(JSON.stringify({ format: 1, streams: { visits: { rows: 1, derivedFrom: ["screens", 7, "", "screens", "tools"] }, odd: { rows: 1, derivedFrom: "screens" } } }));
+    expect(lanes.get("visits")?.derivedFrom).toEqual(["screens", "tools"]);
+    expect(lanes.get("odd")?.derivedFrom).toEqual([]);
+  });
+
+  test("marks a listed stream derived, naming its sources, and leaves a captured one alone", () => {
+    const streams = [{ name: "visits", total: 1, truncated: false, events: [] }, { name: "app.views", total: 1, truncated: false, events: [] }] as EventStream[];
+    ev.applyDerivedLanes(streams, JSON.stringify({ format: 1, streams: { visits: { rows: 1, title: "Cart visits", derivedFrom: ["screens"] } } }));
+    expect(streams[0]).toMatchObject({ title: "Cart visits", shown: true, derivedFrom: ["screens"] });
+    expect(streams[1]!.derivedFrom).toBeUndefined();
+  });
+
+  test("applies a derived stream's lane fold, and only a known one", () => {
+    const streams = [{ name: "flags", total: 1, truncated: false, events: [] }, { name: "odd", total: 1, truncated: false, events: [] }] as EventStream[];
+    ev.applyDerivedLanes(streams, JSON.stringify({ format: 1, streams: { flags: { rows: 1, lane: { fold: "none" } }, odd: { rows: 1, lane: { fold: "sideways" } } } }));
+    expect(streams[0]!.fold).toBe("none");
+    expect(streams[1]!.fold).toBeUndefined();
+  });
+
+  test("keeps the fold a formatter set over the one the stream declares", () => {
+    const streams = [{ name: "flags", total: 1, truncated: false, events: [], fold: "none" }] as EventStream[];
+    ev.applyDerivedLanes(streams, JSON.stringify({ format: 1, streams: { flags: { rows: 1, lane: { fold: "any" } } } }));
+    expect(streams[0]!.fold).toBe("none");
+  });
+
+  test("is empty for an absent or malformed manifest", () => {
+    expect(ev.derivedLanes(null).size).toBe(0);
+    expect(ev.derivedLanes("not json").size).toBe(0);
+    expect(ev.derivedLanes(JSON.stringify({ streams: [] })).size).toBe(0);
   });
 });

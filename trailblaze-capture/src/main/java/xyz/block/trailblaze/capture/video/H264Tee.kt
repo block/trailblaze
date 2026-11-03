@@ -743,11 +743,14 @@ class H264Tee internal constructor(
      * Query the device's SDK level via a one-shot `adb shell getprop ro.build.version.sdk`.
      * Returns 0 on failure so the caller falls back to the chained-segment path (safe
      * default — works on every API level).
+     *
+     * On its own connection: capture can start while the device connects, and a timeout on the
+     * shared one would replace it, and with it the instrumentation being launched over it.
      */
     internal fun sdkLevelFromDevice(deviceId: TrailblazeDeviceId): Int {
       return try {
         val sdkText = xyz.block.trailblaze.util.AndroidHostAdbUtils
-          .execAdbShellCommandWithTimeout(
+          .execAdbShellCommandOnOwnConnection(
             deviceId = deviceId,
             args = listOf("getprop", "ro.build.version.sdk"),
             timeoutMs = 5_000L,

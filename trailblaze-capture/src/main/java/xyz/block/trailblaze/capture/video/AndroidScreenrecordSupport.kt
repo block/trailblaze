@@ -71,7 +71,9 @@ internal object AndroidScreenrecordSupport {
    * which [interpret] reads as "assume it is there".
    */
   private fun probeDevice(deviceId: TrailblazeDeviceId): String? = try {
-    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+    // Its own connection: it runs beside the other streams' starts, and a timeout on the shared
+    // one would replace it, ending the log stream that already opened on it.
+    AndroidHostAdbUtils.execAdbShellCommandOnOwnConnection(
       deviceId = deviceId,
       args = listOf("command", "-v", "screenrecord", "||", "ls", "/system/bin/screenrecord"),
       timeoutMs = PROBE_TIMEOUT_MS,

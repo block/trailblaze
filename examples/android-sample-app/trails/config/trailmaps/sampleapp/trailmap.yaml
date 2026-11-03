@@ -8,6 +8,11 @@ trail_validation:
   exempt: "mcp-tools-demo records MCP-subprocess tools not present in the generated typed surface"
 target:
   display_name: Trailblaze Sample App
+  # The in-process test APK `--driver in-process` drives: built by
+  # a test module that instruments the sample app.
+  android_test:
+    test_app_id: xyz.block.trailblaze.uitests.inprocess
+    fq_test_name: xyz.block.trailblaze.uitests.inprocess.SampleAppRpcServerTest
   platforms:
     android:
       app_ids:

@@ -2,6 +2,8 @@ package xyz.block.trailblaze.report.utils
 
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -74,7 +76,7 @@ class SessionEventsReader(
     val budget = maxStreams - streams.size
     if (budget <= 0) return streams
     val rootFiles = rootNetworkFiles(sessionDir.listFiles()?.filter { it.isFile }.orEmpty(), streams.map { it.name })
-    return streams + rootFiles.take(budget).mapNotNull { (file, name) -> readStream(file, name, clockSync) }
+    return streams + rootFiles.take(budget).mapNotNull { (file, name) -> readStreamOrNull(file, name, clockSync) }
   }
 
   private fun readEventsDir(eventsDir: File, clockSync: DeviceClockSync?): List<EventStream> {
@@ -90,8 +92,16 @@ class SessionEventsReader(
       // arbitrarily many event files, and the route reads them on every poll.
       .take(maxStreams)
       .toList()
-      .mapNotNull { (file, name) -> readStream(file, name, clockSync) }
+      .mapNotNull { (file, name) -> readStreamOrNull(file, name, clockSync) }
   }
+
+  /** [readStream], with a file that vanished or can't be read costing only itself, not the other streams. */
+  internal fun readStreamOrNull(file: File, name: String, clockSync: DeviceClockSync?): EventStream? =
+    try {
+      readStream(file, name, clockSync)
+    } catch (_: IOException) {
+      null
+    }
 
   /**
    * Read one NDJSON file as a named stream, under the same per-line and per-stream bounds [read]
@@ -105,7 +115,13 @@ class SessionEventsReader(
     val clockTrack = clockSync?.trackForStream(name)
     val events = ArrayList<EventEntry>()
     var truncated = false
-    file.bufferedReader(Charsets.UTF_8).use { reader ->
+    // Gone since it was listed (a report pruning a derived stream): only this stream is missing.
+    val opened = try {
+      file.bufferedReader(Charsets.UTF_8)
+    } catch (_: FileNotFoundException) {
+      return null
+    }
+    opened.use { reader ->
       // Count bytes SCANNED (every non-blank line), not just bytes accepted. Otherwise a producer
       // that writes a large malformed prefix (or an all-malformed file) would never trip the cap —
       // `events` stays empty — and every poll of this producer-owned file would scan it unbounded.
@@ -131,7 +147,7 @@ class SessionEventsReader(
           break
         }
         scannedBytes += read.byteLen
-        parseLine(trimmed, clockTrack)?.let { events.add(it) }
+        parseLine(trimmed, clockTrack, clockSync)?.let { events.add(it) }
       }
     }
     if (events.isEmpty()) return null
@@ -153,7 +169,7 @@ class SessionEventsReader(
    * Locked against the TS `decodeEventLine` (run-report-events.ts) by
    * `session-events-parity-fixtures.json` — see `SessionEventsParityFixturesTest`.
    */
-  private fun parseLine(line: String, clockTrack: DeviceClockTrack?): EventEntry? {
+  private fun parseLine(line: String, clockTrack: DeviceClockTrack?, clockSync: DeviceClockSync?): EventEntry? {
     val obj = runCatching { JSON.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: return null
     val envelopeTime = obj[SessionEvents.TIME_FIELD]?.tryToLong()
     val orderTime = envelopeTime ?: obj[SessionEvents.LEGACY_TIME_FIELD]?.tryToLong()
@@ -162,7 +178,11 @@ class SessionEventsReader(
     val data = if (envelopeTime != null) (obj[ENVELOPE_DATA_FIELD] ?: obj) else obj
     val deviceStamped = obj[SessionEvents.CLOCK_FIELD]?.tryToString() == DEVICE_CLOCK
     if (!deviceStamped || orderTime == null) return EventEntry(timeMs = orderTime ?: 0L, data = data)
-    val hostMs = clockTrack?.toHostMs(orderTime)
+    // A line naming the stream whose device stamped it (a derived row, in a multi-device session)
+    // converts on that device's clock, even when it has no readings.
+    val clockStream = obj[CLOCK_STREAM_FIELD]?.tryToString()?.takeIf { it.isNotEmpty() }
+    val track = if (clockStream != null) clockSync?.trackForStream(clockStream) else clockTrack
+    val hostMs = track?.toHostMs(orderTime)
       ?: return EventEntry(timeMs = orderTime, data = data, clock = TrailblazeClockDomain.DEVICE)
     return EventEntry(timeMs = hostMs, data = data)
   }
@@ -214,19 +234,36 @@ class SessionEventsReader(
 
   companion object {
     private const val ENVELOPE_DATA_FIELD = "data"
+
+    /** With `clock: "device"`, the stream whose device stamped the line, when not the file's own (a derived row). */
+    private const val CLOCK_STREAM_FIELD = "clockStream"
+
     private val ROOT_NETWORK_FILE = Regex("""^network(?:\.[^/]+)?\.ndjson$""")
+
+    /** The Summary's network-lane rule: `network`, `<plugin>.network`, `network.<device>`. */
+    private val NETWORK_STREAM = Regex("""^(?:.*\.)?network(?:\.(.+))?$""", RegexOption.IGNORE_CASE)
+
+    /** The network lane a stream feeds (`network` or `network.<device>`), or null for any other stream. */
+    fun networkLaneKey(streamName: String): String? =
+      NETWORK_STREAM.matchEntire(streamName)?.let { match ->
+        match.groupValues[1].takeIf { it.isNotEmpty() }?.let { "network.$it" } ?: "network"
+      }
 
     /**
      * Network capture writes `network.ndjson` (`network.<device>.ndjson` per Android device) at the
      * session root, outside `events/`, so these root [files] are read as streams too: the Summary's
      * network lane and run comparisons only see streams. A stream `events/` already carries under
-     * the same name ([eventStreamNames]) wins. Mirrors the TS `rootNetworkStreamFiles`.
+     * the same name ([eventStreamNames]) wins. A plugin's capture of the same traffic
+     * (`com.example.plugin.network`) is read beside it; the Summary's lane shows the plugin's.
+     * Mirrors the TS `rootNetworkStreamFiles`.
      */
     fun rootNetworkFiles(files: List<File>, eventStreamNames: List<String>): List<Pair<File, String>> {
       val present = eventStreamNames.toSet()
       return files
         .filter { ROOT_NETWORK_FILE.matches(it.name) }
-        .mapNotNull { file -> SessionEvents.parseFileName(file.name)?.takeIf { it !in present }?.let { file to it } }
+        .mapNotNull { file ->
+          SessionEvents.parseFileName(file.name)?.takeIf { it !in present }?.let { file to it }
+        }
         .sortedBy { it.first.name }
     }
     private val DEVICE_CLOCK = TrailblazeClockDomain.DEVICE.wireName

@@ -8,6 +8,7 @@ import kotlinx.datetime.Clock
 import maestro.DeviceInfo
 import org.junit.Rule
 import org.junit.rules.RuleChain
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.BaseTrailblazeAgent
@@ -60,6 +61,7 @@ import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.model.toSessionToolRepo
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.host.persistedTrailYaml
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
@@ -121,7 +123,7 @@ abstract class BaseHostTrailblazeTest(
   companion object {
     private const val TRAILBLAZE_SELF_HEAL_ENABLED_ENV = "TRAILBLAZE_SELF_HEAL_ENABLED"
     private const val TRAILBLAZE_TRAIL_CONTEXT_ENV = "TRAILBLAZE_TRAIL_CONTEXT"
-    private const val TRAILBLAZE_SETUP_TRAIL_ID_ENV = "TRAILBLAZE_SETUP_TRAIL_ID"
+    internal const val TRAILBLAZE_SETUP_TRAIL_ID_ENV = "TRAILBLAZE_SETUP_TRAIL_ID"
 
     private fun resolveDeviceForTest(
       trailblazeDriverType: TrailblazeDriverType,
@@ -547,11 +549,16 @@ abstract class BaseHostTrailblazeTest(
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
     useRecordedSteps: Boolean,
+    onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)?,
   ): TrailblazeToolResult.Success? =
     // One trail, setup trail included: the trailhead's teardown runs after it, whatever the
     // outcome.
     trailblazeRunnerUtil.runTrail {
       resolveTrailContextFromEnv()?.let { trailblazeRunner.appendToSystemPrompt(it) }
+      // The run's setup tool calls, before anything else in the trail: the setup trail and the trailhead included.
+      DeviceSetupToolsMemory.read(trailblazeAgent.memory)?.let { setup ->
+        trailblazeRunnerUtil.runDeviceSetup(setup, { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } }, toolRepo)
+      }
       resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
         val setupFile = File(setupTrailId)
         if (setupFile.exists()) {
@@ -566,12 +573,14 @@ abstract class BaseHostTrailblazeTest(
                     prompts = setupItem.promptSteps,
                     useRecordedSteps = true,
                     selfHeal = false,
+                    onStepProgress = onStepProgress,
                   )
                 is TrailYamlItem.TrailheadTrailItem ->
                   trailblazeRunnerUtil.runPromptSuspend(
                     prompts = listOf(setupItem.trailhead.toPromptStep()),
                     useRecordedSteps = true,
                     selfHeal = false,
+                    onStepProgress = onStepProgress,
                   )
                 is TrailYamlItem.ToolTrailItem ->
                   trailblazeRunnerUtil.runToolItem(
@@ -598,12 +607,14 @@ abstract class BaseHostTrailblazeTest(
               prompts = item.promptSteps,
               useRecordedSteps = useRecordedSteps,
               selfHeal = resolveSelfHealFromEnvOrConfig(),
+              onStepProgress = onStepProgress,
             )
           is TrailYamlItem.TrailheadTrailItem ->
             trailblazeRunnerUtil.runPromptSuspend(
               prompts = listOf(item.trailhead.toPromptStep()),
               useRecordedSteps = true,
               selfHeal = resolveSelfHealFromEnvOrConfig(),
+              onStepProgress = onStepProgress,
             )
           is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
@@ -671,6 +682,8 @@ abstract class BaseHostTrailblazeTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     trailSourceUrl: String? = null,
+    /** Called as each trailhead or trail step starts, so the daemon's no-progress watchdog sees the run advancing. */
+    onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): HostYamlRunResult {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this device. v1 inputs ignore the list.
@@ -795,44 +808,46 @@ abstract class BaseHostTrailblazeTest(
     // Subprocess scripted tools are intentionally NOT
     // launched here (`includeSubprocess = false`) — no host test needs one, and `target.tools:` isn't
     // platform-scoped, so launching them would fork the web sign-in subprocess on a mobile session.
-    var launchedScripting: LaunchedScriptingRuntime? = null
-    var lastToolResult: TrailblazeToolResult.Success? = null
-    try {
-      val session = loggingRule.session
-      if (session != null) {
-        launchedScripting = HostScriptedToolLauncher.launch(
-          targetTestApp = appTarget,
-          config = config,
-          trailFilePath = trailFilePath,
-          sessionId = session.sessionId,
-          deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
-          logsRepo = hostLoggingRule.logsRepo,
-          toolRepo = toolRepo,
-          classLoader = javaClass.classLoader,
-          logPrefix = "[BaseHostTrailblazeTest]",
-          includeSubprocess = false,
-          onProgressMessage = { Console.log("[BaseHostTrailblazeTest] $it") },
-        )
+    return TrailExecution.within(trailConfig?.id) {
+      var launchedScripting: LaunchedScriptingRuntime? = null
+      var lastToolResult: TrailblazeToolResult.Success? = null
+      try {
+        val session = loggingRule.session
+        if (session != null) {
+          launchedScripting = HostScriptedToolLauncher.launch(
+            targetTestApp = appTarget,
+            config = config,
+            trailFilePath = trailFilePath,
+            sessionId = session.sessionId,
+            deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+            logsRepo = hostLoggingRule.logsRepo,
+            toolRepo = toolRepo,
+            classLoader = javaClass.classLoader,
+            logPrefix = "[BaseHostTrailblazeTest]",
+            includeSubprocess = false,
+            onProgressMessage = { Console.log("[BaseHostTrailblazeTest] $it") },
+          )
+        }
+        if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+          val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+          throw xyz.block.trailblaze.exception.TrailblazeException(
+            "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+              "Add prompts or tool steps to this trail file.",
+          )
+        }
+        lastToolResult = runTrail(trailItems, useRecordedSteps, onStepProgress)
+      } finally {
+        // Free QuickJS engines + deregister the dynamic tools so a reused repo doesn't collide on a
+        // later session. NonCancellable so teardown completes even on trail timeout / abort.
+        withContext(NonCancellable) {
+          finishScriptingRuntimeCleanup(listOfNotNull(launchedScripting)) { currentToolTraceId = null }
+        }
       }
-      if (!trailblazeYaml.hasActionableSteps(trailItems)) {
-        val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
-        throw xyz.block.trailblaze.exception.TrailblazeException(
-          "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-            "Add prompts or tool steps to this trail file.",
-        )
-      }
-      lastToolResult = runTrail(trailItems, useRecordedSteps)
-    } finally {
-      // Free QuickJS engines + deregister the dynamic tools so a reused repo doesn't collide on a
-      // later session. NonCancellable so teardown completes even on trail timeout / abort.
-      withContext(NonCancellable) {
-        finishScriptingRuntimeCleanup(listOfNotNull(launchedScripting)) { currentToolTraceId = null }
-      }
+      HostYamlRunResult(
+        sessionId = loggingRule.session?.sessionId ?: SessionId("unknown"),
+        lastToolResult = lastToolResult,
+      )
     }
-    return HostYamlRunResult(
-      sessionId = loggingRule.session?.sessionId ?: SessionId("unknown"),
-      lastToolResult = lastToolResult,
-    )
   }
 
   /**

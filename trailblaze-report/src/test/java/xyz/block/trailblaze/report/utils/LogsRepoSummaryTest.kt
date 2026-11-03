@@ -8,6 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.yaml.DirectionStep
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -164,5 +165,22 @@ class LogsRepoSummaryTest {
     File(logsDir, sessionId.value).mkdirs()
 
     assertNull(logsRepo.getSessionInfoSummary(sessionId))
+  }
+
+  @Test
+  fun `objective starts are the session's step starts, oldest first`() {
+    val logsRepo = LogsRepo(tempLogsDir(), watchFileSystem = false)
+    val sessionId = SessionId("objective-starts")
+    val started = Clock.System.now()
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(sessionStatus = startedStatus(), session = sessionId, timestamp = started),
+    )
+    logsRepo.saveLogToDisk(TrailblazeLog.ObjectiveStartLog(DirectionStep("Send money"), sessionId, started.plus(2.seconds)))
+    logsRepo.saveLogToDisk(TrailblazeLog.ObjectiveStartLog(DirectionStep("Open the menu"), sessionId, started.plus(1.seconds)))
+
+    assertEquals(
+      listOf("Open the menu", "Send money"),
+      logsRepo.objectiveStarts(sessionId).map { it.promptStep.prompt },
+    )
   }
 }

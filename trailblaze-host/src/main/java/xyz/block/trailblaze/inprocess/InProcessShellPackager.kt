@@ -710,7 +710,9 @@ object InProcessShellPackager {
           f.name.endsWith(".ts") &&
           !f.name.endsWith(".test.ts") &&
           !f.name.endsWith(".d.ts") &&
-          (allOwnersSubprocess[f.canonicalFile]?.not() ?: toolExport.containsMatchIn(f.readText()))
+          (allOwnersSubprocess[f.canonicalFile]?.not() ?: toolExport.containsMatchIn(
+            f.readText().lineSequence().filterNot { it.trimStart().startsWith("//") }.joinToString("\n")
+          ))
       }
       .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
       .toList()

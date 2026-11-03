@@ -19,6 +19,11 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.config.DefaultBehavior
+import xyz.block.trailblaze.yaml.TrailArgConfig
+import xyz.block.trailblaze.logs.client.SessionStartRecords
+import xyz.block.trailblaze.logs.model.SessionStartFields
+import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.ToolNameResolver
@@ -40,6 +45,11 @@ import xyz.block.trailblaze.surveys.SurveyHostFunctions
 import xyz.block.trailblaze.surveys.SurveyNotFoundException
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionException
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.yaml.TrailMetadataValue
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
+import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 
 class WorkspaceSurveyBundleSourceTest {
 
@@ -166,6 +176,98 @@ class WorkspaceSurveyBundleSourceTest {
     assertEquals(
       Json.parseToJsonElement("""{"shop":{"android":["com.example.shop"],"ios":["com.example.shop.ios"]}}"""),
       loaded["targets"],
+    )
+  }
+
+  @Test
+  fun `a load sends the running trail's start record without its seeded memory or argument defaults, and stops once the session ends`() = runBlocking {
+    val built = File(tempFolder.root, "built.js").apply { writeText("// built") }
+    val root = workspace("started-config")
+    SurveyBundles.register(SessionId("started"), WorkspaceSurveyBundleSource(configDir = { root }, bundle = { built }))
+    val ctx = context("started")
+    val session = ctx.sessionProvider.invoke()
+    val statusLog = { status: SessionStatus ->
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(sessionStatus = status, session = session.sessionId, timestamp = Clock.System.now())
+    }
+    val started = SessionStatus.Started(
+      trailConfig = TrailConfig(
+        id = "checkout/card",
+        title = "Pay by card",
+        metadata = mapOf("priority" to TrailMetadataValue.StringValue("p0"), "tags" to TrailMetadataValue.ListValue.of("pay")),
+        memory = mapOf("pin" to "1234"),
+        args = mapOf("passcode" to TrailArgConfig(default = DefaultBehavior.Use(JsonPrimitive("5678")))),
+      ),
+      trailFilePath = null,
+      hasRecordedSteps = true,
+      testMethodName = "card",
+      testClassName = "Checkout",
+      trailblazeDeviceInfo = ctx.trailblazeDeviceInfo,
+      targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.shop", versionName = "6.80"),
+    )
+    TrailblazeLogger.createNoOp().log(session, statusLog(started))
+    val args = buildJsonObject { put("name", "checkoutDone") }
+    assertEquals(
+      Json.parseToJsonElement(
+        """{"trailConfig":{"id":"checkout/card","title":"Pay by card","metadata":{"priority":"p0","tags":["pay"]}},""" +
+          """"targetAppInfo":{"appId":"com.example.shop","versionName":"6.80"}}""",
+      ),
+      SurveyHostFunctions.call(args, ctx).jsonObject["started"],
+    )
+    TrailblazeLogger.createNoOp().log(session, statusLog(SessionStatus.Ended.Succeeded(durationMs = 1)))
+    assertEquals(null, SurveyHostFunctions.call(args, ctx).jsonObject["started"])
+  }
+
+  @Test
+  fun `an interactive session's end, written straight to the logs folder, drops its start record`() = runBlocking {
+    val built = File(tempFolder.root, "built.js").apply { writeText("// built") }
+    val root = workspace("interactive-config")
+    SurveyBundles.register(SessionId("interactive"), WorkspaceSurveyBundleSource(configDir = { root }, bundle = { built }))
+    val ctx = context("interactive")
+    val sessionId = ctx.sessionProvider.invoke().sessionId
+    val repo = LogsRepo(logsDir = File(tempFolder.root, "logs").also { it.mkdirs() }, watchFileSystem = false)
+    val statusLog = { status: SessionStatus ->
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(sessionStatus = status, session = sessionId, timestamp = Clock.System.now())
+    }
+    repo.saveLogToDisk(
+      statusLog(
+        SessionStatus.Started(
+          trailConfig = TrailConfig(id = "checkout/coupon"),
+          trailFilePath = null,
+          hasRecordedSteps = false,
+          testMethodName = "coupon",
+          testClassName = "Checkout",
+          trailblazeDeviceInfo = ctx.trailblazeDeviceInfo,
+        ),
+      ),
+    )
+    val args = buildJsonObject { put("name", "checkoutDone") }
+    assertEquals(
+      Json.parseToJsonElement("""{"trailConfig":{"id":"checkout/coupon"}}"""),
+      SurveyHostFunctions.call(args, ctx).jsonObject["started"],
+    )
+    repo.saveLogToDisk(statusLog(SessionStatus.Ended.Succeeded(durationMs = 1)))
+    assertEquals(null, SurveyHostFunctions.call(args, ctx).jsonObject["started"])
+  }
+
+  @Test
+  fun `a device running tools for a host-driven session serves the start fields the host sent it`() = runBlocking {
+    val built = File(tempFolder.root, "built.js").apply { writeText("// built") }
+    val root = workspace("forwarded-config")
+    SurveyBundles.register(SessionId("forwarded"), WorkspaceSurveyBundleSource(configDir = { root }, bundle = { built }))
+    val ctx = context("forwarded")
+    SessionStartRecords.record(
+      ctx.sessionProvider.invoke().sessionId,
+      SessionStartFields(
+        trailConfig = TrailConfig(id = "checkout/gift", title = "Pay by gift card", memory = mapOf("pin" to "1234")),
+        targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.shop", versionName = "6.81"),
+      ),
+    )
+    assertEquals(
+      Json.parseToJsonElement(
+        """{"trailConfig":{"id":"checkout/gift","title":"Pay by gift card"},""" +
+          """"targetAppInfo":{"appId":"com.example.shop","versionName":"6.81"}}""",
+      ),
+      SurveyHostFunctions.call(buildJsonObject { put("name", "checkoutDone") }, ctx).jsonObject["started"],
     )
   }
 

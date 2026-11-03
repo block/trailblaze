@@ -10,6 +10,7 @@ import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import xyz.block.trailblaze.report.utils.SessionEventsReader
 
 internal fun resolveRoots(trailsRootProvider: () -> File): Pair<File, List<File>> {
   val primary = resolvePrimaryRoot(trailsRootProvider)
@@ -74,8 +75,11 @@ internal fun resolveTrailFile(idSegments: List<String>, primary: File, extras: L
 
 // Short, human-readable name for an event-stream id: the last dotted/slashed segment.
 // "com.example.network" -> "network", "feature_flags" -> "feature_flags". Falls back to the
-// raw id when there's no trailing segment.
+// raw id when there's no trailing segment. A network stream is labelled by its Summary lane, so a
+// device's capture ("network.seller", "com.example.plugin.network.seller") reads as
+// "network.seller": the report's Summary needs that `network` prefix to pair requests with responses.
 internal fun eventStreamLabel(streamId: String): String {
+  SessionEventsReader.networkLaneKey(streamId)?.let { return it }
   val tail = streamId.substringAfterLast('.').substringAfterLast('/').trim()
   return tail.ifEmpty { streamId }
 }

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.revyl
 
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -329,7 +330,7 @@ class RevylHostDriverDescriptor(
         cleanup = {
           withContext(NonCancellable) {
             finishScriptingRuntimeCleanup(subprocessRuntimes) {
-              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+              deviceManager.releaseDeviceAfterRun(trailblazeDeviceId)
             }
           }
         },
@@ -411,6 +412,10 @@ class RevylHostDriverDescriptor(
 
         // One trail: the trailhead's teardown runs after it, whatever the outcome.
         trailblazeRunnerUtil.runTrail {
+          // The run's setup tool calls, before anything else in the trail, the trailhead included.
+          DeviceSetupToolsMemory.read(agent.memory)?.let { setup ->
+            trailblazeRunnerUtil.runDeviceSetup(setup, { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } }, toolRepo)
+          }
           for (item in trailItems) {
             val itemResult = when (item) {
               is TrailYamlItem.PromptsTrailItem ->

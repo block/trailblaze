@@ -493,6 +493,29 @@ class IosHostSimctlUtilsTest {
   }
 
   @Test
+  fun `a reset container has the stock empty layout and no stale data`() {
+    val container = Files.createTempDirectory("data-container-reset")
+    Files.createDirectories(container.resolve("tmp"))
+    container.resolve("tmp/old-download").toFile().writeText("stale")
+    Files.createDirectories(container.resolve("Library/Caches"))
+    container.resolve("Library/session.db").toFile().writeText("stale")
+    container.resolve("Library/Caches/Cache.db").toFile().writeText("stale")
+
+    assertEquals(emptyList(), IosHostSimctlUtils.resetAppDataContainer(container))
+
+    fun children(relative: String) =
+      Files.list(container.resolve(relative)).use { stream -> stream.map { it.fileName.toString() }.sorted().toList() }
+    assertEquals(listOf("Documents", "Library", "tmp"), children(""))
+    assertEquals(listOf("Caches", "Preferences"), children("Library"))
+    listOf("Documents", "Library/Caches", "Library/Preferences", "tmp").forEach {
+      assertEquals(emptyList(), children(it))
+    }
+    val download = Files.createTempFile(container.resolve("tmp"), "download", ".tmp")
+    download.toFile().writeText("new download")
+    assertEquals("new download", download.toFile().readText())
+  }
+
+  @Test
   fun `an app counts as running only while launchd lists a pid for it`() {
     val running = listOf("45470\t0\tUIKitApplication:com.example.app[78e1][rb-legacy]")
     val exited = listOf("-\t0\tUIKitApplication:com.example.app[78e1][rb-legacy]")

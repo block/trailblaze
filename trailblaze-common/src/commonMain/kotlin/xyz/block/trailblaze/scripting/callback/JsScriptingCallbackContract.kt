@@ -94,6 +94,11 @@ sealed interface JsScriptingCallbackResult {
    * Backward compatible: tools that don't populate this field round-trip cleanly, and consumers
    * on older SDKs simply ignore the unknown key (the TS-side wire types decode with
    * `ignoreUnknownKeys = true`-equivalent permissive parsing through `JSON.parse`).
+   *
+   * [fatal] is true when the tool returned [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.FatalError],
+   * so the SDK can keep that failure fatal when it propagates out of the calling scripted tool
+   * instead of flattening it into a recoverable error. Defaults to false and is omitted from the
+   * wire when false, so older peers and payloads round-trip unchanged.
    */
   @Serializable
   @SerialName("call_tool_result")
@@ -102,6 +107,7 @@ sealed interface JsScriptingCallbackResult {
     @SerialName("text_content") val textContent: String = "",
     @SerialName("error_message") val errorMessage: String = "",
     @SerialName("structured_content") val structuredContent: JsonElement? = null,
+    val fatal: Boolean = false,
   ) : JsScriptingCallbackResult
 
   /**

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.EmptyCoroutineContext
@@ -26,6 +27,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -99,7 +101,9 @@ class AndroidTestTrailblazeAgent(
     get() = externalMemory ?: ownMemory
 
   val screenStateProvider: () -> ScreenState =
-    screenStateProviderOverride ?: { AndroidTestScreenState(target) }
+    screenStateProviderOverride ?: {
+      ForeignWindow.screenStateIfInFront(emptyList(), includeScreenshot = true) ?: AndroidTestScreenState(target)
+    }
 
   override fun buildExecutionContext(
     traceId: TraceId,
@@ -170,16 +174,20 @@ class AndroidTestTrailblazeAgent(
   private fun executeNativeTool(
     tool: AndroidTestExecutableTool,
     context: TrailblazeToolExecutionContext,
-  ): TrailblazeToolResult =
-    executeMeasured(tool, context, DISPATCH_SPAN_NATIVE) { resolved ->
+  ): TrailblazeToolResult {
+    AppUnderTestLauncher.markTouched()
+    AppUnderTestLauncher.markUsed()
+    return executeMeasured(tool, context, DISPATCH_SPAN_NATIVE) { resolved ->
       resolved.executeWithAndroidTest(target, context)
     }
+  }
 
   private fun executeGenericTool(
     tool: ExecutableTrailblazeTool,
     context: TrailblazeToolExecutionContext,
-  ): TrailblazeToolResult =
-    refuseIfSelfDestructive(tool)
+  ): TrailblazeToolResult {
+    if (tool !is LaunchAppTrailblazeTool) AppUnderTestLauncher.markTouched()
+    return refuseIfSelfDestructive(tool)
       ?: executeCanonicalTool(tool, context)
       ?: refuseIfMaestroBound(tool)
       ?: executeMeasured(tool, context, DISPATCH_SPAN_GENERIC) { resolved ->
@@ -187,6 +195,7 @@ class AndroidTestTrailblazeAgent(
         // instrumented package here.
         refuseIfSelfDestructive(resolved) ?: resolved.execute(context)
       }
+  }
 
   /**
    * Refuses a tool whose only body is Maestro dispatch, or null to let it through. This driver
@@ -226,6 +235,7 @@ class AndroidTestTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult? {
     CanonicalToolAdapters.adapt(tool) ?: return null
+    if (tool !is LaunchAppTrailblazeTool) AppUnderTestLauncher.markUsed()
     return executeMeasured(tool, context, DISPATCH_SPAN_NATIVE) { resolved ->
       // Re-adapted after memory interpolation; the resolved tool is the same class, so the
       // second adapt cannot return null.
@@ -313,7 +323,7 @@ class AndroidTestTrailblazeAgent(
       @Suppress("UNCHECKED_CAST")
       val resolvedTool =
         TrailblazeTracer.traceDetail("interpolateMemory", cat = DRIVER_TRACE_CAT) {
-          interpolateMemoryInTool(authoredTool, memory) as T
+          interpolateMemoryInTool(authoredTool, memory, context.trailblazeDeviceInfo) as T
         }
       val interpolationMs = orchestrationTimer.elapsedMs()
       AndroidTestPhaseAttribution.reset()

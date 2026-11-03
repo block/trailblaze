@@ -123,6 +123,10 @@ reason string) reports the trail as skipped at runtime and exits 0
 for that file's slot. Blank `skip:` is ignored. To unskip a trail,
 remove its `skip:` line.
 
+A crash the device log shows does not fail the run on its own: it is
+indexed as the session's `crash` stream and marked on the report's
+timeline, and the run's verdict comes from its steps.
+
 **Memory/secret resolution contract.** When a trail step references
 a `{ memory: KEY }` or `{ secret: KEY }` value that was never supplied
 on the command line, `run` fails the step with a structured error

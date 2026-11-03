@@ -84,7 +84,16 @@ function normalizeEventPayload(event) {
     if (text && !fields.some((field) => field.value === text)) fields.push({ label, value: text });
   });
   const labelField = kinds[0][1].find((name) => found.has(name));
-  const normalized = { raw, parsed, fields: fields.slice(0, 8), semanticLabel: labelField ? eventValueText(found.get(labelField)) : '' };
+  // An HTTP record with no name of its own reads as its request: `POST /pay · 500`.
+  const method = found.has('method') ? eventValueText(found.get('method')) : '';
+  const pathField = ['urlpath', 'path', 'url'].find((name) => found.has(name));
+  const status = found.has('statuscode') ? Number(found.get('statuscode')) : NaN;
+  const phase = found.has('phase') ? eventValueText(found.get('phase')) : '';
+  const httpLabel = method && pathField
+    ? `${method.toUpperCase()} ${eventValueText(found.get(pathField))}${phase === 'FAILED' ? ' · FAILED' : Number.isFinite(status) ? ` · ${status}` : ''}`
+    : '';
+  const failed = !!httpLabel && (phase === 'FAILED' || status >= 400);
+  const normalized = { raw, parsed, fields: fields.slice(0, 8), semanticLabel: labelField ? eventValueText(found.get(labelField)) : httpLabel, failed };
   cache.set(event, normalized);
   return normalized;
 }
@@ -138,6 +147,44 @@ async function inflateGzJsonArray(b64: string): Promise<unknown[] | null> {
 // JSON as base64 — see packEvents in run-report-cli.ts).
 async function inflateEventsGz(b64: string): Promise<EventStream[] | null> {
   return (await inflateGzJsonArray(b64)) as EventStream[] | null;
+}
+
+// A linked-media report keeps its largest payload, a session's eventsGz, in a file beside the
+// session's screenshots (SessionPayload.eventsHref). The file is a script rather than JSON because
+// a report opened from disk is a file:// page, where browsers refuse fetch() but still run
+// <script src>. The script hands its payload to SIDECAR_CALLBACK along with itself, so concurrent
+// loads resolve to their own requests.
+const SIDECAR_CALLBACK = '__tbReportSidecar';
+
+function sidecarScript(text: string): string {
+  return `self.${SIDECAR_CALLBACK}&&self.${SIDECAR_CALLBACK}(document.currentScript,${JSON.stringify(text)});`;
+}
+
+const pendingSidecars = new Map<unknown, (text: string | null) => void>();
+
+// The text a sidecarScript at `href` carries, or null when it fails to load or carries nothing.
+// The element is removed once it ran, so an exported clone of this document doesn't carry it.
+function loadSidecarText(href: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const scope = globalThis as Record<string, unknown>;
+    scope[SIDECAR_CALLBACK] = scope[SIDECAR_CALLBACK] || ((script: unknown, text: unknown) => {
+      const done = pendingSidecars.get(script);
+      pendingSidecars.delete(script);
+      if (done) done(typeof text === 'string' ? text : null);
+    });
+    const script = document.createElement('script');
+    const settle = () => {
+      script.remove();
+      const done = pendingSidecars.get(script);
+      pendingSidecars.delete(script);
+      if (done) done(null);
+    };
+    pendingSidecars.set(script, resolve);
+    script.onload = settle;
+    script.onerror = settle;
+    script.src = href;
+    (document.head || document.body).appendChild(script);
+  });
 }
 
 // Inflate a session's compressed LLM transcripts (SessionPayload.llmMessagesGz: gzip'd
@@ -383,4 +430,4 @@ function chunkJsonWithoutRuntimeAttachments(json: string): string | null {
   });
 }
 
-export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };
+export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, sidecarScript, loadSidecarText, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };

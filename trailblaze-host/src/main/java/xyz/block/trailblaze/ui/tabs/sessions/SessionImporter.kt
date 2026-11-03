@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.tabs.sessions
 
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.report.ReportSidecarFiles
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 import java.io.FileInputStream
@@ -79,6 +80,18 @@ object SessionImporter {
         )
       }
 
+      // Every check below, and the per-entry containment, trusts a session ID to name one directory
+      // directly under the logs dir. On Windows "..\outside" is a path, not a name.
+      val logsRoot = logsRepo.logsDir.canonicalFile
+      val unsafeIds = sessionIds.filter { '\\' in it || File(logsRoot, it).canonicalFile.parentFile != logsRoot }
+      if (unsafeIds.isNotEmpty()) {
+        return SessionImportResult.Error(
+          title = "Invalid Archive Structure",
+          message = "These archive folders are not valid session IDs:\n\n" +
+              unsafeIds.take(3).joinToString("\n") { "• $it" }
+        )
+      }
+
       // Check for existing sessions
       for (sessionId in sessionIds) {
         val targetSessionDir = File(logsRepo.logsDir, sessionId)
@@ -112,9 +125,14 @@ object SessionImporter {
             }
             val entryPath = normalizedParts.joinToString("/")
             val targetFile = File(logsRepo.logsDir, entryPath)
+            val sessionDir = File(logsRepo.logsDir, normalizedParts.first()).canonicalPath
 
-            // Guard against zip path traversal (e.g., entries containing "../")
-            if (!targetFile.canonicalPath.startsWith(logsRepo.logsDir.canonicalPath + File.separator)) {
+            // Each entry stays in its own session: "new/../existing/file" is still inside the logs
+            // dir, and would write into a session the existence check above let through. Report
+            // event files run as script when a report opens, and only the report writes them.
+            if (!targetFile.canonicalPath.startsWith(sessionDir + File.separator) ||
+              ReportSidecarFiles.isSidecar(targetFile.name)
+            ) {
               entry = zis.nextEntry
               continue
             }

@@ -575,6 +575,137 @@ describe('fetchSideChannels', () => {
     }]);
   });
 
+  test('builds derived streams from their files, as the CLI report does, and keeps the rest generic', async () => {
+    const text = (body: string) => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(body).buffer });
+    const files: Record<string, string> = {
+      '/static/sess_1/events/derived.json': JSON.stringify({ format: 1, streams: { 'app.screens': { rows: 1, title: 'Screens' }, gone: { rows: 1 } } }),
+      '/static/sess_1/events/app.screens.ndjson': '{"timeMs":5,"data":{"screen":"cart"},"row":{"label":"cart"}}\n',
+      '/static/sess_1/session_device_clock.json': '{"devices":[]}',
+    };
+    const built: any[] = [];
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        if (files[url] !== undefined) return text(files[url]);
+        if (url.startsWith('/static/')) return { ok: false, status: 404 };
+        if (url.endsWith('/events')) {
+          return okJson({
+            streams: [
+              { streamId: 'app.screens', label: 'screens', count: 1, events: [{ timeMs: 5, data: { screen: 'cart' } }] },
+              { streamId: 'network', label: 'network', count: 1, events: [{ timeMs: 1, data: { url: '/a' } }] },
+            ],
+          });
+        }
+        return okJson([]);
+      },
+      originalYamlFromLogs: () => null,
+      // Stand-ins for run-report-core's own, recording what they were given.
+      buildEventStream: (file: string, lines: string[], _f: unknown, _c: unknown, clockSync: unknown) => {
+        built.push({ file, lines: lines.filter(Boolean), clockSync });
+        return { name: 'app.screens', total: 1, truncated: false, events: [], rows: [{ t: 5, label: 'cart' }] };
+      },
+      applyDerivedLanes: (streams: any[], json: string) => {
+        const lanes = JSON.parse(json).streams;
+        streams.forEach((st) => { if (lanes[st.name]) Object.assign(st, { shown: true, title: lanes[st.name].title }); });
+      },
+      parseDeviceClockSync: (t: string) => ({ parsed: JSON.parse(t) }),
+    }, []);
+
+    // `gone` has no file, so nothing is built for it; the clock file reaches the builder parsed.
+    expect(built).toEqual([{ file: 'app.screens.ndjson', lines: ['{"timeMs":5,"data":{"screen":"cart"},"row":{"label":"cart"}}'], clockSync: { parsed: { devices: [] } } }]);
+    expect(side.events).toEqual([
+      { name: 'network', total: 1, truncated: false, events: [{ t: 1, d: '{"url":"/a"}' }] },
+      { name: 'app.screens', total: 1, truncated: false, events: [], rows: [{ t: 5, label: 'cart' }], shown: true, title: 'Screens' },
+    ]);
+  });
+
+  test('reads derived streams one at a time within the shared event budget, and the clock file to its own cap', async () => {
+    const text = (body: string) => ({ ok: true, status: 200, headers: { get: () => String(body.length) }, arrayBuffer: async () => new TextEncoder().encode(body).buffer });
+    const row = '{"timeMs":5,"data":{},"row":{"label":"x"}}\n';
+    const clock = JSON.stringify({ devices: [], pad: 'x'.repeat(2000) });
+    const files: Record<string, string> = {
+      '/static/sess_1/events/derived.json': JSON.stringify({ format: 1, streams: { a: { rows: 1 }, b: { rows: 1 }, unlisted: { rows: 1 } } }),
+      '/static/sess_1/events/a.ndjson': row,
+      '/static/sess_1/events/b.ndjson': row,
+      '/static/sess_1/session_device_clock.json': clock,
+    };
+    const fetched: string[] = [];
+    const clocks: unknown[] = [];
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        fetched.push(url);
+        if (files[url] !== undefined) return text(files[url]);
+        if (url.startsWith('/static/')) return { ok: false, status: 404 };
+        if (url.endsWith('/events')) {
+          return okJson({ streams: ['a', 'b'].map((id) => ({ streamId: id, label: id, count: 1, events: [{ timeMs: 5, data: {} }] })) });
+        }
+        return okJson([]);
+      },
+      originalYamlFromLogs: () => null,
+      buildEventStream: (file: string, _l: string[], _f: unknown, _c: unknown, clockSync: unknown) => { clocks.push(clockSync); return { name: file.replace('.ndjson', ''), total: 1, truncated: false, events: [], rows: [{ t: 5 }] }; },
+      applyDerivedLanes: () => {},
+      parseDeviceClockSync: (t: string) => JSON.parse(t).devices,
+      // Room for one stream; a clock file past the manifest's 1 MiB cap would still be within its own.
+      MAX_EVENT_STREAMS_TOTAL_CHARS: row.length,
+      DEVICE_CLOCK_MAX_BYTES: clock.length,
+    }, []);
+
+    // `unlisted` is not among the daemon's streams, so it is never fetched; `b` is past the budget and stays generic.
+    expect(fetched.some((u) => u.includes('unlisted'))).toBe(false);
+    expect(fetched.some((u) => u.endsWith('/events/b.ndjson'))).toBe(false);
+    expect(side.events?.map((e: any) => [e.name, !!e.rows])).toEqual([['b', false], ['a', true]]);
+    expect(clocks).toEqual([[]]);
+  });
+
+  test('builds a derived stream in full only within the daemon\'s per-stream cap, and all of them well under the Share upload limit', async () => {
+    const text = (body: string) => ({ ok: true, status: 200, headers: { get: () => String(body.length) }, arrayBuffer: async () => new TextEncoder().encode(body).buffer });
+    const line = (size: number) => JSON.stringify({ timeMs: 5, data: { pad: 'x'.repeat(size) }, row: { label: 'x' } });
+    // Nine streams just under the per-stream cap fill the total before the ninth; one stream is over the cap.
+    const ids = [...Array.from({ length: 9 }, (_, i) => `s${i}`), 'big'];
+    const files: Record<string, string> = { '/static/sess_1/events/derived.json': JSON.stringify({ format: 1, streams: Object.fromEntries(ids.map((id) => [id, { rows: 1 }])) }) };
+    ids.forEach((id) => { files[`/static/sess_1/events/${id}.ndjson`] = line(id === 'big' ? 2_000_000 : 1_900_000); });
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        if (files[url] !== undefined) return text(files[url]);
+        if (url.startsWith('/static/')) return { ok: false, status: 404 };
+        if (url.endsWith('/events')) return okJson({ streams: ids.map((id) => ({ streamId: id, label: id, count: 1, truncated: true, events: [{ timeMs: 5, data: {} }] })) });
+        return okJson([]);
+      },
+      originalYamlFromLogs: () => null,
+      buildEventStream: (file: string) => ({ name: file.replace('.ndjson', ''), total: 1, truncated: false, events: [], rows: [{ t: 5 }] }),
+      applyDerivedLanes: () => {},
+    }, []);
+
+    const built = (side.events ?? []).filter((e: any) => e.rows).map((e: any) => e.name).sort();
+    expect(built).toEqual(['s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7']);
+    expect((side.events ?? []).filter((e: any) => !e.rows).map((e: any) => [e.name, e.truncated])).toEqual([['s8', true], ['big', true]]);
+  });
+
+  test('a derived stream left generic keeps its id, so its lane still gets its title', async () => {
+    const text = (body: string) => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(body).buffer });
+    const manifest = JSON.stringify({ format: 1, streams: { 'app.screens': { rows: 1, title: 'Screens' } } });
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        if (url === '/static/sess_1/events/derived.json') return text(manifest);
+        // Its file cannot be read, so the daemon's generic version stays.
+        if (url.startsWith('/static/')) return { ok: false, status: 404 };
+        if (url.endsWith('/events')) {
+          return okJson({ streams: [
+            { streamId: 'app.screens', label: 'screens', count: 1, events: [{ timeMs: 5, data: {} }] },
+            { streamId: 'com.x.network', label: 'network', count: 1, events: [{ timeMs: 1, data: {} }] },
+          ] });
+        }
+        return okJson([]);
+      },
+      originalYamlFromLogs: () => null,
+      buildEventStream: () => null,
+      applyDerivedLanes: (streams: any[], json: string) => {
+        const lanes = JSON.parse(json).streams;
+        streams.forEach((st) => { if (lanes[st.name]) Object.assign(st, { shown: true, title: lanes[st.name].title }); });
+      },
+    }, []);
+    expect(side.events?.map((e: any) => [e.name, e.title ?? null])).toEqual([['app.screens', 'Screens'], ['network', null]]);
+  });
+
   test('keeps the device-clock marker on events the session could not convert', async () => {
     const side = await Payload.fetchSideChannels('sess_1', {
       fetch: async (url: string) => {

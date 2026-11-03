@@ -42,6 +42,13 @@
       visibleStringsShotFiles: o.visibleStringsShotFiles || g.visibleStringsShotFiles,
       // The frames saved from the recording for captures with no screenshot, by the same route.
       captureFrameFiles: o.captureFrameFiles || g.captureFrameFiles,
+      // The events-file pipeline the CLI and zip reports run, for derived streams (see fetchDerivedStreams).
+      buildEventStream: o.buildEventStream || g.buildEventStream,
+      applyDerivedLanes: o.applyDerivedLanes || g.applyDerivedLanes,
+      parseDeviceClockSync: o.parseDeviceClockSync || g.parseDeviceClockSync,
+      MAX_EVENT_STREAM_BYTES: o.MAX_EVENT_STREAM_BYTES || g.MAX_EVENT_STREAM_BYTES,
+      MAX_EVENT_STREAMS_TOTAL_CHARS: o.MAX_EVENT_STREAMS_TOTAL_CHARS || g.MAX_EVENT_STREAMS_TOTAL_CHARS,
+      DEVICE_CLOCK_MAX_BYTES: o.DEVICE_CLOCK_MAX_BYTES || g.DEVICE_CLOCK_MAX_BYTES,
     };
   }
 
@@ -381,6 +388,57 @@
     } catch (e) { return null; }
   }
 
+  // A session file's text, or null when it is missing, over [maxBytes], or unreadable.
+  async function fetchSessionText(sessionId, file, d, maxBytes) {
+    try {
+      var res = await d.fetch(staticUrl(sessionId, file));
+      if (!res.ok) return null;
+      var body = await readBodyWithinLimit(res, maxBytes);
+      return body ? new TextDecoder().decode(body) : null;
+    } catch (e) { return null; }
+  }
+
+  // Far past any real manifest, as the CLI report's cap on `events/derived.json`.
+  var DERIVED_MANIFEST_MAX_BYTES = 1024 * 1024;
+  // A derived stream is built in full only within the daemon's own per-stream read cap
+  // (EVENTS_MAX_BYTES_PER_STREAM), so it is never bigger than the bounded prefix it replaces, and all
+  // of them together stay far under what Share uploads (SHARE_HTML_MAX_BYTES, 64 MiB). Past either, a
+  // stream keeps the daemon's bounded, truncated version.
+  var DERIVED_STREAM_MAX_BYTES = 2 * 1000 * 1000;
+  var DERIVED_STREAMS_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+
+  // The derived streams `events/derived.json` lists, of those in [ids] (the daemon's streams), built
+  // from their files by the same buildEventStream the CLI and zip reports run: each row keeps its own
+  // card and is converted on its device's clock, and the manifest gives the lane its title and opens
+  // it. The daemon's generic event DTO keeps neither, so without this one session would render
+  // differently here. Read one at a time within the budgets above; a stream that cannot be built, or
+  // is past a budget, keeps the daemon's generic version. Null when none is listed.
+  async function fetchDerivedStreams(sessionId, ids, d) {
+    if (typeof d.buildEventStream !== 'function' || typeof d.applyDerivedLanes !== 'function') return null;
+    var json = await fetchSessionText(sessionId, 'events/derived.json', d, DERIVED_MANIFEST_MAX_BYTES);
+    var listed;
+    try { listed = (json && JSON.parse(json).streams) || {}; } catch (e) { return null; }
+    var names = ids.filter(function (id) { return Object.prototype.hasOwnProperty.call(listed, id); });
+    if (!names.length) return null;
+    var clockText = typeof d.parseDeviceClockSync === 'function'
+      ? await fetchSessionText(sessionId, 'session_device_clock.json', d, d.DEVICE_CLOCK_MAX_BYTES || 4 * 1024 * 1024)
+      : null;
+    var clockSync = clockText ? d.parseDeviceClockSync(clockText) : null;
+    var left = Math.min(d.MAX_EVENT_STREAMS_TOTAL_CHARS || Infinity, DERIVED_STREAMS_MAX_TOTAL_BYTES);
+    var byId = {};
+    for (var i = 0; i < names.length && left > 0; i++) {
+      var cap = Math.min(d.MAX_EVENT_STREAM_BYTES || Infinity, DERIVED_STREAM_MAX_BYTES, left);
+      var text = await fetchSessionText(sessionId, 'events/' + names[i] + '.ndjson', d, cap);
+      if (text == null) continue;
+      left -= text.length;
+      try {
+        var built = d.buildEventStream(names[i] + '.ndjson', text.split('\n'), [], undefined, clockSync);
+        if (built) byId[names[i]] = built;
+      } catch (e) { /* stays generic */ }
+    }
+    return { json: json, listed: names, byId: byId };
+  }
+
   // Normalize the live route's generic event-stream DTO into the compact report shape. This carries
   // generic plugin event streams from any producer into the report.
   async function fetchReportEvents(sessionId, d) {
@@ -388,9 +446,13 @@
       var res = await d.fetch(apiUrl(sessionId, 'events'));
       if (!res.ok) return null;
       var raw = await res.json();
-      var streams = ((raw && raw.streams) || []).map(function (s) {
+      var derived = await fetchDerivedStreams(sessionId, ((raw && raw.streams) || []).map(function (s) { return s.streamId; }), d);
+      var own = function (s) { return !!(derived && Object.prototype.hasOwnProperty.call(derived.byId, s.streamId)); };
+      var streams = ((raw && raw.streams) || []).filter(function (s) { return !own(s); }).map(function (s) {
+        // A derived stream left generic keeps its id, which the manifest's lane title and default are keyed by.
+        var derivedId = derived && derived.listed.indexOf(s.streamId) >= 0;
         return {
-          name: s.label || s.streamId,
+          name: derivedId ? s.streamId : (s.label || s.streamId),
           total: s.count || (s.events || []).length,
           truncated: !!s.truncated,
           events: (s.events || []).map(function (e) {
@@ -401,6 +463,11 @@
           }),
         };
       });
+      if (derived) {
+        // In the daemon's order; only streams it lists were built, so one gone since stays gone.
+        ((raw && raw.streams) || []).filter(own).forEach(function (s) { streams.push(derived.byId[s.streamId]); });
+        d.applyDerivedLanes(streams, derived.json);
+      }
       return streams.length ? streams : null;
     } catch (e) { return null; }
   }

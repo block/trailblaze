@@ -229,17 +229,15 @@ _Verified by: `CliCommandValidationTest.'trail' alias dispatches to the same com
 
 ### Save session as trail file
 
-The --save flag writes the session to a trail file. Use --setup to mark leading steps as setup, or --no-setup to mark none. One of --setup or --no-setup is required with --save.
+The --save flag writes every step of the session to a trail file.
 
 **CLI:**
 
 ```bash
 trailblaze step --save trails/test.trail.yaml
-trailblaze step --save trails/test.trail.yaml --setup 1-3
-trailblaze step --save trails/test.trail.yaml --no-setup
 ```
 
-_Verified by: `CliCommandValidationTest.step --setup without save returns USAGE`_
+_Verified by: `CliCommandValidationTest.picocli parses step save flag`_
 
 ---
 

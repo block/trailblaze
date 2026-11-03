@@ -30,7 +30,12 @@ object AndroidComposeHierarchyCollector {
     val semanticsIdByNodeId: Map<Long, Int>,
   )
 
-  fun collect(roots: List<SemanticsNode>, firstNodeId: Long): Collected {
+  /**
+   * [keepClipped] keeps placed nodes clipped to nothing, which every capture otherwise leaves out
+   * (see [mapNode]). Only for finding a node to scroll into view: such a node is real, its own
+   * container can bring it back, and nothing may tap it as it is.
+   */
+  fun collect(roots: List<SemanticsNode>, firstNodeId: Long, keepClipped: Boolean = false): Collected {
     var nextId = firstNodeId
     val semanticsIdByNodeId = mutableMapOf<Long, Int>()
     // Failure-isolated PER ROOT, matching the View collector's read of the same objects: mapping
@@ -40,7 +45,13 @@ object AndroidComposeHierarchyCollector {
     // be read", so a dropped root degrades to exactly that documented state.
     val trees =
       roots.mapNotNull { root ->
-        runCatching { mapNode(root, { nextId++ }, semanticsIdByNodeId) }.getOrNull()
+        runCatching {
+          // Screen coordinates, like the accessibility tree and the screenshot: `boundsInWindow` is
+          // relative to the root's own window, which is off the screen origin for a dialog, sheet
+          // or popup. One offset per root, since every node under it shares its window.
+          val windowOrigin = root.positionOnScreen - root.positionInWindow
+          mapNode(root, { nextId++ }, semanticsIdByNodeId, windowOrigin, keepClipped = keepClipped)
+        }.getOrNull()
       }
     return Collected(trees = trees, semanticsIdByNodeId = semanticsIdByNodeId)
   }
@@ -89,16 +100,54 @@ object AndroidComposeHierarchyCollector {
   private fun View.isLifecycleResumed(): Boolean =
     findViewTreeLifecycleOwner()?.lifecycle?.currentState == Lifecycle.State.RESUMED
 
+  /**
+   * The (row, column) Compose's accessibility layer gives a selectable child of a `selectableGroup`
+   * that declares no `CollectionItemInfo` of its own — a NavigationBar item, a radio group's
+   * options. Accessibility trails record that position (`collectionItemColumnIndex: 2` for the
+   * third tab), and reading only the explicit property left those selectors matching nothing here.
+   *
+   * Mirrors `setCollectionItemInfo` in Compose's `CollectionInfo.android.kt`: only children carrying
+   * `Selected` count, a lazy collection parent publishes its own positions instead, and a group
+   * whose items sit side by side is one row.
+   */
+  private fun selectableGroupPosition(node: SemanticsNode): Pair<Int, Int>? {
+    if (!node.config.contains(SemanticsProperties.Selected)) return null
+    val parent = node.parent ?: return null
+    if (!parent.config.contains(SemanticsProperties.SelectableGroup)) return null
+    val parentCollection = parent.config.getOrNull(SemanticsProperties.CollectionInfo)
+    if (parentCollection != null && (parentCollection.rowCount < 0 || parentCollection.columnCount < 0)) return null
+    val siblings = parent.children.filter { it.config.contains(SemanticsProperties.Selected) }
+    val index = siblings.indexOfFirst { it.id == node.id }.takeIf { it >= 0 } ?: return null
+    return if (isHorizontallyStacked(siblings)) 0 to index else index to 0
+  }
+
+  private fun isHorizontallyStacked(items: List<SemanticsNode>): Boolean {
+    if (items.size < 2) return true
+    var deltaX = 0f
+    var deltaY = 0f
+    items.zipWithNext { a, b ->
+      deltaX += kotlin.math.abs(a.boundsInWindow.center.x - b.boundsInWindow.center.x)
+      deltaY += kotlin.math.abs(a.boundsInWindow.center.y - b.boundsInWindow.center.y)
+    }
+    return deltaY < deltaX
+  }
+
   private fun mapNode(
     node: SemanticsNode,
     nextId: () -> Long,
     semanticsIdByNodeId: MutableMap<Long, Int>,
+    windowOrigin: androidx.compose.ui.geometry.Offset,
+    insideMerge: Boolean = false,
+    keepClipped: Boolean = false,
   ): TrailblazeNode {
     val config = node.config
-    val bounds = node.boundsInWindow
+    val childrenInsideMerge = insideMerge || config.isMergingSemanticsOfDescendants
+    val bounds = node.boundsInWindow.translate(windowOrigin)
     val nodeId = nextId()
     semanticsIdByNodeId[nodeId] = node.id
     val collectionItem = config.getOrNull(SemanticsProperties.CollectionItemInfo)
+      ?.let { it.rowIndex to it.columnIndex }
+      ?: selectableGroupPosition(node)
     val progress = config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)
       ?.takeIf { it != ProgressBarRangeInfo.Indeterminate }
     val verticalScroll = config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
@@ -112,7 +161,27 @@ object AndroidComposeHierarchyCollector {
           right = bounds.right.toInt(),
           bottom = bounds.bottom.toInt(),
         ),
-      children = node.children.map { mapNode(it, nextId, semanticsIdByNodeId) },
+      // A child that is not placed, or that has a size but is clipped to nothing, is left out with
+      // its whole subtree, as Compose's accessibility delegate does: it only recurses into a placed
+      // node that still covers some of the window. Both are nodes the accessibility tree never had
+      // and no tap can land on. A lazy list composes rows ahead of the scroll without placing them,
+      // and such a row reports the list's top-left as its position, so a tap on a list's footer
+      // button landed on the first item in the list. A row scrolled to a sliver under
+      // its container's edge keeps a few pixels itself while its text clips to nothing. A node
+      // that is zero-sized by its own layout stays, so a selector still finds it and reports it
+      // as having no on-screen bounds rather than as matching nothing.
+      //
+      // Clipping is judged at the node the accessibility tree publishes, though, not below it. A
+      // merging node (a row, a button) is ONE accessibility node carrying its descendants' text, so
+      // a row with a sliver on screen still publishes its label even when the label's own box is
+      // clipped away. Its clipped descendants are kept for that reason: they are where this tree
+      // holds the row's text. A list can push its first item to a sliver above the buttons
+      // below it, and a recorded tap on that row then found no row here at all.
+      children =
+        node.children
+          .filter { it.layoutInfo.isPlaced && (keepClipped || childrenInsideMerge || !it.isClippedAway()) }
+          .map { mapNode(it, nextId, semanticsIdByNodeId, windowOrigin, childrenInsideMerge, keepClipped) } +
+          listOfNotNull(roleCarrierOf(node, nextId, semanticsIdByNodeId, windowOrigin)),
       driverDetail =
         DriverNodeDetail.Compose(
           testTag = config.getOrNull(SemanticsProperties.TestTag),
@@ -132,8 +201,8 @@ object AndroidComposeHierarchyCollector {
           isFocused = config.getOrNull(SemanticsProperties.Focused) ?: false,
           isSelected = config.getOrNull(SemanticsProperties.Selected) ?: false,
           isPassword = config.getOrNull(SemanticsProperties.Password) != null,
-          collectionItemRowIndex = collectionItem?.rowIndex,
-          collectionItemColumnIndex = collectionItem?.columnIndex,
+          collectionItemRowIndex = collectionItem?.first,
+          collectionItemColumnIndex = collectionItem?.second,
           stateDescription = config.getOrNull(SemanticsProperties.StateDescription),
           isHeading = config.contains(SemanticsProperties.Heading),
           paneTitle = config.getOrNull(SemanticsProperties.PaneTitle),
@@ -141,7 +210,9 @@ object AndroidComposeHierarchyCollector {
           isPopup = config.contains(SemanticsProperties.IsPopup),
           errorText = config.getOrNull(SemanticsProperties.Error),
           hasSetTextAction = config.getOrNull(SemanticsActions.SetText) != null,
-          accessibilityClassName = accessibilityClassNameOf(node),
+          accessibilityClassName = accessibilityClassNameOf(node, insideMerge),
+          accessibilityHintText = accessibilityHintTextOf(node),
+          accessibilityStateDescription = accessibilityStateDescriptionOf(node),
           hasClickAction = config.getOrNull(SemanticsActions.OnClick) != null,
           hasScrollAction = config.getOrNull(SemanticsActions.ScrollBy) != null,
           hasLongClickAction = config.getOrNull(SemanticsActions.OnLongClick) != null,
@@ -154,6 +225,51 @@ object AndroidComposeHierarchyCollector {
         ),
     )
   }
+
+  /**
+   * The child Compose's accessibility delegate adds to carry a role its node cannot show itself.
+   *
+   * A merging node with a role and children of its own keeps the plain view class (the role only
+   * names a node with no children), so Compose appends a synthetic child holding just the role,
+   * which the delegate publishes with the role's widget class. An icon-only search button is a
+   * plain view holding its icon and a `Button` after it, and recordings of such a control name it
+   * either way: as the view whose child has an empty description, and as the fourth `Button`.
+   *
+   * Acting on it acts on [node], whose semantics id it carries: the synthetic child has no actions
+   * of its own, and on screen it is the node it was made for.
+   */
+  private fun roleCarrierOf(
+    node: SemanticsNode,
+    nextId: () -> Long,
+    semanticsIdByNodeId: MutableMap<Long, Int>,
+    windowOrigin: androidx.compose.ui.geometry.Offset,
+  ): TrailblazeNode? {
+    val role = node.config.getOrNull(SemanticsProperties.Role) ?: return null
+    if (!node.config.isMergingSemanticsOfDescendants || node.children.isEmpty()) return null
+    val className = roleClassNameOf(role) ?: return null
+    val bounds = node.boundsInWindow.translate(windowOrigin)
+    val nodeId = nextId()
+    semanticsIdByNodeId[nodeId] = node.id
+    return TrailblazeNode(
+      nodeId = nodeId,
+      bounds =
+        TrailblazeNode.Bounds(
+          left = bounds.left.toInt(),
+          top = bounds.top.toInt(),
+          right = bounds.right.toInt(),
+          bottom = bounds.bottom.toInt(),
+        ),
+      children = emptyList(),
+      driverDetail = DriverNodeDetail.Compose(
+        role = role.toString(),
+        accessibilityClassName = className,
+        accessibilityProjectionOnly = true,
+      ),
+    )
+  }
+
+  private fun SemanticsNode.isClippedAway(): Boolean =
+    size.width > 0 && size.height > 0 && boundsInWindow.isEmpty
 
   /**
    * The class name Compose's accessibility delegate would publish for [node], reproducing
@@ -170,7 +286,9 @@ object AndroidComposeHierarchyCollector {
    *
    * The role only applies to a node with no children of its own, matching the delegate's
    * `replacedChildren.isEmpty()` guard: a role on a container describes the container's purpose,
-   * and the a11y tree keeps that node a plain view.
+   * and the a11y tree keeps that node a plain view, with the role on a synthetic child (see
+   * [roleCarrierOf]). The children counted are the unmerged ones: an icon merged into its button
+   * is still a child here, as it is to the delegate.
    *
    * Null for a node the delegate would not publish AT ALL, which is most of this tree: the
    * unmerged semantics tree carries a layout node per modifier, and the delegate keeps only the
@@ -185,19 +303,17 @@ object AndroidComposeHierarchyCollector {
    * only by `index` — how the recorder names a row with no text, id or content description of its
    * own — counts every published node, and three things beyond importance still move that count:
    * each Compose host contributes a semantics root that the a11y tree represents as the host View
-   * instead, the delegate's role branch keys off MERGED children where this keys off unmerged, and
-   * the message bar's own contents differ between two devices anyway. On the Settings list two
-   * trails were recorded against, that leaves index 6 on the mode-selector row rather than
-   * Checkout, two places short.
+   * instead, and the message bar's own contents differ between two devices anyway. On a settings
+   * list trails were recorded against, that leaves the index two rows short of the row it named.
    *
-   * Those two were the only trails here whose recording carried such a step, and they no longer do:
+   * Those were the only trails here whose recording carried such a step, and they no longer do:
    * the row is qualified by its label and the Compose host it hangs under, which is something both
    * trees state. A separate selector-portability suite holds a capture from each driver and pins
    * that. An `index` was never going to survive this move — it is unstable on the recording driver
    * too, since the row it lands on depends on what the status bar is showing — so what this filter
    * buys is a `classNameRegex` that means the same thing on both trees, not a count that agrees.
    */
-  private fun accessibilityClassNameOf(node: SemanticsNode): String? {
+  private fun accessibilityClassNameOf(node: SemanticsNode, insideMerge: Boolean): String? {
     val config = node.config
     if (
       !config.isMergingSemanticsOfDescendants &&
@@ -206,19 +322,64 @@ object AndroidComposeHierarchyCollector {
       return null
     }
     var className = PLAIN_VIEW_CLASS
-    if (node.children.isEmpty()) {
-      when (config.getOrNull(SemanticsProperties.Role)) {
-        Role.Button -> className = "android.widget.Button"
-        Role.Checkbox -> className = "android.widget.CheckBox"
-        Role.RadioButton -> className = "android.widget.RadioButton"
-        Role.Image -> className = "android.widget.ImageView"
-        Role.DropdownList -> className = "android.widget.Spinner"
-        else -> Unit
-      }
+    val role = config.getOrNull(SemanticsProperties.Role)
+    // An image merged into something larger (an icon inside a button) is not announced as one: the
+    // delegate names it an image only on a leaf outside any merge, or on a node that merges itself.
+    val namesRole = role != Role.Image || !insideMerge || config.isMergingSemanticsOfDescendants
+    if (node.children.isEmpty() && role != null && namesRole) {
+      roleClassNameOf(role)?.let { className = it }
     }
     if (config.contains(SemanticsActions.SetText)) className = "android.widget.EditText"
     if (config.contains(SemanticsProperties.Text)) className = "android.widget.TextView"
     return className
+  }
+
+  private fun roleClassNameOf(role: Role): String? = when (role) {
+    Role.Button -> "android.widget.Button"
+    Role.Checkbox -> "android.widget.CheckBox"
+    Role.RadioButton -> "android.widget.RadioButton"
+    Role.Image -> "android.widget.ImageView"
+    Role.DropdownList -> "android.widget.Spinner"
+    else -> null
+  }
+
+  /**
+   * The hint the accessibility delegate publishes for a text field: the `Text` its merged config
+   * carries, which is the label or placeholder its decoration box draws as children. Read from the
+   * unmerged children because that is the tree this collector walks; the walk stops at a child
+   * that merges its own descendants, since the delegate would not fold that one in either.
+   */
+  private fun accessibilityHintTextOf(node: SemanticsNode): String? {
+    if (!node.config.contains(SemanticsActions.SetText)) return null
+    val texts = mutableListOf<String>()
+    fun collect(n: SemanticsNode) {
+      n.config.getOrNull(SemanticsProperties.Text)?.forEach { texts += it.text }
+      n.children.filterNot { it.config.isMergingSemanticsOfDescendants }.forEach(::collect)
+    }
+    node.children.filterNot { it.config.isMergingSemanticsOfDescendants }.forEach(::collect)
+    return texts.joinToString(", ").ifEmpty { null }
+  }
+
+  /**
+   * The state description the accessibility delegate publishes, in the order it decides it: the
+   * app's own wins; otherwise a switch reads "On"/"Off" and a selectable node that is not a tab
+   * reads "Selected"/"Not selected". The delegate's strings are localized, and these are its
+   * English text, which is what recordings carry.
+   */
+  private fun accessibilityStateDescriptionOf(node: SemanticsNode): String? {
+    val config = node.config
+    config.getOrNull(SemanticsProperties.StateDescription)?.let { return it }
+    val role = config.getOrNull(SemanticsProperties.Role)
+    if (role == Role.Switch) {
+      when (config.getOrNull(SemanticsProperties.ToggleableState)) {
+        ToggleableState.On -> return "On"
+        ToggleableState.Off -> return "Off"
+        else -> Unit
+      }
+    }
+    val selected = config.getOrNull(SemanticsProperties.Selected) ?: return null
+    if (role == Role.Tab) return null
+    return if (selected) "Selected" else "Not selected"
   }
 
   /** What Compose publishes for a semantics node it has nothing more specific to say about. */
@@ -240,8 +401,9 @@ object AndroidComposeHierarchyCollector {
    * The node itself stays in the tree with its tag, so a `composeTestTagRegex` selector still
    * resolves against it; only the claim that the a11y tree published a class for it is withdrawn.
    *
-   * Square's own custom keys (`MarketId`, `Shape`) are absent for the same reason: a key declared
-   * outside Compose defaults to unimportant, and a node carrying nothing else is a layout detail.
+   * An app's own custom keys (a design system's id or shape keys) are absent for the same reason: a
+   * key declared outside Compose defaults to unimportant, and a node carrying nothing else is a
+   * layout detail.
    */
   private val IMPORTANT_FOR_ACCESSIBILITY: Set<SemanticsPropertyKey<*>> =
     setOf(

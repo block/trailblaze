@@ -361,6 +361,31 @@ class SessionScopedHostBindingTest {
       }
     }
 
+  @Test
+  fun `a tool that returns FatalError is marked fatal and one that returns a recoverable error is not`() =
+    runBlocking {
+      val repo = newRepoWith(PingTool::class)
+      val binding = SessionScopedHostBinding(repo, sessionId)
+      fun envelopeFor(toolResult: TrailblazeToolResult): JsonObject {
+        SessionScopedHostBinding.installContext(buildContext(nestedToolExecutor = { toolResult }))
+        try {
+          return Json.parseToJsonElement(
+            runBlocking { binding.callFromBundle("test_ping", """{"text":"hi"}""") },
+          ) as JsonObject
+        } finally {
+          SessionScopedHostBinding.clearContext()
+        }
+      }
+
+      val fatal = envelopeFor(TrailblazeToolResult.Error.FatalError(errorMessage = "device disconnected"))
+      assertEquals(true, (fatal["isError"] as JsonPrimitive).content.toBoolean(), "$fatal")
+      assertEquals(true, (fatal["fatal"] as? JsonPrimitive)?.content?.toBoolean(), "$fatal")
+
+      val recoverable = envelopeFor(TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "button missing"))
+      assertEquals(true, (recoverable["isError"] as JsonPrimitive).content.toBoolean(), "$recoverable")
+      assertEquals(null, recoverable["fatal"], "$recoverable")
+    }
+
   // ---- Test 5b: global-registry (unfiltered) tier is reachable — cross-transport parity ----
 
   @Test

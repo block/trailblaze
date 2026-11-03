@@ -95,10 +95,14 @@ class AndroidVideoCapture(
   /** How long a started stream may go without a picture before the session is recorded by [fallback]. */
   private val firstPictureTimeoutMs: Long = FIRST_PICTURE_TIMEOUT_MS,
   /**
-   * Devices already found to stream no pictures. Shared across sessions for the life of the
-   * process, so only a device's first session waits [firstPictureTimeoutMs] before falling back.
+   * How many sessions in a row each device has streamed no picture. Shared across sessions for the
+   * life of the process: from [PICTURELESS_AFTER_SESSIONS] on, a session skips the
+   * [firstPictureTimeoutMs] wait and goes straight to [fallback]. One session is not enough: its
+   * start can meet the device or adb briefly unavailable (it can run while the device connects),
+   * and a device judged on that would record from screenshots until the daemon restarts. A session
+   * that gets a picture starts the count again.
    */
-  private val picturelessDevices: MutableSet<String> = PICTURELESS_DEVICES,
+  private val picturelessDevices: MutableMap<String, Int> = PICTURELESS_DEVICES,
 ) : CaptureStream {
 
   override val type: CaptureType get() = format.captureType
@@ -132,7 +136,7 @@ class AndroidVideoCapture(
         "format=$format",
     )
 
-    if (deviceId in picturelessDevices) {
+    if ((picturelessDevices[deviceId] ?: 0) >= PICTURELESS_AFTER_SESSIONS) {
       Console.log("[AndroidVideoCapture] $deviceId streamed no picture earlier; recording from screenshots")
       usingFallback = true
       fallback.start(sessionDir, deviceId, appId)
@@ -166,7 +170,7 @@ class AndroidVideoCapture(
       // The stream started but carries no pictures — measured on a vendor arm64 emulator
       // image, whose only H.264 encoder fails to configure: the stream connects, pictures never
       // come, and the session would end with no recording at all. Screenshots still work there.
-      picturelessDevices.add(deviceId)
+      picturelessDevices.merge(deviceId, 1, Int::plus)
       Console.log(
         "[AndroidVideoCapture] $deviceId streamed no picture within ${firstPictureTimeoutMs}ms; " +
           "recording from screenshots",
@@ -178,6 +182,7 @@ class AndroidVideoCapture(
       fallback.start(sessionDir, deviceId, appId)
       return
     }
+    picturelessDevices.remove(deviceId)
     mux = streaming
   }
 
@@ -254,13 +259,17 @@ class AndroidVideoCapture(
   /**
    * Queries the Android device's current display size via `adb shell wm size`. Returns
    * (width, height) reflecting the current orientation, or null if the query fails.
+   *
+   * On a connection of its own: capture can start while instrumentation connects, and a transport
+   * failure on the shared client would close it, taking the instrumentation with it.
    */
   private fun getDeviceDisplaySize(deviceId: String): Pair<Int, Int>? {
     return try {
-      val output = AndroidHostAdbUtils.execAdbShellCommand(
+      val output = AndroidHostAdbUtils.execAdbShellCommandOnOwnConnection(
         deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
         args = listOf("wm", "size"),
-      ).trim()
+        timeoutMs = DISPLAY_SIZE_TIMEOUT_MS,
+      )?.trim() ?: return null
       // Output format: "Physical size: 1080x1920" or "Override size: ..."
       // Use the last line (override takes precedence if present)
       val lastLine = output.lines().lastOrNull { it.contains("size:") } ?: return null
@@ -276,6 +285,7 @@ class AndroidVideoCapture(
   companion object {
     /** Fallback when we can't query the device's display size. */
     private const val VIDEO_SIZE_FALLBACK = "720x1280"
+    private const val DISPLAY_SIZE_TIMEOUT_MS = 5_000L
     /** Target for the short side when scaling down for recording. */
     private const val TARGET_SHORT_SIDE = 720
     private const val BIT_RATE = "4000000" // 4 Mbps
@@ -289,7 +299,10 @@ class AndroidVideoCapture(
     private const val FIRST_PICTURE_POLL_MS = 100L
 
     /** See the `picturelessDevices` constructor parameter. */
-    private val PICTURELESS_DEVICES: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val PICTURELESS_DEVICES: MutableMap<String, Int> = java.util.concurrent.ConcurrentHashMap()
+
+    /** Sessions in a row with no picture before a device's later sessions skip the wait. */
+    internal const val PICTURELESS_AFTER_SESSIONS = 2
 
     /**
      * Scales the device's real display dimensions down so the short side is ~[TARGET_SHORT_SIDE]px.

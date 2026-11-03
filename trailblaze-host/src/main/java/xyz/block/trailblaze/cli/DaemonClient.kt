@@ -11,6 +11,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
@@ -179,6 +180,39 @@ class DaemonClient(
     }
   }
 
+  /** What the daemon says of whether a run has let go of its device; see [runRelease]. */
+  enum class RunRelease {
+    LET_GO,
+    HOLDING,
+
+    /** The daemon can't say: an older one, or a run it no longer knows. */
+    UNKNOWN,
+
+    /** The status request itself failed, so the run may be either. */
+    UNREACHABLE,
+  }
+
+  /**
+   * Whether run [runId] has let go of its device, cleanup included: a cancelled run reads cancelled
+   * at once but finishes only once its trail stops.
+   */
+  suspend fun runRelease(runId: String): RunRelease = try {
+    val response = client.get("$baseUrl${CliEndpoints.RUN_STATUS}") { parameter("runId", runId) }
+    when {
+      response.status == HttpStatusCode.NotFound -> RunRelease.UNKNOWN
+      !response.status.isSuccess() -> RunRelease.UNREACHABLE
+      else -> when (json.decodeFromString(CliRunStatusResponse.serializer(), response.bodyAsText()).finished) {
+        true -> RunRelease.LET_GO
+        false -> RunRelease.HOLDING
+        null -> RunRelease.UNKNOWN
+      }
+    }
+  } catch (e: CancellationException) {
+    throw e
+  } catch (_: Exception) {
+    RunRelease.UNREACHABLE
+  }
+
   /** Request daemon shutdown. */
   suspend fun shutdown(): CliShutdownResponse {
     return try {
@@ -226,6 +260,9 @@ class DaemonClient(
   /** Blocking wrapper for [cancelRun]. */
   fun cancelRunBlocking(runId: String): Boolean = runBlocking { cancelRun(runId) }
 
+  /** Blocking wrapper for [runRelease]. */
+  fun runReleaseBlocking(runId: String): RunRelease = runBlocking { runRelease(runId) }
+
   /** Blocking wrapper for [shutdown]. */
   fun shutdownBlocking(): CliShutdownResponse = runBlocking { shutdown() }
 
@@ -239,6 +276,16 @@ class DaemonClient(
    */
   @Volatile
   var currentRunId: String? = null
+    private set
+
+  /** The run ID of the last async run submitted, kept once it is over. */
+  @Volatile
+  var lastRunId: String? = null
+    private set
+
+  /** When this client gave up on [lastRunId] for making no progress, before it cancelled it; null if it didn't. */
+  @Volatile
+  var lastRunAbandonedAtMs: Long? = null
     private set
 
   private suspend fun runAsync(
@@ -263,6 +310,8 @@ class DaemonClient(
 
     val runId = submitResponse.runId
     currentRunId = runId
+    lastRunId = runId
+    lastRunAbandonedAtMs = null
 
     // Poll for status
     var lastProgress: String? = null
@@ -275,6 +324,8 @@ class DaemonClient(
     // cap, so the change can never kill a run EARLIER than the previous flat timeout did.
     var lastProgressAtMs = pollStartTime
     var consecutiveErrors = 0
+    // Where the daemon writes sessions, so a run given up on below still names where its session is.
+    var daemonLogsDir: String? = null
     try {
       while (true) {
         kotlinx.coroutines.delay(
@@ -287,13 +338,15 @@ class DaemonClient(
           // a caller's retry runs beside it, and if it later passes, that pass is credited to an
           // attempt this client already reported failed. The client's request timeout bounds the
           // call, so a wedged daemon that never answers it cannot hold up this report.
+          lastRunAbandonedAtMs = System.currentTimeMillis()
           val cancelled = cancelRun(runId)
           return CliRunResponse(
             success = false,
             error =
-              "Timed out waiting for run to complete: no progress for ${runPollTimeoutMs / 1000}s" +
-                if (cancelled) " (run cancelled)" else " (cancelling the run failed; it may still be running)",
+              "$NO_PROGRESS_TIMEOUT_PREFIX: no progress for ${runPollTimeoutMs / 1000}s" +
+                if (cancelled) RUN_CANCELLED_SUFFIX else " (cancelling the run failed; it may still be running)",
             errorKind = CliRunResponse.ERROR_KIND_INFRA,
+            logsDir = daemonLogsDir,
           )
         }
 
@@ -376,6 +429,7 @@ class DaemonClient(
         // ping-healthy-after-burst message in resolveConsecutivePollErrors deliberately does NOT
         // reset the watchdog — a daemon that pings but never advances the run is exactly the wedged
         // state the backstop exists to catch.
+        status.logsDir?.let { daemonLogsDir = it }
         val progress = status.progressMessage
         if (progress != null && progress != lastProgress) {
           onProgress(progress)
@@ -557,6 +611,19 @@ class DaemonClient(
      * Override per-invocation with [RUN_POLL_TIMEOUT_ENV_VAR].
      */
     const val RUN_POLL_TIMEOUT_MS = 10 * 60 * 1000L
+
+    /** How the error of a run abandoned for going [RUN_POLL_TIMEOUT_MS] without progress begins. */
+    const val NO_PROGRESS_TIMEOUT_PREFIX = "Timed out waiting for run to complete"
+
+    /** How the error of such a run ends when its cancel landed. */
+    private const val RUN_CANCELLED_SUFFIX = " (run cancelled)"
+
+    /**
+     * Whether [response] is a run this client abandoned for making no progress and cancelled, not one
+     * that finished. Not when the cancel failed: that run may still be executing on the device.
+     */
+    fun abandonedForNoProgress(response: CliRunResponse): Boolean =
+      !response.success && response.error?.let { it.startsWith(NO_PROGRESS_TIMEOUT_PREFIX) && it.endsWith(RUN_CANCELLED_SUFFIX) } == true
 
     /**
      * Env var to override [RUN_POLL_TIMEOUT_MS] (the inactivity window), in milliseconds. Read

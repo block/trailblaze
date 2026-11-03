@@ -8,6 +8,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
@@ -24,9 +26,12 @@ import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.trailhead.TeardownTrailblazeTool
 import xyz.block.trailblaze.trailhead.TeardownWire
@@ -109,12 +114,14 @@ class TrailblazeRunnerUtil(
    * once after it however it ends, before the session's final status. The trail's own outcome
    * (its return value or exception) is what the caller sees; `teardown` never changes it.
    */
-  suspend fun <T> runTrail(block: suspend () -> T): T {
+  suspend fun <T> runTrail(block: suspend () -> T): T = TrailExecution.within(
+    runCatching { sessionProvider?.invoke()?.metadata?.trailId }.getOrNull(),
+  ) {
     var outcome = TrailOutcome.PASSED
     startTrail()
     try {
       // Every tool the trail dispatches (recorded, a `tools:` block, the agent's) is cancelled with it.
-      return withContext(DispatchCancellation.element(currentCoroutineContext()[Job])) { block() }
+      withContext(DispatchCancellation.element(currentCoroutineContext()[Job])) { block() }
     } catch (e: Throwable) {
       outcome = trailOutcomeOf(e)
       throw e
@@ -124,16 +131,18 @@ class TrailblazeRunnerUtil(
   }
 
   /** [runTrail] for runners whose item loop isn't suspending. */
-  fun <T> runTrailBlocking(block: () -> T): T {
+  fun <T> runTrailBlocking(block: () -> T): T = TrailExecution.withinBlocking(
+    runCatching { sessionProvider?.invoke()?.metadata?.trailId }.getOrNull(),
+  ) {
     var outcome = TrailOutcome.PASSED
     startTrail()
     try {
-      return block()
+      block()
     } catch (e: Throwable) {
       outcome = trailOutcomeOf(e)
       throw e
     } finally {
-      runBlocking { finishTrailBestEffort(outcome) }
+      runBlocking(TrailExecution.element()) { finishTrailBestEffort(outcome) }
     }
   }
 
@@ -210,7 +219,7 @@ class TrailblazeRunnerUtil(
         val stepStartTime = Clock.System.now()
         val taskId = TaskId.generate()
         // A log write that fails must not cost the cleanup.
-        logBestEffort("start") { emitObjectiveStart(step) }
+        logBestEffort("Teardown start") { emitObjectiveStart(step) }
         val result = try {
           runTrailblazeTool(listOf(TeardownTrailblazeTool(run, outcome)))
         } catch (e: Exception) {
@@ -220,7 +229,7 @@ class TrailblazeRunnerUtil(
         if (!run.handoffsDropped) TrailheadHandoffStore.dropAll()
         val failure = (result as? TrailblazeToolResult.Error)?.errorMessage
         if (failure != null) Console.error("[Teardown] $failure")
-        logBestEffort("end") {
+        logBestEffort("Teardown end") {
           emitObjectiveComplete(step, taskId, stepStartTime, success = failure == null, failureReason = failure)
         }
       }
@@ -234,7 +243,7 @@ class TrailblazeRunnerUtil(
     try {
       block()
     } catch (e: Exception) {
-      Console.error("[Teardown] logging the Teardown $what failed: ${e::class.simpleName}: ${e.message}")
+      Console.error("[Lifecycle] logging the $what failed: ${e::class.simpleName}: ${e.message}")
     }
   }
 
@@ -290,6 +299,63 @@ class TrailblazeRunnerUtil(
 
   private fun trailheadSectionName(prompt: PromptStep): String =
     prompt.recording?.tools?.joinToString { it.name }?.ifBlank { null } ?: HistorySectionKind.TRAILHEAD
+
+  /**
+   * Runs a run's setup tool calls (`trailblaze run --device-setup`, a lane's `execution.deviceSetupTools`):
+   * once per trail, before anything else in it, the trailhead included. Call it first inside
+   * [runTrail]. The calls get a `deviceSetup` history section (`ctx.history.toolCalls({ section:
+   * "deviceSetup" })`) and a "Device setup" objective of their own, so a report shows them apart from the steps, and
+   * they are never written into a recording.
+   *
+   * [setupJson] is the list as [xyz.block.trailblaze.DeviceSetupToolsMemory] carries it, and [decode]
+   * turns it into tools the way the runner decodes a trail's `tools:`. A call naming a tool no
+   * class backs is looked up in [toolRepo] before any call runs, so a tool this device doesn't have fails the trail before the others
+   * change the device; a class-backed call is checked when it runs, as in a trail. A failure is a
+   * setup failure, like a trailhead's.
+   */
+  fun runDeviceSetup(
+    setupJson: String,
+    decode: (String) -> List<TrailblazeTool>,
+    toolRepo: TrailblazeToolRepo?,
+    run: (List<TrailblazeTool>) -> TrailblazeToolResult = runTrailblazeTool,
+  ) {
+    val names = runCatching {
+      TrailblazeJsonInstance.parseToJsonElement(setupJson).jsonArray.mapNotNull { (it as? JsonObject)?.keys?.singleOrNull() }
+    }.getOrDefault(emptyList()).joinToString().ifEmpty { "tools" }
+    enterHistorySection(HistorySectionKind.DEVICE_SETUP, names)
+    val step = DirectionStep(step = "Device setup: $names", recordable = false, isSetup = true)
+    val stepStartTime = Clock.System.now()
+    val taskId = TaskId.generate()
+    logBestEffort("setup start") { emitObjectiveStart(step) }
+    val failure = try {
+      val unavailable = mutableListOf<String>()
+      val resolved = decode(setupJson).mapIndexed { index, tool ->
+        if (tool !is OtherTrailblazeTool || toolRepo == null) return@mapIndexed tool
+        try {
+          toolRepo.toolCallToTrailblazeTool(tool.toolName, tool.raw.toString())
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          unavailable += "call ${index + 1}, `${tool.toolName}`: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}"
+          tool
+        }
+      }
+      if (unavailable.isNotEmpty()) {
+        "This device can't run ${unavailable.size} of the device setup tool calls, so none ran:\n" +
+          unavailable.joinToString("\n")
+      } else {
+        (run(resolved) as? TrailblazeToolResult.Error)?.errorMessage
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      "${e::class.simpleName}: ${e.message}"
+    }
+    logBestEffort("setup end") {
+      emitObjectiveComplete(step, taskId, stepStartTime, success = failure == null, failureReason = failure)
+    }
+    if (failure != null) throw TrailheadException(headline = "device setup failed", detail = failure)
+  }
 
   /**
    * Runs a trail's bare `tools:` item. Use this rather than [runTrailblazeTool] for one, so its

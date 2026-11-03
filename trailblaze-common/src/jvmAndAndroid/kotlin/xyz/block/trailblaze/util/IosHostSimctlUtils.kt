@@ -304,7 +304,7 @@ object IosHostSimctlUtils {
       return ClearAppDataOutcome.CLEARED
     }
     Console.log("Clearing $appId data container under $dataPath")
-    val undeleted = deleteChildrenWithoutFollowingLinks(dataPath)
+    val undeleted = resetAppDataContainer(dataPath)
     check(undeleted.isEmpty()) { "failed to delete from $appId's data container: ${undeleted.joinToString(", ")}" }
     return ClearAppDataOutcome.CLEARED
   }
@@ -349,6 +349,24 @@ object IosHostSimctlUtils {
   /** `get_app_container` exits with POSIX ENOENT when the app isn't installed. */
   internal fun isNotInstalledContainerOutput(output: String): Boolean =
     "NSPOSIXErrorDomain, code=2)" in output
+
+  /** Clears stale state, then restores the container layout an installed app expects. */
+  internal fun resetAppDataContainer(root: Path): List<String> {
+    val undeleted = deleteChildrenWithoutFollowingLinks(root)
+    if (undeleted.isEmpty()) recreateStockAppDataDirectories(root)
+    return undeleted
+  }
+
+  /**
+   * Installing an app creates these directories, but launching an already-installed app does not
+   * restore them after a wipe. Apps assume they exist: a URLSession download, for one, fails with
+   * ENOENT creating its temporary file when `tmp` is missing.
+   */
+  fun recreateStockAppDataDirectories(root: Path) {
+    listOf("Documents", "Library/Caches", "Library/Preferences", "tmp").forEach {
+      Files.createDirectories(root.resolve(it))
+    }
+  }
 
   /**
    * Deletes everything under [root], leaving [root] itself. Symlinks are deleted as links, never

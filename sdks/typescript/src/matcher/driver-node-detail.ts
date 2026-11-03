@@ -318,6 +318,11 @@ export interface DriverNodeDetailCompose {
   readonly verticalScrollMax?: number | null;
   readonly horizontalScrollValue?: number | null;
   readonly horizontalScrollMax?: number | null;
+  /**
+   * True on the synthetic child Compose's accessibility delegate adds to carry a role its merging
+   * parent cannot show. It shares the parent's semantics, so native Compose matching skips it.
+   */
+  readonly accessibilityProjectionOnly?: boolean;
 }
 
 // ============================================================================

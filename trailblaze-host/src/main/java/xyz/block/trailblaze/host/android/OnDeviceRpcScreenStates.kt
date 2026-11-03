@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.android
 import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -54,6 +55,11 @@ internal suspend fun onDeviceRpcScreenState(
             override val deviceWidth: Int = response.deviceWidth
             override val deviceHeight: Int = response.deviceHeight
             override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
+
+            // In-process, another app's window is captured only as this tree, with no legacy
+            // hierarchy, so dropping it would leave a host read of that screen empty.
+            override val trailblazeNodeTree: TrailblazeNode? =
+              response.trailblazeNodeTree.takeIf { driverType == TrailblazeDriverType.ANDROID_TEST }
             override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
               trailblazeDeviceId.trailblazeDevicePlatform
             override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()

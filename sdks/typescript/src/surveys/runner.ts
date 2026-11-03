@@ -1,10 +1,12 @@
 // Runs a set of surveys over a set of sessions and assembles the report.
 
+import { createHash, randomUUID } from "node:crypto";
 import { hasFindPhase, type SurveyDefinition } from "./survey.js";
 import { runSurvey, type SurveyError } from "./run-one.js";
 export { compactRecord, runSurvey, type SurveyError } from "./run-one.js";
 import { planSurveys, runLabelPhases } from "./labels.js";
 import { SurveySession } from "./session.js";
+import { type EventStreamDefinition, withDerivedStreams } from "./stream.js";
 import { currentEntry, readStoredSurveys, sessionInputs, type StoredSurveys } from "./stored.js";
 import type { Finding, LabelRecord, SessionSummary } from "./types.js";
 import { surveyApplies, type TargetCatalog } from "./scope.js";
@@ -88,6 +90,12 @@ export interface RunOptions {
   available?: ReadonlyArray<SurveyDefinition>;
   /** A session's stored findings. Defaults to its `surveys.json`. */
   stored?: (session: SurveySession) => StoredSurveys | undefined;
+  /**
+   * The loaded derived streams. Each is re-derived for every session before its surveys run, so a
+   * survey reading `session.stream("<name>")` or `session.events` sees current rows, not what the
+   * session's files last held. A derived stream not listed here keeps its written rows.
+   */
+  streams?: ReadonlyArray<EventStreamDefinition>;
 }
 
 /**
@@ -116,6 +124,7 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
   const ids = surveyIds(options.surveys);
   const plan = planSurveys(options.surveys.map((def, i) => ({ def, id: ids[i]! })), options.available);
   const stored = options.stored ?? ((session: SurveySession) => readStoredSurveys(session.dir));
+  const streamsKey = streamVersionsKey(options.streams);
   const reused = new Map<string, number>();
   const surveyed = new Map<string, number>();
   const report: SurveyReport = {
@@ -154,6 +163,9 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
       continue;
     }
     if (inputs !== null && sessionInputs(path) !== inputs) inputs = null;
+    // A survey can read a stream by name without importing it, so its own version misses a change to
+    // the stream: the streams this run derives are part of what every survey here read.
+    if (inputs !== null && streamsKey !== undefined) inputs = createHash("sha256").update(`${inputs}\n${streamsKey}`).digest("hex");
     if (options.where && !options.where(session.summary)) {
       report.excluded.push({ id: session.summary.id, path });
       continue;
@@ -174,6 +186,11 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
     }
     pathOf.set(session.summary.id, { path, recording: recordingOf(session) });
     const result: SessionResult = { session: session.summary, findings: [], errors: [], skipped: [], labels: [], inputs };
+    if (options.streams?.length) {
+      const derived = withDerivedStreams(session, options.streams);
+      session = derived.session;
+      for (const e of derived.errors) result.errors.push({ survey: `stream:${e.stream}`, message: e.message });
+    }
     // Read once, and only when a survey could reuse it.
     let storedHere: StoredSurveys | undefined | null = null;
     for (const p of plan) {
@@ -228,6 +245,15 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
     );
   }
   return report;
+}
+
+/**
+ * The streams a run derives, by name and version; undefined when it derives none. A stream with no
+ * version gets one of its own each run, so nothing stored over it is ever taken for current.
+ */
+function streamVersionsKey(streams: ReadonlyArray<EventStreamDefinition<any>> | undefined): string | undefined {
+  if (!streams?.length) return undefined;
+  return streams.map((s) => `${s.name}@${s.version ?? randomUUID()}`).sort().join("\n");
 }
 
 /** What a session recorded, wherever it was read from: its summary and how many records of each kind. */

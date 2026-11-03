@@ -58,6 +58,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.yaml.displayTitle
 import java.io.File
 import kotlin.io.path.Path
 
@@ -230,8 +231,7 @@ open class GenerateTestResultsCliCommand(
 
         val platform = sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase() ?: "unknown"
         val outcome = mapStatusToOutcome(sessionInfo.latestStatus)
-        val title = sessionInfo.trailConfig?.title
-          ?: sessionInfo.trailConfig?.id
+        val title = sessionInfo.trailConfig?.displayTitle()
           ?: sessionInfo.trailFilePath?.let { TrailRecordings.shortTrailName(it) }
           ?: sessionInfo.testName?.takeIf { it.isNotBlank() }?.let { name ->
             sessionInfo.testClass?.let { cls -> "$cls:$name" } ?: name

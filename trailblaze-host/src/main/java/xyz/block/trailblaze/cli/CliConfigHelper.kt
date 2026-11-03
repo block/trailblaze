@@ -479,7 +479,7 @@ object CliConfigHelper {
       EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
       EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
       EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
-      EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
+      EffectiveDisableAnimationsConfig.set(it.disableAnimationsEnabled)
       EffectiveTurboConfig.enabled = it.turboEnabled ?: false
     }
 

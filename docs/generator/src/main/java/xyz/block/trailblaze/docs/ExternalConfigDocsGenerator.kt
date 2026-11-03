@@ -361,8 +361,8 @@ class ExternalConfigDocsGenerator(
           "Runtime " +
             "selection happens per descriptor: tools run in-process (QuickJS) by default; set " +
             "`runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. " +
-            "The file extension is not a runtime hint. `requiresHost: true` is a separate, " +
-            "on-device visibility gate — not a runtime selector.",
+            "The file extension is not a runtime hint. A subprocess tool is host-only; it needs " +
+            "no `requiresHost`.",
         )
         appendLine()
         appendLine(

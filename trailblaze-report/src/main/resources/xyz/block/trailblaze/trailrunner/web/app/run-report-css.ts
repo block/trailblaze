@@ -186,12 +186,12 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .failurestack pre { max-height: 210px; margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--danger-border) 32%,var(--line)); border-radius: 0; background: var(--code-surface); color: var(--code-text); }
 .stepgroupbody > .failurepanel { margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--danger-border) 64%,var(--line2)); border-radius: 0; }
 .stepgroupbody > .selfhealpanel { margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--warning-border) 60%,var(--line2)); border-radius: 0; }
-.tlphase.trailhead .steps { border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); }
+.tlphase.trailhead .steps, .tlphase.devicesetup .steps { border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); }
 /* overflow: clip (not hidden) — hidden would make .steps a scroll container and break the sticky step headers. */
 .steps { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: clip; background: var(--bg2); box-shadow: inset 0 1px rgba(255,255,255,.025); }
-.tlphase:not(.trailhead) .steps { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.tlphase:not(.trailhead) .stepgroup { overflow: clip; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg2); box-shadow: inset 0 1px rgba(255,255,255,.025); }
-.tlphase:not(.trailhead) .stepgroup > .grphdr { border-top: 0; }
+.tlphase:not(.trailhead):not(.devicesetup) .steps { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.tlphase:not(.trailhead):not(.devicesetup) .stepgroup { overflow: clip; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg2); box-shadow: inset 0 1px rgba(255,255,255,.025); }
+.tlphase:not(.trailhead):not(.devicesetup) .stepgroup > .grphdr { border-top: 0; }
 .stepgroup { position: relative; }
 .stepgroup.failed { background: var(--danger-surface); }
 .stepgroup.failed .grphdr { background: color-mix(in srgb,var(--danger-surface) 80%,var(--bg3)); }
@@ -228,7 +228,7 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 /* The trailhead is setup rather than a numbered trail step, so its token stays distinguishable at a
    glance. It can't do that with hue any more, because hue now means outcome: it takes a ring in
    whatever colour the outcome already gave it. */
-.grphdr.trailhead .chip { box-shadow: inset 0 0 0 1px currentColor; }
+.grphdr.trailhead .chip, .grphdr.devicesetup .chip { box-shadow: inset 0 0 0 1px currentColor; }
 .grphdr .lbl { grid-column: 2; min-width: 0; display: block; padding-top: 1px; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1.4; overflow-wrap: anywhere; }
 .step { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
 .step.child { padding-left: 22px; }
@@ -830,11 +830,6 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .logpane .ln { display: flex; gap: 10px; padding: 1px 11px; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--line); }
 .logpane .ln:first-child { border-top: none; }
 .logpane .ln.e { color: var(--danger-text); } .logpane .ln.w { color: var(--warning-text); }
-.logpane.net .meth { font-weight: var(--font-weight-emphasis); min-width: 46px; }
-.logpane.net .m { color: var(--sub); min-width: 96px; }
-.logpane.net .netphase { color: var(--sub); min-width: 68px; }
-.logpane.net .netphase.trailhead { color: var(--trail-text); }
-.netcoverage { margin-top: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--sub); font-size: 12px; }
 .evchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .evchip { background: var(--bg3); border: 1px solid var(--line2); color: var(--txt); border-radius: 999px; padding: 4px 10px; font-size: 11.5px; font-weight: var(--font-weight-emphasis); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .evchip:hover { border-color: var(--run); }
@@ -1773,6 +1768,7 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .cmpmissingrun a { color: var(--txt); text-decoration: underline; text-underline-offset: 2px; }
 .cmpmissingrun a:hover { color: var(--run); }
 .cmpdegraded { margin: 0 0 var(--space-3); padding: 10px 12px; border: 1px solid var(--failed); border-radius: var(--r-sm); background: color-mix(in srgb, var(--failed) 8%, var(--surface)); color: var(--txt); font-size: var(--type-caption); line-height: 1.55; }
+.detailnotice { flex: none; margin: var(--space-3) var(--page-x) 0; }
 .cmpeventloading, .cmpeventempty, .cmpeventnomatch { padding: var(--space-5) var(--space-3); color: var(--sub); font-size: var(--type-caption); text-align: center; }
 .cmpeventssection { display: grid; gap: 0; }
 .cmpeventoverview { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; }

@@ -54,6 +54,13 @@ describe("fromMeta: device block", () => {
     expect(ctx?.device.instanceId).toBe("ABC-123-UDID");
   });
 
+  test("classifiers are parsed onto ctx.device.classifiers, absent when missing or malformed", () => {
+    const device = { platform: "android", widthPixels: 1600, heightPixels: 2560, driverType: "android-ondevice-accessibility" };
+    expect(fromMeta(withDevice({ ...device, classifiers: ["android", "tablet"] }))?.device.classifiers).toEqual(["android", "tablet"]);
+    expect(fromMeta(withDevice(device))?.device.classifiers).toBeUndefined();
+    expect(fromMeta(withDevice({ ...device, classifiers: ["android", 7] }))?.device.classifiers).toBeUndefined();
+  });
+
   test("instanceId absent leaves it undefined without dropping the envelope (older daemon / subprocess path)", () => {
     const ctx = fromMeta(
       withDevice({

@@ -275,6 +275,59 @@ class CheckCommandSurveyPhaseTest {
     )
   }
 
+  private val screensStream = """
+    import { trailblaze } from "@trailblaze/scripting/surveys";
+    export const screens = trailblaze.eventStream<{ screen: string }>({
+      name: "screens",
+      derive: (session) => session.analytics.all().map((e) => ({ timeMs: e.timeMs!, data: { screen: e.name }, from: e })),
+    });
+  """
+
+  @Test
+  fun `two streams of one name fail before anything runs, naming where each is declared`() {
+    val ws = workspace(screensStream)
+    File(ws, "trails/config/surveys").mkdirs()
+    File(ws, "trails/config/surveys/other.survey.ts").writeText(
+      "import { eventStream } from \"@trailblaze/scripting/surveys\";\n\nexport const views = eventStream({ name: 'screens', derive: () => [] });\n",
+    )
+    val (exit, stderr) = run(ws)
+    assertEquals(CheckCommand.EXIT_TYPE_ERROR, exit)
+    assertTrue(
+      stderr.contains("Stream screens is declared at surveys/other.survey.ts:3 and trailmaps/shop/surveys/shop.survey.ts:2. Stream names must be unique"),
+      stderr,
+    )
+  }
+
+  @Test
+  fun `a stream another file re-exports, or one in a comment or a string, is not a second declaration`() {
+    val ws = workspace(screensStream)
+    File(ws, "trails/config/surveys").mkdirs()
+    File(ws, "trails/config/surveys/other.survey.ts").writeText(
+      """
+      export { screens } from "../trailmaps/shop/surveys/shop.survey";
+      // export const old = eventStream({ name: "screens", derive: () => [] });
+      const note = "eventStream({ name: 'screens' })";
+      """.trimIndent(),
+    )
+    val (exit, stderr) = run(ws)
+    assertEquals(CheckCommand.EXIT_OK, exit, stderr)
+  }
+
+  @Test
+  fun `a stream whose name is computed fails, since check cannot compare it`() {
+    val (exit, stderr) = run(
+      workspace(
+        """
+        import { trailblaze } from "@trailblaze/scripting/surveys";
+        const kind = "views";
+        export const views = trailblaze.eventStream({ name: "app." + kind, derive: () => [] });
+        """,
+      ),
+    )
+    assertEquals(CheckCommand.EXIT_TYPE_ERROR, exit)
+    assertTrue(stderr.contains("trailmaps/shop/surveys/shop.survey.ts:3: This derived event stream's name is not a plain string"), stderr)
+  }
+
   @Test
   fun `a final inside a string is not a guard`() {
     val (exit, stderr) = run(

@@ -88,9 +88,8 @@ data class TrailmapScriptedToolFile(
    * Top-level shortcut for `_meta: { trailblaze/requiresHost: true }`. Setting this to `true`
    * marks the tool as host-only — the on-device agent skips it at registration via the same
    * `TrailblazeToolMeta.shouldRegister` gate that Kotlin
-   * `@TrailblazeToolClass(requiresHost = true)` already uses. Use it for tools that need
-   * Node/Bun APIs (`node:fs`, `node:child_process`) or otherwise can't run inside the
-   * on-device QuickJS bundle.
+   * `@TrailblazeToolClass(requiresHost = true)` already uses. Use it when an in-process Android
+   * tool calls a host-only tool like `exec`. Subprocess tools are host-only already.
    *
    * Translated by [toInlineScriptToolConfig] into `_meta["trailblaze/requiresHost"] = true`
    * on the runtime [InlineScriptToolConfig]. Default `false` is a no-op — any explicit

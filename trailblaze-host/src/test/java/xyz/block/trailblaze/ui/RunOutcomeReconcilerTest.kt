@@ -66,6 +66,18 @@ class RunOutcomeReconcilerTest {
   }
 
   @Test
+  fun `a failed session's recorded reason reaches the error`() {
+    val outcome = reconcileRunOutcome(
+      latchSuccess = true,
+      latchError = null,
+      diskStatus = SessionStatus.Ended.Failed(durationMs = 1000, exceptionMessage = "TRAILHEAD FAILED: launchApp\n"),
+      sessionDescription = sessionDesc,
+    )
+    assertFalse(outcome.success)
+    assertEquals("Session $sessionDesc ended with status: Failed\nTRAILHEAD FAILED: launchApp", outcome.error)
+  }
+
+  @Test
   fun `latch success with succeeded disk status stays success`() {
     val outcome = reconcileRunOutcome(
       latchSuccess = true,

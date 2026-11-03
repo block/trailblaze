@@ -219,6 +219,9 @@ class YamlBackedHostAppTarget(
 
   override fun getElectronAppConfig(): xyz.block.trailblaze.yaml.ElectronAppConfig? = config.electron
 
+  override fun clearsAppDataBeforeInProcessTrailhead(): Boolean =
+    config.androidTest?.clearDataBeforeTrailhead == true
+
   override fun getAndroidTestInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget? =
     config.androidTest?.let {
       TrailblazeOnDeviceInstrumentationTarget(
