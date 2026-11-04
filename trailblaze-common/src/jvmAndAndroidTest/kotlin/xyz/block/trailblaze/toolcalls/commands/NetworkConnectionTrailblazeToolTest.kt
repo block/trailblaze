@@ -1,9 +1,7 @@
 package xyz.block.trailblaze.toolcalls.commands
 
-import kotlin.reflect.full.findAnnotation
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -13,7 +11,6 @@ import maestro.orchestra.Command
 import maestro.orchestra.SetAirplaneModeCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -22,13 +19,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.AndroidRadio
-import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
  * Pins what a `mobile_networkConnection` step MEANS, on both halves of the tool.
@@ -557,49 +550,6 @@ class NetworkConnectionTrailblazeToolTest {
     )
   }
 
-  /**
-   * The deprecated `networkConnection` name still replays, and means exactly what
-   * `mobile_networkConnection` means. Recorded trails across several repos still use the old name
-   * while they migrate, so a step under either name must decode and reach the device identically.
-   */
-  @Test
-  fun `a step recorded under the deprecated name decodes and runs as mobile_networkConnection`() {
-    val trailblazeYaml = createTrailblazeYaml(
-      setOf(NetworkConnectionTrailblazeTool::class, DeprecatedNetworkConnectionTrailblazeTool::class),
-    )
-    val tools = trailblazeYaml.decodeTrail(
-      """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      ios:
-        - networkConnection:
-            airplaneMode: true
-        - mobile_networkConnection:
-            airplaneMode: true
-      """.trimIndent(),
-      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios")),
-    ).filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
-      .promptSteps.single().recording!!.tools.map { it.trailblazeTool }
-
-    assertEquals(DeprecatedNetworkConnectionTrailblazeTool(airplaneMode = true), tools[0])
-    assertEquals(NetworkConnectionTrailblazeTool(airplaneMode = true), tools[1])
-    assertEquals(
-      maestroCommandsFrom(tools[1] as ExecutableTrailblazeTool),
-      maestroCommandsFrom(tools[0] as ExecutableTrailblazeTool),
-    )
-  }
-
-  /** The old name is kept for replay only, so the LLM is never offered it and never records it. */
-  @Test
-  fun `the deprecated name is hidden from the LLM`() {
-    val annotation = DeprecatedNetworkConnectionTrailblazeTool::class
-      .findAnnotation<TrailblazeToolClass>()!!
-    assertEquals("networkConnection", annotation.name)
-    assertFalse(annotation.surfaceToLlm)
-  }
-
   private fun errorFrom(
     tool: NetworkConnectionTrailblazeTool,
     platform: TrailblazeDevicePlatform,
@@ -609,7 +559,7 @@ trail:
     return result.errorMessage
   }
 
-  private fun maestroCommandsFrom(tool: ExecutableTrailblazeTool): List<Command> {
+  private fun maestroCommandsFrom(tool: NetworkConnectionTrailblazeTool): List<Command> {
     val agent = RecordingAgent()
     val result = runBlocking { tool.execute(context(TrailblazeDevicePlatform.IOS, agent)) }
     assertTrue(result is TrailblazeToolResult.Success, "expected a success, got: $result")

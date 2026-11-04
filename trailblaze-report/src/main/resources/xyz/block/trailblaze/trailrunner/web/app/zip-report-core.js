@@ -393,11 +393,13 @@
     return relative.replace(/\.trail\.yaml$/, '');
   }
 
-  // SessionInfo.displayName resolution priority (see the Kotlin kdoc): config title → config id →
-  // trail path → testClass:testName (with the MCP transport marker suppressed) → sessionId.
+  // SessionInfo.displayName resolution priority (see the Kotlin kdoc): config title → metadata title →
+  // config id → trail path → testClass:testName (with the MCP transport marker suppressed) → sessionId.
   function sessionDisplayName(started, sessionId) {
     var config = (started && started.trailConfig) || null;
     if (config && config.title) return config.title;
+    var metadataTitle = config && config.metadata && config.metadata.title;
+    if (typeof metadataTitle === 'string' && metadataTitle.trim() !== '') return metadataTitle;
     if (config && config.id) return config.id;
     var trailFilePath = started && started.trailFilePath;
     if (trailFilePath && trailFilePath.trim() !== '') return shortTrailName(trailFilePath);
@@ -621,6 +623,9 @@
 
   var EVENTS_STREAM_RE = /^events\/[^/]+\.ndjson$/;
   var DEVICE_CLOCK_FILE = 'session_device_clock.json';
+  // Lists the streams a survey derived, with their lane titles; read like the device clock readings.
+  var DERIVED_STREAMS_FILE = 'events/derived.json';
+  var DERIVED_STREAMS_MAX_BYTES = 1024 * 1024;
   // A run samples once a minute; this is days of samples, and keeps a hostile archive from
   // inflating a huge entry just to read it.
   var DEVICE_CLOCK_MAX_BYTES = 4 * 1024 * 1024;
@@ -639,13 +644,6 @@
     var eventFiles = Object.keys(session.byFileName)
       .filter(function (name) { return EVENTS_STREAM_RE.test(name); })
       .sort();
-    // Root-level network captures read as streams too (see rootNetworkStreamFiles). An older bundle
-    // without the helper reads `events/` alone, as before.
-    if (typeof render.rootNetworkStreamFiles === 'function') {
-      var rootNames = Object.keys(session.byFileName).filter(function (name) { return name.indexOf('/') < 0; });
-      var eventNames = eventFiles.map(function (name) { return name.slice('events/'.length).replace(/(\.json)?\.ndjson$/, ''); });
-      eventFiles = eventFiles.concat(render.rootNetworkStreamFiles(rootNames, eventNames));
-    }
     var streams = [];
     var totalChars = 0;
     var overTotal = false;
@@ -659,29 +657,53 @@
           clockSync = parseClock(utf8.decode(data));
         }).catch(function () { clockSync = null; })
       : Promise.resolve();
-    eventFiles.forEach(function (name) {
+    var derived = null;
+    var derivedEntry = session.byFileName[DERIVED_STREAMS_FILE];
+    if (typeof render.applyDerivedLanes === 'function' && derivedEntry && derivedEntry.uncompressedSize <= DERIVED_STREAMS_MAX_BYTES) {
       chain = chain.then(function () {
-        if (overTotal) return;
-        var entry = session.byFileName[name];
-        // The archive's own declared size, checked before inflating rather than after.
-        if (entry.uncompressedSize > render.MAX_EVENT_STREAM_BYTES) {
-          console.error('events: skipping ' + name + ' — exceeds the ' + (render.MAX_EVENT_STREAM_BYTES / 1024 / 1024) + 'MB per-stream cap');
+        return readZipEntry(zipBytes, derivedEntry, inflateRaw).then(function (data) {
+          derived = utf8.decode(data);
+        }).catch(function () { derived = null; });
+      });
+    }
+    // One stream, read and decoded under the per-stream and total budgets.
+    function readStream(name) {
+      if (overTotal) return;
+      var entry = session.byFileName[name];
+      // The archive's own declared size, checked before inflating rather than after.
+      if (entry.uncompressedSize > render.MAX_EVENT_STREAM_BYTES) {
+        console.error('events: skipping ' + name + ' — exceeds the ' + (render.MAX_EVENT_STREAM_BYTES / 1024 / 1024) + 'MB per-stream cap');
+        return;
+      }
+      return readZipEntry(zipBytes, entry, inflateRaw).then(function (data) {
+        var stream = render.buildEventStream(name.replace(/^events\//, ''), utf8.decode(data).split('\n'), [], { sessionPassed: false }, clockSync);
+        if (!stream) return;
+        totalChars += JSON.stringify(stream).length;
+        if (totalChars > render.MAX_EVENT_STREAMS_TOTAL_CHARS) {
+          console.error('events: skipping ' + name + ' and later streams — session events exceed the ' + (render.MAX_EVENT_STREAMS_TOTAL_CHARS / 1024 / 1024) + 'MB total budget');
+          overTotal = true;
           return;
         }
-        return readZipEntry(zipBytes, entry, inflateRaw).then(function (data) {
-          var stream = render.buildEventStream(name.replace(/^events\//, ''), utf8.decode(data).split('\n'), [], { sessionPassed: false }, clockSync);
-          if (!stream) return;
-          totalChars += JSON.stringify(stream).length;
-          if (totalChars > render.MAX_EVENT_STREAMS_TOTAL_CHARS) {
-            console.error('events: skipping ' + name + ' and later streams — session events exceed the ' + (render.MAX_EVENT_STREAMS_TOTAL_CHARS / 1024 / 1024) + 'MB total budget');
-            overTotal = true;
-            return;
-          }
-          streams.push(stream);
-        }).catch(function () { /* a broken stream costs itself, not the report */ });
+        streams.push(stream);
+      }).catch(function () { /* a broken stream costs itself, not the report */ });
+    }
+    eventFiles.forEach(function (name) { chain = chain.then(function () { return readStream(name); }); });
+    // Root-level network captures read as streams too (see rootNetworkStreamFiles), chosen against
+    // the streams that decoded, so an oversized or unreadable `events/network` leaves the root
+    // capture in place. An older bundle without the helper reads `events/` alone, as before.
+    if (typeof render.rootNetworkStreamFiles === 'function') {
+      chain = chain.then(function () {
+        if (overTotal) return;
+        var rootNames = Object.keys(session.byFileName).filter(function (name) { return name.indexOf('/') < 0; });
+        return render.rootNetworkStreamFiles(rootNames, streams.map(function (stream) { return stream.name; }))
+          .reduce(function (done, name) { return done.then(function () { return readStream(name); }); }, Promise.resolve());
       });
+    }
+    return chain.then(function () {
+      // Derived lanes open by default under their titles, as in a report the CLI built.
+      if (derived !== null) render.applyDerivedLanes(streams, derived);
+      return streams.length ? streams : null;
     });
-    return chain.then(function () { return streams.length ? streams : null; });
   }
 
   // The session's `trace.json` → the same TracerSpan[] the bun driver embeds, through the renderer's
@@ -824,6 +846,7 @@
       packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
       traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
       buildEventStream: render.buildEventStream || g.buildEventStream,
+      applyDerivedLanes: render.applyDerivedLanes || g.applyDerivedLanes,
       rootNetworkStreamFiles: render.rootNetworkStreamFiles || g.rootNetworkStreamFiles,
       parseDeviceClockSync: render.parseDeviceClockSync || g.parseDeviceClockSync,
       collectStreamAttachmentRefs: render.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,

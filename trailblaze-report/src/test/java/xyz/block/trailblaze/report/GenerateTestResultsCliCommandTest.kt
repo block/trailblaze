@@ -847,6 +847,62 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `the metadata title labels the result while the trail id stays its test key`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_10_28_metadata_title_session")
+      val deviceInfo = webDeviceInfo()
+      val uuid = "3505fa57-8a2a-42d8-af99-30737ead0bd5"
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = TrailConfig(
+              id = uuid,
+              metadata = mapOf("title" to TrailMetadataValue.StringValue("Sign in to the sample app")),
+            ),
+            trailFilePath = null,
+            hasRecordedSteps = true,
+            testMethodName = "run",
+            testClassName = "TrailTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-10-28T07:53:39Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-10-28T07:53:44Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val result = json.decodeFromString<CiSummaryReport>(outputFile.readText()).results.single()
+      assertEquals("Sign in to the sample app", result.title)
+      assertEquals(uuid, result.test_key)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `a session that named no trail is distinguishable from a trail that replayed nothing`() {
     // Both rows are PASSED with execution_mode UNKNOWN. A device farm runs every @Test in the APK,
     // so a harness entry point that returns before calling the rule opens a session, never emits

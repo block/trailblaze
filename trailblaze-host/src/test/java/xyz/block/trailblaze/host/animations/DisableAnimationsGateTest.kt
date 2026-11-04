@@ -39,4 +39,36 @@ class DisableAnimationsGateTest {
   fun `a non-truthy env value still yields on when the config toggle is on`() {
     assertTrue(DisableAnimationsGate.fromValues(env = "0", configEnabled = true))
   }
+
+  @Test
+  fun `a driver default opens the gate when nobody said otherwise`() {
+    assertTrue(DisableAnimationsGate.fromValues(env = null, configEnabled = false, driverDefault = true))
+  }
+
+  @Test
+  fun `an explicit off from config or env keeps a driver default closed`() {
+    assertFalse(
+      DisableAnimationsGate.fromValues(
+        env = null,
+        configEnabled = false,
+        configExplicitlyOff = true,
+        driverDefault = true,
+      ),
+    )
+    assertFalse(DisableAnimationsGate.fromValues(env = "0", configEnabled = false, driverDefault = true))
+    assertFalse(DisableAnimationsGate.fromValues(env = "false", configEnabled = false, driverDefault = true))
+  }
+
+  @Test
+  fun `under a driver default the env's explicit off outranks the config toggle`() {
+    assertFalse(DisableAnimationsGate.fromValues(env = "0", configEnabled = true, driverDefault = true))
+    assertTrue(
+      DisableAnimationsGate.fromValues(
+        env = "1",
+        configEnabled = false,
+        configExplicitlyOff = true,
+        driverDefault = true,
+      ),
+    )
+  }
 }

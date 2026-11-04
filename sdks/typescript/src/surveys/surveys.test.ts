@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { SurveySession, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFinding, runSurveys, renderMarkdown, targetsOf } from "./index.js";
+import { loadSurveyModules } from "./discover.js";
 import { redactUrl } from "./session.js";
 import { withId } from "./survey.js";
 
@@ -1061,6 +1062,23 @@ describe("discovery", () => {
     writeFileSync(join(dir, "a.survey.ts"), src);
     writeFileSync(join(dir, "b.survey.ts"), src);
     await expect(loadSurveys([dir])).rejects.toThrow(/exported by both/);
+  });
+
+  test("two files declaring a stream of one name is an error, and a stream one file re-exports from another loads once", async () => {
+    const sdk = JSON.stringify(join(import.meta.dir, "index.ts"));
+    const stream = (exportName: string) => `import { trailblaze } from ${sdk};\nexport const ${exportName} = trailblaze.eventStream({ name: "screens", derive: () => [] });\n`;
+    const dupes = join(root, "stream-dupes");
+    mkdirSync(dupes, { recursive: true });
+    // Different export names, one stream name: both would write events/screens.ndjson.
+    writeFileSync(join(dupes, "a.survey.ts"), stream("screens"));
+    writeFileSync(join(dupes, "b.survey.ts"), stream("pages"));
+    await expect(loadSurveyModules([dupes])).rejects.toThrow(/stream "screens" is declared by both .*a\.survey\.ts and .*b\.survey\.ts/);
+
+    const shared = join(root, "stream-shared");
+    mkdirSync(shared, { recursive: true });
+    writeFileSync(join(shared, "a.survey.ts"), stream("screens"));
+    writeFileSync(join(shared, "b.survey.ts"), `export { screens } from "./a.survey.ts";\n`);
+    expect((await loadSurveyModules([shared])).streams.map((s) => [s.definition.name, basename(s.file)])).toEqual([["screens", "a.survey.ts"]]);
   });
 });
 

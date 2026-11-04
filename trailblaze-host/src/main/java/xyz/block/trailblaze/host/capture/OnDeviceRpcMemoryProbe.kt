@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.capture
 
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
@@ -28,7 +29,9 @@ import xyz.block.trailblaze.util.Console
  * device does not pay a failed connection before every sample. The backoff is short because the
  * first samples of a session usually land while the host is still installing and starting the
  * runner; after [MAX_UNREACHABLE_ATTEMPTS] misses in a row the device is read over adb for the
- * rest of the probe's life, as is a runner too old to know the request (HTTP 404).
+ * rest of the probe's life, as is a runner too old to know the request (HTTP 404). A run that
+ * connects the runner calls [runnerReady], which ends either, so samples taken while the device was
+ * still connecting, or against the runner the connect replaced, do not cost the session its readings.
  *
  * [rpc] is injectable so the routing is unit-tested without a device.
  */
@@ -45,6 +48,8 @@ class OnDeviceRpcMemoryProbe(
   private val rpc: (deviceId: String, request: GetMemoryInfoRequest) -> RpcResult<GetMemoryInfoResponse> = rpc ?: ::callRunner
   private val backoffUntilByDevice = mutableMapOf<String, Long>()
   private val unreachableCountByDevice = mutableMapOf<String, Int>()
+  /** The [runnerReady] count each device's backoff was set under; a newer count ends it. */
+  private val backoffReadinessByDevice = mutableMapOf<String, Long>()
   private var announced = false
 
   override fun read(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
@@ -61,6 +66,12 @@ class OnDeviceRpcMemoryProbe(
 
   private fun readWithin(deviceId: String, appId: String?, forceGc: Boolean, budgetMs: Long?): MemorySnapshot? {
     val now = clock()
+    val readiness = readinessOf(deviceId)
+    if (backoffReadinessByDevice[deviceId]?.let { it != readiness } == true) {
+      backoffUntilByDevice.remove(deviceId)
+      unreachableCountByDevice.remove(deviceId)
+      backoffReadinessByDevice.remove(deviceId)
+    }
     if ((backoffUntilByDevice[deviceId] ?: 0L) > now) return fallback.read(deviceId, appId, forceGc)
     val request = GetMemoryInfoRequest(appId = appId, forceGc = forceGc)
     val result = if (budgetMs == null) rpc(deviceId, request) else rpcWithin(budgetMs) { rpc(deviceId, request) }
@@ -79,6 +90,7 @@ class OnDeviceRpcMemoryProbe(
         val giveUp = tooOldForThisRequest(result) || misses >= MAX_UNREACHABLE_ATTEMPTS
         val until = if (giveUp) Long.MAX_VALUE else now + backoffMs
         backoffUntilByDevice[deviceId] = until
+        backoffReadinessByDevice[deviceId] = readiness
         Console.log(
           "[memory-capture] on-device runner unavailable on $deviceId (${result.errorType}: ${result.message}); " +
             "reading memory over adb" + if (until == Long.MAX_VALUE) " for this session" else " for the next ${backoffMs / 1000}s",
@@ -150,6 +162,19 @@ class OnDeviceRpcMemoryProbe(
   )
 
   companion object {
+    private val readinessByDevice = ConcurrentHashMap<String, Long>()
+
+    private fun readinessOf(deviceId: String): Long = readinessByDevice[deviceId] ?: 0L
+
+    /**
+     * Says [deviceId]'s runner just connected. Every probe then asks it again on its next reading,
+     * rather than waiting out a backoff set while the runner was still starting. That includes one
+     * a runner too old for the request set: the connect may have replaced it with one that knows it.
+     */
+    fun runnerReady(deviceId: String) {
+      readinessByDevice.merge(deviceId, 1L, Long::plus)
+    }
+
     /**
      * The wire this probe's RPC uses, pinned rather than taken from the environment switch.
      *

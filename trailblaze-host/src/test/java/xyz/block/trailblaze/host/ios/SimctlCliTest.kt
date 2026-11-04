@@ -192,4 +192,116 @@ class SimctlCliTest {
     assertEquals("Point of Sale", SimctlCli.parseAppDisplayName(spaced))
     assertEquals("Shop", SimctlCli.parseAppDisplayName(nameOnly))
   }
+
+  private class FakeReboot(vararg states: String?, private val bootFailures: Int = 0) {
+    private val states = states.toMutableList()
+    val booted = mutableListOf<String>()
+    var now = 0L
+
+    fun state(): String? = if (states.size > 1) states.removeAt(0) else states.first()
+
+    fun boot(): SimctlCli.Result {
+      booted += "boot"
+      return if (booted.size <= bootFailures) SimctlCli.Result(1, "", "Unable to boot") else SimctlCli.Result(0, "", "")
+    }
+  }
+
+  private fun FakeReboot.run(shutdown: SimctlCli.Result?, timeoutSeconds: Long = 120) =
+    SimctlCli.bootAfterShutdown(
+      udid = "SIM",
+      shutdown = shutdown,
+      timeoutSeconds = timeoutSeconds,
+      state = ::state,
+      boot = ::boot,
+      nanoTime = { now },
+      sleep = { now += it * 1_000_000 },
+    )
+
+  @Test
+  fun `a reboot waits out the shutdown before it boots`() {
+    val fake = FakeReboot("Shutting Down", "Shutting Down", "Shutdown")
+
+    assertTrue(fake.run(SimctlCli.Result(0, "", "")).success)
+    assertEquals(listOf("boot"), fake.booted)
+  }
+
+  @Test
+  fun `a shutdown that timed out but went through is still followed by a boot`() {
+    val fake = FakeReboot("Shutting Down", "Shutdown")
+
+    assertTrue(fake.run(SimctlCli.Result(-1, "", "simctl timed out after 120s")).success)
+    assertEquals(listOf("boot"), fake.booted)
+  }
+
+  @Test
+  fun `a device a failed shutdown left booted reports that failure and is not booted again`() {
+    val fake = FakeReboot("Booted")
+
+    val result = fake.run(SimctlCli.Result(1, "", "Unable to shutdown"))
+
+    assertFalse(result.success)
+    assertEquals("Unable to shutdown", result.stderr)
+    assertEquals(emptyList(), fake.booted)
+  }
+
+  @Test
+  fun `a boot that fails while the device stays shut down is tried again`() {
+    val fake = FakeReboot("Shutdown", bootFailures = 1)
+
+    assertTrue(fake.run(SimctlCli.Result(0, "", "")).success)
+    assertEquals(listOf("boot", "boot"), fake.booted)
+  }
+
+  @Test
+  fun `a device that never boots reports the last boot failure`() {
+    val fake = FakeReboot("Shutdown", bootFailures = Int.MAX_VALUE)
+
+    val result = fake.run(SimctlCli.Result(0, "", ""), timeoutSeconds = 2)
+
+    assertFalse(result.success)
+    assertEquals("Unable to boot", result.stderr)
+  }
+
+  @Test
+  fun `a device that never finishes shutting down fails the reboot`() {
+    val fake = FakeReboot("Shutting Down")
+
+    val result = fake.run(SimctlCli.Result(0, "", ""), timeoutSeconds = 2)
+
+    assertFalse(result.success)
+    assertTrue(result.stderr.contains("still `Shutting Down`"))
+    assertEquals(emptyList(), fake.booted)
+  }
+
+  @Test
+  fun `reads one device's state out of the simctl listing`() {
+    val listing = """
+      -- iOS 26.5 --
+          iPad (A16) (1822DE03-F863-4D4A-B826-F1E3E470482A) (Shutting Down)
+          iPhone 17 Pro (E5BDD6FB-1C7C-46B7-A479-E8A772C3922D) (Booted)
+    """.trimIndent()
+
+    assertEquals("Shutting Down", SimctlCli.parseDeviceState(listing, "1822DE03-F863-4D4A-B826-F1E3E470482A"))
+    assertEquals("Booted", SimctlCli.parseDeviceState(listing, "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D"))
+    assertEquals(null, SimctlCli.parseDeviceState(listing, "MISSING"))
+  }
+
+  @Test
+  fun `reads a simulator's device type from the simctl device listing`() {
+    val listing = """
+      {
+        "devices" : {
+          "com.apple.CoreSimulator.SimRuntime.iOS-26-5" : [
+            { "udid" : "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D", "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "state" : "Booted" },
+            { "udid" : "19B2F674-DEA8-4C94-A2E8-4780CC7EE2DA", "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPad-A16", "state" : "Booted" }
+          ]
+        }
+      }
+    """.trimIndent()
+
+    assertEquals("com.apple.CoreSimulator.SimDeviceType.iPad-A16", SimctlCli.parseDeviceTypeIdentifier(listing, "19B2F674-DEA8-4C94-A2E8-4780CC7EE2DA"))
+    assertEquals("com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", SimctlCli.parseDeviceTypeIdentifier(listing, "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D"))
+    assertEquals(null, SimctlCli.parseDeviceTypeIdentifier(listing, "MISSING"))
+    assertEquals(null, SimctlCli.parseDeviceTypeIdentifier("not json", "19B2F674-DEA8-4C94-A2E8-4780CC7EE2DA"))
+  }
 }

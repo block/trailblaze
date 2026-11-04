@@ -266,7 +266,7 @@ abstract class BaseTrailblazeAgent(
             // reach the LLM context.
             is MemoryTrailblazeTool -> {
               toolsExecuted.add(resolved)
-              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
+              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory, context.trailblazeDeviceInfo)
               try {
                 memoryResolvedTool.execute(memory = memory, elementComparator = elementComparator)
               } catch (e: TrailblazeToolExecutionException) {
@@ -305,7 +305,7 @@ abstract class BaseTrailblazeAgent(
               // `RawArgumentTrailblazeTool`) this is a pass-through — they resolve their args
               // JSON at the engine boundary themselves — but a custom class-backed HostLocal
               // gets its string fields resolved like every other tool.
-              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
+              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory, context.trailblazeDeviceInfo)
               val timeBeforeExecution = Clock.System.now()
               // A composing call can overwrite a sensitive key before its resolved payload is
               // logged. Keep only this invocation's pre-call redaction inputs, never session

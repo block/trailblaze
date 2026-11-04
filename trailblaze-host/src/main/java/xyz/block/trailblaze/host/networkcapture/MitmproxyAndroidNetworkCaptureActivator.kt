@@ -18,8 +18,8 @@ import java.util.concurrent.ConcurrentHashMap
  * third-party apps and external users — by routing the emulator through a host-side `mitmdump`,
  * installing mitmproxy's CA into the device system trust
  * store, and writing each flow into the shared [xyz.block.trailblaze.network.NetworkEvent] schema at
- * `<sessionDir>/network.ndjson` — the same file the desktop app's Network tab and the HTML report
- * already render. The mapping is done by the bundled `mitmproxy_netcapture.py` addon.
+ * `<sessionDir>/network.ndjson` — the same file the report
+ * already renders. The mapping is done by the bundled `mitmproxy_netcapture.py` addon.
  *
  * ### Scope / limitations (v1)
  * - **Android emulator, API 34+.** Uses `10.0.2.2` as the emulator→host address and a writable-system
@@ -106,6 +106,7 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
     targetAppIds: List<String>?,
     deviceLabel: String?,
     requireTraffic: Boolean,
+    targetId: String?,
   ) {
     installShutdownHookOnce()
     sessions.compute(sessionId) { id, existing ->

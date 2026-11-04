@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 import java.util.concurrent.CancellationException
 import android.app.Activity
 import android.graphics.Bitmap
@@ -13,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.AndroidDeviceLocale
 import xyz.block.trailblaze.devices.TrailDeviceLocale
@@ -21,6 +23,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.android.OnDeviceScriptedToolBundleLauncher
+import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -41,6 +44,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.carriesPayload
+import xyz.block.trailblaze.trailhead.DeviceSetupToolsInstrumentationArg
 import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.NoOpElementComparator
@@ -198,7 +202,7 @@ class AndroidTestTrailblazeRule(
   }
 
   private fun hierarchyOnlyState(includeTree: Boolean = true): ScreenState =
-    AndroidTestScreenState(
+    foreignScreenState(includeScreenshot = false, screenshotScalingConfig = null, includeTree) ?: AndroidTestScreenState(
       target = localeAwareTarget,
       deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
       includeScreenshot = false,
@@ -209,7 +213,11 @@ class AndroidTestTrailblazeRule(
    * Screenshot-free by design: this feeds tool dispatch, which resolves selectors against the
    * hierarchy and never reads pixels. Report frames come from [snapshotProvider].
    */
-  private val screenStateProvider: () -> ScreenState = { hierarchyOnlyState() }
+  private val screenStateProvider: () -> ScreenState = {
+    // Each capture a tool polls on lets the app's timers catch up first; see advanceAppClock.
+    localeAwareTarget.advanceAppClock()
+    hierarchyOnlyState()
+  }
 
   private val snapshotProvider: () -> ScreenState = { snapshot(screenshotScalingConfig = null) }
 
@@ -217,13 +225,30 @@ class AndroidTestTrailblazeRule(
     screenshotScalingConfig: ScreenshotScalingConfig?,
     includeTree: Boolean = true,
   ): ScreenState =
-    AndroidTestScreenState(
+    // While another app is in front, the app's Activity is paused behind it and its own capture
+    // would describe the screen nobody can see (or wait for an Activity that will not resume).
+    foreignScreenState(includeScreenshot = true, screenshotScalingConfig, includeTree) ?: AndroidTestScreenState(
       target = screenshotCapableTarget,
       deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
       includeScreenshot = true,
       screenshotScalingConfig = screenshotScalingConfig,
       includeTree = includeTree,
     )
+
+  /**
+   * The screen while another app is in front, or null while this app is. Needs no Activity of this
+   * app, which is paused behind the other one.
+   */
+  fun foreignScreenState(
+    includeScreenshot: Boolean,
+    screenshotScalingConfig: ScreenshotScalingConfig?,
+    includeTree: Boolean = true,
+  ): ScreenState? = ForeignWindow.screenStateIfInFront(
+    deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
+    includeScreenshot = includeScreenshot,
+    screenshotScalingConfig = screenshotScalingConfig,
+    includeTree = includeTree,
+  )
 
   private val trailblazeYaml by lazy { createTrailblazeYaml() }
 
@@ -497,6 +522,12 @@ class AndroidTestTrailblazeRule(
       agent.externalMemory = externalMemory
       if (externalMemory == null) {
         agent.clearMemory()
+        // The lane's setup tool calls, which this rule runs before the trailhead. After the
+        // clear, which would wipe them; on the RPC path the host seeds its own.
+        DeviceSetupToolsInstrumentationArg.seed(
+          agent.memory,
+          AndroidTestInstrumentation.stringArg(DeviceSetupToolsInstrumentationArg.KEY),
+        )
       }
       // `config: memory:` seeds keys the memory doesn't already carry, on BOTH paths — the RPC
       // entry takes whole trail documents, so a document's declared defaults have to land here or
@@ -528,6 +559,16 @@ class AndroidTestTrailblazeRule(
       }
       // One trail: the trailhead's teardown runs after it, whatever the outcome.
       runnerUtil.runTrailBlocking {
+        // The run's setup tool calls, before anything else in the trail, the trailhead included.
+        // Only where this rule owns the memory: on the RPC path the host already ran them, and
+        // each request here is one of its tool calls, so running them again would nest setup.
+        DeviceSetupToolsMemory.read(agent.memory)?.takeUnless { externalMemory != null }?.let { setup ->
+          runnerUtil.runDeviceSetup(
+            setup,
+            { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } },
+            trailblazeToolRepo,
+          ) { tools -> runToolsSnapshotted(tools) }
+        }
         trailItems.forEach { item ->
           val result = when (item) {
             is TrailYamlItem.PromptsTrailItem ->
@@ -583,7 +624,7 @@ class AndroidTestTrailblazeRule(
    * the pin, so refusing under an explicit force would make that documented override a no-op for
    * exactly the driver it exists to select. The pin reaching here need not even be authored
    * top-level: lowering a unified trail resolves its per-device `devices.<classifier>.driver:` pin
-   * into the effective `config.driver`, so a whole estate of per-device-pinned trails hits this
+   * into the effective `config.driver`, so a whole suite of per-device-pinned trails hits this
    * gate under any suite-wide driver override. Under force the pin is logged, not fatal, so a later
    * missing-capability failure still has the mismatch on record.
    */
@@ -640,31 +681,47 @@ class AndroidTestTrailblazeRule(
     ).result
 
   private fun logStepSnapshot(tool: TrailblazeTool) {
+    // Another app in front pauses this one, so its Activity is not RESUMED; that app's window is
+    // the screen, and reading it needs no Activity here.
+    val foreign = runCatching {
+      perf("snapshot.capture") { foreignScreenState(includeScreenshot = true, screenshotScalingConfig = null) }
+    }.getOrNull()
     // A cold-start trail can launch its app in this very tool. The snapshot is observational, so
     // don't make it wait for an Activity that cannot exist until the tool has run, or turn that
     // expected absence into a failed locale requirement for the rest of the trail.
-    val activity = runCatching { activityLocaleGate.activityIfAvailable(::targetActivityIfAvailable) }
-      .getOrElse { e ->
-        Console.log("[Trailblaze] Could not resolve Activity for step snapshot: ${e.message}")
-        return
-      }
-      ?: run {
-        Console.log("[Trailblaze] Skipping pre-tool snapshot: no target Activity is RESUMED yet")
-        return
-      }
+    val activity = if (foreign != null) {
+      null
+    } else {
+      runCatching { activityLocaleGate.activityIfAvailable(::targetActivityIfAvailable) }
+        .getOrElse { e ->
+          Console.log("[Trailblaze] Could not resolve Activity for step snapshot: ${e.message}")
+          return
+        }
+        ?: run {
+          Console.log("[Trailblaze] Skipping pre-tool snapshot: no target Activity is RESUMED yet")
+          return
+        }
+    }
     runCatching {
-      val screenState = withPreToolSnapshotActivity(activity) { snapshotProvider() }
+      val screenState = foreign ?: perf("snapshot.capture") {
+        withPreToolSnapshotActivity(checkNotNull(activity)) {
+          InProcessAccessibilityTree.dualCapture { snapshotProvider() }
+        }
+      }
       val capturedAt = Clock.System.now()
       val session = currentSession()
-      val displayName = tool.javaClass.simpleName
+      // `migrate-trail` pairs each recorded tool with the snapshot named for it.
+      val displayName = tool.javaClass.simpleName.let {
+        if (InProcessAccessibilityTree.dualCaptureEnabled) "preTool: $it" else it
+      }
       // Captured here, logged in the background: see StepSnapshotUploads.
       stepSnapshotUploads.submit {
-        loggingRule.logger.logSnapshot(
+        perf("snapshot.upload") { loggingRule.logger.logSnapshot(
           session = session,
           screenState = screenState,
           displayName = displayName,
           capturedAt = capturedAt,
-        )
+        ) }
       }
     }.onFailure { e ->
       // Observational only — a missing frame must not fail the step it was documenting.

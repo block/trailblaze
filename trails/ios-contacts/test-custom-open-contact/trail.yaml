@@ -3,8 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - contact
   title: 'Contacts (iOS) (scripted): direct open by name'
 
 trail:

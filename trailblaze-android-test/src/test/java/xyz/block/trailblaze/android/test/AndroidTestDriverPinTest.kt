@@ -12,7 +12,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  * Pins the force-beats-pin precedence of [AndroidTestTrailblazeRule.Companion.evaluateDriverPin].
  *
  * The stakes on each side: WITHOUT the force downgrade, a suite-wide `trailblaze.driverType`
- * override is a no-op against per-device-pinned trails — an entire estate whose trails pin the
+ * override is a no-op against per-device-pinned trails — an entire suite whose trails pin the
  * accessibility driver per-device can never replay in-process, because lowering resolves that pin
  * into the effective `config.driver` this gate reads. WITHOUT the refusal, a pinned trail wired
  * directly into an in-process test replays silently on a driver missing the capability the pin

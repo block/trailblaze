@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonElement
+import xyz.block.trailblaze.logs.client.SessionStartRecords
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
@@ -776,6 +777,17 @@ class LogsRepo(
       ?.sessionStatus as? SessionStatus.Ended
 
   /**
+   * The steps [sessionId] has started, oldest first. Selected by filename like the status logs, so
+   * polling a running session never deserializes its large driver logs.
+   */
+  fun objectiveStarts(sessionId: SessionId): List<TrailblazeLog.ObjectiveStartLog> =
+    readLogFilesFromDisk(sessionId)
+      .filter { it.name.contains("ObjectiveStartLog") }
+      .mapNotNull { parseTrailblazeLogFromFile(it) }
+      .filterIsInstance<TrailblazeLog.ObjectiveStartLog>()
+      .sortedBy { it.timestamp }
+
+  /**
    * When [sessionId]'s first and newest logs were written, in epoch millis, read from file times so
    * no log is parsed. Null when the session has no logs yet.
    *
@@ -954,6 +966,8 @@ class LogsRepo(
    */
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
     if (readOnly) return File(logsDir, "noop")
+    // Every host session status log is written here, so a session's end evicts its start record.
+    SessionStartRecords.observe(logEvent)
     // A terminal status is immutable: once any Ended.* is on disk for a session, later Ended.*
     // appends are dropped. Without this, cancelling a run lets the killed runner's async failure
     // land an Ended.Failed on top of the user's Ended.Cancelled, and the run reads as Failed.

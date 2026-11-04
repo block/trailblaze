@@ -183,6 +183,8 @@ class TrailblazeToolExecutionContext(
    * so subsequent tools bind the newly-active device.
    */
   val deviceBindings: SessionDeviceBindings? = null,
+  /** Whole-execution custody, retained by nested and scripted cleanup calls. */
+  val trailExecution: TrailExecution? = TrailExecution.current(),
 ) {
   /**
    * The screen state tools act against. Reading this always yields a *current* state:

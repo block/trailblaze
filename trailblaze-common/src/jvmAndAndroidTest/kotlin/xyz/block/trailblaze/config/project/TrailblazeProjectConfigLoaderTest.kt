@@ -414,11 +414,11 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
-  fun `non-string supportedPlatforms entry in a per-platform tool fails at descriptor decode`() {
+  fun `non-string supportedPlatforms entry in a per-platform tool drops its trailmap`() {
     // A malformed `_meta.trailblaze/supportedPlatforms` (non-string element like 123) is caught at
     // typed-decode time by `TrailmapScriptedToolFile._meta`'s validation — before the per-platform
-    // resolver ever sees the config. Pins this contract so the failure stays at the right layer
-    // (the descriptor-decode boundary) with a debuggable message naming the tool and the field.
+    // resolver ever sees the config. Like any authoring error, it drops this trailmap with a
+    // warning rather than failing the whole load.
     val trailmapDir = File(tempFolder.root, "trailmaps/badmeta").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(
       """
@@ -449,13 +449,9 @@ class TrailblazeProjectConfigLoaderTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<IllegalArgumentException> {
-      TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)
-    }
-    assertTrue(
-      ex.message?.contains("badTool") == true && ex.message?.contains("supportedPlatforms") == true,
-      "error must name the tool and the field; got: ${ex.message}",
-    )
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)!!
+
+    assertEquals(emptyList(), resolved.targets.map { it.id })
   }
 
   @Test
@@ -699,6 +695,55 @@ class TrailblazeProjectConfigLoaderTest {
     // The mis-listed trailmap drops out (the new diagnostic from resolveTrailmapSiblings is logged
     // by the atomic-per-trailmap catch in resolveTrailmapArtifacts); the valid sibling still
     // resolves and shows up in the final target list.
+    assertEquals(listOf("validpack"), resolved.targets)
+  }
+
+  @Test
+  fun `a subprocess tool with requiresHost false drops its trailmap and a sibling trailmap still resolves`() {
+    val validTrailmapDir = File(tempFolder.root, "trailmaps/validpack").apply { mkdirs() }
+    File(validTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: validpack
+      target:
+        display_name: Valid Trailmap
+      """.trimIndent(),
+    )
+    val trailmapDir = File(tempFolder.root, "trailmaps/badhost").apply { mkdirs() }
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/bad_tool.ts").writeText("export {};\n")
+    File(trailmapDir, "tools/bad_tool.yaml").writeText(
+      """
+      script: ./bad_tool.ts
+      name: bad_tool
+      description: Contradicts its own runtime.
+      inputSchema: {}
+      runtime: subprocess
+      _meta:
+        trailblaze/requiresHost: false
+      """.trimIndent(),
+    )
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: badhost
+      target:
+        display_name: Bad Host Trailmap
+        platforms:
+          android:
+            app_ids: [com.example.badhost]
+        tools:
+          - bad_tool
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - validpack
+        - badhost
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
     assertEquals(listOf("validpack"), resolved.targets)
   }
 

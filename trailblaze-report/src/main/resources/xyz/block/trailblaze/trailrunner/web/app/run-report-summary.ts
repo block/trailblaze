@@ -10,7 +10,6 @@
 import type { ReportTabHost, ReportTabMount } from './run-report-tab-host';
 import { theaterAvailable } from './run-report-theater';
 import {
-  DEFAULT_VISIBLE,
   arrangeLanes,
   bandAt,
   bandClock,
@@ -18,7 +17,8 @@ import {
   buildSummaryModel,
   cardBeside,
   clockTime,
-  defaultLaneIds,
+  derivedFromText,
+  openingLanes,
   duration,
   emptyPreference,
   isLaneVisible,
@@ -196,6 +196,7 @@ const CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M1
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 
 function stepChip(step: StreamStep): string {
+  if (step.kind === 'setup') return 'Device setup';
   if (step.kind === 'trailhead') return 'Trailhead';
   if (step.kind === 'heal') return 'Self-heal';
   if (step.kind === 'teardown') return 'Teardown';
@@ -203,6 +204,7 @@ function stepChip(step: StreamStep): string {
 }
 
 function diagnosisStepLabel(step: DiagnosisStep): string {
+  if (step.kind === 'setup') return 'Device setup';
   if (step.kind === 'trailhead') return 'Trailhead';
   if (step.kind === 'teardown') return 'Teardown';
   if (step.kind === 'end') return 'After the last step';
@@ -263,6 +265,11 @@ function noteHtml(note: StreamNote, lane: StreamLane, b: number, l: number, n: n
     + '</button>';
 }
 
+/** The "derived" tag beside a derived lane's name; hovering it says what the lane was derived from. */
+function derivedTagHtml(derived: string | null): string {
+  return derived ? `<span class="streamsderived" title="${esc(derived)}">derived</span>` : '';
+}
+
 function badgeHtml(text: string, tone?: string): string {
   return `<span class="streambadge"${tone ? ` data-streams-tone="${tone}"` : ''}>${esc(text)}</span>`;
 }
@@ -317,13 +324,12 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
   // ── Persistent state ────────────────────────────────────────────────────────────────────────
   const steps = model.steps;
   const hasScreens = model.shots.length > 0;
-  const hasDefaultLane = model.lanes.some((lane) => (DEFAULT_VISIBLE as readonly string[]).includes(isNetworkLane(lane.id) ? 'network' : lane.id));
-  const defaults: readonly string[] = hasDefaultLane ? DEFAULT_VISIBLE : defaultLaneIds(model.lanes);
+  const defaults = openingLanes(model.lanes);
   let pref: LaneLayoutPreference = (state.pref as LaneLayoutPreference | undefined) ?? readPreference();
   const collapsed = new Set<number>(
     Array.isArray(state.collapsed)
       ? (state.collapsed as number[])
-      : steps.length > 1 ? steps.flatMap((step, index) => (step.kind === 'trailhead' ? [index] : [])) : [],
+      : steps.length > 1 ? steps.flatMap((step, index) => (step.kind === 'trailhead' || step.kind === 'setup' ? [index] : [])) : [],
   );
   let pinnedT = pinnedAt(host.seek, host.initialEpochMs, state.pinnedT);
   let query = typeof state.query === 'string' ? state.query : '';
@@ -553,8 +559,9 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
     let html = `<div class="streamshead streamsstepcol" style="grid-area:1/1" data-streams-headcell>Step${hasScreens ? '' : '<button type="button" class="streamsadd" data-streams-menu-toggle="add" title="Choose streams">' + PLUS + '</button>'}</div>`;
     if (hasScreens) html += `<div class="streamshead streamsshotcol" style="grid-area:1/2">Screen<button type="button" class="streamsadd" data-streams-menu-toggle="add" title="Choose streams">${PLUS}</button></div>`;
     visible.forEach((lane, index) => {
-      html += `<div class="streamshead streamslanehead" draggable="true" tabindex="0" data-streams-lane="${esc(lane.id)}" style="grid-area:1/${laneCol0 + index}" aria-label="${esc(lane.name)} stream. Alt+Arrow keys move it.">`
-        + `${GRIP}<span class="streamslanename">${esc(lane.name)}</span><span class="streamslanecount">${count(lane.total)}</span>`
+      const derived = derivedFromText(lane);
+      html += `<div class="streamshead streamslanehead" draggable="true" tabindex="0" data-streams-lane="${esc(lane.id)}" style="grid-area:1/${laneCol0 + index}" aria-label="${esc(lane.name)} stream${derived ? `, ${esc(derived.charAt(0).toLowerCase() + derived.slice(1))}` : ''}. Alt+Arrow keys move it.">`
+        + `${GRIP}<span class="streamslanename">${esc(lane.name)}</span>${derivedTagHtml(derived)}<span class="streamslanecount">${count(lane.total)}</span>`
         + `<button type="button" class="streamslanehide" title="Hide ${esc(lane.name)}" data-streams-hide="${esc(lane.id)}">${CLOSE}</button>`
         + `<span class="streamsresize" role="separator" aria-orientation="vertical" aria-valuenow="${Math.round(widthOf(lane.id))}" aria-valuemin="${MIN_LANE_WIDTH}" aria-valuemax="${MAX_LANE_WIDTH}" aria-label="Resize ${esc(lane.name)}. Arrow keys change its width; double-click resets it." tabindex="0" data-streams-resize="${esc(lane.id)}"></span></div>`;
     });
@@ -894,6 +901,8 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
       + (theaterOk ? `<button type="button" class="streamcardlink" data-streams-theater="${note.shotT ?? note.t}">Open in Theater</button>` : '')
       + (expanded && host.shareLink ? '<button type="button" class="streamcardlink" data-streams-copy>Copy link</button>' : '')
       + '</div>';
+    const derived = derivedFromText(lane);
+    if (derived) html += `<div class="streamcardderived">${esc(derived)}</div>`;
     html += `<div class="streamcardtitle"${note.tone ? ` data-streams-tone="${note.tone}"` : ''}>${esc(note.label)}</div>`;
     if (note.detail && !note.members && !note.entries) html += `<div class="streamcarddetail">${esc(note.detail)}</div>`;
     if (note.badges.length > 0) html += `<div class="streamcardbadges">${note.badges.map((badge) => badgeHtml(badge.text, badge.tone)).join('')}</div>`;
@@ -1318,7 +1327,7 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
   let menuCleanup: (() => void) | null = null;
 
   const menuHtml = (): string => `<div class="streamsmenuhead"><span>Event streams</span><button type="button" data-streams-reset>Reset</button></div>
-    <ul>${arranged.map((lane) => `<li draggable="true" data-streams-menu-lane="${esc(lane.id)}"><label>${GRIP}<input type="checkbox"${shown(lane.id) ? ' checked' : ''} data-streams-menu-check="${esc(lane.id)}" aria-label="Show ${esc(lane.name)}. Alt+Up and Alt+Down move it."><span class="streamsmenuname">${esc(lane.name)}</span><span class="streamsmenucount">${count(lane.total)}</span></label></li>`).join('')}</ul>
+    <ul>${arranged.map((lane) => `<li draggable="true" data-streams-menu-lane="${esc(lane.id)}"><label>${GRIP}<input type="checkbox"${shown(lane.id) ? ' checked' : ''} data-streams-menu-check="${esc(lane.id)}" aria-label="Show ${esc(lane.name)}. Alt+Up and Alt+Down move it."><span class="streamsmenuname">${esc(lane.name)}</span>${derivedTagHtml(derivedFromText(lane))}<span class="streamsmenucount">${count(lane.total)}</span></label></li>`).join('')}</ul>
     <p class="streamsmenuhint">Drag to reorder, here or by a stream's header.</p>`;
 
   function refreshMenu(): void {

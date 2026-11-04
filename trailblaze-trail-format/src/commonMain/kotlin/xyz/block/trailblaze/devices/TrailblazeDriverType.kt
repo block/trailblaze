@@ -166,7 +166,10 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
-    centersScrollTargetByDefault = false,
+    // Its scroll stops the moment the target is on screen, often as a sliver at the trailing edge,
+    // so steps recorded on the accessibility driver after a scroll found their target below the
+    // fold. Centring like that driver puts the screen where those recordings expect it.
+    centersScrollTargetByDefault = true,
   ),
   IOS_HOST(
     platform = TrailblazeDevicePlatform.IOS,

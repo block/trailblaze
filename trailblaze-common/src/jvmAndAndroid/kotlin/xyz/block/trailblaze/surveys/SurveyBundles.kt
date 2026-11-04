@@ -149,6 +149,27 @@ object SurveyBundles {
   class ExportedSurvey(val name: String, val feature: String?, val requiresFinishedSession: Boolean)
 
   /**
+   * Every derived event stream [text] declares with `eventStream(`, by the `name` its spec gives,
+   * so `trailblaze check` can refuse two streams of one name before anything runs. [DeclaredStream.name]
+   * is null when the spec is not an object literal or its `name` is not a plain string: only running
+   * the file could tell what it is. Comments and literals are not code here, as in [exportedSurveys].
+   */
+  fun declaredStreams(text: String): List<DeclaredStream> {
+    val code = SurveySourceText.codeOnly(text)
+    val readable = SurveySourceText.withoutComments(text)
+    return EVENT_STREAM_CALL.findAll(code).mapNotNull { match ->
+      val args = SurveySourceText.callArgumentsAt(code, match.range.last + 1) ?: return@mapNotNull null
+      val spec = SurveySourceText.objectLiteralAt(code, args)
+      DeclaredStream(
+        name = spec?.let { valueOf(code, readable, it, "name") }?.let { PLAIN_STRING.find(it)?.groupValues?.get(2) },
+        line = code.substring(0, match.range.first).count { it == '\n' } + 1,
+      )
+    }.toList()
+  }
+
+  class DeclaredStream(val name: String?, val line: Int)
+
+  /**
    * The source after [key]'s colon, when it is one of the top-level keys of the literal at [spec],
    * bare or quoted. A key-like run inside a string value is not a key: [code] has it blanked.
    */
@@ -162,6 +183,11 @@ object SurveyBundles {
 
   private val STRING_VALUE = Regex("""^\s*(["'`])([^"'`]+)\1""")
   private val TRUE_VALUE = Regex("""^\s*true\b""")
+
+  /** A string literal with nothing computed in or after it: `"screens",` but not `"app." + kind`. */
+  private val PLAIN_STRING = Regex("""^\s*(["'`])([^"'`$\\]+)\1\s*(?:,|$)""")
+
+  private val EVENT_STREAM_CALL = Regex("""(?<![\w$])eventStream\b""")
 
   private val EXPORTED_SURVEY =
     Regex("""export\s+const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:trailblaze\s*\.\s*)?survey\b""")

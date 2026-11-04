@@ -3,8 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - search
   title: 'Contacts (iOS): Search query that returns no results'
 
 trail:

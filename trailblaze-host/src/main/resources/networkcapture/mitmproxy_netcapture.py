@@ -8,7 +8,7 @@ Run via `mitmdump -s mitmproxy_netcapture.py`. Reads two env vars:
 Each flow produces a REQUEST_START line (on request) and a RESPONSE_END line (on
 response), sharing the flow id, plus a FAILED line on transport error. The output
 schema, redaction, and body rules deliberately mirror the web capture path
-(`WebNetworkCapture`) so events render identically in the Network tab / HTML report:
+(`WebNetworkCapture`) so events render identically in the HTML report:
 
   - request `Authorization` and response `Set-Cookie` header values -> "***REDACTED***"
   - bodies <= 4 KB and "likely text" are inlined; larger/binary go to `bodies/`;

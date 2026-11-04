@@ -27,6 +27,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetId
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.util.Console
@@ -1675,6 +1676,7 @@ internal object ExternalAgentSupervisor {
         targetAppIds = listOf(targetAppId),
         // Capture-optional: an app that sends nothing must not fail the demo's teardown.
         requireTraffic = false,
+        targetId = androidCaptureTargetId(demo.target),
       )
       demo.captureStarted = true
     }.onFailure { Console.log("[demo] network capture start failed: ${it.message}") }

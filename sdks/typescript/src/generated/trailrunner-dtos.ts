@@ -356,6 +356,7 @@ export interface DirectionStep {
   maxRetries?: number | null;
   isTrailhead?: boolean;
   isTeardown?: boolean;
+  isSetup?: boolean;
   prompt?: string;
 }
 
@@ -2071,6 +2072,9 @@ export interface compose {
   verticalScrollMax?: number | null;
   horizontalScrollValue?: number | null;
   horizontalScrollMax?: number | null;
+  accessibilityHintText?: string | null;
+  accessibilityStateDescription?: string | null;
+  accessibilityProjectionOnly?: boolean;
 }
 
 export interface iosAxe {

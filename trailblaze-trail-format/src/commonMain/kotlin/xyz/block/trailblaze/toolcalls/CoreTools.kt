@@ -142,10 +142,6 @@ object CoreTools {
   /** Set a mobile device's network radios and airplane mode. */
   const val MOBILE_NETWORK_CONNECTION = "mobile_networkConnection"
 
-  /** Deprecated alias of [MOBILE_NETWORK_CONNECTION], kept while recorded trails migrate. */
-  @Deprecated("Renamed to mobile_networkConnection", ReplaceWith("MOBILE_NETWORK_CONNECTION"))
-  const val NETWORK_CONNECTION = "networkConnection"
-
   // =========================================================================
   // Assertion/Verification Tools
   // =========================================================================

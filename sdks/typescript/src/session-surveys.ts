@@ -6,6 +6,7 @@
 // once per engine and holds the survey runtime, so this file stays small in every tool's bundle.
 
 import type { SessionEvents, SessionEventsSince } from "./session-events.js";
+import { type StartedTrailFields, trailFieldsFromStarted } from "./session-start.js";
 
 /** Reserved host function behind [TrailblazeSurveys]. Mirrors `SurveyHostFunctions.kt`. */
 export const HOST_FUNCTION_SURVEYS_LOAD = "trailblaze.surveys.load";
@@ -59,6 +60,8 @@ export interface SurveySessionInfo {
   driver?: string;
   target?: string;
   appId?: string;
+  /** The dispatching device's classifiers; a live survey sees `[]` when omitted. */
+  deviceClassifiers?: string[];
 }
 
 interface SurveyBundle {
@@ -66,7 +69,7 @@ interface SurveyBundle {
   runLive(
     name: string,
     events: SessionEvents,
-    options: SurveyRunOptions & { sessionId?: string; summary?: Omit<SurveySessionInfo, "sessionId">; targets?: TargetCatalog },
+    options: SurveyRunOptions & { sessionId?: string; summary?: Omit<SurveySessionInfo, "sessionId"> & Partial<StartedTrailFields>; targets?: TargetCatalog },
   ): Promise<SurveyRunResult>;
 }
 
@@ -80,6 +83,8 @@ interface LoadedSurvey {
   file: string;
   /** The workspace's targets: id → platform → app ids. */
   targets?: Record<string, Record<string, string[]>>;
+  /** The session's `Started` log's `trailConfig` and `targetAppInfo`; absent from older hosts. */
+  started?: unknown;
 }
 
 function catalogOf(targets: LoadedSurvey["targets"]): TargetCatalog {
@@ -95,9 +100,11 @@ const BUNDLE_GLOBAL = "__trailblazeSurveyBundle";
 
 type HostCall = (args: unknown) => Promise<unknown>;
 
+type Loaded = { bundle: SurveyBundle; targets: TargetCatalog; trail: StartedTrailFields };
+
 export function createSessionSurveys(host: unknown, events: SessionEvents, about: SurveySessionInfo = {}): TrailblazeSurveys {
-  const bundles = new Map<string, Promise<{ bundle: SurveyBundle; targets: TargetCatalog }>>();
-  const load = (name: string): Promise<{ bundle: SurveyBundle; targets: TargetCatalog }> => {
+  const bundles = new Map<string, Promise<Loaded>>();
+  const load = (name: string): Promise<Loaded> => {
     let bundle = bundles.get(name);
     if (!bundle) {
       bundle = (async () => {
@@ -109,7 +116,7 @@ export function createSessionSurveys(host: unknown, events: SessionEvents, about
         // The bundle is the framework's own build of a workspace file, the same trust as the
         // calling tool's bundle; it runs in this engine because QuickJS has no module loader.
         const bundle = new Function(`${loaded.source}\nreturn ${BUNDLE_GLOBAL};`)() as SurveyBundle;
-        return { bundle, targets: catalogOf(loaded.targets) };
+        return { bundle, targets: catalogOf(loaded.targets), trail: trailFieldsFromStarted(loaded.started) };
       })();
       // A failed load is not cached: the next call retries, after a fix or a capture that started late.
       bundle.catch(() => bundles.delete(name));
@@ -124,14 +131,16 @@ export function createSessionSurveys(host: unknown, events: SessionEvents, about
       const { sessionId, ...summary } = about;
       const defined = Object.fromEntries(Object.entries(summary).filter(([, v]) => v !== undefined));
       return async (options?: SurveyRunOptions) => {
-        const { bundle, targets } = await load(name);
+        const { bundle, targets, trail } = await load(name);
         // Pushed tools can be newer than the survey bundle packaged in a device's test APK.
         for (const option of ["since", "expected"] as const) {
           if (options?.[option] !== undefined && bundle.capabilities?.[option] !== true) {
             throw new Error(`Survey ${name}'s bundle does not support "${option}". Rebuild the test APK or regenerate the survey bundle with the current framework.`);
           }
         }
-        return bundle.runLive(name, events, { ...options, ...(sessionId ? { sessionId } : {}), summary: defined, targets });
+        // The trail's fields come from the session's start; the device's, from the device the tool runs on.
+        const fromStart = Object.fromEntries(Object.entries(trail).filter(([, v]) => v !== undefined));
+        return bundle.runLive(name, events, { ...options, ...(sessionId ? { sessionId } : {}), summary: { ...fromStart, ...defined }, targets });
       };
     },
   });

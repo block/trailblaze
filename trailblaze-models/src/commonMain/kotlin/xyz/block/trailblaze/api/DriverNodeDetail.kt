@@ -1166,7 +1166,180 @@ sealed interface DriverNodeDetail {
     val horizontalScrollValue: Float? = null,
     /** **Display-only.** Maximum horizontal scroll offset. */
     val horizontalScrollMax: Float? = null,
+
+    // --- Matchable, appended after the display-only fields so the constructor and componentN
+    // signatures published before them stay put (see the compat constructor below) ---
+
+    /**
+     * **Matchable.** The hint Compose's accessibility delegate publishes for a text field: the
+     * label or placeholder text drawn inside it. A projection like [accessibilityClassName], and
+     * for the same reason — a canonical `hintTextRegex` recorded against the accessibility tree
+     * names it, and the unmerged tree carries that text on a child `Text` node instead.
+     *
+     * Null on anything that is not a text field, and on a tree whose collector projects nothing.
+     */
+    val accessibilityHintText: String? = null,
+
+    /**
+     * **Matchable.** The state description Compose's accessibility delegate publishes: the app's
+     * own [stateDescription] when it set one, otherwise the one the delegate fills in — `"On"` or
+     * `"Off"` for a switch, `"Selected"` or `"Not selected"` for a selectable node that is not a
+     * tab. A projection like [accessibilityHintText], and for the same reason: a canonical
+     * `stateDescriptionRegex` recorded against the accessibility tree names the delegate's text,
+     * which the semantics tree never holds.
+     *
+     * Null when the delegate publishes none, and on a tree whose collector projects nothing.
+     */
+    val accessibilityStateDescription: String? = null,
+
+    /**
+     * True on a node that exists only to mirror the accessibility tree: the synthetic child
+     * Compose's accessibility delegate adds to carry a role its merging parent cannot show. It
+     * shares the parent's semantics, so native Compose matching skips it — counting it would make
+     * one button two matches for a role selector. Accessibility-shaped selectors still see it,
+     * because the tree they were recorded against has it.
+     */
+    val accessibilityProjectionOnly: Boolean = false,
   ) : DriverNodeDetail {
+
+    /**
+     * The constructor and `copy` from before [accessibilityHintText], [accessibilityStateDescription]
+     * and [accessibilityProjectionOnly], kept so this module's published artifact stays
+     * binary-compatible: the same shim, for the same reasons, as
+     * `TrailblazeOnDeviceInstrumentationTarget`'s, including repeating the old defaults so the
+     * `DefaultConstructorMarker` overload survives too. The new fields are appended after the
+     * display-only ones, so every published `componentN` keeps its position and type.
+     */
+    @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+    constructor(
+      testTag: String? = null,
+      role: String? = null,
+      text: String? = null,
+      editableText: String? = null,
+      contentDescription: String? = null,
+      toggleableState: String? = null,
+      isEnabled: Boolean = true,
+      isFocused: Boolean = false,
+      isSelected: Boolean = false,
+      isPassword: Boolean = false,
+      collectionItemRowIndex: Int? = null,
+      collectionItemColumnIndex: Int? = null,
+      stateDescription: String? = null,
+      isHeading: Boolean = false,
+      paneTitle: String? = null,
+      isDialog: Boolean = false,
+      isPopup: Boolean = false,
+      errorText: String? = null,
+      hasSetTextAction: Boolean = false,
+      accessibilityClassName: String? = null,
+      hasClickAction: Boolean = false,
+      hasScrollAction: Boolean = false,
+      hasLongClickAction: Boolean = false,
+      progressValue: Float? = null,
+      progressMax: Float? = null,
+      verticalScrollValue: Float? = null,
+      verticalScrollMax: Float? = null,
+      horizontalScrollValue: Float? = null,
+      horizontalScrollMax: Float? = null,
+    ) : this(
+      testTag,
+      role,
+      text,
+      editableText,
+      contentDescription,
+      toggleableState,
+      isEnabled,
+      isFocused,
+      isSelected,
+      isPassword,
+      collectionItemRowIndex,
+      collectionItemColumnIndex,
+      stateDescription,
+      isHeading,
+      paneTitle,
+      isDialog,
+      isPopup,
+      errorText,
+      hasSetTextAction,
+      accessibilityClassName,
+      hasClickAction,
+      hasScrollAction,
+      hasLongClickAction,
+      progressValue,
+      progressMax,
+      verticalScrollValue,
+      verticalScrollMax,
+      horizontalScrollValue,
+      horizontalScrollMax,
+      accessibilityHintText = null,
+    )
+
+    /** Carries the newer fields through: a caller compiled against the old signature could not name them. */
+    @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+    fun copy(
+      testTag: String? = this.testTag,
+      role: String? = this.role,
+      text: String? = this.text,
+      editableText: String? = this.editableText,
+      contentDescription: String? = this.contentDescription,
+      toggleableState: String? = this.toggleableState,
+      isEnabled: Boolean = this.isEnabled,
+      isFocused: Boolean = this.isFocused,
+      isSelected: Boolean = this.isSelected,
+      isPassword: Boolean = this.isPassword,
+      collectionItemRowIndex: Int? = this.collectionItemRowIndex,
+      collectionItemColumnIndex: Int? = this.collectionItemColumnIndex,
+      stateDescription: String? = this.stateDescription,
+      isHeading: Boolean = this.isHeading,
+      paneTitle: String? = this.paneTitle,
+      isDialog: Boolean = this.isDialog,
+      isPopup: Boolean = this.isPopup,
+      errorText: String? = this.errorText,
+      hasSetTextAction: Boolean = this.hasSetTextAction,
+      accessibilityClassName: String? = this.accessibilityClassName,
+      hasClickAction: Boolean = this.hasClickAction,
+      hasScrollAction: Boolean = this.hasScrollAction,
+      hasLongClickAction: Boolean = this.hasLongClickAction,
+      progressValue: Float? = this.progressValue,
+      progressMax: Float? = this.progressMax,
+      verticalScrollValue: Float? = this.verticalScrollValue,
+      verticalScrollMax: Float? = this.verticalScrollMax,
+      horizontalScrollValue: Float? = this.horizontalScrollValue,
+      horizontalScrollMax: Float? = this.horizontalScrollMax,
+    ): Compose = Compose(
+      testTag,
+      role,
+      text,
+      editableText,
+      contentDescription,
+      toggleableState,
+      isEnabled,
+      isFocused,
+      isSelected,
+      isPassword,
+      collectionItemRowIndex,
+      collectionItemColumnIndex,
+      stateDescription,
+      isHeading,
+      paneTitle,
+      isDialog,
+      isPopup,
+      errorText,
+      hasSetTextAction,
+      accessibilityClassName,
+      hasClickAction,
+      hasScrollAction,
+      hasLongClickAction,
+      progressValue,
+      progressMax,
+      verticalScrollValue,
+      verticalScrollMax,
+      horizontalScrollValue,
+      horizontalScrollMax,
+      accessibilityHintText = accessibilityHintText,
+      accessibilityStateDescription = accessibilityStateDescription,
+      accessibilityProjectionOnly = accessibilityProjectionOnly,
+    )
 
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES

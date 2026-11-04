@@ -136,12 +136,8 @@ tool's invocations in a Bun subprocess with the full Node-compatible surface (`n
 [Scripted Tools (TypeScript) → Runtime](scripted-tools-typed-authoring.md#runtime-quickjs-in-process-by-default)
 for the mechanics.
 
-> **`runtime: subprocess` is the selector, not `requiresHost: true`.** `runtime` is a
-> descriptor field, not part of the typed `trailblaze.tool(...)` spec — a pure-`.ts` tool
-> opts in via a sibling `<name>.yaml` carrying `runtime: subprocess`. The separate typed
-> flag `requiresHost: true` is only an on-device *visibility* gate; it does **not** change
-> the runtime, so a tool marked `requiresHost: true` but left on the default runtime still
-> runs in QuickJS, where `node:*` is absent and a `node:fs` import fails.
+> **Node APIs need `runtime: subprocess` in the tool's descriptor YAML.** `requiresHost: true`
+> doesn't change the runtime: the tool stays in QuickJS, where `node:*` doesn't exist.
 
 Two costs come with that capability, and both follow from the fact that it's a *separate
 process*, not in-process code:

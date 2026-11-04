@@ -5,11 +5,16 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.config.project.WorkspaceRoot
+import xyz.block.trailblaze.config.project.findWorkspaceRoot
 import xyz.block.trailblaze.report.SkippedTrails
+import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
+import xyz.block.trailblaze.surveys.SurveyBundles
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.nio.file.Path
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 import xyz.block.trailblaze.util.fileUrl
@@ -281,6 +286,18 @@ class ReportCommand : Callable<Int> {
   var fullReportPayloads: Boolean = false
 
   @Option(
+    names = ["--link-images"],
+    description = [
+      "Link screenshots and session recordings from the session directories instead of " +
+        "embedding them, which keeps the report small and fast to build for large runs. The " +
+        "links are relative to where the report is written, so it renders only beside the logs " +
+        "directory it came from: open it in place, or host the logs directory with its layout " +
+        "intact (the report and every session directory, at the same relative paths).",
+    ],
+  )
+  var linkImages: Boolean = false
+
+  @Option(
     names = ["--share-url"],
     paramLabel = "<url>",
     description = [
@@ -437,6 +454,7 @@ class ReportCommand : Callable<Int> {
       maxBytesStrict = cap.strict,
       shareUrl = trimmedShareUrl,
       fullEventPayloads = fullReportPayloads,
+      linkImages = linkImages,
       verbose = verbose,
       surveys = surveys?.filter { it.isNotBlank() },
     )
@@ -504,6 +522,84 @@ class ReportCommand : Callable<Int> {
 }
 
 /**
+ * Writes every derived stream the workspace's survey files declare (`trailblaze.eventStream()`) into each
+ * of [sessionDirs] as `events/<name>.ndjson`, on every report, so a session carries its streams
+ * wherever it goes next. Nothing runs outside a workspace, or when [hasDerivedStreamWork] finds no
+ * stream to write and none to remove. A failure costs only those streams: the report still builds,
+ * without them, and exits as it would have; each session's `events/derived.json` records why.
+ * Returns the surveys CLI's exit code, or success when nothing ran.
+ */
+internal fun writeDerivedStreams(sessionDirs: List<File>, configDir: File? = workspaceConfigDir()): Int {
+  if (configDir == null || !hasDerivedStreamWork(configDir, sessionDirs)) return TrailblazeExitCode.SUCCESS.code
+  val args = buildList {
+    add("--streams")
+    add("--quiet")
+    sessionDirs.forEach { add("--sessions"); add(it.absolutePath) }
+  }
+  val exit = SurveyCli.run(args, CliCallerContext.callerCwd().toAbsolutePath().toFile())
+  if (exit != TrailblazeExitCode.SUCCESS.code) {
+    Console.error("Derived streams were not all written (exit $exit); see above. The report shows the rest, and each session records why.")
+  }
+  return exit
+}
+
+/**
+ * The config dir of the workspace the caller is in, or null outside one: `TRAILBLAZE_CONFIG_DIR` when
+ * it names a directory, else the nearest `trailblaze.yaml` anchor above the caller. The surveys CLI
+ * finds its workspace by the same rule (`findWorkspaceConfigDir`), so the two agree on where it is.
+ */
+private fun workspaceConfigDir(): File? {
+  // Relative to the caller, as the surveys CLI resolves it: under `--gradle` the JVM runs elsewhere.
+  System.getenv("TRAILBLAZE_CONFIG_DIR")?.takeIf { it.isNotBlank() }
+    ?.let { CliCallerContext.callerCwd().resolve(it).toFile() }?.takeIf { it.isDirectory }?.let { return it }
+  return (findWorkspaceRoot(CliCallerContext.callerCwd()) as? WorkspaceRoot.Configured)?.configDir?.toFile()
+}
+
+/**
+ * Whether a report over [sessionDirs] has derived streams to write or remove: a survey file under
+ * [configDir], or a local module it imports, declares one, or a session holds some written before.
+ * Read from source, so a report with neither starts no surveys runtime.
+ */
+internal fun hasDerivedStreamWork(configDir: File, sessionDirs: List<File>): Boolean =
+  sessionDirs.any { File(it, "events/derived.json").exists() } ||
+    WorkspaceSurveyBundleSource.surveyFiles(configDir).any { mayDeclareStreams(it) }
+
+/**
+ * Whether [file] or a local module it imports, at any depth, calls `eventStream(`: a survey file can
+ * re-export a stream a helper declares. An import in a comment is followed too, which costs only a
+ * read; a package import is not followed.
+ */
+private fun mayDeclareStreams(file: File, seen: MutableSet<File> = mutableSetOf()): Boolean {
+  if (!file.isFile || !seen.add(file.canonicalFile)) return false
+  val text = file.readText()
+  if (SurveyBundles.declaredStreams(text).isNotEmpty()) return true
+  return LOCAL_IMPORT.findAll(text).any { match ->
+    localModule(file.parentFile, match.groupValues[2])?.let { mayDeclareStreams(it, seen) } == true
+  }
+}
+
+/** A relative specifier after `from`, `import` or `import(`. */
+private val LOCAL_IMPORT = Regex("""(?<![\w$])(?:from|import)\s*\(?\s*(["'])(\.{1,2}/[^"']+)\1""")
+
+private val MODULE_EXTENSIONS = listOf(".ts", ".mts", ".js", ".mjs")
+
+/**
+ * The file [specifier] names from [dir], as the bundler finds it: as written, with an extension
+ * added, a `.js` written for its `.ts`, or a directory's index.
+ */
+private fun localModule(dir: File, specifier: String): File? {
+  val base = File(dir, specifier)
+  val candidates = listOf(base) +
+    MODULE_EXTENSIONS.map { File(base.path + it) } +
+    listOfNotNull(
+      specifier.takeIf { it.endsWith(".js") }?.let { File(base.path.removeSuffix(".js") + ".ts") },
+      specifier.takeIf { it.endsWith(".mjs") }?.let { File(base.path.removeSuffix(".mjs") + ".mts") },
+    ) +
+    MODULE_EXTENSIONS.map { File(base, "index$it") }
+  return candidates.firstOrNull { it.isFile }
+}
+
+/**
  * Runs [names] (every survey when empty) over [sessionDirs] — session directories, or a directory of them — and writes the markdown report to
  * [markdown] and the JSON one to [json], printing both paths. The interactive HTML does not render
  * survey results, so they sit beside it. Returns the surveys CLI's exit code.
@@ -519,6 +615,8 @@ internal fun writeSurveyReport(sessionDirs: List<File>, names: List<String>, mar
   json.delete()
   val args = buildList {
     add("--write")
+    // The streams pass before this one already recorded any failed stream on its session.
+    add("--allow-stream-errors")
     add("--format"); add("markdown")
     add("--out"); add(json.absolutePath)
     sessionDirs.forEach { add("--sessions"); add(it.absolutePath) }
@@ -529,6 +627,41 @@ internal fun writeSurveyReport(sessionDirs: List<File>, names: List<String>, mar
   if (json.isFile) Console.info("Surveys JSON: ${json.fileUrl()}")
   if (exit != TrailblazeExitCode.SUCCESS.code) Console.error("Surveys did not all run cleanly (exit $exit); see above.")
   return exit
+}
+
+/**
+ * The prefix a report written into [reportDir] puts before `<sessionId>/<file>` to reach the
+ * session directories under [logsDir]: `../` for the default `logs/reports/`, and empty for a
+ * report written into the logs directory itself. Relative rather than absolute, so the report and
+ * its images can be moved or hosted together as long as their layout is kept.
+ *
+ * Both paths are only normalized, never canonicalized: a browser resolves the prefix against the
+ * report's URL, which keeps a symlinked directory's own pathname, so following the link here would
+ * compute a path from somewhere the browser never is.
+ *
+ * Null when no relative path exists, as with logs on `C:` and a report on `D:`. An absolute `file:`
+ * prefix is no way out: the viewer only accepts relative or http(s) image URLs, so the caller
+ * embeds the images instead.
+ */
+internal fun linkedImageBaseUrl(logsDir: Path, reportDir: Path): String? {
+  val relative = try {
+    reportDir.normalize().relativize(logsDir.normalize())
+  } catch (_: IllegalArgumentException) {
+    return null
+  }
+  return if (relative.toString().isEmpty()) "" else relative.joinToString("/") { percentEncodeSegment(it.toString()) } + "/"
+}
+
+/**
+ * Encoded here because the renderer only encodes the session id and file name it appends, and the
+ * viewer drops a screenshot URL that carries whitespace or a quote. `.` and `..` pass through as
+ * the path steps they are.
+ */
+private fun percentEncodeSegment(segment: String): String = buildString {
+  for (byte in segment.toByteArray(Charsets.UTF_8)) {
+    val c = byte.toInt().toChar()
+    if (byte >= 0 && (c.isLetterOrDigit() || c in "-._~")) append(c) else append('%').append("%02X".format(byte.toInt() and 0xFF))
+  }
 }
 
 /**
@@ -554,6 +687,8 @@ internal fun writeSurveyReport(sessionDirs: List<File>, names: List<String>, mar
  * @param fullEventPayloads When true (`--full-report-payloads`), event formatters embed full
  *   payloads in the interactive report even for passed sessions instead of applying their
  *   report size budgets.
+ * @param linkImages When true (`--link-images`), the interactive report links each session's
+ *   screenshots and recording instead of embedding them; see [linkedImageBaseUrl].
  * @param verbose When true (`-v`/`--verbose`), the generator's own progress logs reach the
  *   terminal instead of being swallowed. Off by default: those lines are one-per-session
  *   breadcrumbs, and the report paths are what the person asked for.
@@ -579,6 +714,7 @@ internal fun generateSessionReport(
   maxBytesStrict: Boolean = true,
   shareUrl: String? = null,
   fullEventPayloads: Boolean = false,
+  linkImages: Boolean = false,
   verbose: Boolean = false,
   surveys: List<String>? = null,
 ): Int {
@@ -603,6 +739,11 @@ internal fun generateSessionReport(
   // trails, or a reader who diffs them finds rows in one that the other says never existed.
   val directorySkips = if (sessionId == null) SkippedTrails.read(logsRepo.logsDir) else emptyList()
 
+  // Before the HTML, which renders every `events/*.ndjson`: a derived stream then shows as its own lane.
+  // On every report, not only with --surveys; a stream that fails, or anything else here, leaves the report and its exit alone.
+  runCatching { writeDerivedStreams(sessionIds.map { File(logsRepo.logsDir, it.value) }) }
+    .onFailure { Console.error("Derived streams were not written: ${it.message}. The report is built without them.") }
+
   Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
 
   // The generator narrates its work on Console.log (tool-class discovery, per-session clock
@@ -612,12 +753,27 @@ internal fun generateSessionReport(
   // restores them for the case where a report is slow or empty and the breadcrumbs are the only
   // way to see how far the generator got.
   val reportGenerator = quietUnlessVerbose(verbose) { app.createCliReportGenerator() }
+  // Resolved against where the HTML ends up, not where the generator first writes it: an
+  // --output-dir report is moved there below, and its links have to survive the move.
+  val imageBaseUrl = if (linkImages) {
+    linkedImageBaseUrl(
+      logsRepo.logsDir.toPath().toAbsolutePath(),
+      (outputDir ?: File(logsRepo.logsDir, "reports")).toPath().toAbsolutePath(),
+    ).also {
+      if (it == null) {
+        Console.error("Warning: --link-images needs the report and the logs on one drive; embedding the images instead.")
+      }
+    }
+  } else {
+    null
+  }
   val generatedHtml = quietUnlessVerbose(verbose) {
     reportGenerator.generateHtmlReports(
       logsRepo,
       sessionIds,
       shareUrl = shareUrl,
       fullEventPayloads = fullEventPayloads,
+      imageBaseUrl = imageBaseUrl,
       skips = directorySkips,
     )
   }

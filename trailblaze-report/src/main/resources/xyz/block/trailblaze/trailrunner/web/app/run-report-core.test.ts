@@ -339,9 +339,9 @@ afterAll(() => {
   realSetTimeoutBeforeGuard = null;
 });
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; clickNetPhase: (phase: string) => void; shownNetworkRows: () => string[]; firePopstate: (next?: string) => void } {
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
   retireEarlierViewers();
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; netPhase: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, netPhase: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -539,12 +539,6 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     set innerHTML(v: string) { this._h = v; devicePlayer.innerHTML = previewPaneSeed(v); timelineList.scrollTop = 0; renders++; progressText = null; tlEventEls.forEach((el) => { el.open = false; el.body = ""; delete el.dataset.lazyfilled; }); },
     get innerHTML() { return this._h; },
     querySelectorAll(sel: string) {
-      // Network phase chips: clicking one narrows the pane's rows (see networkPane below).
-      if (sel === "#nlbar [data-netphase]") return [...this._h.matchAll(/<button class="evchip" data-netphase="([a-z]+)">/g)].map((m: any) => {
-        const el: any = { dataset: { netphase: m[1] }, classes: new Set<string>(), classList: { toggle(c: string, on: boolean) { if (on) el.classes.add(c); else el.classes.delete(c); } } };
-        Object.defineProperty(el, "onclick", { configurable: true, set(fn: () => void) { handlers.netPhase[m[1]] = fn; } });
-        return el;
-      });
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-vdev]") return [...this._h.matchAll(/data-vdev="(\d+)"/g)].map((m: any) => ({ dataset: { vdev: m[1] }, set onclick(fn: () => void) { handlers.vdev[m[1]] = fn; } }));
@@ -1118,9 +1112,6 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   };
   // Hoisted so a test can read back the capture-framing marker autoplay stamps on it.
   const documentElement = { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument, cloneNode: (_deep: boolean) => cloneDocumentElement() };
-  // The Network tab's row container, as last wired: its rows carry the display the filter set, and
-  // each row's text is its request path (the row's last cell).
-  let networkPane: { children: Array<{ textContent: string; style: { display: string } }> } | null = null;
   (globalThis as Record<string, unknown>).document = {
     get activeElement() { return overlayFocus && !overlayFocus.detached ? overlayFocus : activeElement; },
     // While a held chunk is pending the document reads as still loading, so the viewer keeps
@@ -1142,7 +1133,6 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : id === "tlplay" ? { click: () => handlers.timelinePlay && handlers.timelinePlay(), set onclick(fn: () => void) { handlers.timelinePlay = fn; } }
       : id === "shot" && devicePlayer._h.includes('id="shot"') ? shotImg
       : id === "lightboxmode" && app._h.includes('id="lightboxmode"') ? { set onclick(fn: () => void) { handlers.gridMode = fn; } }
-      : id === "nlpane" && app._h.includes('id="nlpane"') ? (networkPane = { children: [...app._h.matchAll(/<div class="ln ([^"]*)"(?: data-netphase="([a-z]+)")?>([\s\S]*?)<\/div>/g)].map((m: any) => ({ dataset: m[2] ? { netphase: m[2] } : {}, textContent: (m[3].match(/<span>([^<]*)<\/span>$/) || ["", ""])[1], style: { display: "" }, classList: { contains: (c: string) => m[1].split(" ").includes(c) } })) })
       : id === "prev" ? prevBtn
       : id === "next" ? nextBtn
       : id === "copylocalprompt" && app._h.includes('id="copylocalprompt"') ? { textContent: "", set onclick(fn: () => void) { handlers.copyLocalPrompt = fn; } }
@@ -1382,7 +1372,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, clickNetPhase: (phase: string) => handlers.netPhase[phase]?.(), shownNetworkRows: () => (networkPane?.children || []).filter((r) => r.style.display !== "none").map((r) => r.textContent), firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -4020,6 +4010,35 @@ describe("embedded chrome (?chrome=none)", () => {
     expect(renderViewer(twoRuns("/static/run-7/s1.png"))).not.toContain('id="exportall"');
   });
 
+  // Event streams a linked report keeps beside it die with the server the same way its frames do.
+  test("the exports are withheld from a run whose event streams are linked", () => {
+    const linkedEvents = { generatedAt: "now", sessions: [{ ...embeddedPayload().sessions[0], eventsHref: "/static/run-7/report-events.js" }] };
+    const out = renderViewer(linkedEvents);
+    expect(out).not.toContain('id="exportrun"');
+    expect(out).not.toContain('id="exportall"');
+    expect(out).toContain('id="exportlogs"');
+  });
+
+  // The index reads this before any session chunk is parsed, so a stub has to carry it.
+  test("the index withholds Download report before any run is opened when a run's event streams are linked", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [
+        { meta: { title: "First run", status: "passed" }, trace: [], llmLogs: [], shots: {} },
+        { meta: { title: "Second run", status: "passed" }, trace: [], llmLogs: [], shots: {}, eventsHref: "../s2/report-events-0123456789abcdef.js" },
+      ] as never,
+    });
+    const chunks = chunksOf(html);
+    expect(JSON.parse(chunks.index).sessions.map((s: any) => s.eventsHref ?? null)).toEqual([null, "../s2/report-events-0123456789abcdef.js"]);
+    const held = renderViewerState(null, { chunks, holdChunks: [0, 1] }).html;
+    expect(held).not.toContain('id="exportall"');
+    const embedded = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "First run", status: "passed" }, trace: [], llmLogs: [], shots: {} }, { meta: { title: "Second run", status: "passed" }, trace: [], llmLogs: [], shots: {} }] as never,
+    });
+    expect(renderViewerState(null, { chunks: chunksOf(embedded), holdChunks: [0, 1] }).html).toContain('id="exportall"');
+  });
+
   // The session recording is a frame the same way the screenshots are, and it follows the same
   // embed-or-link switch. A run can have a recording and no step screenshots at all (link mode
   // normally links both, so this is the shape that slips past a `shots`-only guard) — and an export
@@ -6567,7 +6586,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<span class="name" id="trailhead-heading">Trailhead</span><span class="desc">0 actions</span>');
     expect(out).not.toContain('id="trailhead-heading">Trailhead</span><span class="counttoken"');
     expect(out).toContain('class="tlphase trailhead" aria-labelledby="trailhead-heading"');
-    expect(core.RUN_REPORT_CSS).toContain('.tlphase.trailhead .steps { border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); }');
+    expect(core.RUN_REPORT_CSS).toContain('.tlphase.trailhead .steps, .tlphase.devicesetup .steps { border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); }');
     expect(out).toContain(">TRAILHEAD</span>");
     // Trail section: its count is a token beside the title, and numbering starts at STEP 1.
     expect(out).toContain('class="tlphase" aria-labelledby="trail-heading"');
@@ -7106,7 +7125,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     // A trailhead that broke reads red like any other failure. Its distinguishing mark is a ring,
     // deliberately not a hue, so nothing here can override the outcome colour it inherits.
     expect(out).toContain('<span class="chip fail">TRAILHEAD</span>');
-    expect(core.RUN_REPORT_CSS).toContain(".grphdr.trailhead .chip { box-shadow: inset 0 0 0 1px currentColor; }");
+    expect(core.RUN_REPORT_CSS).toContain(".grphdr.trailhead .chip, .grphdr.devicesetup .chip { box-shadow: inset 0 0 0 1px currentColor; }");
     expect(core.RUN_REPORT_CSS).not.toContain(".grphdr.trailhead .chip { color:");
   });
 
@@ -7443,6 +7462,39 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out.indexOf('id="trailhead-heading"')).toBeLessThan(out.indexOf('id="trail-heading"'));
   });
 
+  test("the run's device setup renders as its own phase above the trailhead, and the trail's steps keep their numbers", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Setup: setAppearance", isSetup: true }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "setAppearance", traceId: "setup", trailblazeTool: { raw: {} }, successful: true, timestamp: "2024-01-01T00:00:00.200Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open the demo app", isTrailhead: true }, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "launchApp", traceId: "trailhead", trailblazeTool: { raw: {} }, successful: true, timestamp: "2024-01-01T00:00:01.200Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Complete checkout" }, timestamp: "2024-01-01T00:00:02Z" },
+    ]));
+    expect(trace[0].setup).toBe(true);
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('<section class="tlphase devicesetup" aria-labelledby="devicesetup-heading">');
+    expect(out).toContain('<span class="name" id="devicesetup-heading">Device setup</span><span class="phasestatus pass">');
+    expect(out).toContain(">DEVICE SETUP<");
+    expect(out).toContain(">STEP 1<");
+    expect(out).not.toContain(">STEP 2<");
+    expect(out.indexOf('id="devicesetup-heading"')).toBeLessThan(out.indexOf('id="trailhead-heading"'));
+    expect(out.indexOf('id="trailhead-heading"')).toBeLessThan(out.indexOf('id="trail-heading"'));
+    // A clean device setup is collapsed; the trail's step count leaves it out.
+    expect(out).toContain('data-phase="setup" aria-expanded="false"');
+    expect(out).toMatch(/id="trail-heading">Trail<\/span><span class="counttoken">1</);
+  });
+
+  test("a failed device setup opens its phase and names it as the failure", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Setup: setAppearance", isSetup: true }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "setAppearance", traceId: "setup", trailblazeTool: { raw: {} }, successful: false, exceptionMessage: "no app", timestamp: "2024-01-01T00:00:00.200Z" },
+      { class: `${T}.ObjectiveCompleteLog`, promptStep: { step: "Setup: setAppearance", isSetup: true }, objectiveResult: { type: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.ObjectiveFailed", llmExplanation: "no app" }, timestamp: "2024-01-01T00:00:00.300Z" },
+    ]));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "failed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('data-phase="setup" aria-expanded="true"');
+    expect(out).toContain('id="devicesetup-heading">Device setup</span><span class="phasestatus fail">');
+  });
+
   test("the trailhead's teardown renders as its own Teardown phase after the trail, unnumbered", () => {
     const trace = (core as any).slimTraceForShare(core.extractTrace([
       { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open the demo app", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
@@ -7529,8 +7581,14 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       { type: "setup", tool: "signIn", setup: "reused", reason: "still on the home screen", previousRunSessionId: "run_prev" },
     ]);
     expect(reused).toContain('<span class="name" id="trailhead-heading">Trailhead</span><span class="phasestatus reused">Reused</span>');
-    expect(reused).toContain("Reused from <code>run_prev</code>");
+    expect(reused).toContain("Reused from <code>run_prev</code></span>");
     expect(reused).toContain("still on the home screen");
+
+    // A chain of reuses also names the session that ran the setup.
+    const chained = render([{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b", trailheadSessionId: "run_a" }]);
+    expect(chained).toContain("Reused from <code>run_b</code>, first set up in <code>run_a</code></span>");
+    const direct = render([{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_a", trailheadSessionId: "run_a" }]);
+    expect(direct).toContain("Reused from <code>run_a</code></span>");
 
     const full = render([
       { type: "previousRun", tool: "signIn", previousRun: null, reason: "reuse is off for this lane" },
@@ -7557,84 +7615,6 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     const none = render([{ type: "previousRun", tool: "signIn", previousRun: null, reason: "this trailhead defines no teardown" }]);
     expect(none).not.toContain("phasestatus");
     expect(none).not.toContain("setupdecision");
-  });
-
-  test("the Network tab tags each request with its start phase and says where reused setup traffic is", () => {
-    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
-    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
-    const trailheadStream = (records: Record<string, unknown>[]) => [{ name: "trailhead", total: records.length, truncated: false, events: records.map((d, t) => ({ t, d: JSON.stringify(d) })) }];
-    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: null, durationMs: null, urlPath, phase: "REQUEST_START", trailPhase });
-    const render = (network: unknown[] | null, records: Record<string, unknown>[]) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network, events: trailheadStream(records) }] }, { tab: "network" });
-
-    const full = render([net("/sign-in", "trailhead"), net("/checkout", "trail")], [{ type: "setup", tool: "signIn", setup: "fullSetup" }]);
-    expect(full).toContain('data-netphase="trailhead"><span class="netphase trailhead">Trailhead</span>');
-    expect(full).toContain('<button class="evchip" data-netphase="trail">Trail</button>');
-    expect(full).not.toContain("netcoverage");
-    // Network rows must not look like the Timeline's phase disclosures.
-    expect(full).not.toContain('class="ln " data-phase=');
-
-    // A third trail in a chain names the session that ran the setup, and the one that handed it on.
-    const chained = [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b", trailheadSessionId: "run_a" }];
-    const reused = render([net("/checkout", "trail")], chained);
-    expect(reused).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran (handed on by <code>run_b</code>)");
-    // One phase present: no chips to filter by.
-    expect(reused).not.toContain("data-netphase=\"trail\">Trail</button>");
-
-    // A reused trail with no traffic of its own still gets the tab and the notice.
-    const quiet = render(null, chained);
-    expect(quiet).toContain('data-tab="network"');
-    expect(quiet).toContain("<code>signIn</code> reused the setup <code>run_a</code> ran");
-    expect(quiet).toContain("This report has no network log for this session.");
-    expect(quiet).not.toContain("No network activity captured");
-
-    // A multi-device session keeps each device's traffic in its own stream: say so, never "none".
-    const perDevice = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, network: null,
-      events: [...trailheadStream(chained), { name: "network.seller", total: 3, truncated: false, events: [] }, { name: "network.buyer", total: 0, truncated: false, events: [] }] }] }, { tab: "network" });
-    expect(perDevice).toContain("captured each device's traffic separately: <code>network.seller</code> (3 events). Those requests are on the Timeline.");
-    expect(perDevice).not.toContain("has no network log");
-    expect(perDevice).not.toContain("network.buyer</code>");
-
-    // Only the tools that reused are named.
-    const mixed = render([net("/x", "trail")], [
-      { type: "setup", tool: "signIn", setup: "fullSetup" },
-      { type: "setup", tool: "seedCatalog", setup: "reused", reason: "same catalog", previousRunSessionId: "run_a", trailheadSessionId: "run_a" },
-    ]);
-    expect(mixed).toContain("<code>seedCatalog</code> reused the setup <code>run_a</code> ran, so");
-    expect(mixed).not.toContain("<code>signIn</code> reused");
-
-    // A log from before the setup's own session was recorded: the hand-off session is not credited
-    // with running it, since in a chain it did not.
-    const legacy = render([net("/x", "trail")], [{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "run_b" }]);
-    expect(legacy).toContain("<code>signIn</code> reused a setup handed on by <code>run_b</code>. This log does not record which session ran that setup");
-    expect(legacy).not.toContain("reused the setup <code>run_b</code> ran");
-
-    // Successive trails in one session: the setup's requests are earlier in this same log.
-    const sameSession = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed", sessionId: "mcp_1" }, trace, llm: [], shots: {}, network: [net("/x", "trail")],
-      events: trailheadStream([{ type: "setup", tool: "signIn", setup: "reused", reason: "signed in", previousRunSessionId: "mcp_1", trailheadSessionId: "mcp_1" }]) }] }, { tab: "network" });
-    expect(sameSession).toContain("an earlier trail in this session ran, so the requests that setup made are earlier in this log");
-    expect(sameSession).not.toContain("not here");
-  });
-
-  test("clicking a Network phase chip shows only that phase's requests, and a second click shows them all again", () => {
-    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
-    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
-    const net = (urlPath: string, trailPhase: string | null) => ({ method: "GET", statusCode: 200, durationMs: 5, urlPath, phase: "REQUEST_END", trailPhase });
-    const state = renderViewerState({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {}, events: [],
-      network: [net("/sign-in", "trailhead"), net("/checkout", "trail"), net("/sign-out", "teardown"), net("/before-any-trail", null)] }] }, { tab: "network" });
-    const shown = () => state.shownNetworkRows();
-    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
-
-    state.clickNetPhase("trail");
-    expect(shown()).toEqual(["/checkout"]);
-    state.clickNetPhase("trailhead");
-    expect(shown()).toEqual(["/sign-in"]);
-    state.clickNetPhase("trailhead");
-    expect(shown()).toEqual(["/sign-in", "/checkout", "/sign-out", "/before-any-trail"]);
-
-    // Only the Timeline's phase disclosures carry data-phase, so its phase toggles never bind to a
-    // network row or chip.
-    const html = state.readHtml();
-    expect((html.match(/data-phase="/g) || []).length).toBe((html.match(/class="phasecontrol" data-phase="/g) || []).length);
   });
 
   test("a failed teardown never anchors the run's failure", () => {
@@ -8141,10 +8121,32 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     }],
   };
 
-  test("nav exposes Lightbox, Video, Device logs and Network tabs when their data is present", () => {
+  test("nav exposes Lightbox, Video and Device logs tabs when their data is present, and no Network tab", () => {
     const out = renderViewer(payload);
     expect(out).toContain('data-tab="lightbox">Lightbox <span class="counttoken">1</span></button>');
-    for (const tab of ["Video", "Device logs", "Network"]) expect(out).toContain(">" + tab + "<");
+    for (const tab of ["Video", "Device logs"]) expect(out).toContain(">" + tab + "<");
+    // The Summary's network lane shows the requests.
+    expect(out).not.toContain('data-tab="network"');
+  });
+
+  test("a tab=network link lands on the Summary, or the Timeline when there's no Summary", () => {
+    const toSummary = renderViewerState(payload, { query: "?run=0&tab=network" });
+    expect(toSummary.route).toContain("tab=summary");
+    const noTrace = renderViewerState({ ...payload, sessions: payload.sessions.map((s: any) => ({ ...s, trace: [] })) }, { query: "?run=0&tab=network" });
+    expect(noTrace.route).not.toContain("tab=network");
+    expect(noTrace.route).not.toContain("tab=summary");
+    // There the session's network streams start shown, so the link still opens on its requests.
+    const rootCapture = { name: "network", total: 1, truncated: false, events: [{ t: 1704067201000, d: JSON.stringify({ method: "POST", urlPath: "/root-fail", statusCode: 500, phase: "RESPONSE_END" }) }] };
+    const other = { name: "analytics", total: 1, truncated: false, events: [{ t: 1704067201000, d: "{}" }] };
+    const withStreams = renderViewerState({ ...payload, sessions: payload.sessions.map((s: any) => ({ ...s, trace: [], network: null, events: [other, rootCapture] })) }, { query: "?run=0&tab=network" });
+    expect(withStreams.route).toContain("tab=timeline");
+    expect(withStreams.route).toContain("streams=1");
+    expect(withStreams.html).toContain('data-tlstream="1" checked');
+    expect(withStreams.html).not.toContain('data-tlstream="0" checked');
+    expect(withStreams.html).toContain('data-lazykey="network-0"');
+    // A raw request reads as its request, and a failure is marked as one.
+    expect(withStreams.html).toContain('<details class="timelineevent e"');
+    expect(withStreams.html).toContain("POST /root-fail · 500");
   });
 
   test("the Strings tab appears only when the run recorded strings, and shows each on its screenshot", () => {
@@ -8366,12 +8368,6 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     });
   });
 
-  test("network tab flags >=400 responses as errors", () => {
-    const out = renderViewer(payload, { tab: "network" });
-    expect(out).toContain("/fail");
-    expect(out).toContain("ln e"); // error-level row class
-  });
-
   test("video tab renders the recording with a scrubber, play, elapsed/total time, a speed control and a download", () => {
     withObjectUrls(() => {
       const out = renderViewer(payload, { tab: "video" });
@@ -8542,13 +8538,10 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     expect(out).toContain("ln e");
   });
 
-  test("device-logs and network tabs offer a text filter and severity chips", () => {
+  test("the device-logs tab offers a text filter and severity chips", () => {
     const dev = renderViewer(payload, { tab: "device" });
     expect(dev).toContain('id="dlq"');
     expect(dev).toContain('data-lvl="e"');
-    const net = renderViewer(payload, { tab: "network" });
-    expect(net).toContain('id="nlq"');
-    expect(net).toContain('data-lvl="e"');
   });
 });
 
@@ -9505,6 +9498,122 @@ describe("compressed event streams (SessionPayload.eventsGz)", () => {
     expect(out).toContain(">Events</span>");
     expect(out).not.toContain(">Streams</span>");
   });
+
+  test("buildMultiReportHtml carries a linked session's eventsHref verbatim", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: [], llmLogs: [], shots: {}, eventsHref: "../sess/report-events.js" }],
+    });
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.eventsHref).toBe("../sess/report-events.js");
+    expect(embedded.eventsGz).toBeNull();
+    expect(embedded.events).toBeNull();
+  });
+
+  // A head standing in for the page's: a <script src> it mounts runs the sidecar written at that
+  // path (core.sidecarScript, the driver's writer), then fires load, or fires error when nothing is there.
+  const sidecarHead = (files: Record<string, string>) => {
+    const head = {
+      children: [] as any[],
+      requested: [] as string[],
+      appendChild(el: any) {
+        head.children.push(el);
+        el.remove = () => { const at = head.children.indexOf(el); if (at >= 0) head.children.splice(at, 1); };
+        if (el.tagName !== "SCRIPT") return;
+        head.requested.push(el.src);
+        setTimeout(() => {
+          const body = files[el.src];
+          if (body == null) return el.onerror?.();
+          new Function("self", "document", body)(globalThis, { currentScript: el });
+          el.onload?.();
+        }, 0);
+      },
+    };
+    return head;
+  };
+  const settledOn = async (read: () => string, needle: string): Promise<string> => {
+    for (let i = 0; i < 100 && !read().includes(needle); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    return read();
+  };
+  const linkedSession = (title: string, href: string) => ({ meta: { title, status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsHref: href });
+
+  test("a linked session loads its event streams from the sidecar and leaves nothing mounted", async () => {
+    const head = sidecarHead({ "../sess/report-events.js": (core as any).sidecarScript(gz(streams)) });
+    const state = renderViewerState({ generatedAt: "now", sessions: [linkedSession("Run", "../sess/report-events.js")] }, { documentHead: head });
+    expect(state.html).toContain(">Events</span>");
+    const out = await settledOn(state.readHtml, ">Streams</span>");
+    expect(out).toContain(">Streams</span>");
+    expect(head.requested).toEqual(["../sess/report-events.js"]);
+    expect(head.children).toEqual([]);
+  });
+
+  test("a sidecar that is missing reads as undecodable events, not as a run that captured none", async () => {
+    const head = sidecarHead({});
+    const sessions = [linkedSession("Run 1", "../a/report-events.js"), linkedSession("Run 2", "../b/report-events.js")];
+    const state = renderViewerState({ generatedAt: "now", sessions }, { documentHead: head, query: "?view=compare&tab=events" });
+    const out = await settledOn(state.readHtml, "could not be decoded");
+    expect(out).toContain("could not be decoded");
+    expect(head.children).toEqual([]);
+  });
+
+  const unavailableNotice = "Event streams are unavailable";
+  const withDownloads = async (body: (downloaded: () => Blob | null) => Promise<void>) => {
+    const urlAny = URL as any;
+    const original = { create: urlAny.createObjectURL, revoke: urlAny.revokeObjectURL };
+    let blob: Blob | null = null;
+    urlAny.createObjectURL = (b: Blob) => { blob = b; return "blob:test"; };
+    urlAny.revokeObjectURL = () => {};
+    try { await body(() => blob); } finally {
+      urlAny.createObjectURL = original.create;
+      urlAny.revokeObjectURL = original.revoke;
+    }
+  };
+
+  test("a run whose linked sidecar is missing says so, instead of looking like a run with no events", async () => {
+    const head = sidecarHead({});
+    const state = renderViewerState({ generatedAt: "now", sessions: [linkedSession("Run", "../sess/report-events-0123456789abcdef.js")] }, { documentHead: head });
+    expect(state.html).not.toContain(unavailableNotice);
+    const out = await settledOn(state.readHtml, unavailableNotice);
+    expect(out).toContain(unavailableNotice);
+    expect(out).toContain('role="alert"');
+    expect(out).not.toContain(">Streams</span>");
+    expect(head.children).toEqual([]);
+  });
+
+  test("the notice stays off a run whose events loaded, and off one that has none", async () => {
+    const head = sidecarHead({ "../sess/report-events-0123456789abcdef.js": (core as any).sidecarScript(gz(streams)) });
+    const loaded = renderViewerState({ generatedAt: "now", sessions: [linkedSession("Run", "../sess/report-events-0123456789abcdef.js")] }, { documentHead: head });
+    expect(await settledOn(loaded.readHtml, ">Streams</span>")).not.toContain(unavailableNotice);
+
+    const noEvents = renderViewerState({ generatedAt: "now", sessions: [{ ...linkedSession("Run", ""), eventsHref: null }] }, { documentHead: sidecarHead({}) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(noEvents.readHtml()).not.toContain(unavailableNotice);
+
+    const emptySet = renderViewerState({ generatedAt: "now", sessions: [{ ...linkedSession("Run", ""), eventsHref: null, eventsGz: gz([]) }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(emptySet.readHtml()).not.toContain(unavailableNotice);
+  });
+
+  test("Export logs of a run whose sidecar is missing says the events could not be loaded, not that there were none", async () => {
+    await withDownloads(async (downloaded) => {
+      renderViewerState({ generatedAt: "now", sessions: [linkedSession("Run", "../sess/report-events-0123456789abcdef.js")] }, { documentHead: sidecarHead({}), exportLogs: true });
+      for (let i = 0; i < 100 && !downloaded(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      const logs = JSON.parse(await downloaded()!.text());
+      expect(logs.events).toBeNull();
+      expect(logs.eventsError).toContain("could not be loaded");
+    });
+  });
+
+  test("Export logs of a run whose sidecar loaded still carries its events and no error", async () => {
+    await withDownloads(async (downloaded) => {
+      const head = sidecarHead({ "../sess/report-events-0123456789abcdef.js": (core as any).sidecarScript(gz(streams)) });
+      renderViewerState({ generatedAt: "now", sessions: [linkedSession("Run", "../sess/report-events-0123456789abcdef.js")] }, { documentHead: head, exportLogs: true });
+      for (let i = 0; i < 100 && !downloaded(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      const logs = JSON.parse(await downloaded()!.text());
+      expect(logs.events).toEqual(streams);
+      expect(logs).not.toHaveProperty("eventsError");
+    });
+  });
 });
 
 describe("playback timing (pure core)", () => {
@@ -10255,9 +10364,9 @@ describe("compressed device/network logs (SessionPayload.deviceLogGz / networkGz
     expect(payloadOf(without).sessions[0].visibleStrings).toBeNull();
   });
 
-  test("nav exposes the Device logs and Network tabs for compressed-only sessions", () => {
+  test("nav exposes the Device logs tab for compressed-only sessions", () => {
     const out = renderViewer(gzPayload());
-    for (const tab of ["Device logs", "Network"]) expect(out).toContain(">" + tab + "<");
+    expect(out).toContain(">Device logs<");
   });
 
   test("device-logs tab shows the user the identical log text once inflation lands", async () => {
@@ -10270,16 +10379,6 @@ describe("compressed device/network logs (SessionPayload.deviceLogGz / networkGz
     expect(out).toContain("FATAL crash");
     expect(out).toContain("3001 lines");
     expect(out).toContain("ln e"); // severity highlighting works on the inflated text too
-  });
-
-  test("network tab renders the inflated events once inflation lands", async () => {
-    const state = renderViewerState(gzPayload(), { tab: "network" });
-    expect(state.html).toContain("Decompressing network log");
-    const out = await settled(state.readHtml, "/inflated-ok");
-    expect(out).toContain("/inflated-ok");
-    expect(out).toContain("/inflated-fail");
-    expect(out).toContain("2 events");
-    expect(out).toContain("ln e"); // >=400 rows keep their error class
   });
 
   test("Export logs clicked before inflation still downloads the complete logs and events", async () => {

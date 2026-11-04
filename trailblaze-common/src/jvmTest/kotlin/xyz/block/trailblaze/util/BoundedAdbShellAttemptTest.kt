@@ -1,13 +1,20 @@
 package xyz.block.trailblaze.util
 
+import dadb.AdbStream
+import dadb.Dadb
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
+import kotlin.concurrent.thread
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 
@@ -115,5 +122,74 @@ class BoundedAdbShellAttemptTest {
     assertEquals(1L, finished.count, "the worker is still parked")
     release.countDown()
     assertEquals(true, finished.await(5, TimeUnit.SECONDS))
+  }
+
+  /**
+   * Interrupts a caller parked on an attempt whose worker resolved the device's cached client, and
+   * returns that client once the caller has given up.
+   */
+  private fun interruptedAttempt(evictClientOnTimeout: Boolean): Pair<String, FakeDadb> {
+    val serial = "interrupted-${UUID.randomUUID()}"
+    val cached = FakeDadb()
+    AndroidHostAdbUtils.dadbClients[serial] = cached
+    val resolved = CountDownLatch(1)
+    var outcome: AndroidHostAdbUtils.ShellAttemptOutcome? = null
+    val caller = thread {
+      outcome = AndroidHostAdbUtils.runSingleAdbShellAttempt(
+        deviceId = TrailblazeDeviceId(serial, TrailblazeDevicePlatform.ANDROID),
+        command = "dumpsys meminfo",
+        redactedCommand = "dumpsys meminfo",
+        timeoutMs = 30_000L,
+        evictClientOnTimeout = evictClientOnTimeout,
+        shellCall = { onClientResolved ->
+          onClientResolved(cached)
+          resolved.countDown()
+          // The worker is interrupted too; a socket read would ignore that, so this does as well.
+          while (release.count > 0) Thread.onSpinWait()
+          "too late"
+        },
+      ).outcome
+    }
+    assertTrue(resolved.await(5, TimeUnit.SECONDS))
+    caller.interrupt()
+    caller.join(5_000L)
+    assertEquals(AndroidHostAdbUtils.ShellAttemptOutcome.FAILED, outcome)
+    return serial to cached
+  }
+
+  @Test
+  fun `an interrupted caller that leaves the shared client alone on a timeout leaves it alone here too`() {
+    // A background sampler is stopped this way at session end, while the session's own cleanup
+    // still runs over that client.
+    val (serial, cached) = interruptedAttempt(evictClientOnTimeout = false)
+    try {
+      assertSame(cached, AndroidHostAdbUtils.dadbClients[serial])
+      assertFalse(cached.closed)
+    } finally {
+      AndroidHostAdbUtils.dadbClients.remove(serial)
+    }
+  }
+
+  @Test
+  fun `an interrupted trail call evicts the client it was using`() {
+    val (serial, cached) = interruptedAttempt(evictClientOnTimeout = true)
+    try {
+      assertNotSame(cached, AndroidHostAdbUtils.dadbClients[serial])
+      assertTrue(cached.closed)
+    } finally {
+      AndroidHostAdbUtils.dadbClients.remove(serial)
+    }
+  }
+
+  private class FakeDadb : Dadb {
+    @Volatile var closed = false
+
+    override fun open(destination: String): AdbStream = error("not used")
+
+    override fun supportsFeature(feature: String): Boolean = true
+
+    override fun close() {
+      closed = true
+    }
   }
 }

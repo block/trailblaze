@@ -23,8 +23,8 @@ import org.junit.Test
  * hardcoded 10s for it to become ready, never re-picking; and because `DEFAULT` requires
  * `isFocusable()`, "ready" means exactly "this window holds window focus". So a settle routed
  * through `onView` is a bet that one particular window holds focus, and it loses that bet on every
- * transition it does not win the race with. A real trail lost it on the tap that opens an
- * item-detail sheet, 91s into a run, on a tap that had already landed.
+ * transition it does not win the race with. A trail can lose it on the tap that opens a detail
+ * sheet, on a tap that had already landed.
  *
  * The unfocused window here is produced by expanding the notification shade rather than by racing a
  * modal, because the shade holds focus for as long as the test wants it to and the racing version

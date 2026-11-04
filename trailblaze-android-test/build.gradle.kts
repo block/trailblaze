@@ -79,6 +79,10 @@ dependencies {
   implementation(project(":trailblaze-quickjs-tools"))
   implementation(project(":trailblaze-scripting-fetch"))
 
+  // `InProcessRpcServerTest` hosts the same `OnDeviceRpcServer` the accessibility runner serves, so
+  // `trailblaze run --driver in-process` can drive any app whose test APK subclasses it.
+  implementation(project(":trailblaze-android-ondevice-mcp"))
+
   // Android-register and other large instrumentation harnesses currently standardize on
   // coroutines 1.10.x. Trailblaze's wider graph can resolve 1.11 through Ktor, whose renamed
   // runBlockingK symbol is not binary-compatible with 1.10 at runtime. Compile this thin driver

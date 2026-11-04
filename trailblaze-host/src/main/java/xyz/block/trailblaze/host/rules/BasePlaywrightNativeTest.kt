@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.rules
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
@@ -38,6 +39,7 @@ import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -351,6 +353,10 @@ open class BasePlaywrightNativeTest(
     val activeRunnerUtil = runnerUtilFor(activeRunner, TrailheadRuns.reuseEnabledFor(trailheadReuse))
     // One trail: the trailhead's teardown runs after it, whatever the outcome.
     activeRunnerUtil.runTrail {
+      // The run's setup tool calls, before anything else in the trail, the trailhead included.
+      DeviceSetupToolsMemory.read(playwrightAgent.memory)?.let { setup ->
+        activeRunnerUtil.runDeviceSetup(setup, { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } }, toolRepo)
+      }
       for (item in trailItems) {
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
@@ -509,10 +515,12 @@ open class BasePlaywrightNativeTest(
           "Add prompts or tool steps to this trail file.",
       )
     }
-    try {
-      runTrail(trailItems, useRecordedSteps, onStepProgress, trailheadReuse)
-    } finally {
-      currentToolTraceId = null
+    TrailExecution.within(trailConfig?.id) {
+      try {
+        runTrail(trailItems, useRecordedSteps, onStepProgress, trailheadReuse)
+      } finally {
+        currentToolTraceId = null
+      }
     }
     loggingRule.session?.sessionId ?: SessionId("unknown")
   }

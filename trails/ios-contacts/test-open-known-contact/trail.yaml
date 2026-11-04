@@ -3,9 +3,6 @@ config:
   devices:
     ios-iphone:
       driver: IOS_HOST
-  tags:
-  - smoke
-  - contact
   title: 'Contacts (iOS): Open a known contact by name'
 
 trail:

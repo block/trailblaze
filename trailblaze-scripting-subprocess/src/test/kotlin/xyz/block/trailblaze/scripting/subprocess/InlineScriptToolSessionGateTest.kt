@@ -4,9 +4,11 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
+import assertk.assertions.isEqualTo
 import io.modelcontextprotocol.kotlin.sdk.types.Tool
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -173,6 +175,22 @@ class InlineScriptToolSessionGateTest {
       preferHostAgent = false,
     )
     assertThat(onDeviceAgent.map { it.name }).isEmpty()
+  }
+
+  /**
+   * A subprocess is a host Bun process, so a `runtime: subprocess` tool is host-only without its
+   * own `requiresHost: true`: it advertises the flag, and an on-device agent session skips it.
+   */
+  @Test fun `subprocess tool is host-only without requiresHost`() {
+    assertThat(SubprocessToolRegistrar.advertisedMeta(unrestricted)!!["trailblaze/requiresHost"])
+      .isEqualTo(JsonPrimitive(true))
+
+    val onDeviceAgent = SubprocessToolRegistrar.applicableInlineTools(
+      tools = listOf(unrestricted),
+      driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      preferHostAgent = false,
+    )
+    assertThat(onDeviceAgent).isEmpty()
   }
 
   /**

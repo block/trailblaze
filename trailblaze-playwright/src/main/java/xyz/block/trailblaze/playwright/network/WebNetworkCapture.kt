@@ -682,7 +682,7 @@ class WebNetworkCapture private constructor(
 
     /**
      * Where a capture writes its events. A single-device session ([deviceLabel] null) keeps the
-     * root `network.ndjson` the Network tab reads. A device in a multi-device session writes the
+     * root `network.ndjson` the report reads. A device in a multi-device session writes the
      * events stream `events/network.<deviceLabel>.ndjson` instead: there is no "the" network log in
      * a session with several devices, and the label is how the report's Streams menu attributes
      * the traffic to the device it came from — the same suffix every other device's streams carry.

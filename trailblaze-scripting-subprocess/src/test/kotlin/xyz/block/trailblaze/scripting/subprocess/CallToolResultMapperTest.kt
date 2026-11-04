@@ -11,6 +11,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlin.test.Test
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
@@ -156,5 +157,30 @@ class CallToolResultMapperTest {
       .isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
       .prop(TrailblazeToolResult.Error.ExceptionThrown::structuredPayload)
       .isEqualTo(null)
+  }
+
+  private fun errorResult(text: String, variant: String? = null, isError: Boolean = true) = CallToolResult(
+    content = listOf(TextContent(text = text)),
+    isError = isError,
+    meta = variant?.let {
+      buildJsonObject { put("trailblaze", buildJsonObject { put("variant", JsonPrimitive(it)) }) }
+    },
+  )
+
+  @Test fun `isError true with the FatalError variant maps to FatalError`() {
+    assertThat(errorResult("device disconnected", variant = "FatalError").toTrailblazeToolResult())
+      .isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+      .prop(TrailblazeToolResult.Error.FatalError::errorMessage)
+      .isEqualTo("device disconnected")
+  }
+
+  @Test fun `an unrecognized variant stays a recoverable ExceptionThrown`() {
+    assertThat(errorResult("nope", variant = "SomethingElse").toTrailblazeToolResult())
+      .isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+  }
+
+  @Test fun `the FatalError variant on a successful result is ignored`() {
+    assertThat(errorResult("fine", variant = "FatalError", isError = false).toTrailblazeToolResult())
+      .isInstanceOf(TrailblazeToolResult.Success::class)
   }
 }

@@ -473,6 +473,17 @@ describe('building a story', () => {
     expect(s.chapters.map((_, k) => stepNumber(s.chapters, k))).toEqual(['0', '1', '2', '']);
     expect(acts(s).map((a) => [a.title, a.chapters])).toEqual([['Trailhead', [0]], ['Trail', [1, 2, 3]]]);
   });
+
+  test("the run's device setup is its own unnumbered act before the trailhead", () => {
+    const s = story([
+      objective('Setup: setAppearance', 0, { setup: true }),
+      objective('Trailhead', 1000, { trailhead: true }),
+      objective('First', 2000),
+    ]);
+    expect(s.chapters.map((c) => c.kind)).toEqual(['setup', 'trailhead', 'step']);
+    expect(s.chapters.map((_, k) => stepNumber(s.chapters, k))).toEqual(['', '0', '1']);
+    expect(acts(s).map((a) => [a.title, a.chapters])).toEqual([['Device setup', [0]], ['Trailhead', [1]], ['Trail', [2]]]);
+  });
 });
 
 describe('the trail YAML as a script', () => {

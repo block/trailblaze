@@ -10,6 +10,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -45,6 +47,93 @@ class CrashEventArtifactWriterTest {
       assertEquals("FATAL EXCEPTION: main", data["summary"]?.jsonPrimitive?.content)
       assertEquals("device.log", data["source"]?.jsonObject?.get("path")?.jsonPrimitive?.content)
       assertEquals(2, data["source"]?.jsonObject?.get("line")?.jsonPrimitive?.content?.toInt())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a crash logged before the session started stays in the log but is not indexed`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      // Logged while the device connected, then the runner recovered.
+      val connectPhase = """
+        1772846521.000  123  123 E AndroidRuntime: FATAL EXCEPTION: main
+        1772846521.000  123  123 E AndroidRuntime: Process: com.example.store, PID: 123
+
+      """.trimIndent()
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(connectPhase + "1772846525.000  456  456 I MyApp : opening checkout\n")
+      }
+
+      CrashEventArtifactWriter.write(
+        sessionDir,
+        deviceLog,
+        TrailblazeDevicePlatform.ANDROID,
+        appProcessName = "com.example.store",
+        bytesBeforeSessionStart = connectPhase.toByteArray().size.toLong(),
+      )
+
+      assertEquals(emptyList(), crashes(sessionDir))
+      assertTrue(deviceLog.readText().contains("FATAL EXCEPTION"), "the connect's crash is still in the log")
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `crashes before the session started do not crowd out the session's own`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      // More crash lines while the device connected than the index keeps.
+      val connectPhase = (1..150).joinToString("") {
+        "1772846521.000  123  123 E AndroidRuntime: FATAL EXCEPTION: main\n" +
+          "1772846521.000  123  123 E AndroidRuntime: Process: com.example.store, PID: 123\n"
+      }
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          connectPhase +
+            "1772846525.000  456  456 E AndroidRuntime: FATAL EXCEPTION: main\n" +
+            "1772846525.000  456  456 E AndroidRuntime: Process: com.example.store, PID: 456\n",
+        )
+      }
+
+      CrashEventArtifactWriter.write(
+        sessionDir,
+        deviceLog,
+        TrailblazeDevicePlatform.ANDROID,
+        appProcessName = "com.example.store",
+        bytesBeforeSessionStart = connectPhase.toByteArray().size.toLong(),
+      )
+
+      assertEquals(1, crashes(sessionDir).size, "the trail's own crash is still indexed")
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a crash after the session started is indexed`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val connectPhase = "1772846521.000  123  123 I MyApp : connecting\n"
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          connectPhase +
+            "1772846525.000  456  456 E AndroidRuntime: FATAL EXCEPTION: main\n" +
+            "1772846525.000  456  456 E AndroidRuntime: Process: com.example.store, PID: 456\n",
+        )
+      }
+
+      CrashEventArtifactWriter.write(
+        sessionDir,
+        deviceLog,
+        TrailblazeDevicePlatform.ANDROID,
+        appProcessName = "com.example.store",
+        bytesBeforeSessionStart = connectPhase.toByteArray().size.toLong(),
+      )
+
+      assertEquals(1, crashes(sessionDir).size)
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -123,7 +212,7 @@ class CrashEventArtifactWriterTest {
   }
 
   @Test
-  fun `the app's own lines that only resemble a crash do not fail its run`() {
+  fun `the app's own lines that only resemble a crash are not indexed`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       val deviceLog = File(sessionDir, "device.log").apply {
@@ -167,52 +256,66 @@ class CrashEventArtifactWriterTest {
   }
 
   @Test
-  fun `a session that recorded crashes fails naming the first crash, with the app_crashed code and the crash itself`() {
+  fun `an Android crash keeps the records its process logs after it, under its tag, as detail`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
+      val frames = (1..10).joinToString("\n") { "1772846522.234  123  123 E AndroidRuntime: \tat com.example.store.Frame$it.run(Frame.kt:$it)" }
       val deviceLog = File(sessionDir, "device.log").apply {
         writeText(
           """
-          1772846521.000  123  123 I MyApp : opening checkout
-          1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main
-          1772846523.000  456  456 F libc : Fatal signal 11 (SIGSEGV), code 1
-          """.trimIndent(),
+          |1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main
+          |1772846522.234  777  777 E AndroidRuntime: Process: com.other.launcher, PID: 777
+          |1772846522.234  123  123 I MyApp : unrelated line from the same process
+          |1772846522.234  123  123 E AndroidRuntime: Process: com.example.store, PID: 123
+          |1772846522.234  123  123 E AndroidRuntime: java.lang.IllegalStateException: Debug menu crash
+          |$frames
+          """.trimMargin(),
         )
       }
-      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID)
 
-      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
+
+      val data = Json.decodeFromString(
+        SessionEvent.serializer(),
+        File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").readText(),
+      ).data.jsonObject
+      val detail = assertNotNull(data["detail"]?.jsonArray).map { it.jsonPrimitive.content }
       assertEquals(
-        "App crashed: FATAL EXCEPTION: main (device.log line 2, 2 crash events in total)",
-        failure.message,
+        listOf(
+          "Process: com.example.store, PID: 123",
+          "java.lang.IllegalStateException: Debug menu crash",
+        ),
+        detail.take(2),
+        "only the crashing process's records under its tag, in log order",
       )
-      assertEquals("app_crashed", failure.payload["code"]?.jsonPrimitive?.content)
-      assertEquals(2, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
-      val firstCrash = assertNotNull(failure.payload["firstCrash"]?.jsonObject)
-      assertEquals("fatal_exception", firstCrash["kind"]?.jsonPrimitive?.content)
-      assertEquals("FATAL EXCEPTION: main", firstCrash["summary"]?.jsonPrimitive?.content)
+      assertTrue(detail.size < 12, "detail keeps the first frames, not the whole stack: $detail")
+      assertTrue(detail.drop(2).all { it.startsWith("at com.example.store.Frame") })
     } finally {
       sessionDir.deleteRecursively()
     }
   }
 
   @Test
-  fun `a session that recorded no crash has no crash failure`() {
+  fun `an iOS crash carries no detail`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       val deviceLog = File(sessionDir, "device.log").apply {
-        writeText("1772846521.000  123  123 E MyApp : request failed with an Exception")
+        writeText("2026-03-10 14:23:45.678-0700  ExampleApp[12345]: Fatal error: Debug Menu Test Crash")
       }
-      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID)
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "ExampleApp")
 
-      assertNull(CrashEventArtifactWriter.failure(sessionDir))
+      val data = Json.decodeFromString(
+        SessionEvent.serializer(),
+        File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").readText(),
+      ).data.jsonObject
+      assertNull(data["detail"])
     } finally {
       sessionDir.deleteRecursively()
     }
   }
 
   @Test
-  fun `another Android app's crash in the shared logcat does not fail the app's run`() {
+  fun `another Android app's crash in the shared logcat is not indexed for the app`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       // A Java crash is named by the next AndroidRuntime line, a native one by crash_dump's tombstone.
@@ -233,14 +336,14 @@ class CrashEventArtifactWriterTest {
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
 
       assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
-      assertNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(emptyList(), crashes(sessionDir))
     } finally {
       sessionDir.deleteRecursively()
     }
   }
 
   @Test
-  fun `the Android app's own crashes still fail its run beside other processes' crashes`() {
+  fun `the Android app's own crashes are indexed beside other processes' crashes`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       val deviceLog = File(sessionDir, "device.log").apply {
@@ -257,11 +360,7 @@ class CrashEventArtifactWriterTest {
 
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
 
-      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
-      assertEquals(2, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
-      val lines = File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").readLines().map { line ->
-        Json.decodeFromString(SessionEvent.serializer(), line).data.jsonObject
-      }
+      val lines = crashes(sessionDir)
       assertEquals(
         listOf(2, 5),
         lines.map { it["source"]?.jsonObject?.get("line")?.jsonPrimitive?.content?.toInt() },
@@ -308,6 +407,95 @@ class CrashEventArtifactWriterTest {
   }
 
   @Test
+  fun `a shell-launched tool's crash is not recorded, with or without the app's name`() {
+    // A screen recorder's server, started from the shell, failing to configure its encoder: its
+    // AndroidRuntime record carries only `PID:`, never a `Process:` line.
+    val log =
+      """
+      1793674533.548  3863  3863 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+      1793674533.586  3863  3863 D AndroidRuntime: Calling main entry com.genymobile.scrcpy.Server
+      1793674533.693  3863  3876 E scrcpy  : Capture/encoding error: java.lang.IllegalArgumentException: null
+      1793674533.696  3863  3876 E AndroidRuntime: FATAL EXCEPTION: video
+      1793674533.696  3863  3876 E AndroidRuntime: PID: 3863
+      1793674533.696  3863  3876 E AndroidRuntime: java.lang.IllegalArgumentException
+      1793674533.697  3863  3876 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 3876 (video), pid 3863 (app_process)
+      """.trimIndent()
+    for (appProcessName in listOf(null, "com.example.store")) {
+      val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+      try {
+        val deviceLog = File(sessionDir, "device.log").apply { writeText(log) }
+
+        CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = appProcessName)
+
+        assertEquals(emptyList(), crashes(sessionDir), "app name: $appProcessName")
+      } finally {
+        sessionDir.deleteRecursively()
+      }
+    }
+  }
+
+  @Test
+  fun `the app's own crash is still recorded beside a shell-launched tool's crash`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          1772846521.000  3863  3863 D AndroidRuntime: Calling main entry com.android.commands.am.Am
+          1772846522.000  3863  3876 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846522.000  3863  3876 E AndroidRuntime: PID: 3863
+          1772846523.000   123   123 E AndroidRuntime: FATAL EXCEPTION: main
+          1772846523.000   123   123 E AndroidRuntime: java.lang.IllegalStateException: the app's own
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = null)
+
+      val lines = crashes(sessionDir)
+      assertEquals(listOf(4), lines.map { it["source"]?.jsonObject?.get("line")?.jsonPrimitive?.content?.toInt() })
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an app crash in a pid a finished shell-launched tool used is still recorded`() {
+    val toolExited = "1772846521.000  3863  3863 D AndroidRuntime: Calling main entry com.android.commands.am.Am"
+    val cases = mapOf(
+      // ActivityManager starting the app in the pid ends the tool's claim on it.
+      "started in the pid" to (
+        null to """
+        $toolExited
+        1772846522.000   600   620 I ActivityManager: Start proc 3863:com.example.store/u0a123 for activity
+        1772846523.000  3863  3863 E AndroidRuntime: FATAL EXCEPTION: main
+        """.trimIndent()
+      ),
+      // With no start record, the crash's own Process line names the app.
+      "named by its crash" to (
+        "com.example.store" to """
+        $toolExited
+        1772846523.000  3863  3863 E AndroidRuntime: FATAL EXCEPTION: main
+        1772846523.000  3863  3863 E AndroidRuntime: Process: com.example.store, PID: 3863
+        """.trimIndent()
+      ),
+    )
+    for ((case, input) in cases) {
+      val (appProcessName, log) = input
+      val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+      try {
+        val deviceLog = File(sessionDir, "device.log").apply { writeText(log) }
+
+        CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = appProcessName)
+
+        assertEquals(1, crashes(sessionDir).size, case)
+      } finally {
+        sessionDir.deleteRecursively()
+      }
+    }
+  }
+
+  @Test
   fun `an Android crash whose process is never named still counts`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
@@ -322,7 +510,7 @@ class CrashEventArtifactWriterTest {
 
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.ANDROID, appProcessName = "com.example.store")
 
-      assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(1, crashes(sessionDir).size)
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -435,7 +623,7 @@ class CrashEventArtifactWriterTest {
   }
 
   @Test
-  fun `an iOS extension's crash beside the app does not fail the app's run`() {
+  fun `an iOS extension's crash beside the app is not indexed for the app`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       // The app and its widget extension share the install directory, so both reach device.log.
@@ -452,14 +640,14 @@ class CrashEventArtifactWriterTest {
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
 
       assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
-      assertNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(emptyList(), crashes(sessionDir))
     } finally {
       sessionDir.deleteRecursively()
     }
   }
 
   @Test
-  fun `the iOS app's own crash still fails its run when an extension also crashed`() {
+  fun `the iOS app's own crash is indexed when an extension also crashed`() {
     val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
     try {
       val deviceLog = File(sessionDir, "device.log").apply {
@@ -474,9 +662,7 @@ class CrashEventArtifactWriterTest {
       // Process names compare case-insensitively, like the log predicate's [c] clauses.
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "wallet")
 
-      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
-      assertEquals(1, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
-      val source = assertNotNull(failure.payload["firstCrash"]?.jsonObject?.get("source")?.jsonObject)
+      val source = assertNotNull(crashes(sessionDir).single()["source"]?.jsonObject)
       assertEquals(2, source["line"]?.jsonPrimitive?.content?.toInt())
     } finally {
       sessionDir.deleteRecursively()
@@ -500,9 +686,7 @@ class CrashEventArtifactWriterTest {
 
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
 
-      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
-      assertEquals(1, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
-      val source = assertNotNull(failure.payload["firstCrash"]?.jsonObject?.get("source")?.jsonObject)
+      val source = assertNotNull(crashes(sessionDir).single()["source"]?.jsonObject)
       assertEquals(4, source["line"]?.jsonPrimitive?.content?.toInt())
     } finally {
       sessionDir.deleteRecursively()
@@ -519,7 +703,7 @@ class CrashEventArtifactWriterTest {
 
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
 
-      assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(1, crashes(sessionDir).size)
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -540,8 +724,7 @@ class CrashEventArtifactWriterTest {
 
       CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "My App")
 
-      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
-      assertEquals(2, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
+      assertEquals(2, crashes(sessionDir).size)
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -571,6 +754,12 @@ class CrashEventArtifactWriterTest {
 
     assertNull(CrashEventArtifactWriter.iosProcessColumnOf("    Fatal error: continued from the previous line"))
   }
+
+  /** The crash records [CrashEventArtifactWriter.write] indexed for [sessionDir], in log order; none without an index. */
+  private fun crashes(sessionDir: File): List<JsonObject> =
+    File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").takeIf { it.isFile }?.readLines().orEmpty()
+      .filter { it.isNotBlank() }
+      .map { Json.decodeFromString(SessionEvent.serializer(), it).data.jsonObject }
 
   private data class SignatureCase(
     val platform: TrailblazeDevicePlatform,

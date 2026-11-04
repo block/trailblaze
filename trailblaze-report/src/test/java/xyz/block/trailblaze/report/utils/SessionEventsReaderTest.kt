@@ -42,6 +42,12 @@ class SessionEventsReaderTest {
   }
 
   @Test
+  fun `a stream removed after it was listed reads as absent, leaving the others`() {
+    val dir = tempDir()
+    assertNull(SessionEventsReader().readStream(File(dir, "gone.ndjson"), "gone"))
+  }
+
+  @Test
   fun `bare rich-schema line orders on timestampMs and exposes the whole object as data`() {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->
@@ -74,6 +80,33 @@ class SessionEventsReaderTest {
 
     val s = SessionEventsReader().read(dir).single()
     assertEquals("e1", (s.events.single().data as JsonObject)["id"]?.jsonPrimitive?.content)
+  }
+
+  @Test
+  fun `a plugin capture of the same traffic reads beside the session-root capture`() {
+    val dir = tempDir()
+    FileEventSink(dir).use { it.appendRaw("com.example.plugin.network", """{"id":"e1","timestampMs":1}""") }
+    File(dir, "network.ndjson").writeText("""{"id":"r1","timestampMs":2,"phase":"REQUEST_START"}""" + "\n")
+
+    assertEquals(listOf("com.example.plugin.network", "network"), SessionEventsReader().read(dir).map { it.name })
+  }
+
+  @Test
+  fun `a stream file that vanished before it was read costs only itself`() {
+    assertNull(SessionEventsReader().readStreamOrNull(File(tempDir(), "network.ndjson"), "network", null))
+  }
+
+  @Test
+  fun `a truncated plugin stream reads beside the session-root capture`() {
+    val dir = tempDir()
+    FileEventSink(dir).use { sink ->
+      repeat(3) { sink.appendRaw("com.example.plugin.network", """{"id":"e$it","timestampMs":$it}""") }
+    }
+    File(dir, "network.ndjson").writeText("""{"id":"r1","timestampMs":2,"phase":"REQUEST_START"}""" + "\n")
+
+    val streams = SessionEventsReader(maxEventsPerStream = 2).read(dir)
+    assertEquals(listOf("com.example.plugin.network", "network"), streams.map { it.name })
+    assertTrue(streams.first().truncated)
   }
 
   @Test
@@ -237,5 +270,23 @@ class SessionEventsReaderTest {
     }
     val event = SessionEventsReader().read(dir).single().events.single()
     assertEquals(6_100L to TrailblazeClockDomain.DEVICE, event.timeMs to event.clock)
+  }
+
+  @Test
+  fun `a derived row converts on the clock of the device it names, not its file's`() {
+    // The phone (the start device) runs 5s ahead and the tablet 9s; a derived `screens` row copied the tablet's time.
+    val dir = tempDir()
+    DeviceClockSyncFile.appendSample(dir, "phone-id", DeviceClockSample(1_000, 1_010, 6_005))
+    DeviceClockSyncFile.appendSample(dir, "tablet-id", DeviceClockSample(1_000, 1_010, 10_005))
+    DeviceClockSyncFile.nameDevices(dir, "phone-id", mapOf("phone-id" to "phone", "tablet-id" to "tablet"))
+    val eventsDir = File(dir, "events").apply { mkdirs() }
+    File(eventsDir, "screens.ndjson").writeText(
+      """{"timeMs":10100,"clock":"device","clockStream":"analytics.tablet","data":{"screen":"cart"}}""" + "\n" +
+        """{"timeMs":6100,"clock":"device","data":{"screen":"home"}}""" + "\n",
+    )
+
+    val events = SessionEventsReader().read(dir).single().events
+    assertEquals(listOf(1_100L, 1_100L), events.map { it.timeMs })
+    assertTrue(events.all { it.clock == null }, "both rows are now on the host clock")
   }
 }

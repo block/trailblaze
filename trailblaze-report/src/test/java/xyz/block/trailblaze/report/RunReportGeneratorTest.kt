@@ -1053,4 +1053,74 @@ class RunReportGeneratorTest {
     val array = JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(2)))
     assertTrue(RunReportGenerator.slimViewHierarchyFields(array) === array)
   }
+
+  @Test
+  fun subprocessTimeoutSeconds_keepsTheOldFloorForSmallReports() {
+    assertEquals(120L, RunReportGenerator.subprocessTimeoutSeconds(0, emptyMap()))
+    assertEquals(120L, RunReportGenerator.subprocessTimeoutSeconds(1, emptyMap()))
+    assertEquals(120L, RunReportGenerator.subprocessTimeoutSeconds(60, emptyMap()))
+  }
+
+  @Test
+  fun subprocessTimeoutSeconds_growsWithTheSessionCountPastTheFloor() {
+    // A report of several hundred sessions outgrows a flat 120s; it needs room well past that.
+    assertEquals(1_200L, RunReportGenerator.subprocessTimeoutSeconds(600, emptyMap()))
+    assertTrue(
+      RunReportGenerator.subprocessTimeoutSeconds(400, emptyMap()) <
+        RunReportGenerator.subprocessTimeoutSeconds(800, emptyMap()),
+    )
+  }
+
+  @Test
+  fun subprocessTimeoutSeconds_anExplicitSettingWinsInEitherDirection() {
+    val env = { value: String -> mapOf(RunReportGenerator.SUBPROCESS_TIMEOUT_ENV to value) }
+    assertEquals(3_600L, RunReportGenerator.subprocessTimeoutSeconds(10, env("3600")))
+    assertEquals(30L, RunReportGenerator.subprocessTimeoutSeconds(600, env(" 30 ")))
+  }
+
+  @Test
+  fun subprocessTimeoutSeconds_ignoresAnUnusableSettingAndScalesInstead() {
+    for (bad in listOf("", "  ", "abc", "0", "-5", "1.5")) {
+      assertEquals(
+        1_200L,
+        RunReportGenerator.subprocessTimeoutSeconds(600, mapOf(RunReportGenerator.SUBPROCESS_TIMEOUT_ENV to bad)),
+        "value '$bad'",
+      )
+    }
+  }
+
+  @Test
+  fun writeInputJson_encodesTheHeaderAndEverySessionAsOneDocument() {
+    val sessions = listOf(
+      buildJsonObject { put("sessionDir", "/logs/a"); put("logs", JsonArray(listOf(JsonPrimitive("say \"hi\"\n")))) },
+      buildJsonObject { put("sessionDir", "/logs/b"); put("logs", JsonArray(emptyList())) },
+      RunReportGenerator.skipSessionJson(skipRecord()),
+    )
+    val header = buildJsonObject {
+      put("generatedAt", "now")
+      put("imageBaseUrl", "")
+    }
+
+    val out = java.io.StringWriter()
+    val count = RunReportGenerator.writeInputJson(out, sessions.asSequence(), header)
+
+    assertEquals(3, count)
+    val expected = buildJsonObject {
+      put("generatedAt", "now")
+      put("imageBaseUrl", "")
+      put("sessions", JsonArray(sessions))
+    }
+    assertEquals(expected, kotlinx.serialization.json.Json.parseToJsonElement(out.toString()))
+  }
+
+  @Test
+  fun writeInputJson_withNoSessionsStillWritesAnEmptySessionsArray() {
+    val out = java.io.StringWriter()
+    val count = RunReportGenerator.writeInputJson(out, emptySequence(), buildJsonObject { put("generatedAt", "now") })
+
+    assertEquals(0, count)
+    val parsed = kotlinx.serialization.json.Json.parseToJsonElement(out.toString()).jsonObject
+    assertEquals(JsonArray(emptyList()), parsed["sessions"])
+    assertEquals("now", parsed["generatedAt"]!!.jsonPrimitive.content)
+  }
 }

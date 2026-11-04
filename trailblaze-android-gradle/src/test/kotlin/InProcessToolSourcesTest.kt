@@ -53,6 +53,13 @@ class InProcessToolSourcesTest {
     assertEquals(emptyList(), discoveredNames())
   }
 
+  @Test fun `ignores tool registrations mentioned only in full line comments`() {
+    val comment = "  // Imported, not registered: this helper holds no trailblaze.tool().\n"
+    write("accounts.ts", comment + "export const account = { name: 'sandbox' };\n")
+    write("realTool.ts", comment + toolBody)
+    assertEquals(listOf("realTool.ts"), discoveredNames())
+  }
+
   @Test fun `excludes a subprocess tool gated by its yaml sidecar`() {
     // This branch is the sole subprocess gate: the spec's `runtime` takes the analyzer to read, so
     // a descriptor-less `.ts` is always in-process here.

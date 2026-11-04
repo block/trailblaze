@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.android.test
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.UiAutomation
 import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
@@ -147,11 +148,19 @@ class BoundsTapViabilityOnDeviceTest {
         },
       )
 
-    val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    val uiAutomation = driverUiAutomation()
     uiAutomation.serviceInfo = uiAutomation.serviceInfo.apply {
       flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
     }
   }
+
+  /**
+   * The connection the driver uses. Asking for the default one in between would reconnect
+   * UiAutomation each time the driver and this test take turns, and the active window reads null
+   * straight after a reconnect.
+   */
+  private fun driverUiAutomation(): UiAutomation =
+    InstrumentationRegistry.getInstrumentation().getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
 
   @After
   fun releaseFixture() {
@@ -274,7 +283,7 @@ class BoundsTapViabilityOnDeviceTest {
     val performed =
       actionClickEligible &&
         run {
-          val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+          val root = driverUiAutomation().rootInActiveWindow
           checkNotNull(root) { "rootInActiveWindow was null" }
           // Match on whichever label the eligibility gate accepted. Comparing `text` alone would
           // let a node labelled only by contentDescription degrade to `null == null`, which
@@ -345,7 +354,7 @@ class BoundsTapViabilityOnDeviceTest {
    * than to fire-and-forget injection.
    */
   private fun tapAt(x: Float, y: Float) {
-    val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    val uiAutomation = driverUiAutomation()
     val downAt = SystemClock.uptimeMillis()
     val down = MotionEvent.obtain(downAt, downAt, MotionEvent.ACTION_DOWN, x, y, 0)
     val up = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0)
@@ -361,7 +370,7 @@ class BoundsTapViabilityOnDeviceTest {
   }
 
   private fun accessibilityHierarchy(): TrailblazeNode {
-    val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+    val root = driverUiAutomation().rootInActiveWindow
     checkNotNull(root) { "rootInActiveWindow was null" }
     return root.toAccessibilityNode().toTrailblazeNode()
   }

@@ -42,7 +42,9 @@ internal object SurveyCli {
     }
     // Beside the SDK, not in it: extraction deletes whatever it did not ship.
     val entry = File(cache.parentFile, "survey-cli/survey-cli.mjs")
-    val text = "import { runSurveyCli } from ${jsString(bundle.toURI().toString())};\n" +
+    // `File.toURI()` renders `file:/abs/path` (one slash), which Bun's resolver rejects with "Cannot
+    // find module"; `Path.toUri()` renders the `file:///abs/path` form every runtime accepts.
+    val text = "import { runSurveyCli } from ${jsString(bundle.toPath().toUri().toString())};\n" +
       "process.exitCode = await runSurveyCli(process.argv.slice(2));\n"
     if (!entry.isFile || entry.readText() != text) {
       // Written whole and moved into place, so a run starting at the same moment never reads half of it.

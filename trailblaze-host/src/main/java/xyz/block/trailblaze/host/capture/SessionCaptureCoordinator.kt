@@ -789,6 +789,16 @@ class SessionCaptureCoordinator(
     return true
   }
 
+  /**
+   * Marks the moment [sessionId] takes its device over, for a recording started earlier, while the
+   * device connected: a crash logged before it stays in the log but does not fail the run. A no-op
+   * when the session is not recording.
+   */
+  fun markSessionStarted(sessionId: SessionId) {
+    val capture = synchronized(lock) { active[sessionId]?.takeIf { it.started } } ?: return
+    capture.session.markSessionStart()
+  }
+
   /** True when capture is currently running (committed-started) for [sessionId]. */
   fun isActive(sessionId: SessionId): Boolean = synchronized(lock) {
     active[sessionId]?.started == true

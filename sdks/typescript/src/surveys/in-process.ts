@@ -7,6 +7,9 @@
 export const liveSurveyCapabilities = { since: true, expected: true };
 
 export { explainFinding, isSurvey, matchFinding, survey, withId } from "./survey.js";
+// Derived streams: one pure function from a session to a new event stream (`stream.ts`).
+export { isEventStream, eventStream } from "./stream.js";
+export type { DerivedRow, DerivedRowInput, RowSource, RowView, EventStreamDefinition, EventStreamSpec } from "./stream.js";
 export type { DataOf, FindingExplanation, FindingQueries, FindingSpec, LabelBatch, LabelOf, LabelResult, SurveyContext, SurveyDefinition, SurveyHandler, FindResult, SurveyResult, BatchFinding, Dependency } from "./survey.js";
 export type { SurveySession } from "./session.js";
 export { Records } from "./match.js";
@@ -50,7 +53,8 @@ export type {
   TraceSpan,
 } from "./types.js";
 
+import { eventStream } from "./stream.js";
 import { survey } from "./survey.js";
 
 /** `trailblaze.survey(...)`, the same namespace shape as the full entry. */
-export const trailblaze = { survey };
+export const trailblaze = { survey, eventStream };

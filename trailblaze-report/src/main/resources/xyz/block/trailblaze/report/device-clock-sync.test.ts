@@ -11,6 +11,7 @@ import {
   tightestSample,
   trackToHostMs,
   type DeviceClockSample,
+  type DeviceClockSync,
 } from "./device-clock-sync";
 
 const fixtures = require("./device-clock-parity-fixtures.json") as {
@@ -64,5 +65,25 @@ describe("parseDeviceClockSync", () => {
     );
     expect(sync!.devices).toHaveLength(1);
     expect(clockTrackFor(sync, null)!.samples).toEqual([{ hostBeforeMs: 0, hostAfterMs: 0, deviceMs: 10 }]);
+  });
+});
+
+describe("clockTrackForStream on a session with many devices", () => {
+  test("finds each stream's device, the longest name winning, without searching every device per lookup", () => {
+    const devices = Array.from({ length: 50_000 }, (_, i) => ({ deviceName: `d${i}`, samples: [{ deviceMs: 0, hostMs: i }] }));
+    devices.push({ deviceName: "pair.d7", samples: [{ deviceMs: 0, hostMs: -1 }] });
+    const sync = { devices } as unknown as DeviceClockSync;
+    const started = performance.now();
+    for (let i = 0; i < 100_000; i++) expect(clockTrackForStream(sync, `app.screens.d${i % 50_000}`)).toBe(devices[i % 50_000] as never);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(clockTrackForStream(sync, "network.pair.d7")).toBe(devices[50_000] as never);
+  });
+
+  test("a megabyte stream name full of dots costs no more than the devices' own names", () => {
+    const devices = [{ deviceName: "d7", samples: [{ deviceMs: 0, hostMs: 0 }] }];
+    const sync = { devices } as unknown as DeviceClockSync;
+    const started = performance.now();
+    expect(clockTrackForStream(sync, "a.".repeat(500_000) + "d7")).toBe(devices[0] as never);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

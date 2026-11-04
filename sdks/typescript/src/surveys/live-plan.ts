@@ -86,7 +86,7 @@ export const TABLE_ROW: Record<string, unknown> = { columnItems: {} };
 export const NO_RECORD: Record<string, unknown> = { "trailblaze.health": "trailblaze-no-such-record" };
 
 /** Whether a query's `stream` filter could accept [stream]. A predicate is not called here: it may. */
-function streamMayMatch(stream: string, filter: TextMatch | undefined): boolean {
+export function streamMayMatch(stream: string, filter: TextMatch | undefined): boolean {
   if (filter === undefined || typeof filter === "function") return true;
   return matchText(stream, filter);
 }

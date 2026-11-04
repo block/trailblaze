@@ -119,6 +119,17 @@ const shows = (hasShot: HasShot, lane: number, file: string | null | undefined):
 // A capture that saved no screenshot still has a picture: the frame the run's recording shows at
 // that moment. It is named by this key in place of a file, and the viewer takes the frame from the
 // recording when it is shown.
+/** The row number of the run's device setup, which runs before the trailhead's row 0. */
+export const DEVICE_SETUP_ROW = -1;
+
+/** A row's step token: `STEP n`, or the unnumbered phase it stands for. */
+export const trailStepToken = (num: number): string =>
+  num === DEVICE_SETUP_ROW ? 'DEVICE SETUP' : num === 0 ? 'TRAILHEAD' : `STEP ${num}`;
+
+/** [trailStepToken] in sentence case, for labels. */
+export const trailStepLabel = (num: number): string =>
+  num === DEVICE_SETUP_ROW ? 'Device setup' : num === 0 ? 'Trailhead' : `Step ${num}`;
+
 export const VIDEO_SHOT_PREFIX = '@video:';
 export const videoShotKey = (captureId: string): string => VIDEO_SHOT_PREFIX + captureId;
 /** The capture id a video-frame key names, or null for a screenshot file. */
@@ -311,27 +322,29 @@ export function buildTrailMatrix(
       // Teardown runs after the verdict and is no trail step; it would otherwise land on (and
       // could paint red) the Trailhead row, the other group numbered 0.
       if (group.header && group.header.teardown) continue;
-      const num = group.header && !group.header.trailhead ? group.num : 0;
+      // The device setup ran before the trailhead, so it gets its own row above the trailhead's.
+      const num = group.header && group.header.setup ? DEVICE_SETUP_ROW : group.header && !group.header.trailhead ? group.num : 0;
       if (!byNum.has(num)) byNum.set(num, []);
       (byNum.get(num) as ReportTraceGroup[]).push(group);
     }
     return byNum;
   });
   const maxNum = laneNumbered.reduce((max, byNum) => Math.max(max, ...Array.from(byNum.keys())), 0);
+  const minNum = laneNumbered.some((byNum) => byNum.has(DEVICE_SETUP_ROW)) ? DEVICE_SETUP_ROW : 0;
   const anchors = models.map((_, lane) => laneFailureAnchor(lane));
   const rows: TrailRow[] = [];
-  for (let num = 0; num <= maxNum; num++) {
+  for (let num = minNum; num <= maxNum; num++) {
     const cells = models.map((model, lane) =>
       cellFromGroups(laneNumbered[lane].get(num) || [], lane, model.traceT0, hasShot, isLlmTurn, anchors[lane]));
     if (cells.every((cell) => cell == null)) continue;
     // A position join has no shared step to name the row after, so the row carries no label and
     // every cell shows its own (labelDiffers, which is what the renderers already key on).
-    const label = join === 'position' && num !== 0
+    const label = join === 'position' && num > 0
       ? ''
-      : num === 0
-        ? 'Trailhead'
+      : num <= 0
+        ? trailStepLabel(num)
         : (cells.find((cell) => cell && cell.label) as TrailCell | undefined)?.label || `Step ${num}`;
-    cells.forEach((cell) => { if (cell && num !== 0) cell.labelDiffers = Boolean(cell.label) && cell.label !== label; });
+    cells.forEach((cell) => { if (cell && num > 0) cell.labelDiffers = Boolean(cell.label) && cell.label !== label; });
     rows.push({ num, label, cells });
   }
   const maxEndMs = rows.reduce((max, row) => row.cells.reduce((laneMax, cell) =>

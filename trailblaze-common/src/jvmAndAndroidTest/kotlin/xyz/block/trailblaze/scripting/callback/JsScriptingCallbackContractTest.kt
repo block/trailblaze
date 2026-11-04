@@ -103,4 +103,30 @@ class JsScriptingCallbackContractTest {
     assertThat(decodedCallToolResult.textContent).isEqualTo("hi")
     assertThat(decodedCallToolResult.structuredContent).isNull()
   }
+
+  @Test
+  fun `fatal CallToolResult round-trips and a non-fatal one omits the key`() {
+    val fatal = JsScriptingCallbackResult.CallToolResult(
+      success = false,
+      errorMessage = "device disconnected",
+      fatal = true,
+    )
+    val fatalJson = json.encodeToString(JsScriptingCallbackResult.serializer(), fatal)
+    assertThat(json.parseToJsonElement(fatalJson).jsonObject["fatal"]).isEqualTo(JsonPrimitive(true))
+    val decoded = json.decodeFromString(JsScriptingCallbackResult.serializer(), fatalJson)
+    assertThat((decoded as JsScriptingCallbackResult.CallToolResult).fatal).isEqualTo(true)
+
+    val nonFatal = JsScriptingCallbackResult.CallToolResult(success = false, errorMessage = "nope")
+    val nonFatalJson = json.encodeToString(JsScriptingCallbackResult.serializer(), nonFatal)
+    assertThat(json.parseToJsonElement(nonFatalJson).jsonObject.keys.contains("fatal")).isFalse()
+  }
+
+  @Test
+  fun `legacy wire JSON without a fatal key decodes as non-fatal`() {
+    val legacyJson = """
+      {"type":"call_tool_result","success":false,"text_content":"","error_message":"boom"}
+    """.trimIndent()
+    val decoded = json.decodeFromString(JsScriptingCallbackResult.serializer(), legacyJson)
+    assertThat((decoded as JsScriptingCallbackResult.CallToolResult).fatal).isEqualTo(false)
+  }
 }

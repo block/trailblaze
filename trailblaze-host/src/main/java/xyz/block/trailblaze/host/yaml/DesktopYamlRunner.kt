@@ -2,16 +2,22 @@ package xyz.block.trailblaze.host.yaml
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.trailhead.InProcessDataClearedArg
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.cli.CliRunDriverResolution
@@ -21,8 +27,11 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.android.InProcessInstrumentationCleanup
+import xyz.block.trailblaze.host.android.InProcessTrailheadReset
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
@@ -32,12 +41,14 @@ import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.capture.OnDeviceRpcMemoryProbe
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.networkcapture.WebCompanionNetworkCapture
 import xyz.block.trailblaze.host.networkcapture.androidCaptureRequiresTraffic
 import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetAppIds
+import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetId
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -48,6 +59,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -57,6 +69,7 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
@@ -66,6 +79,7 @@ import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
@@ -74,6 +88,16 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
+import xyz.block.trailblaze.cli.SELF_HEAL_ENV_VAR
+import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertWithAiTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
+import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnknownDriverException
 import java.io.File
@@ -104,6 +128,12 @@ class DesktopYamlRunner(
      * fresh machine downloads and installs Chromium before the browser can launch.
      */
     private const val WEB_COMPANION_LAUNCH_TIMEOUT_MS = 180_000L
+
+    /** How a session ends whose on-device run was stopped because its host run was cancelled. */
+    internal const val STOPPED_ON_DEVICE_MESSAGE = "Run cancelled; its on-device runner was stopped"
+
+    /** An Android package name: two or more dot-separated segments, each starting with a letter. */
+    private val ANDROID_PACKAGE_NAME = Regex("""^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$""")
 
     private val COMPANION_PLATFORMS = listOf(
       TrailblazeDevicePlatform.ANDROID,
@@ -191,7 +221,14 @@ class DesktopYamlRunner(
      * the session under, so capture can start under it while the trail still has to run.
      */
     internal fun sessionIdToCaptureBeforeDispatch(runYamlRequest: RunYamlRequest): SessionId? =
-      runYamlRequest.config.overrideSessionId?.takeIf { runYamlRequest.awaitCompletion }
+      runYamlRequest.config.overrideSessionId?.takeIf { runYamlRequest.awaitCompletion }?.let(::asCreated)
+
+    /**
+     * The id the session manager creates a session under for override [id]: an id that is not
+     * already canonical (`review-run`, `../outside`) is created as `review_run`, `___outside`.
+     * Capture started under the raw id would record into a directory nothing ends.
+     */
+    internal fun asCreated(id: SessionId): SessionId = SessionId.sanitized(id.value)
 
     /** The session MCP reserved for a run that ends it though the caller asked not to (a browser-launched
      *  configuration). Left on the device when setup fails before it starts, it gets the retry refused. */
@@ -219,6 +256,42 @@ class DesktopYamlRunner(
      * runs while the trail does. If the request then fails or throws, the device never ran that
      * session and writes nothing for it, so [onAbandoned] gets the id to stop that capture.
      */
+    /**
+     * Runs [block], a trail the device runs by itself, and on cancellation stops the device's run
+     * with [stopOnDevice] before the cancellation goes on. The host's wait is all that cancelling
+     * stops, so without this the device runs on: a run reported over would still drive the device
+     * under the next one. A failed stop is logged, never thrown over the cancellation.
+     */
+    internal suspend fun <T> stoppingOnDeviceRunWhenCancelled(stopOnDevice: suspend () -> Unit, block: suspend () -> T): T =
+      try {
+        block()
+      } catch (e: CancellationException) {
+        withContext(NonCancellable) {
+          runCatching { stopOnDevice() }.onFailure {
+            Console.log("[runYamlOnDevice] Stopping the cancelled on-device run failed: ${it.message}")
+          }
+        }
+        throw e
+      }
+
+    /**
+     * Ends [sessionId] cancelled unless it already ended: its on-device runner, which would have
+     * written the end, was stopped. A session with no end status reads as still running, and
+     * publishers refuse it.
+     */
+    internal fun endStoppedOnDeviceSession(logsRepo: LogsRepo, sessionId: SessionId) {
+      if (logsRepo.persistedEndStatus(sessionId) != null) return
+      runCatching {
+        logsRepo.saveLogToDisk(
+          TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            session = sessionId,
+            timestamp = kotlinx.datetime.Clock.System.now(),
+            sessionStatus = SessionStatus.Ended.Cancelled(durationMs = 0L, cancellationMessage = STOPPED_ON_DEVICE_MESSAGE),
+          ),
+        )
+      }.onFailure { Console.log("[runYamlOnDevice] Ending stopped session $sessionId failed: ${it.message}") }
+    }
+
     internal suspend fun replyOrSessionEnd(
       pinnedSessionId: SessionId?,
       sendRequest: suspend () -> RpcResult<RunYamlResponse>,
@@ -253,6 +326,155 @@ class DesktopYamlRunner(
       }
       if (result is RpcResult.Failure) onAbandoned(pinnedSessionId)
       return result
+    }
+
+    /**
+     * Connects the device with [connect] while [startRecording] starts the pinned session's
+     * recording, and returns once both are done. The session's first step, trailhead included, so
+     * never runs before capture is recording, and capture's own start (the video's first picture,
+     * logcat, memory) is spent inside the connect and readiness wait instead of after it.
+     *
+     * [startRecording] returns whether it started the recording, which the result repeats. A
+     * recording it started is stopped through [onAbandoned] when [connect] fails or the run is
+     * cancelled first: no session runs then, so nothing else would stop it. A recording that was
+     * already running, such as an MCP session's, is never stopped here.
+     *
+     * With no pinned id the session's id is unknown until it starts, so this is just [connect].
+     */
+    internal suspend fun <T> connectWhileRecordingStarts(
+      pinnedSessionId: SessionId?,
+      startRecording: (SessionId) -> Boolean,
+      onAbandoned: (SessionId) -> Unit,
+      connect: suspend () -> T,
+    ): Pair<T, Boolean> {
+      if (pinnedSessionId == null) return connect() to false
+      // Not a child of the run: a cancelled run still has to learn whether the recording started.
+      val recording = CoroutineScope(Dispatchers.IO).async {
+        runCatching { startRecording(pinnedSessionId) }
+          .onFailure { Console.log("[connectWhileRecordingStarts] capture start for $pinnedSessionId threw: ${it.message}") }
+          .getOrDefault(false)
+      }
+      return try {
+        val connected = connect()
+        connected to recording.await()
+      } catch (t: Throwable) {
+        // Waits for the start to finish, so its streams are stopped before the run gives up the
+        // device: one left starting could record, or clear the log of, the device's next run.
+        withContext(NonCancellable) {
+          if (recording.await()) {
+            runCatching { onAbandoned(pinnedSessionId) }
+              .onFailure { Console.log("[connectWhileRecordingStarts] stopping capture for $pinnedSessionId threw: ${it.message}") }
+          }
+        }
+        throw t
+      }
+    }
+
+    /**
+     * Reports each step an on-device session starts as `Step N: <prompt>`. That report is the only
+     * progress the daemon client's no-progress watchdog sees from an on-device run, so without it
+     * a long trail is abandoned however steadily it advances. One instance spans the whole run, so
+     * the wait for the reply and the wait after it never report a step twice.
+     */
+    internal class StepProgress(private val onProgressMessage: (String) -> Unit) {
+      private var reported = 0
+
+      /** Returns whether [starts] holds a step not reported yet. */
+      @Synchronized
+      fun report(starts: List<TrailblazeLog.ObjectiveStartLog>): Boolean {
+        if (starts.size <= reported) return false
+        reported = starts.size
+        onProgressMessage("Step $reported: ${starts.last().promptStep.prompt}")
+        return true
+      }
+    }
+
+    /**
+     * The early start [connectWhileRecordingStarts] takes, skipped while the device is still
+     * recording [sessionBeforeRun], the session this run replaces. Releasing that one waits until the
+     * connect has succeeded, so a run that fails to connect leaves the device's session recording.
+     */
+    internal fun startRecordingUnlessReplacing(
+      sessionBeforeRun: SessionId?,
+      isRecording: (SessionId) -> Boolean,
+      start: (SessionId) -> Boolean,
+    ): (SessionId) -> Boolean = { sid ->
+      val replacesRecording = sessionBeforeRun != null && sessionBeforeRun != sid && isRecording(sessionBeforeRun)
+      !replacesRecording && start(sid)
+    }
+
+    /**
+     * The app a run's capture samples. [probe] answers null when the device cannot tell which
+     * declared app it has, as can happen while it is still connecting. [ifSettled] asks the device
+     * itself (`freshOnly`), never the last inventory seen, which can predate a reinstall, and keeps
+     * only a real answer, so a later ask probes again. [get] also accepts that inventory, settles
+     * for [fallback] when nothing can tell, and every call after it returns the same id.
+     */
+    internal class SettlingAppId(private val fallback: String?, private val probe: (freshOnly: Boolean) -> String?) {
+      @Volatile private var answer: String? = null
+
+      @Volatile private var settled = false
+
+      /** What the device has installed, or null while it cannot tell. */
+      fun ifSettled(): String? = answer ?: synchronized(this) { answer ?: probe(true)?.also { answer = it } }
+
+      fun get(): String? {
+        if (settled) return answer
+        return synchronized(this) {
+          if (!settled) {
+            answer = answer ?: probe(false) ?: fallback
+            settled = true
+          }
+          answer
+        }
+      }
+    }
+
+    /**
+     * Runs [block] while reporting the steps [readStepStarts] returns. A synchronous on-device
+     * request replies only once the trail is over, so these reports are all the watchdog sees of a
+     * trail still running.
+     */
+    internal suspend fun <T> reportingSteps(
+      readStepStarts: () -> List<TrailblazeLog.ObjectiveStartLog>,
+      stepProgress: StepProgress,
+      pollIntervalMs: Long = 1_000,
+      block: suspend () -> T,
+    ): T = coroutineScope {
+      val reporter = launch {
+        while (true) {
+          // A failed read must not fail the scope, which would cancel the trail it only reports on.
+          runCatching { stepProgress.report(readStepStarts()) }
+          delay(pollIntervalMs)
+        }
+      }
+      try {
+        block()
+      } finally {
+        reporter.cancel()
+      }
+    }
+
+    /**
+     * Polls [readLogs] until the session ends, reporting new steps through [stepProgress]. The
+     * timeout is measured from the last step to start, so one step that hangs still ends the wait.
+     * Returns false when it timed out.
+     */
+    internal suspend fun awaitSessionEnd(
+      readLogs: () -> List<TrailblazeLog>,
+      stepProgress: StepProgress,
+      inactivityTimeoutMs: Long = 600_000,
+      pollIntervalMs: Long = 1_000,
+      nowMs: () -> Long = System::currentTimeMillis,
+    ): Boolean {
+      var lastProgressAtMs = nowMs()
+      while (nowMs() - lastProgressAtMs < inactivityTimeoutMs) {
+        val logs = readLogs()
+        if (stepProgress.report(logs.filterIsInstance<TrailblazeLog.ObjectiveStartLog>())) lastProgressAtMs = nowMs()
+        if (logs.getSessionStatus() is SessionStatus.Ended) return true
+        delay(pollIntervalMs)
+      }
+      return false
     }
 
     /** How often [replyOrSessionEnd] looks for the end status; it reads only status logs. */
@@ -294,6 +516,96 @@ class DesktopYamlRunner(
       )?.let { throw TrailblazeException(it) }
       return onDeviceRpc.rpcCall(runYamlRequest)
     }
+
+    /**
+     * Whether anything in this run can call the AI: a prompt step (the trailhead included) that runs
+     * on the AI instead of replaying a recording, or a replayed step that self-heal may hand to the
+     * AI when it fails. Mirrors `TrailblazeRunnerUtil.runPromptSuspend`, which replays a step only
+     * when recorded steps are on and the step is recordable with a recording, and never heals a
+     * trailhead.
+     *
+     * A replayed step also reaches the AI when its recording holds a tool that asks the AI as it
+     * runs ([toolsThatCallTheAi]), such as `assertWithAi`, and so does a root `tools:` item holding
+     * one.
+     *
+     * [trailItems] is the trail as lowered for this device, or null when it could not be decoded,
+     * which counts as reachable: a run whose steps aren't known must keep its LLM credentials ready.
+     * A trailhead is treated as an AI step when recorded steps are off, even though some paths
+     * replay it anyway, so the answer errs toward reachable.
+     *
+     * Lowered with the host's classification; [preflightMayMissLlm] covers the runs whose runner
+     * may lower it differently. A scripted tool that calls one of [toolsThatCallTheAi] itself isn't
+     * seen here; it still gets the token, and a token the server rejects fails that call with the
+     * provider's auth error.
+     */
+    internal fun runCanReachLlm(
+      trailItems: List<TrailYamlItem>?,
+      useRecordedSteps: Boolean,
+      selfHeal: Boolean,
+    ): Boolean {
+      if (trailItems == null) return true
+      // A root `tools:` item runs its tools directly, whatever the replay settings.
+      val rootToolCallsTheAi = trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>()
+        .any { item -> item.tools.any { it.name in toolsThatCallTheAi } }
+      if (rootToolCallsTheAi) return true
+      val steps = trailItems.flatMap { item ->
+        when (item) {
+          is TrailYamlItem.PromptsTrailItem -> item.promptSteps
+          is TrailYamlItem.TrailheadTrailItem -> listOf(item.trailhead.toPromptStep())
+          is TrailYamlItem.ToolTrailItem, is TrailYamlItem.ConfigTrailItem -> emptyList()
+        }
+      }
+      return steps.any { step ->
+        val recording = step.recording
+        val replays = useRecordedSteps && step.recordable && recording != null
+        val isTrailhead = step is DirectionStep && step.isTrailhead
+        !replays || (selfHeal && !isTrailhead) ||
+          recording?.tools.orEmpty().any { it.name in toolsThatCallTheAi }
+      }
+    }
+
+    /**
+     * Whether the run may reach the AI in a way [runCanReachLlm]'s answer, lowered with the host's
+     * classification, can't rule out: the host test base runs a setup trail named by its
+     * environment first and lets that environment switch self-heal on; a host probe that came back
+     * incomplete leaves the device free to pick recordings the host didn't see; and drivers outside
+     * [driversReplayingHostClassification] replay with classifiers of their own.
+     */
+    internal fun preflightMayMissLlm(
+      driverType: TrailblazeDriverType,
+      classificationDefinitive: Boolean,
+      env: (String) -> String? = { System.getenv(it) ?: System.getProperty(it) },
+    ): Boolean =
+      env(BaseHostTrailblazeTest.TRAILBLAZE_SETUP_TRAIL_ID_ENV) != null ||
+        env(SELF_HEAL_ENV_VAR)?.lowercase()?.toBooleanStrictOrNull() == true ||
+        !classificationDefinitive ||
+        driverType !in driversReplayingHostClassification
+
+    /**
+     * Drivers whose runner picks recordings with the same classification the host resolves:
+     * Android and iOS classify the device by the host's rules, and the web driver uses the
+     * requested classifier or bare `web`. Compose, Electron and Revyl replay with fixed
+     * classifiers of their own, so their runs keep the credential check.
+     */
+    private val driversReplayingHostClassification: Set<TrailblazeDriverType> =
+      setOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.ANDROID_TEST,
+        TrailblazeDriverType.IOS_HOST,
+        TrailblazeDriverType.IOS_AXE,
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      )
+
+    /** Tools that ask the AI while they run, so replaying one still needs LLM credentials. */
+    internal val toolsThatCallTheAi: Set<String> =
+      setOf(
+        AssertWithAiTrailblazeTool::class,
+        RememberWithAiTrailblazeTool::class,
+        RememberTextTrailblazeTool::class,
+        RememberNumberTrailblazeTool::class,
+        AssertMathTrailblazeTool::class,
+      ).mapTo(mutableSetOf()) { it.toolName().toolName }
 
     /**
      * Pure decision: did [status] end in the on-device UiAutomation wedge that only a server
@@ -377,10 +689,25 @@ class DesktopYamlRunner(
       platform: TrailblazeDevicePlatform,
     ): List<String>? =
       androidCaptureTargetAppIds(
-        targetId = unresolvedDeclaredTarget?.takeIf { it.isNotBlank() } ?: targetTestApp?.id,
+        targetId = declaredCaptureTargetId(targetTestApp, unresolvedDeclaredTarget),
         platform = platform,
         findTarget = { id -> targetTestApp?.takeIf { it.id.equals(id, ignoreCase = true) } },
       )
+
+    /**
+     * Network capture's `targetId` for one device of a run: the target [deviceCaptureTargetAppIds]
+     * names for the same arguments, so the two values passed to one start always agree.
+     */
+    internal fun deviceCaptureTargetId(
+      targetTestApp: TrailblazeHostAppTarget?,
+      unresolvedDeclaredTarget: String?,
+    ): String? =
+      androidCaptureTargetId(declaredCaptureTargetId(targetTestApp, unresolvedDeclaredTarget))
+
+    private fun declaredCaptureTargetId(
+      targetTestApp: TrailblazeHostAppTarget?,
+      unresolvedDeclaredTarget: String?,
+    ): String? = unresolvedDeclaredTarget?.takeIf { it.isNotBlank() } ?: targetTestApp?.id
 
     /**
      * Log-scanning variant: true when the session's terminal status matches (above), OR any
@@ -509,16 +836,66 @@ class DesktopYamlRunner(
    * so ANDROID_TEST resolves the target's in-process harness (or null when none is declared)
    * instead of the bundled runner, which knows nothing about the app's process.
    */
-  private fun resolveOnDeviceInstrumentationTarget(
+  private suspend fun resolveOnDeviceInstrumentationTarget(
     driverType: TrailblazeDriverType,
     targetTestApp: TrailblazeHostAppTarget?,
     trailblazeHostAppTarget: TrailblazeHostAppTarget,
-  ): TrailblazeOnDeviceInstrumentationTarget? =
+    deviceId: TrailblazeDeviceId? = null,
+    onProgress: (String) -> Unit = {},
+  ): TrailblazeOnDeviceInstrumentationTarget? {
     // Which target answers is decided before the call, not by whether the answer was null. Once
     // ANDROID_TEST can legitimately resolve to null, an elvis here would silently instrument a
     // DIFFERENT target's harness whenever the trail's own target declared none.
-    (targetTestApp ?: trailblazeHostAppTarget)
-      .getTrailblazeOnDeviceInstrumentationTargetForDriver(driverType)
+    val target = targetTestApp ?: trailblazeHostAppTarget
+    val declared = target.getTrailblazeOnDeviceInstrumentationTargetForDriver(driverType)
+    if (driverType != TrailblazeDriverType.ANDROID_TEST || deviceId == null) return declared
+    if (declared != null) {
+      // The test APK's code runs in the app's process on every start, and an `adb install`ed APK
+      // has no compiled artifacts: ART verifies its dex on each cold start. Measured on the generic
+      // shell, compiling it once took instrumentation start from ~10 s to 6-8 s. One cheap
+      // state read per run when it is already compiled.
+      SessionAppCompileEnsurer.startForSession(
+        sessionId = "in-process-harness-${System.nanoTime()}",
+        deviceId = deviceId,
+        candidateAppIds = listOf(declared.testAppId),
+        log = { onProgress(it) },
+      )
+      (declared.hostProcessAppId ?: target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID)?.firstOrNull())
+        ?.let { warnIfDebuggableInProcess(deviceId, it, onProgress) }
+    }
+    return declared
+  }
+
+  /** Whether [target] declares an in-process harness. Read without touching the device. */
+  private fun hasInProcessHarness(target: TrailblazeHostAppTarget): Boolean =
+    target.getTrailblazeOnDeviceInstrumentationTargetForDriver(TrailblazeDriverType.ANDROID_TEST) != null
+
+  /** (device, app) pairs already warned about, so a suite says it once rather than per trail. */
+  private val debuggableWarned = java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, String>>()
+
+  /**
+   * One line when the app under an in-process run is a debuggable build. In-process, every step
+   * waits on the app's main thread, and a debuggable build runs framework code there in ART's
+   * interpreter. Instrumentation doesn't need a debuggable app, so the fix is the build type.
+   */
+  private fun warnIfDebuggableInProcess(
+    deviceId: TrailblazeDeviceId,
+    appId: String,
+    onProgress: (String) -> Unit,
+  ) {
+    // Passed to a device shell, so only a well-formed package name gets that far.
+    if (!ANDROID_PACKAGE_NAME.matches(appId)) return
+    if (!debuggableWarned.add(deviceId.instanceId to appId)) return
+    val flags = runCatching {
+      AndroidHostAdbUtils.execAdbShellCommand(deviceId, listOf("dumpsys", "package", appId))
+    }.getOrNull()?.lineSequence()?.firstOrNull { it.trim().startsWith("pkgFlags=") } ?: return
+    if ("DEBUGGABLE" !in flags) return
+    onProgress(
+      "$appId is a debuggable build, which runs noticeably slower in-process: the app's main " +
+        "thread runs framework code interpreted. A release-type build signed with your debug key " +
+        "avoids it.",
+    )
+  }
 
   /**
    * The runner to warm on one multi-device Android companion. Same precedence rule as
@@ -565,8 +942,13 @@ class DesktopYamlRunner(
    *
    * @return the trail's job. It runs in the device's scope, not the caller's, so a caller that
    * stops waiting must cancel this job to stop the trail.
+   * [onExecutionFinished] runs after owned children and lease release attempts, for callers
+   * that must keep the process alive through finalization.
    */
-  fun runYaml(desktopAppRunYamlParams: DesktopAppRunYamlParams): Job {
+  fun runYaml(
+    desktopAppRunYamlParams: DesktopAppRunYamlParams,
+    onExecutionFinished: () -> Unit = {},
+  ): Job {
     val targetTestApp = desktopAppRunYamlParams.targetTestApp
     val trailblazeDeviceId = desktopAppRunYamlParams.runYamlRequest.trailblazeDeviceId
     val forceStopTargetApp = desktopAppRunYamlParams.forceStopTargetApp
@@ -576,9 +958,14 @@ class DesktopYamlRunner(
     }
     val onProgressMessage = desktopAppRunYamlParams.onProgressMessage
     val onConnectionStatus = desktopAppRunYamlParams.onConnectionStatus
-    val additionalInstrumentationArgs = desktopAppRunYamlParams.additionalInstrumentationArgs
     val onComplete = desktopAppRunYamlParams.onComplete
 
+    // Registered before launching, not once the coroutine gets going: a caller that resolved this
+    // run's session has already handed it over, and until the run is registered a cast member
+    // forcing a new session would take the device off that session and stop its capture. Before
+    // taking the device's scope, too: a run still letting go of the device cancels that scope.
+    val runInFlight = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
+    runInFlight.sessionId = runYamlRequest.config.overrideSessionId
     // MCP and CLI requests reuse the existing scope. The "create a new scope (which cancels
     // any existing one)" pattern is a UI-only ergonomic — when the user clicks Run while a
     // prior trail is mid-flight in the desktop app, replace it. For background flows that
@@ -594,12 +981,11 @@ class DesktopYamlRunner(
     } else {
       trailblazeDeviceManager.createNewCoroutineScopeForDevice(trailblazeDeviceId)
     }
-
-    // Registered before launching, not once the coroutine gets going: a caller that resolved this
-    // run's session has already handed it over, and until the run is registered a cast member
-    // forcing a new session would take the device off that session and stop its capture.
-    val runInFlight = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
-    val trailJob = coroutineScope.launch {
+    // The existing run job owns custody. An added withContext child around driver cleanup
+    // would turn normal iOS device-scope cancellation into a failed session return.
+    val execution = TrailExecution(runYamlRequest.trailSessionMetadata().trailId)
+    // The run in the job's context tells the device manager whose cleanup lets go of the device.
+    val trailJob = coroutineScope.launch(TrailExecution.element(execution) + runInFlight) {
       Console.log("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
       
       // Track the execution result to report in finally block
@@ -663,11 +1049,15 @@ class DesktopYamlRunner(
         .singleDeviceFallbackMessage(runYamlRequest.yaml, selectedConfigurationName)
         ?.let(prefixedProgressMessage)
 
+      // False when the host's hardware probe came back incomplete, so the device itself may pick
+      // recordings the host can't see.
+      var classificationDefinitive = true
       val deviceClassifiers = try {
         val classification = DeviceClassifierResolver.classificationFor(
           platform = connectedTrailblazeDevice.platform,
           instanceId = connectedTrailblazeDevice.instanceId,
         )
+        classificationDefinitive = classification.definitive
         DeviceClassifierResolver.resolveOverride(
           detected = DeviceClassifierResolver.trustedForBehavior(classification),
           requested = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
@@ -689,6 +1079,15 @@ class DesktopYamlRunner(
           selectedDeviceConfiguration = selectedConfigurationName,
         )
       }
+      // The trail as THIS device will run it: which steps replay a recording and which go to the
+      // AI. Null when the document does not decode as a trail here; the run's own decode owns that.
+      val trailItemsForDevice = runCatching {
+        createTrailblazeYaml().decodeTrail(
+          yaml = runYamlRequest.yaml,
+          deviceClassifiers = deviceClassifiers,
+          selectedDeviceConfiguration = selectedConfigurationName,
+        )
+      }.getOrNull()
       val requestedLocale = requestedDeviceLocale(
         readable = resolvedTrailConfigResult.isSuccess,
         config = resolvedTrailConfigResult.getOrNull(),
@@ -696,17 +1095,9 @@ class DesktopYamlRunner(
           !runYamlRequest.config.sendSessionStartLog ||
           TrailblazeYaml.Default.isBareToolEnvelope(runYamlRequest.yaml),
         // A document that does not decode as a trail here is left to the run's own decode.
-        hasSteps = runCatching {
-          createTrailblazeYaml().let { yaml ->
-            yaml.hasActionableSteps(
-              yaml.decodeTrail(
-                yaml = runYamlRequest.yaml,
-                deviceClassifiers = deviceClassifiers,
-                selectedDeviceConfiguration = selectedConfigurationName,
-              ),
-            )
-          }
-        }.getOrDefault(true),
+        hasSteps = trailItemsForDevice
+          ?.let { items -> runCatching { createTrailblazeYaml().hasActionableSteps(items) }.getOrNull() }
+          ?: true,
       )
 
       // Resolve driver type: request (CLI --driver / trail config) > the trail's own driver pin
@@ -796,6 +1187,15 @@ class DesktopYamlRunner(
           ?.let { prefixedProgressMessage("⚠️ $it") }
       }
 
+      if (DeviceSetupToolsMemory.DEVICE_SETUP_TOOLS_MEMORY_KEY in runYamlRequest.initialMemorySeeds) {
+        DesktopDispatchDecision.setupRefusal(dispatchPath, trailblazeDriverType)?.let { message ->
+          prefixedProgressMessage(message)
+          executionResult = TrailExecutionResult.Failed(message, misuse = true)
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
+      }
+
       // Multi-device configurations are wired into exactly one dispatch path: the host agent
       // dispatching to each device (Android over RPC, iOS simulators host-side). Every other path
       // (the on-device agent, web/Compose host runs) has no companion connect, no device bindings, and no
@@ -851,13 +1251,14 @@ class DesktopYamlRunner(
       // Capture samples ONE app, so the declared list has to be narrowed to the one this device
       // actually has — taking the first declared id scoped capture to an app that is not there,
       // and a reading against an absent package is quiet: it just reports the app as not running.
-      // `lazy` because the answer costs a device probe, and a run whose capture never starts
-      // (`--no-logging`) should not pay for it.
-      val appIdForCapture: String? by lazy {
-        trailblazeDeviceManager.resolveCaptureAppId(
+      // Asked for only when used, because the answer costs a device probe, and a run whose capture
+      // never starts (`--no-logging`) should not pay for it.
+      val appIdForCapture = SettlingAppId(fallback = appIdsForCapture.firstOrNull()) { freshOnly ->
+        trailblazeDeviceManager.resolveInstalledCaptureAppId(
           trailblazeDeviceId = trailblazeDeviceId,
           target = targetTestApp,
           candidateAppIds = appIdsForCapture,
+          installedAppIdsProvider = { trailblazeDeviceManager.probeInstalledAppIdsForCapture(it, freshOnly = freshOnly) },
         )
       }
       // Resolve per-run capture toggles in the same order the pre-coordinator flow did:
@@ -891,6 +1292,28 @@ class DesktopYamlRunner(
       // BEFORE the runner starts the session so `captureSessionStarted` can arm one capture bridge
       // per device instead of only the launch device's. Empty for a single-device run.
       var captureDeviceBindings: List<CaptureDeviceBinding> = emptyList()
+      // Built here rather than by the caller, because only now is it known whether this run can
+      // reach the AI on this device, and a run that can't lets the provider skip its LLM
+      // credential check. Before the session snapshot below, so a cancel during a slow credential
+      // check can't mistake a session another run started meanwhile for this run's own. A failure
+      // is reported inside the run's `try`, so its `finally` still ends a session MCP reserved.
+      val llmCredentials: Result<Map<String, String>> = try {
+        Result.success(
+          desktopAppRunYamlParams.additionalInstrumentationArgs(
+            runCanReachLlm(
+              trailItems = trailItemsForDevice,
+              useRecordedSteps = runYamlRequest.useRecordedSteps,
+              selfHeal = runYamlRequest.config.selfHeal,
+            ) || preflightMayMissLlm(
+              driverType = trailblazeDriverType,
+              classificationDefinitive = classificationDefinitive,
+            ),
+          ),
+        )
+      } catch (e: Exception) {
+        Result.failure(e)
+      }
+
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
       // Read before this run's session exists: once it does, the device's pointer moves to it and
@@ -920,6 +1343,14 @@ class DesktopYamlRunner(
         }
       }
       try {
+        var additionalInstrumentationArgs = llmCredentials.getOrElse { e ->
+          if (e is CancellationException) throw e
+          val message = "Could not prepare LLM credentials: ${e.message ?: e::class.java.simpleName}"
+          prefixedProgressMessage(message)
+          Console.log("❌ COROUTINE ENDING (LLM credentials) for device: ${trailblazeDeviceId.instanceId}")
+          executionResult = TrailExecutionResult.Failed(message, infrastructure = true)
+          return@launch
+        }
         // Interruptible: a cancel landing while iOS waits for SpringBoard stops the wait, so a
         // cancelled run cannot go on to stop the app of the run that replaced it.
         val localeChanged = deviceLocale?.let {
@@ -930,14 +1361,18 @@ class DesktopYamlRunner(
 
         // Only a trail whose trailhead will take the reusable hand-off skips the clean start. A
         // trail that can't be read here keeps it; the run's own decode reports the error.
-        val keepForReuse = TrailheadRuns.reuseEnabledFor(runYamlRequest.config.trailheadReuse) &&
-          runCatching {
-            createTrailblazeYaml().decodeTrail(
-              yaml = runYamlRequest.yaml,
-              deviceClassifiers = deviceClassifiers,
-              selectedDeviceConfiguration = selectedConfigurationName,
-            )
-          }.getOrNull()?.let { TrailheadHandoffStore.holdsReusableFor(trailblazeDeviceId, it) } == true
+        val decodedTrailItems = runCatching {
+          createTrailblazeYaml().decodeTrail(
+            yaml = runYamlRequest.yaml,
+            deviceClassifiers = deviceClassifiers,
+            selectedDeviceConfiguration = selectedConfigurationName,
+          )
+        }.getOrNull()
+        // The on-device path never receives the reuse request and sets up from scratch, so a hand-off
+        // left by an earlier host run must not spare it the clean start or the trailhead clear.
+        val keepForReuse = dispatchPath != DispatchPath.ON_DEVICE_AGENT &&
+          TrailheadRuns.reuseEnabledFor(runYamlRequest.config.trailheadReuse) &&
+          decodedTrailItems?.let { TrailheadHandoffStore.holdsReusableFor(trailblazeDeviceId, it) } == true
         var targetAppStopped = false
         if (shouldForceStopTargetApp(forceStopTargetApp, localeChanged, keepForReuse)) {
           // Stop the app this device will actually run. A locale change forces a fresh process even
@@ -959,6 +1394,61 @@ class DesktopYamlRunner(
         // A run with no target app stopped nothing, so the restart stays owed to the next run that has one.
         if (localeChanged && targetAppStopped) DeviceLocaleConfigurator.cleanupDone(trailblazeDeviceId)
 
+        // In-process, a trailhead cannot clear the app it runs inside, so the host clears it here,
+        // before the instrumentation starts. See InProcessTrailheadReset.
+        //
+        // A skipped trail is reported as skipped by the device without running, so it must not
+        // reset anything first; nor must a run with no harness to start, which fails below without
+        // running. Cancellation is checked before every clear: the package query below blocks, and
+        // a run cancelled or replaced meanwhile must not reset its replacement.
+        if (trailblazeDriverType == TrailblazeDriverType.ANDROID_TEST && !keepForReuse && decodedTrailItems != null &&
+          createTrailblazeYaml().firstSkipReason(decodedTrailItems) == null &&
+          hasInProcessHarness(targetTestApp ?: trailblazeHostAppTargetProvider())
+        ) {
+          val installedAppIds = runInterruptible(Dispatchers.IO) { MobileDeviceUtils.getInstalledAppIds(trailblazeDeviceId) }
+          // The target the harness came from: a trail with no `target:` runs the workspace's.
+          val harnessTarget = targetTestApp ?: trailblazeHostAppTargetProvider()
+          // Only the package the harness instruments: a target can list several variants of its app,
+          // and the device refuses a launch of any other, so clearing one would wipe an app this run
+          // cannot even drive.
+          val harness = harnessTarget.getTrailblazeOnDeviceInstrumentationTargetForDriver(TrailblazeDriverType.ANDROID_TEST)
+          val instrumentedAppId = harness?.hostProcessAppId
+          // A test APK the app's own build installs, and that is missing, fails the connect below:
+          // a run that cannot start must not have wiped the app first.
+          val harnessInstalled = harness?.installedExternally != true || harness.testAppId in installedAppIds
+          val targetAppIds = harnessTarget
+            .getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+            ?.filter { harnessInstalled && it in installedAppIds && (instrumentedAppId == null || it == instrumentedAppId) }
+            ?.toSet()
+            .orEmpty()
+          val appIdsToClear = InProcessTrailheadReset.appIdsToClear(
+            trailItems = decodedTrailItems,
+            targetAppIds = targetAppIds,
+            clearOnEveryTrailhead = harnessTarget.clearsAppDataBeforeInProcessTrailhead(),
+            memory = runYamlRequest.memorySnapshot + runYamlRequest.initialMemorySeeds,
+          )
+          appIdsToClear.forEach { appId ->
+            currentCoroutineContext().ensureActive()
+            prefixedProgressMessage("Clearing $appId before the in-process trailhead")
+            // The trailhead runs inside the app and cannot clear it, so a refused clear would
+            // start the trail on the previous run's data.
+            // Interruptible, so a cancelled run stops waiting on the device and starts nothing more.
+            val cleared = runInterruptible(Dispatchers.IO) { InProcessTrailheadReset.clear(trailblazeDeviceId, appId) }
+            currentCoroutineContext().ensureActive()
+            if (!cleared) {
+              val message = "Could not clear $appId's data before the in-process trailhead " +
+                "(`pm clear` did not report success), so the trail would start on the previous run's data."
+              prefixedProgressMessage(message)
+              Console.log("❌ COROUTINE ENDING (in-process trailhead clear) for device: ${trailblazeDeviceId.instanceId}")
+              executionResult = TrailExecutionResult.Failed(message, infrastructure = true)
+              return@launch
+            }
+          }
+          // Tells an in-process REINSTALL whether this start is on cleared data; it cannot see that.
+          additionalInstrumentationArgs = additionalInstrumentationArgs +
+            (InProcessDataClearedArg.KEY to appIdsToClear.isNotEmpty().toString())
+        }
+
         trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
         prefixedProgressMessage(
           "Starting ${trailblazeDeviceId.trailblazeDevicePlatform.displayName} test on device ${trailblazeDeviceId.instanceId} with driver type $trailblazeDriverType",
@@ -966,6 +1456,44 @@ class DesktopYamlRunner(
 
         val trailblazeHostAppTarget = trailblazeHostAppTargetProvider()
 
+        // Starts the session's own recording; true when this call started it. Shared by
+        // `captureSessionStarted` below and the Android paths' early start, which records while the
+        // device connects (see [connectWhileRecordingStarts]); idempotent, so whichever is second
+        // is a no-op.
+        fun startSessionRecording(sid: SessionId): Boolean =
+          trailblazeDeviceManager.sessionCaptureCoordinator.startForSession(
+            sessionId = sid,
+            deviceId = trailblazeDeviceId.instanceId,
+            platform = trailblazeDeviceId.trailblazeDevicePlatform,
+            options = captureOptionsForRun,
+            // Asked for only when a stream will use the answer: resolving it can ask the device
+            // what is installed, and a run with every stream off should not pay for that probe.
+            appId = if (captureOptionsForRun.hasAnyCaptureEnabled) appIdForCapture.get() else null,
+            // A browser-launched multi-device session runs no single-device web runner to record it.
+            followWebScreencast = captureDeviceBindings.isNotEmpty(),
+          )
+        // The recording only, for the session the request pins, while the device connects. The
+        // rest of `captureSessionStarted` stays after the connect: it compiles the app and attaches
+        // turbo, which must not race the instrumentation starting.
+        // Until the session takes the device over, when `captureSessionStarted` marks it.
+        val recordingAheadOfSession = ConcurrentHashMap.newKeySet<SessionId>()
+        val startRecordingEarly = startRecordingUnlessReplacing(
+          sessionBeforeRun = sessionBeforeRun,
+          isRecording = trailblazeDeviceManager.sessionCaptureCoordinator::isActive,
+        ) { sid ->
+          // A device still connecting may not say which declared app it has. Capture then starts
+          // after the connect, once it can, rather than scoping the whole run to a guess.
+          // `--no-logging` is checked first, so a run that records nothing never pays for the probe.
+          (
+            !desktopAppRunYamlParams.noLogging &&
+              (!captureOptionsForRun.hasAnyCaptureEnabled || appIdForCapture.ifSettled() != null) &&
+              startSessionRecording(sid)
+            )
+            .also { if (it) recordingAheadOfSession += sid }
+        }
+        val abandonEarlyRecording: (SessionId) -> Unit = { sid ->
+          finalizeHostSessionResources(listOf(sid), trailblazeDeviceManager.sessionCaptureCoordinator::stopForSession)
+        }
         // Capture-aware onSessionStarted callback shared across the Android dispatch
         // branches. Each branch knows the resolved
         // session id at a slightly different point in its flow; this lambda lets them all
@@ -973,6 +1501,7 @@ class DesktopYamlRunner(
         // `maybeStartAndroidNetworkCapture` plumbing.
         val captureSessionStarted: (SessionId) -> Unit = { sid ->
           startedSessionId = sid
+          runInFlight.sessionId = sid
           // First, so the replaced session restores the animation settings it changed before this
           // session records them as the device's defaults.
           releaseReplacedSession(sid)
@@ -989,19 +1518,13 @@ class DesktopYamlRunner(
             // don't double-spawn screenrecord. For runs that originated from the CLI,
             // `captureOptionsForRun` honors per-flag overrides (--no-capture-video,
             // --capture-logcat, --capture-ios-logs).
-            trailblazeDeviceManager.sessionCaptureCoordinator.startForSession(
-              sessionId = sid,
-              deviceId = trailblazeDeviceId.instanceId,
-              platform = trailblazeDeviceId.trailblazeDevicePlatform,
-              options = captureOptionsForRun,
-              // Asked for only when a stream will use the answer. `appIdForCapture` is lazy
-              // because resolving it can ask the device what is installed, and passing it as a
-              // value forces it — so a run with every stream off still paid for a probe whose
-              // result the coordinator was about to decline.
-              appId = if (captureOptionsForRun.hasAnyCaptureEnabled) appIdForCapture else null,
-              // A browser-launched multi-device session runs no single-device web runner to record it.
-              followWebScreencast = captureDeviceBindings.isNotEmpty(),
-            )
+            startSessionRecording(sid)
+            // A recording started while the device connected: what it logged until now, such as the
+            // app crashing during a connect that recovered, stays in the log but does not fail the
+            // run. Once only, since a path can report its session again after the trail ran.
+            if (recordingAheadOfSession.remove(sid)) {
+              trailblazeDeviceManager.sessionCaptureCoordinator.markSessionStarted(sid)
+            }
             // Every display a multi-device configuration bound gets its own recording, so a step
             // that ran on a companion is shown on that companion's screen rather than on the
             // start device sitting still. Whole roster, start device included: the coordinator
@@ -1037,7 +1560,11 @@ class DesktopYamlRunner(
           // ignore a separately requested optimization and make the same trail run differently.
           // Experimental opt-in (gated internally, idempotent — the MCP path may have already
           // fired it at session-resolution time).
-          SessionAnimationDisabler.startForSession(sid, trailblazeDeviceId)
+          SessionAnimationDisabler.startForSession(
+            sid,
+            trailblazeDeviceId,
+            driverDefault = trailblazeDriverType == TrailblazeDriverType.ANDROID_TEST,
+          )
           // Same placement rationale — the first point that knows both the device AND which app
           // the session will drive — but on by default (kill switch inside): makes sure the app
           // has compiled ART artifacts so its cold starts do not re-verify the APK. Idempotent,
@@ -1164,6 +1691,8 @@ class DesktopYamlRunner(
                 driverType = trailblazeDriverType,
                 targetTestApp = targetTestApp,
                 trailblazeHostAppTarget = trailblazeHostAppTarget,
+                deviceId = trailblazeDeviceId,
+                onProgress = prefixedProgressMessage,
               )
             } else {
               null
@@ -1188,6 +1717,8 @@ class DesktopYamlRunner(
                 additionalInstrumentationArgs = additionalInstrumentationArgs,
                 targetTestApp = targetTestApp,
                 onSessionStarted = captureSessionStarted,
+                startRecordingEarly = startRecordingEarly,
+                onEarlyRecordingAbandoned = abandonEarlyRecording,
                 findTargetById = desktopAppRunYamlParams.findTargetById,
                 onCaptureDeviceBindingsResolved = { captureDeviceBindings = it },
                 noLogging = desktopAppRunYamlParams.noLogging,
@@ -1210,6 +1741,8 @@ class DesktopYamlRunner(
               driverType = trailblazeDriverType,
               targetTestApp = targetTestApp,
               trailblazeHostAppTarget = trailblazeHostAppTarget,
+              deviceId = trailblazeDeviceId,
+              onProgress = prefixedProgressMessage,
             )
             if (trailblazeOnDeviceInstrumentationTarget == null) {
               val reason = (targetTestApp ?: trailblazeHostAppTarget).missingInProcessHarnessMessage()
@@ -1240,6 +1773,8 @@ class DesktopYamlRunner(
                 onConnectionStatus = onConnectionStatus,
                 additionalInstrumentationArgs = additionalInstrumentationArgs,
                 onSessionStarted = captureSessionStarted,
+                startRecordingEarly = startRecordingEarly,
+                onEarlyRecordingAbandoned = abandonEarlyRecording,
                 onSessionAbandoned = { sid ->
                   finalizeHostSessionResources(
                     listOf(sid),
@@ -1392,21 +1927,13 @@ class DesktopYamlRunner(
               sessionFinalizationFailed = true,
             )
           }
-          // The crash index is written as capture stops, so it is complete only now. A run that
-          // already failed keeps its own failure; its crash still shows on the timeline.
-          if (captureAction == RunEndCaptureAction.FINALIZE && executionResult is TrailExecutionResult.Success) {
-            trailblazeDeviceManager.failSucceededSessionIfAppCrashed(resolvedSessionId)?.let { crashMessage ->
-              Console.log("💥 $crashMessage")
-              executionResult = TrailExecutionResult.Failed(crashMessage, sessionFinalizationFailed = true)
-            }
-          }
           // The caller expects its session to go on, so the device must drop it before replying:
           // a next call that still found it would continue it.
           if (captureAction == RunEndCaptureAction.FINALIZE && !runYamlRequest.config.sendSessionEndLog) {
             trailblazeDeviceManager.clearEndedSessionFromDevice(trailblazeDeviceId, resolvedSessionId)
           }
         }
-        // Again for failures found only now, as capture stops (a finalizer, an app crash).
+        // Again for failures found only now, as capture stops (a finalizer).
         if (processFatalFailure != null || executionResult !is TrailExecutionResult.Success) {
           dropOwnHandoffs()
         }
@@ -1432,8 +1959,15 @@ class DesktopYamlRunner(
       }
     }
     trailJob.invokeOnCompletion {
-      // A coroutine cancelled before it started, or a `finally` that threw before its end, never ends the run.
-      trailblazeDeviceManager.endRun(runInFlight)
+      try {
+        // Job completion waits for runtime/app cleanup and every owned child's cleanup.
+        execution.finish()
+        // A coroutine cancelled before it started, or a `finally` that threw before its end, never ends the run.
+        trailblazeDeviceManager.endRun(runInFlight)
+      } finally {
+        // Standalone callers must not exit while completion handlers are releasing leases.
+        onExecutionFinished()
+      }
     }
     return trailJob
   }
@@ -1481,6 +2015,7 @@ class DesktopYamlRunner(
     // a `forceRestart` retry would just repeat — so we let it propagate rather than hiding it
     // behind a misleading "readiness probe failed" log.
     suspend fun doConnectAndEnable(forceRestart: Boolean): DeviceConnectionStatus {
+      val context = currentCoroutineContext()
       val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
         sendProgressMessage = onProgressMessage,
         deviceId = trailblazeDeviceId,
@@ -1495,6 +2030,16 @@ class DesktopYamlRunner(
         // Every harness THIS RUN's target can present, not just the one being launched — see
         // HostAndroidDeviceConnectUtils.planConnectForceStop for why, and for what it costs.
         additionalForceStopTargets = runTargetApp.allInstrumentationTargets().toSet(),
+        beforeConnect = {
+          runInterruptible(Dispatchers.IO) {
+            InProcessInstrumentationCleanup.stopOtherAttached(
+              trailblazeDeviceId,
+              connectingTestAppId = trailblazeOnDeviceInstrumentationTarget.testAppId,
+              log = onProgressMessage,
+              checkActive = { context.ensureActive() },
+            )
+          }
+        },
       )
       if (enableAccessibility) {
         // The on-device GetScreenState handler (triggered below by waitForReady) uses the
@@ -1613,6 +2158,13 @@ class DesktopYamlRunner(
      * per-session capture can arm one bridge per device. Not called for a single-device run.
      */
     onCaptureDeviceBindingsResolved: (List<CaptureDeviceBinding>) -> Unit = {},
+    /**
+     * Starts the pinned session's recording while an Android launch device connects, returning
+     * whether it did; see [connectWhileRecordingStarts]. [onEarlyRecordingAbandoned] stops it when
+     * the run ends before its session starts.
+     */
+    startRecordingEarly: (SessionId) -> Boolean = { false },
+    onEarlyRecordingAbandoned: (SessionId) -> Unit = {},
     /** The run's `--no-logging` flag: no session files, no trace export. */
     noLogging: Boolean = false,
   ): SessionId? {
@@ -1674,9 +2226,26 @@ class DesktopYamlRunner(
             )
           ).also { boundIosDevices += it }
 
+      // The session this run will start, recorded from the launch device's connect onward. Only an
+      // Android launch: a browser or simulator launch has no connect wait to hide the start in.
+      val pinnedSessionId = runYamlRequest.config.overrideSessionId?.let(::asCreated)
+        ?.takeIf { trailblazeOnDeviceInstrumentationTarget != null }
+      var recordingStartedEarly = false
+      // Set once the session is running, after which its own end stops the recording.
+      var sessionStarted = false
       try {
         val androidLaunch = trailblazeOnDeviceInstrumentationTarget?.let { instrumentationTarget ->
-          connectAndroid(launchDeviceId, launchDriver, instrumentationTarget, runTargetApp)
+          val (connected, startedEarly) = connectWhileRecordingStarts(
+            pinnedSessionId = pinnedSessionId,
+            startRecording = startRecordingEarly,
+            onAbandoned = onEarlyRecordingAbandoned,
+          ) {
+            connectAndroid(launchDeviceId, launchDriver, instrumentationTarget, runTargetApp)
+          }
+          recordingStartedEarly = startedEarly
+          // Memory samples taken while the runner was still starting fell back to adb; it is up now.
+          if (startedEarly) OnDeviceRpcMemoryProbe.runnerReady(launchDeviceId.instanceId)
+          connected
         }
 
         // Multi-device: a unified trail may declare a `config.devices:` configuration entry (an
@@ -1846,6 +2415,7 @@ class DesktopYamlRunner(
               onProgressMessage = onProgressMessage,
               onSessionStarted = { sessionId ->
                 hostAgentSessionId = sessionId
+                sessionStarted = true
                 onSessionStarted(sessionId)
               },
               multiDeviceSession = multiDeviceSession,
@@ -1865,6 +2435,14 @@ class DesktopYamlRunner(
           }
         }
       } finally {
+        // Companions, a browser or the session itself can fail after the launch device connected.
+        // The session never started, so its end will not stop the recording started for it.
+        if (recordingStartedEarly && !sessionStarted) {
+          pinnedSessionId?.let { sid ->
+            runCatching { onEarlyRecordingAbandoned(sid) }
+              .onFailure { Console.log("[runHostAgentWithOnDeviceRpc] stopping capture for $sid threw: ${it.message}") }
+          }
+        }
         closeCompanionRpcClients(companionRpcClients)
         releaseBoundIosDevices(boundIosDevices)
       }
@@ -2032,6 +2610,12 @@ class DesktopYamlRunner(
      */
     onSessionAbandoned: (SessionId) -> Unit = {},
     /**
+     * Starts the pinned session's recording while the device connects, returning whether it did;
+     * see [connectWhileRecordingStarts]. [onEarlyRecordingAbandoned] stops it when the connect fails.
+     */
+    startRecordingEarly: (SessionId) -> Boolean = { false },
+    onEarlyRecordingAbandoned: (SessionId) -> Unit = {},
+    /**
      * The run's effective target — `targetTestApp ?: trailblazeHostAppTarget`, the same expression
      * [resolveOnDeviceInstrumentationTarget] picks the runner from. See [connectAndEnsureReady].
      */
@@ -2040,70 +2624,119 @@ class DesktopYamlRunner(
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
         AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType)
-      val (status, readiness) = connectAndEnsureReady(
-        onDeviceRpc = onDeviceRpc,
-        trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
-        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
-        additionalInstrumentationArgs = additionalInstrumentationArgs,
-        onProgressMessage = onProgressMessage,
-        enableAccessibility = needsAccessibility,
-        requireAndroidAccessibilityService = needsAccessibility,
-        runTargetApp = runTargetApp,
-      )
+      // A synchronous request replies once the trail is over, so session-scoped capture (logcat,
+      // memory, the network bridge) has to start before it is sent. See
+      // sessionIdToCaptureBeforeDispatch.
+      val pinnedSessionId = sessionIdToCaptureBeforeDispatch(runYamlRequest)
+      var recordingStartedEarly = false
+      // Set once dispatch takes the session over, after which its own end, or `onSessionAbandoned`,
+      // stops the recording.
+      var dispatched = false
+      try {
+        val (connection, startedEarly) = connectWhileRecordingStarts(
+          pinnedSessionId = pinnedSessionId,
+          startRecording = startRecordingEarly,
+          onAbandoned = onEarlyRecordingAbandoned,
+        ) {
+          connectAndEnsureReady(
+            onDeviceRpc = onDeviceRpc,
+            trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
+            trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+            additionalInstrumentationArgs = additionalInstrumentationArgs,
+            onProgressMessage = onProgressMessage,
+            enableAccessibility = needsAccessibility,
+            requireAndroidAccessibilityService = needsAccessibility,
+            runTargetApp = runTargetApp,
+          )
+        }
+        recordingStartedEarly = startedEarly
+        // Memory samples taken while the runner was still starting fell back to adb; it is up now.
+        if (startedEarly) OnDeviceRpcMemoryProbe.runnerReady(trailblazeConnectedDevice.trailblazeDeviceId.instanceId)
+        val (status, readiness) = connection
 
-      withContext(Dispatchers.Default) {
-        onConnectionStatus(status)
-        // Errors from the callback are caught so a misbehaving listener can't crash the test run.
-        val notifySessionStarted: (SessionId) -> Unit = { sid ->
-          try {
-            onSessionStarted(sid)
-          } catch (t: Throwable) {
-            Console.log(
-              "[runYamlOnDevice] onSessionStarted callback threw — continuing test run: " +
-                "${t::class.java.simpleName}: ${t.message}"
-            )
+        withContext(Dispatchers.Default) {
+          onConnectionStatus(status)
+          // Errors from the callback are caught so a misbehaving listener can't crash the test run.
+          val notifySessionStarted: (SessionId) -> Unit = { sid ->
+            dispatched = true
+            try {
+              onSessionStarted(sid)
+            } catch (t: Throwable) {
+              Console.log(
+                "[runYamlOnDevice] onSessionStarted callback threw — continuing test run: " +
+                  "${t::class.java.simpleName}: ${t.message}"
+              )
+            }
+          }
+          val deviceId = trailblazeConnectedDevice.trailblazeDeviceId
+          // Killed, not drained: a drain clears the runner's state for whichever run has it by then.
+          // Only while the device is still this run's (see ifDeviceStillOnSession), and the session
+          // then ends cancelled, since the process that would have written its end is gone.
+          stoppingOnDeviceRunWhenCancelled(
+            stopOnDevice = {
+              val ownSession = currentCoroutineContext()[TrailblazeDeviceManager.RunInFlight]?.sessionId ?: pinnedSessionId
+              val stopped = trailblazeDeviceManager.ifDeviceStillOnSession(deviceId, ownSession) {
+                HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
+                  trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
+                  deviceId = deviceId,
+                )
+              }
+              if (stopped && ownSession != null) endStoppedOnDeviceSession(trailblazeDeviceManager.logsRepo, ownSession)
+            },
+          ) {
+            val stepProgress = StepProgress(onProgressMessage)
+            // The capability gate reads the readiness handshake's answer; see startYamlAfterReadiness.
+            val result: RpcResult<RunYamlResponse> = reportingSteps(
+              readStepStarts = { pinnedSessionId?.let(trailblazeDeviceManager.logsRepo::objectiveStarts).orEmpty() },
+              stepProgress = stepProgress,
+            ) {
+              replyOrSessionEnd(
+                pinnedSessionId = pinnedSessionId,
+                sendRequest = { startYamlAfterReadiness(onDeviceRpc, readiness, runYamlRequest) },
+                sessionHasEnded = { trailblazeDeviceManager.logsRepo.persistedEndStatus(it) != null },
+                onDispatching = notifySessionStarted,
+                onAbandoned = { sid ->
+                  runCatching { onSessionAbandoned(sid) }.onFailure {
+                    Console.log("[runYamlOnDevice] onSessionAbandoned callback threw: ${it.message}")
+                  }
+                },
+              )
+            }
+            when (result) {
+              is RpcResult.Failure -> {
+                onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")
+                null
+              }
+
+              is RpcResult.Success -> {
+                val runYamlResponse = result.data
+                onProgressMessage("YAML test execution started for session: ${runYamlResponse.sessionId}")
+
+                // Also from the reply: an unpinned or fire-and-forget request learns its session id
+                // only here. Idempotent when capture already started under the pinned id above.
+                notifySessionStarted(runYamlResponse.sessionId)
+
+                // Block until the session reaches an Ended status so its logs are fully streamed
+                // before the process exits. A fire-and-forget reply arrives before the trail runs; a
+                // synchronous one after it, when this returns at once.
+                awaitOnDeviceSessionCompletion(
+                  sessionId = runYamlResponse.sessionId,
+                  trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
+                  stepProgress = stepProgress,
+                  onProgressMessage = onProgressMessage,
+                )
+
+                runYamlResponse.sessionId
+              }
+            }
           }
         }
-        // A synchronous request replies once the trail is over, so session-scoped capture (logcat,
-        // memory, the network bridge) has to start before it is sent. See
-        // sessionIdToCaptureBeforeDispatch.
-        val pinnedSessionId = sessionIdToCaptureBeforeDispatch(runYamlRequest)
-        // The capability gate reads the readiness handshake's answer; see startYamlAfterReadiness.
-        val result: RpcResult<RunYamlResponse> = replyOrSessionEnd(
-          pinnedSessionId = pinnedSessionId,
-          sendRequest = { startYamlAfterReadiness(onDeviceRpc, readiness, runYamlRequest) },
-          sessionHasEnded = { trailblazeDeviceManager.logsRepo.persistedEndStatus(it) != null },
-          onDispatching = notifySessionStarted,
-          onAbandoned = { sid ->
-            runCatching { onSessionAbandoned(sid) }.onFailure {
-              Console.log("[runYamlOnDevice] onSessionAbandoned callback threw: ${it.message}")
-            }
-          },
-        )
-        when (result) {
-          is RpcResult.Failure -> {
-            onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")
-            null
-          }
-
-          is RpcResult.Success -> {
-            val runYamlResponse = result.data
-            onProgressMessage("YAML test execution started for session: ${runYamlResponse.sessionId}")
-
-            // Also from the reply: an unpinned or fire-and-forget request learns its session id
-            // only here. Idempotent when capture already started under the pinned id above.
-            notifySessionStarted(runYamlResponse.sessionId)
-
-            // Block until the session reaches an Ended status so its logs are fully streamed
-            // before the process exits. A fire-and-forget reply arrives before the trail runs; a
-            // synchronous one after it, when this returns at once.
-            awaitOnDeviceSessionCompletion(
-              sessionId = runYamlResponse.sessionId,
-              trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
-              onProgressMessage = onProgressMessage,
-            )
-
-            runYamlResponse.sessionId
+      } finally {
+        // A cancel between the connect and the dispatch leaves the early recording with no owner.
+        if (recordingStartedEarly && !dispatched) {
+          pinnedSessionId?.let { sid ->
+            runCatching { onEarlyRecordingAbandoned(sid) }
+              .onFailure { Console.log("[runYamlOnDevice] stopping capture for $sid threw: ${it.message}") }
           }
         }
       }
@@ -2120,24 +2753,21 @@ class DesktopYamlRunner(
   private suspend fun awaitOnDeviceSessionCompletion(
     sessionId: SessionId,
     trailblazeDeviceId: TrailblazeDeviceId,
+    stepProgress: StepProgress,
     onProgressMessage: (String) -> Unit,
-    maxWaitMs: Long = 600_000,
-    pollIntervalMs: Long = 1_000,
   ) {
     val logsRepo = trailblazeDeviceManager.logsRepo
-    val startTime = System.currentTimeMillis()
-
-    while (System.currentTimeMillis() - startTime < maxWaitMs) {
-      val status = logsRepo.getLogsForSession(sessionId).getSessionStatus()
-      if (status is SessionStatus.Ended) {
-        // Gate: ONLY the non-recoverable UiAutomation wedge arms a relaunch — never an ordinary
-        // failure, so a clean server is provisioned for the NEXT trail without re-running this one.
-        armIfWedged(sessionId, listOf(trailblazeDeviceId), onProgressMessage)
-        return
-      }
-      delay(pollIntervalMs)
+    val ended = awaitSessionEnd(
+      readLogs = { logsRepo.getLogsForSession(sessionId) },
+      stepProgress = stepProgress,
+    )
+    if (ended) {
+      // Gate: ONLY the non-recoverable UiAutomation wedge arms a relaunch — never an ordinary
+      // failure, so a clean server is provisioned for the NEXT trail without re-running this one.
+      armIfWedged(sessionId, listOf(trailblazeDeviceId), onProgressMessage)
+    } else {
+      onProgressMessage("Warning: Timed out waiting for on-device session to complete")
     }
-    onProgressMessage("Warning: Timed out waiting for on-device session to complete")
   }
 
   /**
@@ -2197,6 +2827,10 @@ class DesktopYamlRunner(
             platform = deviceId.trailblazeDevicePlatform,
           ),
           requireTraffic = androidCaptureRequiresTraffic(runYamlRequest.referrer),
+          targetId = deviceCaptureTargetId(
+            targetTestApp = targetTestApp,
+            unresolvedDeclaredTarget = unresolvedDeclaredTarget,
+          ),
         )
         onProgressMessage(
           "Android network capture bridge started for session ${sessionIdOverride.value}",
@@ -2321,6 +2955,13 @@ class DesktopYamlRunner(
           ),
           deviceLabel = binding.name,
           requireTraffic = androidCaptureRequiresTraffic(runYamlRequest.referrer),
+          targetId = deviceCaptureTargetId(
+            targetTestApp = binding.target,
+            unresolvedDeclaredTarget = unresolvedTargetForDevice(
+              sessionUnresolvedTarget = unresolvedDeclaredTarget,
+              deviceHasOwnTarget = binding.hasOwnTarget,
+            ),
+          ),
         )
         anyStarted = true
         onProgressMessage(

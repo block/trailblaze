@@ -17,6 +17,10 @@ import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -79,7 +83,7 @@ class ToolMemoryInterpolationTest {
   fun `typed tool string fields resolve both token syntaxes`() {
     val authored = InputTextTrailblazeTool(text = "Hi {{user}} at \${domain}")
 
-    val dispatched = interpolateMemoryInTool(authored, memory)
+    val dispatched = interpolateMemoryInTool(authored, memory, null)
 
     assertThat(dispatched.text).isEqualTo("Hi sam at example.com")
     assertThat(dispatched).isNotSameInstanceAs(authored)
@@ -92,7 +96,7 @@ class ToolMemoryInterpolationTest {
     // Memory is non-empty so the same-instance short-circuit doesn't apply — this pins
     // AgentMemory's leave-literal semantics holding at the dispatch boundary: a typo'd
     // token surfaces visibly in the dispatched args instead of silently blanking.
-    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{missing}}!"), memory)
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{missing}}!"), memory, null)
 
     assertThat(dispatched.text).isEqualTo("{{missing}}!")
   }
@@ -109,7 +113,7 @@ class ToolMemoryInterpolationTest {
       ),
     )
 
-    val dispatched = interpolateMemoryInTool(authored, memory)
+    val dispatched = interpolateMemoryInTool(authored, memory, null)
 
     assertThat(dispatched.nodeSelector!!.androidAccessibility!!.textRegex)
       .isEqualTo("sam tickets")
@@ -122,9 +126,9 @@ class ToolMemoryInterpolationTest {
     // Idempotence keeps double-interpolation safe during transition windows (e.g. a new host
     // driving an old on-device build): the second boundary sees no tokens and returns the
     // same instance.
-    val once = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{user}}"), memory)
+    val once = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{user}}"), memory, null)
 
-    val twice = interpolateMemoryInTool(once, memory)
+    val twice = interpolateMemoryInTool(once, memory, null)
 
     assertThat(twice).isSameInstanceAs(once)
     assertThat(twice.text).isEqualTo("sam")
@@ -147,7 +151,7 @@ class ToolMemoryInterpolationTest {
       remember("name", "sam")
     }
 
-    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{greeting}}"), memory)
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{greeting}}"), memory, null)
 
     assertThat(dispatched.text).isEqualTo("hi {{name}}")
   }
@@ -161,7 +165,7 @@ class ToolMemoryInterpolationTest {
       remember("name", "sam")
     }
 
-    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "\${greeting}"), memory)
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "\${greeting}"), memory, null)
 
     assertThat(dispatched.text).isEqualTo("hi {{name}}")
   }
@@ -176,9 +180,9 @@ class ToolMemoryInterpolationTest {
       remember("greeting", "hi {{name}}")
       remember("name", "sam")
     }
-    val afterFirstBoundary = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{greeting}}"), memory)
+    val afterFirstBoundary = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{greeting}}"), memory, null)
 
-    val afterSecondBoundary = interpolateMemoryInTool(afterFirstBoundary, memory)
+    val afterSecondBoundary = interpolateMemoryInTool(afterFirstBoundary, memory, null)
 
     assertThat(afterFirstBoundary.text).isEqualTo("hi {{name}}")
     assertThat(afterSecondBoundary.text).isEqualTo("hi sam")
@@ -190,7 +194,7 @@ class ToolMemoryInterpolationTest {
   fun `token-free tool returns the same instance`() {
     val authored = InputTextTrailblazeTool(text = "plain text")
 
-    assertThat(interpolateMemoryInTool(authored, memory)).isSameInstanceAs(authored)
+    assertThat(interpolateMemoryInTool(authored, memory, null)).isSameInstanceAs(authored)
   }
 
   @Test
@@ -199,15 +203,117 @@ class ToolMemoryInterpolationTest {
 
     // Nothing remembered → nothing can resolve; the token staying literal (rather than
     // becoming "") is deliberate, so a missing `remember` step is visible in what executes.
-    assertThat(interpolateMemoryInTool(authored, AgentMemory())).isSameInstanceAs(authored)
+    assertThat(interpolateMemoryInTool(authored, AgentMemory(), null)).isSameInstanceAs(authored)
   }
 
   @Test
   fun `kill-switch returns the same instance`() {
     val authored = InputTextTrailblazeTool(text = "{{user}}")
 
-    assertThat(interpolateMemoryInTool(authored, memory, disabled = true))
+    assertThat(interpolateMemoryInTool(authored, memory, null, disabled = true))
       .isSameInstanceAs(authored)
+  }
+
+  // -- device namespace --
+  //
+  // `{{device.<name>}}` resolves from the device the dispatch targets, not from memory: one memory
+  // is shared by every device a session binds, and each device's tools must name their own.
+
+  private fun device(instanceId: String, platform: TrailblazeDevicePlatform, driver: TrailblazeDriverType) =
+    TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(instanceId = instanceId, trailblazeDevicePlatform = platform),
+      trailblazeDriverType = driver,
+      widthPixels = 1080,
+      heightPixels = 1920,
+    )
+
+  private val simulator = device("SIM-UDID-1", TrailblazeDevicePlatform.IOS, TrailblazeDriverType.IOS_HOST)
+
+  @Test
+  fun `device tokens resolve with empty memory`() {
+    val authored = InputTextTrailblazeTool(text = "{{device.instanceId}} {{device.platform}} {{device.driverType}}")
+
+    val dispatched = interpolateMemoryInTool(authored, AgentMemory(), simulator)
+
+    assertThat(dispatched.text).isEqualTo("SIM-UDID-1 ios ios-host")
+    assertThat(dispatched).isNotSameInstanceAs(authored)
+  }
+
+  @Test
+  fun `every device token spelling resolves with empty memory`() {
+    for (spelling in listOf("{{ device.instanceId }}", "\${device.instanceId}", "{{{device.instanceId}}}")) {
+      val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = spelling), AgentMemory(), simulator)
+
+      assertThat(dispatched.text, spelling).isEqualTo("SIM-UDID-1")
+    }
+  }
+
+  @Test
+  fun `devices sharing one memory each resolve their own instance id`() {
+    val shared = AgentMemory().apply { remember("user", "sam") }
+    val emulator = device("emulator-5554", TrailblazeDevicePlatform.ANDROID, TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    val authored = InputTextTrailblazeTool(text = "{{user}} on {{device.instanceId}}")
+
+    assertThat(interpolateMemoryInTool(authored, shared, simulator).text).isEqualTo("sam on SIM-UDID-1")
+    assertThat(interpolateMemoryInTool(authored, shared, emulator).text).isEqualTo("sam on emulator-5554")
+  }
+
+  @Test
+  fun `a remembered device key does not override the device`() {
+    val spoofing = AgentMemory().apply { remember("device.instanceId", "someone-else") }
+
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{device.instanceId}}"), spoofing, simulator)
+
+    assertThat(dispatched.text).isEqualTo("SIM-UDID-1")
+  }
+
+  @Test
+  fun `an unknown device token stays literal`() {
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{device.serial}}"), AgentMemory(), simulator)
+
+    assertThat(dispatched.text).isEqualTo("{{device.serial}}")
+  }
+
+  @Test
+  fun `a remembered device key never fills a device token the device lacks`() {
+    val remembered = AgentMemory().apply {
+      remember("device.serial", "remembered-serial")
+      remember("device.instanceId", "remembered-id")
+    }
+
+    assertThat(interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{device.serial}}"), remembered, simulator).text)
+      .isEqualTo("{{device.serial}}")
+    assertThat(interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{device.instanceId}}"), remembered, null).text)
+      .isEqualTo("{{device.instanceId}}")
+    assertThat(interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{memory.device.serial}}"), remembered, null).text)
+      .isEqualTo("remembered-serial")
+  }
+
+  @Test
+  fun `the logged payload renders device tokens as the device resolved them`() {
+    val authored = OtherTrailblazeTool(
+      toolName = "inputText",
+      raw = buildJsonObject { put("text", "{{device.instanceId}}") },
+    )
+
+    val logged = buildLogSafeResolvedPayload(authored, AgentMemory(), simulator)
+
+    assertThat(logged.raw["text"]!!.jsonPrimitive.content).isEqualTo("SIM-UDID-1")
+    assertThat(buildLogSafeResolvedPayload(authored, AgentMemory(), null)).isSameInstanceAs(authored)
+  }
+
+  @Test
+  fun `device tokens stay literal when no device is passed`() {
+    val authored = InputTextTrailblazeTool(text = "{{device.instanceId}}")
+
+    assertThat(interpolateMemoryInTool(authored, memory, null)).isSameInstanceAs(authored)
+  }
+
+  @Test
+  fun `a token-free tool with a device returns the same instance`() {
+    val authored = InputTextTrailblazeTool(text = "plain text")
+
+    assertThat(interpolateMemoryInTool(authored, AgentMemory(), simulator)).isSameInstanceAs(authored)
   }
 
   // -- args-only memory (no remembered variables) --
@@ -226,7 +332,7 @@ class ToolMemoryInterpolationTest {
     }
     val authored = InputTextTrailblazeTool(text = "Hi {{args.recipient}}")
 
-    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
+    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory, null)
 
     assertThat(dispatched.text).isEqualTo("Hi sam")
     assertThat(dispatched).isNotSameInstanceAs(authored)
@@ -240,7 +346,7 @@ class ToolMemoryInterpolationTest {
     val argsOnlyMemory = AgentMemory().apply { seedArgs(mapOf("count" to JsonPrimitive(3))) }
     val authored = InputTextTrailblazeTool(text = "{{args.count}}")
 
-    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
+    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory, null)
 
     assertThat(dispatched.text).isEqualTo("3")
   }
@@ -255,7 +361,7 @@ class ToolMemoryInterpolationTest {
     val authored = InputTextTrailblazeTool(text = "{{args.count + 1}}")
 
     assertFailure {
-      interpolateMemoryInTool(authored, argsOnlyMemory)
+      interpolateMemoryInTool(authored, argsOnlyMemory, null)
     }.isInstanceOf(MalformedArgTokenException::class)
       .messageContains("dotted paths only")
   }
@@ -270,7 +376,7 @@ class ToolMemoryInterpolationTest {
       raw = buildJsonObject { put("text", "{{user}}") },
     )
 
-    val dispatched = interpolateMemoryInTool(authored, memory)
+    val dispatched = interpolateMemoryInTool(authored, memory, null)
 
     assertThat(dispatched).isSameInstanceAs(authored)
     assertThat(dispatched.raw["text"]!!.jsonPrimitive.content).isEqualTo("{{user}}")
@@ -286,7 +392,7 @@ class ToolMemoryInterpolationTest {
       rawToolArguments = buildJsonObject { put("text", "{{user}}") },
     )
 
-    assertThat(interpolateMemoryInTool(authored, memory)).isSameInstanceAs(authored)
+    assertThat(interpolateMemoryInTool(authored, memory, null)).isSameInstanceAs(authored)
   }
 
   @Test
@@ -295,7 +401,7 @@ class ToolMemoryInterpolationTest {
     // as-authored instead of failing the run.
     val authored = NonSerializableTool(text = "{{user}}")
 
-    val dispatched = interpolateMemoryInTool(authored, memory)
+    val dispatched = interpolateMemoryInTool(authored, memory, null)
 
     assertThat(dispatched).isSameInstanceAs(authored)
     assertThat(dispatched.text).isEqualTo("{{user}}")
@@ -313,7 +419,7 @@ class ToolMemoryInterpolationTest {
       put("text", "{{user}}:{{pin}}")
     }
 
-    val resolved = buildLogSafeResolvedPayload(rawPayload, memory)
+    val resolved = buildLogSafeResolvedPayload(rawPayload, memory, null)
 
     assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("sam:{{pin}}")
     assertThat(resolved.toolName).isEqualTo("inputText")
@@ -324,7 +430,7 @@ class ToolMemoryInterpolationTest {
     val memory = AgentMemory().apply { rememberSensitive("pin", "9999") }
     val rawPayload = payload("inputText") { put("text", "\${pin}") }
 
-    val resolved = buildLogSafeResolvedPayload(rawPayload, memory)
+    val resolved = buildLogSafeResolvedPayload(rawPayload, memory, null)
 
     assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("{{pin}}")
   }
@@ -335,14 +441,14 @@ class ToolMemoryInterpolationTest {
 
     // Callers use `!=` between raw and resolved to elide the raw payload from the log —
     // a no-op scrub must therefore hand back the identical payload.
-    assertThat(buildLogSafeResolvedPayload(rawPayload, memory)).isSameInstanceAs(rawPayload)
+    assertThat(buildLogSafeResolvedPayload(rawPayload, memory, null)).isSameInstanceAs(rawPayload)
   }
 
   @Test
   fun `empty memory returns the same payload instance`() {
     val rawPayload = payload("inputText") { put("text", "{{user}}") }
 
-    assertThat(buildLogSafeResolvedPayload(rawPayload, AgentMemory())).isSameInstanceAs(rawPayload)
+    assertThat(buildLogSafeResolvedPayload(rawPayload, AgentMemory(), null)).isSameInstanceAs(rawPayload)
   }
 
   @Test
@@ -354,7 +460,7 @@ class ToolMemoryInterpolationTest {
     }
     val rawPayload = payload("inputText") { put("text", "Hi {{args.recipient}}") }
 
-    val resolved = buildLogSafeResolvedPayload(rawPayload, argsOnlyMemory)
+    val resolved = buildLogSafeResolvedPayload(rawPayload, argsOnlyMemory, null)
 
     assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("Hi sam")
   }
@@ -370,11 +476,11 @@ class ToolMemoryInterpolationTest {
     }
     val rawPayload = payload("inputText") { put("text", "{{args.vaultCode}}") }
 
-    val resolved = buildLogSafeResolvedPayload(rawPayload, memory)
+    val resolved = buildLogSafeResolvedPayload(rawPayload, memory, null)
 
     assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("{{args.vaultCode}}")
     // The dispatch boundary, by contrast, resolves the real value.
-    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{args.vaultCode}}"), memory)
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{args.vaultCode}}"), memory, null)
     assertThat(dispatched.text).isEqualTo("9876")
   }
 
@@ -497,6 +603,21 @@ class ToolMemoryInterpolationTest {
 
     assertThat(safe.command).isSameInstanceAs(authored)
     assertThat(safe.errorMessage).isEqualTo("boom")
+  }
+
+  @Test
+  fun `scrubs the resolved secret from a fatal error and keeps it fatal`() {
+    val memory = AgentMemory().apply { rememberSensitive("pin", "9999") }
+    val error = TrailblazeToolResult.Error.FatalError(
+      errorMessage = "Device rejected pin 9999",
+      stackTraceString = "IllegalStateException: Device rejected pin 9999",
+    )
+
+    val safe = error.withAuthoredFailureContent(InputTextTrailblazeTool(text = "{{pin}}"), memory)
+
+    assertThat(safe).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    assertThat(safe.errorMessage).isEqualTo("Device rejected pin {{pin}}")
+    assertThat(safe.stackTraceString).isEqualTo("IllegalStateException: Device rejected pin {{pin}}")
   }
 
   @Test

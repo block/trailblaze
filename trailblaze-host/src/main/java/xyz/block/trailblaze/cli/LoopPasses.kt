@@ -23,8 +23,11 @@ interface LoopExtension {
   fun startLoop(loop: LoopStart): LoopListener?
 }
 
-/** One device's loop, as it starts. [captures] is false when its sessions record no video, log or memory. */
-data class LoopStart(val trailFile: File, val iterations: Int, val startedAt: Instant, val captures: Boolean = true)
+/**
+ * One device's loop, as it starts. [iterations] is null when only a time limit bounds it. [captures]
+ * is false when its sessions record no video, log or memory.
+ */
+data class LoopStart(val trailFile: File, val iterations: Int?, val startedAt: Instant, val captures: Boolean = true)
 
 /**
  * Hears about the passes of one device's loop. [passFinished] is called from the loop's own
@@ -128,7 +131,8 @@ class LoopPassReader {
         else -> null
       }
       fun result(i: Int) = (sorted[i].first as? TrailblazeLog.ObjectiveCompleteLog)?.objectiveResult
-      // The trailhead's setup and its teardown bookend the trail; neither is a step of a pass.
+      // The trailhead's setup and its teardown bookend the trail; neither is a step of a pass, and
+      // nor is a run's setup, which runs before the trailhead.
       val lifecycle = sorted.indices.filter { step(it)?.isTeardown() == false }
       val trailheadFirst = lifecycle.firstOrNull { step(it)!!.isTrailhead() }
       val trailheadEnd = lifecycle.lastOrNull { result(it) != null && step(it)!!.isTrailhead() }
@@ -179,6 +183,6 @@ class LoopPassReader {
 
     private fun xyz.block.trailblaze.yaml.PromptStep.isTrailhead() = this is DirectionStep && isTrailhead
 
-    private fun xyz.block.trailblaze.yaml.PromptStep.isTeardown() = this is DirectionStep && isTeardown
+    private fun xyz.block.trailblaze.yaml.PromptStep.isTeardown() = this is DirectionStep && (isTeardown || isSetup)
   }
 }

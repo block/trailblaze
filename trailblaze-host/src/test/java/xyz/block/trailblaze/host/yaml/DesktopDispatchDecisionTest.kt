@@ -215,6 +215,20 @@ class DesktopDispatchDecisionTest {
     assertThat(notice(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isNull()
   }
 
+  @Test
+  fun `a run with a setup is refused only where the run executes on the device`() {
+    fun refusal(driver: TrailblazeDriverType, preferHostAgent: Boolean) =
+      DesktopDispatchDecision.setupRefusal(decide(driver, preferHostAgent), driver)
+
+    assertThat(refusal(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = false)!!)
+      .contains("Enable `preferHostAgent`")
+    assertThat(refusal(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)!!)
+      .contains("instrumentation argument")
+    assertThat(refusal(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isNull()
+    assertThat(refusal(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isNull()
+    assertThat(refusal(TrailblazeDriverType.PLAYWRIGHT_NATIVE, preferHostAgent = false)).isNull()
+  }
+
   /**
    * A trail declaring single-device entries beside its configuration runs single-device when no
    * companions are bound, so a host-only path (Electron) must accept it — and refuse it once the

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  derivedFromText,
   arrangeLanes,
   bandAt,
   bandClock,
@@ -7,6 +8,7 @@ import {
   buildSummaryModel,
   cardBeside,
   defaultLaneIds,
+  openingLanes,
   describeError,
   emptyPreference,
   foldBursts,
@@ -196,6 +198,17 @@ describe('failure diagnosis', () => {
       trace: [{ label: 'Pick a tip', ts: 0, ms: 0, ok: false, objective: true, selfHeal: true, selfHealError: 'nope' }],
     });
     expect(model.steps[0].status).toBe('failed');
+  });
+
+  test("a failed device setup is diagnosed as device setup, not as a trail step", () => {
+    const model = build({
+      meta: { status: 'failed' },
+      trace: [
+        { label: 'Setup: setAppearance', ts: 0, ms: 0, ok: false, objective: true, setup: true, err: 'no app' },
+      ],
+    });
+    expect(model.steps.map((s) => [s.kind, s.status])).toEqual([['setup', 'failed']]);
+    expect(model.diagnosis?.problems.map((p) => p.step?.kind)).toEqual(['setup']);
   });
 
   test('end-of-run failure rows after a clean teardown belong to the trail, not the teardown', () => {
@@ -434,6 +447,12 @@ describe('event stream lanes', () => {
     expect(row).toMatchObject({ label: 'Row one', tone: 'error', badges: [{ text: 'ok', tone: 'ok' }], fields: [{ k: 'A', v: 'b' }] });
   });
 
+  test('a formatted row keeps its ok, warn, and error badge tones and drops any other', () => {
+    const badges = [{ text: 'a', tone: 'ok' }, { text: 'b', tone: 'warn' }, { text: 'c', tone: 'error' }, { text: 'd', tone: 'loud' }];
+    const model = build(base, [{ name: 'acme.rows', events: [], rows: [{ t: 7, label: 'Row one', badges }] }]);
+    expect(model.lanes[0].bands[0][0].badges).toEqual([{ text: 'a', tone: 'ok' }, { text: 'b', tone: 'warn' }, { text: 'c', tone: 'error' }, { text: 'd' }]);
+  });
+
   test('a stream with no placeable events adds no lane', () => {
     expect(build(base, [stream('acme.empty', [])]).lanes).toEqual([]);
   });
@@ -444,6 +463,35 @@ describe('event stream lanes', () => {
     const merged = build(base, [stream('one.plugin.log', [{ t: 1, d: 'a' }]), stream('one.plugin.log', [{ t: 2, d: 'b' }])]);
     expect(merged.lanes).toHaveLength(1);
     expect(merged.lanes[0].total).toBe(2);
+  });
+});
+
+describe('a lane whose rows each matter', () => {
+  const base = { trace: [{ label: 'Go', ts: 0, ms: 0, ok: true, objective: true }] };
+  const exposure = (flag: string) => ({
+    t: 7,
+    label: flag,
+    badges: [{ text: 'exposed', tone: 'ok' }, { text: 'remote' }],
+    fields: [{ k: 'Cohort', v: `${flag}-treatment` }, { k: 'Experiment', v: flag, href: `https://experiments.example.test/${flag}` }],
+    raw: [{ flag }],
+  });
+  const exposures = [exposure('alpha'), exposure('beta'), exposure('gamma')];
+
+  test('a burst of evaluations at one instant keeps every evaluation its own card when its stream says fold none', () => {
+    const notes = build(base, [{ name: 'acme.plugin.flag-evaluations', events: [], rows: exposures, fold: 'none' }]).lanes[0].bands[0];
+    expect(notes.map((n) => n.label)).toEqual(['alpha', 'beta', 'gamma']);
+    for (const note of notes) {
+      expect(note.badges).toEqual([{ text: 'exposed', tone: 'ok' }, { text: 'remote' }]);
+      expect(note.fields).toEqual([
+        { k: 'Cohort', v: `${note.label}-treatment` },
+        { k: 'Experiment', v: note.label, href: `https://experiments.example.test/${note.label}` },
+      ]);
+      expect(note.body).toContain(`"flag": "${note.label}"`);
+    }
+    // The same rows with no fold declared fold, whatever the stream is called.
+    for (const name of ['acme.plugin.flag-evaluations', 'experiment-eval']) {
+      expect(build(base, [{ name, events: [], rows: exposures }]).lanes[0].bands[0].map((n) => n.label)).toEqual(['3 events']);
+    }
   });
 });
 
@@ -496,9 +544,72 @@ describe('network lane', () => {
     expect(model.lanes[0].bands[0][0].fields).toContainEqual({ k: 'Device', v: 'phone' });
   });
 
+  // A raw line's time is when it was captured, which can be after the request started, so only a
+  // formatter's span (its row starts at the request's own time) stands in for durationMs.
+  test("an end without durationMs takes its latency from the formatter's span, not capture times", () => {
+    const row = (t: number, endT: number) => ({
+      name: 'network', total: 1, truncated: false, events: [],
+      rows: [{ t, endT, label: 'GET /a', raw: [{ id: 'r', method: 'GET', url: 'https://h.test/a' }, { id: 'r', statusCode: 200 }] }],
+    });
+    expect(build(base, [row(6000, 6750)]).lanes[0].bands[0][0].badges).toEqual([{ text: '200', tone: 'ok' }, { text: '750ms' }]);
+    const raw = build(base, [stream('network', [flat(100, { id: 'r', method: 'GET', url: 'https://h.test/a' }), flat(142, { id: 'r', statusCode: 200 })])]);
+    expect(raw.lanes[0].bands[0][0].badges).toEqual([{ text: '200', tone: 'ok' }]);
+  });
+
+  test("a plugin's capture replaces the built-in capture in its lane", () => {
+    const model = build(base, [
+      stream('com.example.plugin.network', [flat(1, { request: { _0: { id: 'q', method: 'GET', url: 'https://h.test/plugin' } } })]),
+      stream('network', [flat(1, { id: 'r', phase: 'REQUEST_START', method: 'GET', url: 'https://h.test/capture' })]),
+      stream('network.buyer', [flat(1, { id: 'b', phase: 'REQUEST_START', method: 'GET', url: 'https://h.test/buyer' })]),
+    ]);
+    const lane = (id: string) => model.lanes.find((l) => l.id === id)!;
+    expect(lane('network').bands.flat().map((n) => n.label)).toEqual(['GET /plugin']);
+    // No plugin stream for the buyer, so the built-in capture still feeds that lane.
+    expect(lane('network.buyer').bands.flat().map((n) => n.label)).toEqual(['GET /buyer']);
+  });
+
+  test('an error variant with its request id beside _0 ends the call as failed', () => {
+    const model = build(base, [
+      stream('com.example.plugin.network', [
+        flat(1, { request: { _0: { requestID: 'q', method: 'GET', url: 'https://h.test/z' } } }),
+        flat(2, { error: { requestID: 'q', _0: { message: 'offline' } } }),
+      ]),
+    ]);
+    expect(model.lanes[0].total).toBe(1);
+    expect(model.lanes[0].bands[0][0].badges[0]).toEqual({ text: 'FAILED', tone: 'error' });
+  });
+
   test('a stream that is not HTTP falls back to generic events', () => {
     const model = build(base, [stream('network', [flat(1, { hello: 'world' })])]);
     expect(model.lanes[0].bands[0]).toHaveLength(1);
+  });
+});
+
+describe('declared lane folds', () => {
+  const base = { trace: [{ label: 'Go', ts: 0, ms: 0, ok: true, objective: true }] };
+  const burst = (label: string) => ['a', 'b', 'c'].map((suffix) => ({ t: 7, label: `${label}-${suffix}`, badges: [], fields: [] }));
+  const labels = (events: unknown[]) => build(base, events).lanes.find((lane) => lane.id === 'acme.rows')!.bands[0].map((n) => n.label);
+
+  test('streams sharing a lane fold by the one that declares a fold, whichever comes first', () => {
+    const plain = { name: 'acme.rows', events: [], rows: burst('x') };
+    const kept = { name: 'acme.rows', events: [], rows: burst('y'), fold: 'none' };
+    const expected = ['x-a', 'x-b', 'x-c', 'y-a', 'y-b', 'y-c'];
+    expect(labels([plain, kept]).sort()).toEqual(expected);
+    expect(labels([kept, plain]).sort()).toEqual(expected);
+  });
+
+  test('of two declared folds on one lane, the one that keeps more rows apart wins, whichever comes first', () => {
+    const folding = { name: 'acme.rows', events: [], rows: burst('x'), fold: 'any' };
+    const kept = { name: 'acme.rows', events: [], rows: burst('y'), fold: 'none' };
+    expect(labels([folding, kept])).toHaveLength(6);
+    expect(labels([kept, folding])).toHaveLength(6);
+  });
+
+  test('a declared fold wins over a built-in lane\'s own', () => {
+    const sample = (heapMb: number) => ({ t: 10, d: JSON.stringify({ reason: 'sample', heapUsedKb: heapMb * 1024 }) });
+    const readings = [sample(50), sample(55), sample(60)];
+    expect(build(base, [stream('memory', readings)]).lanes[0].bands[0]).toHaveLength(3);
+    expect(build(base, [{ ...stream('memory', readings), fold: 'any' }]).lanes[0].bands[0].map((n) => n.label)).toEqual(['3 events']);
   });
 });
 
@@ -919,6 +1030,34 @@ describe('lane arrangement', () => {
   test('a run with none of the defaults opens on its first few lanes', () => {
     expect(defaultLaneIds([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }])).toEqual(['a', 'b', 'c']);
     expect(defaultLaneIds([{ id: 'a' }, { id: 'tools' }])).toEqual(['tools']);
+    expect(defaultLaneIds([{ id: 'tools' }, { id: 'network' }, { id: 'memory' }])).toEqual(['tools', 'network']);
+  });
+
+  test('a lane that asks to be shown opens beside the defaults, and alone when none is present', () => {
+    expect(openingLanes([{ id: 'tools' }, { id: 'screens', shown: true }, { id: 'memory' }])).toContain('screens');
+    expect(openingLanes([{ id: 'tools' }, { id: 'screens', shown: true }])).toContain('tools');
+    expect(openingLanes([{ id: 'screens', shown: true }, { id: 'memory' }])).not.toContain('memory');
+    expect(openingLanes([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }])).toEqual(['a', 'b', 'c']);
+  });
+
+  test('a stream that names its lane and asks to be shown keeps both on its lane', () => {
+    const rows = [{ t: 1300, label: 'Home', raw: [{ screen: 'Home' }] }];
+    const lane = build({ trace: TRACE }, [{ name: 'screens', title: 'Screens shown', shown: true, events: [], rows }]).lanes.find((l) => l.id === 'screens')!;
+    expect(lane).toMatchObject({ name: 'Screens shown', shown: true });
+    expect(lane.bands.flat().map((n) => n.label)).toEqual(['Home']);
+  });
+
+  test('a derived stream\'s lane says what it was derived from; a captured one says nothing', () => {
+    const rows = [{ t: 1300, label: 'Cart', raw: [{}] }];
+    const lanes = build({ trace: TRACE }, [
+      { name: 'cart-visits', shown: true, derivedFrom: ['screens'], events: [], rows },
+      { name: 'counts', shown: true, derivedFrom: [], events: [], rows },
+      { name: 'app.views', events: [], rows },
+    ]).lanes;
+    const lane = (id: string) => lanes.find((l) => l.id === id)!;
+    expect(derivedFromText(lane('cart-visits'))).toBe('Derived from screens');
+    expect(derivedFromText(lane('counts'))).toBe('Derived from this session\'s events');
+    expect(derivedFromText(lane('app.views'))).toBeNull();
   });
 });
 

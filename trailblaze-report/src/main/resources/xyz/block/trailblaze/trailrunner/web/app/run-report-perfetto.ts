@@ -18,6 +18,7 @@
 // there an overlap IS nesting, so they keep the recorder's thread and are only trimmed where a
 // child's separately-stamped end runs past its parent's.
 
+import { trailStepToken } from './run-report-trail-model';
 import type { ReplayLaneFailure, ReplayMemorySeries, ReplayStep } from './run-report-trail-replay';
 
 export const PERFETTO_ORIGIN = 'https://ui.perfetto.dev';
@@ -140,7 +141,7 @@ export const PERFETTO_HEAP_COUNTER = 'App heap (MB)';
 const micros = (ms: number) => Math.round(ms * 1000);
 const megabytes = (kb: number) => Math.round((kb / 1024) * 10) / 10;
 const identity = (t: number) => t;
-const stepName = (step: ReplayStep) => `${step.num === 0 ? 'TRAILHEAD' : `STEP ${step.num}`}${step.label ? ` · ${step.label}` : ''}`;
+const stepName = (step: ReplayStep) => `${trailStepToken(step.num)}${step.label ? ` · ${step.label}` : ''}`;
 
 /** Drop undefined/null/empty args so the trace stays readable in Perfetto's details pane. */
 const compactArgs = (args: Record<string, unknown>): Record<string, unknown> | undefined => {

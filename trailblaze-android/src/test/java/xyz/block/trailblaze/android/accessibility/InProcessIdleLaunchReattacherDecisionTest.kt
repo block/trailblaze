@@ -205,6 +205,30 @@ class InProcessIdleLaunchReattacherDecisionTest {
     assertFalse(OnDeviceTurbo.isTurboTarget(""))
   }
 
+  @Test
+  fun aTaskWhoseProcessWasKilledStillCountsAsStateToKeep() {
+    // Android kills a background app's process and keeps its task; `pidof` then says not running,
+    // and only the activity records show the app has a back stack an attach would wipe.
+    val dumpsys = """
+      ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+      Display #0 (activities from top to bottom):
+        * Task{1a2b #42 type=standard A=10123:$appId U=0 visible=false sz=1}
+          * Hist  #0: ActivityRecord{3c4d u0 $appId/.MainActivity t42}
+        * Task{5e6f #7 type=home}
+          * Hist  #0: ActivityRecord{7a8b u0 com.android.launcher3/.Launcher t7}
+    """.trimIndent()
+    assertTrue(InProcessIdleLaunchReattacher.mayRetainTask(dumpsys, appId))
+    // A package whose id merely starts with the app's is not the app.
+    assertFalse(InProcessIdleLaunchReattacher.mayRetainTask(dumpsys.replace("$appId/", "$appId.debug/"), appId))
+    assertFalse(InProcessIdleLaunchReattacher.mayRetainTask(dumpsys, "com.example.other"))
+  }
+
+  @Test
+  fun aDumpThatDidNotCompleteCannotShowTheTaskIsGone() {
+    assertTrue(InProcessIdleLaunchReattacher.mayRetainTask("", appId))
+    assertTrue(InProcessIdleLaunchReattacher.mayRetainTask("Error: timed out", appId))
+  }
+
   // The detector-package naming convention this class relies on is asserted where it now lives,
   // in InProcessIdleTest — it is shared with the attach, not owned by the re-attach.
 }

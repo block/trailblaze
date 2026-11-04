@@ -84,31 +84,7 @@ class AndroidTestScreenState(
   override val deviceHeight: Int = bitmap?.height ?: activity.resources.displayMetrics.heightPixels
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
 
-  override val screenshotBytes: ByteArray? by lazy {
-    bitmap?.let { source ->
-      val config = screenshotScalingConfig ?: return@let source.encode(
-        format = Bitmap.CompressFormat.PNG,
-        quality = 100,
-      )
-      val (width, height) = config.computeScaledDimensions(source.width, source.height)
-      // A scaled COPY, not `AndroidBitmapUtils.scale`'s recycle-the-original: `source` is this
-      // snapshot's screenshot, and re-reading it after a recycle would throw.
-      val scaled = if (width == source.width && height == source.height) {
-        null
-      } else {
-        Bitmap.createScaledBitmap(source, width, height, true)
-      }
-      try {
-        (scaled ?: source).encode(
-          format = config.imageFormat.toCompressFormat(),
-          // Android takes 0..100; the config carries 0.0..1.0.
-          quality = (config.compressionQuality * 100).toInt().coerceIn(0, 100),
-        )
-      } finally {
-        scaled?.recycle()
-      }
-    }
-  }
+  override val screenshotBytes: ByteArray? by lazy { bitmap?.encodeScreenshot(screenshotScalingConfig) }
 
   private val compactElements: CompactScreenElements? by lazy {
     val tree = trailblazeNodeTree ?: return@lazy null
@@ -124,6 +100,32 @@ class AndroidTestScreenState(
 
   override val annotationElements: List<AnnotationElement>? by lazy {
     compactElements?.buildAnnotationElements()
+  }
+}
+
+/**
+ * This screenshot scaled and encoded as [config] asks. Null [config] is the unscaled, lossless PNG
+ * the farm replay path has always produced.
+ */
+internal fun Bitmap.encodeScreenshot(config: ScreenshotScalingConfig?): ByteArray {
+  val source = this
+  config ?: return source.encode(format = Bitmap.CompressFormat.PNG, quality = 100)
+  val (width, height) = config.computeScaledDimensions(source.width, source.height)
+  // A scaled COPY, not `AndroidBitmapUtils.scale`'s recycle-the-original: the caller still owns
+  // `source`, and re-reading it after a recycle would throw.
+  val scaled = if (width == source.width && height == source.height) {
+    null
+  } else {
+    Bitmap.createScaledBitmap(source, width, height, true)
+  }
+  return try {
+    (scaled ?: source).encode(
+      format = config.imageFormat.toCompressFormat(),
+      // Android takes 0..100; the config carries 0.0..1.0.
+      quality = (config.compressionQuality * 100).toInt().coerceIn(0, 100),
+    )
+  } finally {
+    scaled?.recycle()
   }
 }
 

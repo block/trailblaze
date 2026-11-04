@@ -383,8 +383,10 @@ export const myapp_launchAppSignedIn = trailblaze.trailhead<{ email: string }>(
   do it there when `ctx.previousRun` arrives. Defer nothing else, because when it is `null` the
   next trailhead does a full setup and never sees what was left.
 - **`reusable` is forced to `false`** when the trail did not pass, when `teardown` throws or
-  runs past its 45-second budget, when the session holds a resource the host releases at session
-  end, or when `state` is over 16 KB (it is dropped). The budget
+  runs past its shared budget (45 seconds by default; configurable with
+  [`TRAILBLAZE_TRAILHEAD_TEARDOWN_TIMEOUT_MS`](configuration.md#runs-and-recordings)), when the
+  session holds a resource the host releases at session end, or when `state` is over 16 KB
+  (it is dropped). The budget
   is best effort while `teardown` waits on a nested tool call, which runs to its own timeout.
 - **In a multi-device trail** a trailhead's `teardown` runs only if the trail ended on the device
   that trailhead set up. Otherwise it is skipped and reported as failed, since its cleanup would

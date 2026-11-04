@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.logs.client.SessionStartRecords
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -272,6 +273,9 @@ class RunYamlRequestHandler(
         trailSourceUrl = request.trailSourceUrl,
       )
     }
+
+    // A host-driven session's start log is the host's; its trail rides on each request instead.
+    if (!shouldEmitStartLogHere) request.sessionStart?.let { SessionStartRecords.record(session.sessionId, it) }
 
     ActionTrace.mark(ActionTrace.Boundary.SESSION_READY)
 

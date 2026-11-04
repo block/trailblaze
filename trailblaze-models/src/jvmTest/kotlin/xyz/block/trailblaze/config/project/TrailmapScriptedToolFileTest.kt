@@ -1232,4 +1232,34 @@ class TrailmapScriptedToolFileTest {
     assertTrue(msg.contains("trailblaze/sensitiveArgNames"), "expected key name in: $msg")
     assertTrue(msg.contains("list"), "expected expected-type guidance in: $msg")
   }
+
+  @Test
+  fun `a subprocess descriptor is host-only without requiresHost`() {
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      runtime: subprocess
+    """.trimIndent()
+
+    val config = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source).toInlineScriptToolConfig()
+    assertEquals(false, config.requiresHost)
+    assertTrue(config.hostOnly, "a subprocess tool runs on the host")
+  }
+
+  @Test
+  fun `a subprocess descriptor with requiresHost false in _meta is rejected`() {
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      runtime: subprocess
+      _meta:
+        trailblaze/requiresHost: false
+    """.trimIndent()
+
+    val descriptor = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    val ex = assertFailsWith<IllegalArgumentException> { descriptor.toInlineScriptToolConfig() }
+    val msg = assertNotNull(ex.message)
+    assertTrue(msg.contains("foo_tool"), "expected tool name in: $msg")
+    assertTrue(msg.contains("runtime: subprocess"), "expected the runtime in: $msg")
+  }
 }

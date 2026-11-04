@@ -213,6 +213,52 @@ class OnDeviceRpcMemoryProbeTest {
   }
 
   @Test
+  fun `samples taken while the runner was starting stop costing readings once it connects`() {
+    // Its own device id: readiness is shared by every probe in the process.
+    val device = "emulator-starting-runner"
+    var now = 1_000_000L
+    var up = false
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = FakeFallback(),
+      rpc = { _, _ ->
+        if (up) RpcResult.Success(response(true)) else RpcResult.Failure(RpcResult.ErrorType.NETWORK_ERROR, "starting")
+      },
+      clock = { now },
+      backoffMs = 15_000,
+    )
+    repeat(3) {
+      probe.read(device, "com.example.app", true)
+      now += 15_001
+    }
+    up = true
+    assertEquals(MemoryProbe.SOURCE_ADB, probe.read(device, "com.example.app", true)?.source, "given up on")
+    OnDeviceRpcMemoryProbe.runnerReady(device)
+    assertEquals(MemoryProbe.SOURCE_ONDEVICE, probe.read(device, "com.example.app", true)?.source)
+  }
+
+  @Test
+  fun `a runner the connect replaced with one that knows the request is read again`() {
+    val device = "emulator-replaced-runner"
+    var upgraded = false
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = FakeFallback(),
+      rpc = { _, _ ->
+        if (upgraded) {
+          RpcResult.Success(response(true))
+        } else {
+          RpcResult.Failure(RpcResult.ErrorType.HTTP_ERROR, "Server error during RPC call: HTTP 404: Not Found")
+        }
+      },
+    )
+    // An early sample reaches the old runner, which does not know the request.
+    probe.read(device, "com.example.app", true)
+    upgraded = true
+    assertEquals(MemoryProbe.SOURCE_ADB, probe.read(device, "com.example.app", true)?.source)
+    OnDeviceRpcMemoryProbe.runnerReady(device)
+    assertEquals(MemoryProbe.SOURCE_ONDEVICE, probe.read(device, "com.example.app", true)?.source)
+  }
+
+  @Test
   fun `a runner too old to know the request is not asked again`() {
     var now = 1_000_000L
     var rpcCalls = 0

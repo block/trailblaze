@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.android.test
 
 import android.app.Activity
+import android.os.SystemClock
 import android.graphics.Bitmap
 import android.view.View
 import androidx.compose.ui.semantics.SemanticsNode
@@ -12,9 +13,12 @@ import androidx.test.espresso.IdlingResourceTimeoutException
 import androidx.test.espresso.ViewAction
 import androidx.test.espresso.ViewAssertion
 import androidx.test.espresso.ViewInteraction
+import androidx.test.espresso.matcher.RootMatchers
 import java.util.concurrent.TimeUnit
 import org.hamcrest.Matcher
+import org.hamcrest.Matchers.sameInstance
 import xyz.block.trailblaze.android.test.hierarchy.AndroidComposeHierarchyCollector
+import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollector
 import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.dispatchThenSettle
 
@@ -33,11 +37,15 @@ interface AndroidTestTarget : DriverDispatch {
   /** The currently resumed Activity. Resolve on every capture so recreation cannot stale it. */
   fun currentActivity(): Activity
 
-  /** Executes an Espresso action against a classic Android View. */
-  fun performViewAction(matcher: Matcher<View>, action: ViewAction)
+  /**
+   * Executes an Espresso action against a classic Android View, in the window whose root is [root]
+   * when given. Espresso's default root is the focused window, which excludes a popup that does
+   * not take focus (a search field's suggestion menu) even though the capture shows it.
+   */
+  fun performViewAction(matcher: Matcher<View>, action: ViewAction, root: View? = null)
 
-  /** Executes an Espresso assertion against a classic Android View. */
-  fun checkView(matcher: Matcher<View>, assertion: ViewAssertion)
+  /** Executes an Espresso assertion against a classic Android View; [root] as for [performViewAction]. */
+  fun checkView(matcher: Matcher<View>, assertion: ViewAssertion, root: View? = null)
 
   /**
    * Returns every active Compose semantics root, including dialog and popup roots when available.
@@ -100,6 +108,18 @@ interface AndroidTestTarget : DriverDispatch {
   fun waitForIdle(ceilingMs: Long? = null)
 
   /**
+   * Lets the app's own timers run for the real time that passed since the last settle or call.
+   *
+   * Called before each capture a tool dispatches on, so a tool that polls the screen — a recorded
+   * "wait until Content Loaded" — sees an app whose `delay()`s finish. A no-op for targets whose
+   * app is not on a virtual clock.
+   */
+  fun advanceAppClock() {}
+
+  /** Treats the app's clock as caught up with real time now, without advancing it. */
+  fun markAppClockSynced() {}
+
+  /**
    * Views are synchronized by Espresso and Compose by the existing Compose test rule.
    *
    * An idle timeout from [waitForIdle] after the action landed is logged rather than failing the
@@ -107,8 +127,19 @@ interface AndroidTestTarget : DriverDispatch {
    * the app as failed. Any other exception — an app exception Espresso rethrows — still fails it.
    * See [DriverDispatch].
    */
-  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R =
-    dispatchThenSettle(action, settle = { waitForIdle() }, isSettleTimeout = { it.isIdleTimeout() })
+  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R {
+    // Catch the app's clock up before the action, while the screen is still: the same catch-up
+    // in the settle after it replays the action's own ripple and transition frame by frame, which
+    // cost the first tap of a trail 1.8s.
+    advanceAppClock()
+    // The settle after it only waits for idle, as a Compose test's does: the clock was just caught
+    // up, and advancing it again replays the action's own frames.
+    return dispatchThenSettle(
+      action,
+      settle = { markAppClockSynced(); waitForIdle() },
+      isSettleTimeout = { it.isIdleTimeout() },
+    )
+  }
 }
 
 /**
@@ -125,13 +156,16 @@ class RuleBackedAndroidTestTarget(
 
   override fun currentActivity(): Activity = activityProvider()
 
-  override fun performViewAction(matcher: Matcher<View>, action: ViewAction) {
-    Espresso.onView(matcher).perform(action)
+  override fun performViewAction(matcher: Matcher<View>, action: ViewAction, root: View?) {
+    Espresso.onView(matcher).inWindowOf(root).perform(action)
   }
 
-  override fun checkView(matcher: Matcher<View>, assertion: ViewAssertion) {
-    Espresso.onView(matcher).check(assertion)
+  override fun checkView(matcher: Matcher<View>, assertion: ViewAssertion, root: View?) {
+    Espresso.onView(matcher).inWindowOf(root).check(assertion)
   }
+
+  private fun ViewInteraction.inWindowOf(root: View?): ViewInteraction =
+    if (root == null) this else inRoot(RootMatchers.withDecorView(sameInstance(root)))
 
   /**
    * The Compose rule's own roots, falling back to an unsynchronized read of the same roots when the
@@ -139,10 +173,10 @@ class RuleBackedAndroidTestTarget(
    *
    * The fallback is not belt-and-braces. `fetchSemanticsNodes` synchronizes before it returns
    * anything, so on a screen with an endless animation it does not return a stale tree — it throws,
-   * and the caller gets no tree at all. That is a screen state, not a defect: the signed-out Square
-   * landing runs a looping photo carousel that keeps the recomposer perpetually busy, and builds
-   * 9907 and 9911 each lost trails there mid-sign-in, on a screen that was healthy and had the
-   * Sign in button on it the whole time. Swallowing the timeout in [waitForIdle] was not enough for
+   * and the caller gets no tree at all. That is a screen state, not a defect: a landing
+   * screen with a looping photo carousel keeps the recomposer perpetually busy, and trails lost
+   * their sign-in there on a screen that was healthy and had the Sign in button on it the whole
+   * time. Swallowing the timeout in [waitForIdle] was not enough for
    * exactly this reason — that only covers the waits this driver asks for by name.
    *
    * [unsynchronizedComposeRoots] reads the same [SemanticsOwner]s the rule would have read, without
@@ -170,32 +204,77 @@ class RuleBackedAndroidTestTarget(
   }
 
   /**
-   * The same view-tree read [composeRootsIn] takes, scoped to the current Activity's window.
+   * The same view-tree read [composeRootsIn] takes, over the windows a capture reads
+   * ([AndroidHybridHierarchyCollector.windowRoots]): the focused one and any shown above it.
    *
-   * A Compose `Dialog` or `Popup` — which lives in a window of its own — is therefore not in the
-   * result. Tracking those means installing `ViewRootForTest.onViewCreatedCallback`, which the
-   * Compose rule owns and which taking over would break. Not worth it for a path that only runs
-   * when an app is never idle: what is never idle here is a full-screen animation, and the dialogs
-   * this driver cares about sit on settled screens the rule's own read serves.
+   * The Activity's window alone is not enough. A screen that never goes idle can sit in a dialog
+   * of its own: an editor can be a modal dialog over a screen that keeps animating, and
+   * with only the Activity's window read here, its focused name field was in every capture yet
+   * no Compose action could find it, so `clearText` failed with the field focused.
    */
   private fun unsynchronizedComposeRoots(): List<SemanticsNode> {
     // Resolved off the main thread on purpose, as in `AndroidScrollActions.scrollableViews`: a
     // host's activityProvider is free to reach for the resumed Activity through `runOnMainSync`,
-    // which throws if it is already on the main thread. Square's does, and it also POLLS — so
-    // hoisting this is not only about the throw. One CI run lost a trail here, 110s into a
-    // sign-in spent on the signed-out landing: that screen's looping carousel is never idle,
-    // which is the one condition that reaches this fallback at all.
-    val decorView = currentActivity().window.decorView
+    // which throws if it is already on the main thread, and may also POLL — so hoisting this is
+    // not only about the throw. A sign-in on a landing screen whose looping carousel is never
+    // idle can lose its trail here, which is the one condition that reaches this fallback at all.
+    val activity = currentActivity()
     // Through [onMainThread] rather than `runOnMainSync` directly, because this is reachable FROM
     // the UI thread — a tool dispatched inside an Espresso action reads the tree from there — and
     // `runOnMainSync` refuses that outright too. The UNBOUNDED hop on purpose: this fallback
     // serves the action path, which legitimately waits out whatever the main thread is doing.
-    return onMainThread { AndroidComposeHierarchyCollector.rootsUnder(decorView) }
+    return onMainThread {
+      AndroidHybridHierarchyCollector.windowRoots(activity)
+        .flatMap { AndroidComposeHierarchyCollector.rootsUnder(it) }
+    }
   }
 
   override fun captureScreenshot(): Bitmap? = screenshotProvider()
 
+  /** When the Compose test clock last caught up with real time: a settle, or [advanceAppClock]. */
+  @Volatile private var composeClockSyncedAtMs: Long? = null
+
+  /**
+   * Moves the Compose test rule's clock forward by the real time since it last caught up.
+   *
+   * The rule puts every composition's coroutines on a virtual clock that moves only when a test
+   * advances it. A real app's `delay()` — a loading screen, a debounce, a snackbar timeout — then
+   * never finishes while the driver polls, and a recorded "wait for Content Loaded" waits forever.
+   *
+   * Capped per call, because advancing replays every frame in between, and on a screen that is
+   * still animating each replayed frame is a real measure-and-draw: catching up the seconds a host
+   * round trip took cost a tap 8.6s. A poll calls this every interval, so the cap only slows a
+   * timer that is being waited on by the gap before the first poll.
+   */
+  override fun advanceAppClock() {
+    val rule = composeTestRule ?: return
+    val now = SystemClock.uptimeMillis()
+    val last = composeClockSyncedAtMs
+    composeClockSyncedAtMs = now
+    val elapsed = if (last == null) 0L else (now - last).coerceAtMost(MAX_CLOCK_ADVANCE_MS)
+    if (elapsed > 0) {
+      // Only a never-idle screen or one with no Compose content is tolerated here, as in
+      // awaitIdle; anything else is the app failing during the work this catch-up ran.
+      perf("clock.advance $elapsed") { runCatching { rule.mainClock.advanceTimeBy(elapsed, ignoreFrameDuration = true) } }
+        .onFailure { if (!it.isIdleTimeout() && !it.isNoComposeRoots()) throw it }
+    }
+  }
+
+  override fun markAppClockSynced() {
+    composeClockSyncedAtMs = SystemClock.uptimeMillis()
+  }
+
   override fun waitForIdle(ceilingMs: Long?) {
+    advanceAppClock()
+    try {
+      awaitIdleWithin(ceilingMs)
+    } finally {
+      // The settle just drove every pending frame, so the time it took is not owed again.
+      composeClockSyncedAtMs = SystemClock.uptimeMillis()
+    }
+  }
+
+  private fun awaitIdleWithin(ceilingMs: Long?) {
     if (ceilingMs == null) {
       awaitIdle()
       return
@@ -236,27 +315,27 @@ class RuleBackedAndroidTestTarget(
     // not pick a root first.
     //
     // Never idling is a legitimate state of a real app, not a test failure. A screen with a looping
-    // animation — the signed-out Square landing runs an endless photo carousel — keeps Compose's
+    // animation — an endless photo carousel on a landing screen, say — keeps Compose's
     // recomposer perpetually busy, so this synchronization can only ever expire there. Letting that
     // expiry propagate turns "the app is animating" into a failed trail on whichever step happened
-    // to be running: a CI run lost its sign-in that way, after 69s of waiting on a screen that
-    // was healthy and had the Sign in button on it the whole time.
+    // to be running, such as a sign-in waiting on a screen that was healthy and had the Sign in
+    // button on it the whole time.
     //
     // So expiry means "stop waiting", not "give up". Every caller polls — the resolve loop re-reads
     // the tree until its own deadline, and the sign-in tool waits on screens with budgets of its
     // own — and a tree read off a still-animating screen is answerable in exactly the way a
     // never-arriving idle signal is not. The wait is an optimization; the polling is the contract.
     val espressoTimedOut =
-      runCatching { Espresso.onIdle() }
+      perf("idle.espresso") { runCatching { Espresso.onIdle() } }
         .fold(onSuccess = { false }) { if (it.isIdleTimeout()) true else throw it }
     // The Compose wait is SKIPPED once Espresso has already reported never-idle. Compose registers
     // its recomposer as an Espresso idling resource, so the wait above covers it too and
     // `ComposeTestRule.waitForIdle()` delegates back to Espresso on Android — running it after a
     // timeout re-pays the whole framework timeout to be told the same thing. Every caller polls, so
-    // on a never-idle screen that doubling lands on each poll: one run spent 110s of a single
-    // trail's sign-in waiting on the signed-out landing's endless carousel.
+    // on a never-idle screen that doubling lands on each poll, and a sign-in there spends most of
+    // its budget waiting twice.
     if (espressoTimedOut) return
-    runCatching { composeTestRule?.waitForIdle() }
+    perf("idle.compose") { runCatching { composeTestRule?.waitForIdle() } }
       .onFailure { if (!it.isIdleTimeout()) throw it }
   }
 
@@ -267,9 +346,9 @@ class RuleBackedAndroidTestTarget(
    * `fetchSemanticsNodes` throws this the moment the root registry is empty, on the theory that a
    * Compose test without Compose is a wiring mistake. In a real mixed app it is a screen state: a
    * Views-only screen has no roots, and so does the blank moment mid-transition after one screen's
-   * Compose content detaches and before the next screen's attaches. Square's sign-in does exactly
-   * that — the broadcast tears down the signed-out landing and the shell renders only after a
-   * server-bound sync — and letting the throw propagate turned every poll that should have waited
+   * Compose content detaches and before the next screen's attaches. A sign-in can do exactly
+   * that — the signed-out screen tears down and the next renders only after a server-bound
+   * sync — and letting the throw propagate turned every poll that should have waited
    * out that window into an instant failure claiming the app had no UI.
    *
    * Message-matched for the same reason as [isIdleTimeout]: the type is a bare
@@ -311,3 +390,6 @@ internal fun Throwable.isIdleTimeout(): Boolean {
   }
   return false
 }
+
+/** The most app time one [AndroidTestTarget.advanceAppClock] call replays. */
+private const val MAX_CLOCK_ADVANCE_MS = 1_000L

@@ -29,6 +29,8 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val startedTargetAppIds = mutableListOf<List<String>?>()
     /** The `requireTraffic` of every start, in call order. */
     val startedRequireTraffic = mutableListOf<Boolean>()
+    /** The `targetId` of every start, in call order. */
+    val startedTargetIds = mutableListOf<String?>()
 
     override fun start(
       sessionId: String,
@@ -37,11 +39,13 @@ class CompositeAndroidNetworkCaptureActivatorTest {
       targetAppIds: List<String>?,
       deviceLabel: String?,
       requireTraffic: Boolean,
+      targetId: String?,
     ) {
       started += sessionId
       startedDevices += deviceId.instanceId to deviceLabel
       startedTargetAppIds += targetAppIds
       startedRequireTraffic += requireTraffic
+      startedTargetIds += targetId
     }
 
     override fun stop(sessionId: String) {
@@ -60,12 +64,24 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(RecordingActivator(), fallback) { false }
 
-    composite.start("no-target", dir, deviceId, null)
-    composite.start("unresolved", dir, deviceId, emptyList())
+    composite.start("no-target", dir, deviceId, null, targetId = null)
+    composite.start("unresolved", dir, deviceId, emptyList(), targetId = null)
 
     // The delegate tells "skip" from "refuse" by null vs empty, so the composite must not
     // normalize one into the other.
     assertEquals(listOf(null, emptyList()), fallback.startedTargetAppIds)
+  }
+
+  @Test
+  fun `forwards the target id to the delegate`() {
+    val fallback = RecordingActivator()
+    val composite = CompositeAndroidNetworkCaptureActivator(RecordingActivator(), fallback) { false }
+
+    composite.start("s1", dir, deviceId, listOf("com.example.app"), targetId = "example")
+
+    // A delegate that only serves some targets decides from this; dropping it would idle capture
+    // for every target, including the ones it serves.
+    assertEquals(listOf<String?>("example"), fallback.startedTargetIds)
   }
 
   @Test
@@ -74,7 +90,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
 
-    composite.start("s1", dir, deviceId, emptyList())
+    composite.start("s1", dir, deviceId, emptyList(), targetId = null)
 
     assertEquals(listOf("s1"), proxy.started)
     assertTrue(fallback.started.isEmpty())
@@ -86,7 +102,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { false }
 
-    composite.start("s1", dir, deviceId, emptyList())
+    composite.start("s1", dir, deviceId, emptyList(), targetId = null)
 
     assertEquals(listOf("s1"), fallback.started)
     assertTrue(proxy.started.isEmpty())
@@ -97,7 +113,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val proxy = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback = null) { false }
 
-    composite.start("s1", dir, deviceId, emptyList())
+    composite.start("s1", dir, deviceId, emptyList(), targetId = null)
     composite.stop("s1")
 
     assertTrue(proxy.started.isEmpty())
@@ -110,7 +126,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
 
-    composite.start("s1", dir, deviceId, emptyList())
+    composite.start("s1", dir, deviceId, emptyList(), targetId = null)
     composite.stop("s1")
 
     assertEquals(listOf("s1"), proxy.stopped)
@@ -126,8 +142,8 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
     val buyer = TrailblazeDeviceId("emulator-5556", TrailblazeDevicePlatform.ANDROID)
 
-    composite.start("s1", dir, deviceId, emptyList(), deviceLabel = "seller")
-    composite.start("s1", dir, buyer, emptyList(), deviceLabel = "buyer")
+    composite.start("s1", dir, deviceId, emptyList(), deviceLabel = "seller", targetId = null)
+    composite.start("s1", dir, buyer, emptyList(), deviceLabel = "buyer", targetId = null)
     composite.stop("s1")
 
     assertEquals(
@@ -145,8 +161,8 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(RecordingActivator(), fallback) { false }
 
-    composite.start("interactive", dir, deviceId, listOf("com.example"), requireTraffic = false)
-    composite.start("run", dir, deviceId, listOf("com.example"))
+    composite.start("interactive", dir, deviceId, listOf("com.example"), requireTraffic = false, targetId = null)
+    composite.start("run", dir, deviceId, listOf("com.example"), targetId = null)
 
     assertEquals(listOf(false, true), fallback.startedRequireTraffic.toList())
   }
@@ -180,7 +196,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     var optIn = false
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { optIn }
 
-    composite.start("s1", dir, deviceId, emptyList()) // routes to fallback and is recorded
+    composite.start("s1", dir, deviceId, emptyList(), targetId = null) // routes to fallback and is recorded
     optIn = true // a later flip must not re-route the opt-in question to proxy
 
     assertTrue(composite.isSessionCaptureOptedIn("s1"))
@@ -201,9 +217,9 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     var optIn = false
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { optIn }
 
-    composite.start("off", dir, deviceId, emptyList()) // routes to fallback
+    composite.start("off", dir, deviceId, emptyList(), targetId = null) // routes to fallback
     optIn = true
-    composite.start("on", dir, deviceId, emptyList()) // routes to proxy
+    composite.start("on", dir, deviceId, emptyList(), targetId = null) // routes to proxy
 
     composite.stop("off")
     composite.stop("on")

@@ -29,6 +29,21 @@ class DesktopYamlRunnerCaptureBeforeDispatchTest {
   }
 
   @Test
+  fun `capture starts under the id the session is created under, not the raw override`() {
+    val created = SessionId.sanitized("review-run")
+
+    assertEquals(
+      created,
+      DesktopYamlRunner.sessionIdToCaptureBeforeDispatch(request(SessionId("review-run"), awaitCompletion = true)),
+    )
+    assertEquals(
+      SessionId.sanitized("../outside"),
+      DesktopYamlRunner.sessionIdToCaptureBeforeDispatch(request(SessionId("../outside"), awaitCompletion = true)),
+      "a traversal in the override never reaches the session directory",
+    )
+  }
+
+  @Test
   fun `an unpinned run waits for the reply, which is the only place its id exists`() {
     assertNull(DesktopYamlRunner.sessionIdToCaptureBeforeDispatch(request(null, awaitCompletion = true)))
   }

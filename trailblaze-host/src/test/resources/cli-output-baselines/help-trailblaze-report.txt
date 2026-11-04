@@ -5,11 +5,12 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hvV] [--current] [--full-report-payloads] [--no-gif]
-                         [--no-webp] [--open] [--[no-]storyboard-yaml] [--gif
-                         [=<gifOutput>]] [--storyboard[=<storyboardOutput>]]
-                         [--video[=<videoOutput>]] [--webp[=<webpOutput>]]
-                         [--surveys[=<names>[,<names>...]]]... [--id=<id>]
+Usage: trailblaze report [-hvV] [--current] [--full-report-payloads]
+                         [--link-images] [--no-gif] [--no-webp] [--open] [--
+                         [no-]storyboard-yaml] [--gif[=<gifOutput>]]
+                         [--storyboard[=<storyboardOutput>]] [--video
+                         [=<videoOutput>]] [--webp[=<webpOutput>]] [--surveys
+                         [=<names>[,<names>...]]]... [--id=<id>]
                          [--max-size=<maxSize>] [--output-dir=<outputDir>]
                          [--share-url=<url>]
                          [--storyboard-columns=<storyboardColumns>]
@@ -58,6 +59,15 @@ truncated artifact is still written with a warning.
                                sessions). Use `trailblaze session list` to find
                                IDs. Prefix matching is supported. Equivalent to
                                passing the session ID positionally.
+      --link-images          Link screenshots and session recordings from the
+                               session directories instead of embedding them,
+                               which keeps the report small and fast to build
+                               for large runs. The links are relative to where
+                               the report is written, so it renders only beside
+                               the logs directory it came from: open it in
+                               place, or host the logs directory with its
+                               layout intact (the report and every session
+                               directory, at the same relative paths).
       --max-size=<maxSize>   Cap each exported artifact (--gif / --video /
                                --webp / --storyboard) at the given byte size.
                                Defaults to 10MB — GitHub's inline-attachment

@@ -209,6 +209,79 @@ class CanonicalSelectorBridgeTest {
   }
 
   /**
+   * A recorded `roleDescriptionRegex: Switch` names a Compose switch by the role description the
+   * accessibility delegate publishes for it. A role the delegate does not describe declines.
+   */
+  @Test
+  fun `role description matches a Compose switch and declines a role it does not describe`() {
+    nextId = 1L
+    val switch = node(DriverNodeDetail.Compose(role = "Switch", toggleableState = "Off"))
+    val checkbox = node(DriverNodeDetail.Compose(role = "Checkbox", toggleableState = "Off"))
+    val root = node(DriverNodeDetail.Compose(), children = listOf(switch, checkbox))
+    val switchResult = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(roleDescriptionRegex = "Switch", isChecked = false)),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(switchResult)
+    assertEquals(switch.nodeId, switchResult.node.nodeId)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(
+      TrailblazeNodeSelectorResolver.resolve(
+        root,
+        a11ySelector(DriverNodeMatch.AndroidAccessibility(roleDescriptionRegex = "Checkbox")),
+      ),
+    )
+  }
+
+  /**
+   * A recorded `stateDescriptionRegex: Selected` names what the accessibility delegate published
+   * for a selectable Compose node. The projected description answers it; the app's own description
+   * still answers on a node whose collector projected none.
+   */
+  @Test
+  fun `state description matches the delegate's projected text, and the app's own without one`() {
+    nextId = 1L
+    val selectedRow = node(DriverNodeDetail.Compose(text = "Card", isSelected = true, accessibilityStateDescription = "Selected"))
+    val otherRow = node(DriverNodeDetail.Compose(text = "Coupon", accessibilityStateDescription = "Not selected"))
+    val unprojected = node(DriverNodeDetail.Compose(text = "Gift card", stateDescription = "Chosen"))
+    val root = node(DriverNodeDetail.Compose(), children = listOf(selectedRow, otherRow, unprojected))
+    val selected = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(stateDescriptionRegex = "Selected")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(selected)
+    assertEquals(selectedRow.nodeId, selected.node.nodeId)
+    val chosen = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(stateDescriptionRegex = "Chosen")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(chosen)
+    assertEquals(unprojected.nodeId, chosen.node.nodeId)
+  }
+
+  /**
+   * A recorded `hintTextRegex` names a Compose text field by its label. The field matches, and a
+   * node without the projection — the label's own Text node, or a tree that projects nothing —
+   * declines rather than matching loosely.
+   */
+  @Test
+  fun `hint text matches a Compose text field by its projected label and nothing else`() {
+    nextId = 1L
+    val label = node(DriverNodeDetail.Compose(text = "Name"))
+    val field = node(
+      DriverNodeDetail.Compose(editableText = "", hasSetTextAction = true, accessibilityHintText = "Name"),
+      children = listOf(label),
+    )
+    val unprojected = node(DriverNodeDetail.Compose(editableText = "", hasSetTextAction = true))
+    val root = node(DriverNodeDetail.Compose(), children = listOf(field, unprojected))
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(hintTextRegex = "Name")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(field.nodeId, result.node.nodeId)
+  }
+
+  /**
    * Grid position is answered on the View backend, and answered strictly: a view that is not a
    * collection item reports null and so fails a constraint naming a position rather than matching
    * it loosely. A real trail's grid tiles carry no other distinguishing property.

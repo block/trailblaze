@@ -65,6 +65,12 @@ interface AndroidNetworkCaptureActivator {
    * so when it is false; it should still record the empty capture. True (a run) keeps whatever
    * rule the activator has: it does not oblige one that has no empty-capture check to add one. It
    * never relaxes the identity check above.
+   *
+   * [targetId] is the id of the target [targetAppIds] came from, or null when the session has no
+   * target. An activator whose capture client only some apps ship uses it to stay idle for every
+   * other target, instead of probing the device for a peer that will never appear. Callers build
+   * this value with [androidCaptureTargetId]. It has no default on purpose: a caller that forgot it
+   * would read as "a target with no such client" and silently idle capture for one that has it.
    */
   fun start(
     sessionId: String,
@@ -73,6 +79,7 @@ interface AndroidNetworkCaptureActivator {
     targetAppIds: List<String>?,
     deviceLabel: String? = null,
     requireTraffic: Boolean = true,
+    targetId: String?,
   )
 
   /**
@@ -145,10 +152,18 @@ internal fun androidCaptureTargetAppIds(
   platform: TrailblazeDevicePlatform,
   findTarget: (String) -> TrailblazeHostAppTarget?,
 ): List<String>? {
-  val namedTargetId =
-    TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId(
-      selectedTargetAppId = targetId,
-      neutralDefaultId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
-    ) ?: return null
+  val namedTargetId = androidCaptureTargetId(targetId) ?: return null
   return findTarget(namedTargetId)?.getPossibleAppIdsForPlatform(platform).orEmpty()
 }
+
+/**
+ * The `targetId` to pass [AndroidNetworkCaptureActivator.start] for a session whose target id is
+ * [targetId]: null when the session has no target (none set, or the neutral default target), else
+ * the id itself. Shares its "no target" rule with [androidCaptureTargetAppIds], so the two values
+ * passed to one start always agree on whether the session has a target.
+ */
+internal fun androidCaptureTargetId(targetId: String?): String? =
+  TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId(
+    selectedTargetAppId = targetId,
+    neutralDefaultId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+  )

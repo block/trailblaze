@@ -49,9 +49,20 @@ internal fun reconcileRunOutcome(
   if (latchSuccess && diskStatus is SessionStatus.Ended) {
     return ReconciledRunOutcome(
       success = false,
-      error = "Session $sessionDescription ended with status: ${diskStatus::class.simpleName}",
+      error = "Session $sessionDescription ended with status: ${diskStatus::class.simpleName}" +
+        (diskStatus.failureReason()?.let { "\n$it" } ?: ""),
     )
   }
 
   return ReconciledRunOutcome(success = latchSuccess && latchError == null, error = latchError)
 }
+
+/**
+ * The message a failed session recorded on disk. Without it the CLI reports only the status name,
+ * and the reason (a refused tool, a trailhead that could not start) is left in the session log.
+ */
+private fun SessionStatus.Ended.failureReason(): String? = when (this) {
+  is SessionStatus.Ended.Failed -> exceptionMessage
+  is SessionStatus.Ended.FailedWithSelfHeal -> exceptionMessage
+  else -> null
+}?.trim()?.takeIf { it.isNotEmpty() }

@@ -119,8 +119,9 @@ stale entry left behind after a rename fails CI loudly.
 | `adbShell` | `android_adbShell` | 2026-05-15 |
 | `androidSystemUiDemoMode` | `android_systemUiDemoMode` | 2026-05-15 |
 | `clearAppData` | `mobile_clearAppData` | 2026-05-15 |
+| `networkConnection` | `mobile_networkConnection` | 2026-10-28 (hidden alias until callers moved) |
 
-All three landed together because the enforcement test (above) acts as a safety net:
+The first three landed together because the enforcement test (above) acts as a safety net:
 any callsite missed during a rename surfaces as a build failure rather than a silent
 runtime miss. With that net in place the previous "one tool at a time" caution no
 longer applies. The grandfather allowlist is empty as of this entry; future

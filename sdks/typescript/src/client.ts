@@ -9,6 +9,7 @@
 // field renames or a variant is added, update both sides in lockstep.
 
 import type { TrailblazeContext } from "./context.js";
+import { markFatal } from "./tool-error.js";
 
 // ---- Wire types (mirror Kotlin @Serializable shapes) ------------------------------------------
 
@@ -63,6 +64,7 @@ export interface CallToolResult {
   text_content: string;
   error_message: string;
   structured_content?: unknown;
+  fatal?: boolean;
 }
 
 export interface CallbackError {
@@ -977,9 +979,10 @@ function unwrapCallbackResponse(
     );
   }
   if (!result.success) {
-    throw new Error(
+    const failure = new Error(
       `trailblaze.client.callTool("${toolName}") tool failed: ${result.error_message || "(no message)"}`,
     );
+    throw result.fatal === true ? markFatal(failure) : failure;
   }
   return {
     success: true,

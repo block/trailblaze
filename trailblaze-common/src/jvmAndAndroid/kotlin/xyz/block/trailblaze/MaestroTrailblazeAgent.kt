@@ -457,7 +457,7 @@ abstract class MaestroTrailblazeAgent(
     // exactly once, right before `execute()`. The tool executes with resolved args; the log
     // carries the resolved form plus the authored (token-bearing) form when they differ, which
     // is what lets recordings keep their `{{var}}` tokens.
-    val memoryResolvedTool = interpolateMemoryInTool(trailblazeTool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(trailblazeTool, memory, trailblazeExecutionContext.trailblazeDeviceInfo)
     val timeBeforeToolExecution = Clock.System.now()
     val trailblazeToolResult = memoryResolvedTool.execute(
       toolExecutionContext = trailblazeExecutionContext,

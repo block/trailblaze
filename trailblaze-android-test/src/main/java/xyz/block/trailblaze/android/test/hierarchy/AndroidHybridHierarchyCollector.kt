@@ -44,7 +44,8 @@ object AndroidHybridHierarchyCollector {
    * nothing it needs, because reading on the UI thread is a stronger guarantee than waiting for
    * idle and then reading from somewhere else, and every caller of a capture polls.
    */
-  fun collect(activity: Activity, target: AndroidTestTarget): Collected {
+  /** [keepClipped] as in [AndroidComposeHierarchyCollector.collect]. */
+  fun collect(activity: Activity, target: AndroidTestTarget, keepClipped: Boolean = false): Collected {
     // Only the READS hold the UI thread. The graft below is pure transformation of the immutable
     // nodes these two collectors already copied out, so running it after the block costs the
     // app's frame budget nothing — and a capture is polled, so its main-thread bite repeats.
@@ -54,39 +55,52 @@ object AndroidHybridHierarchyCollector {
     // tools). An unbounded hop would let a wedged main thread park every one of those forever
     // with nothing logged on the device; expiry throws the not-ready classification instead, so
     // a wedge mid-trail is a diagnosed step failure rather than an eternal park.
-    val (views, compose) = onMainThreadForCapture {
-      val windowRoot = focusedWindowRoot(activity)
-      val views = AndroidViewHierarchyCollector.collect(windowRoot)
-      val maxViewId = views.trailblazeTree?.aggregate()?.maxOfOrNull(TrailblazeNode::nodeId) ?: 0L
-      views to
-        AndroidComposeHierarchyCollector.collect(
+    val windows = onMainThreadForCapture {
+      var nextId = 1L
+      windowRoots(activity).map { windowRoot ->
+        val views = AndroidViewHierarchyCollector.collect(windowRoot, firstNodeId = nextId)
+        val maxViewId = views.trailblazeTree?.aggregate()?.maxOfOrNull(TrailblazeNode::nodeId) ?: (nextId - 1)
+        val compose = AndroidComposeHierarchyCollector.collect(
           target.composeRootsIn(windowRoot),
           firstNodeId = maxViewId + 1,
+          keepClipped = keepClipped,
         )
-    }
-    val viewTree = views.trailblazeTree
-    val composeTrees = compose.trees
-
-    val hybrid =
-      when {
-        viewTree == null && composeTrees.isEmpty() -> syntheticRoot(emptyList())
-        viewTree == null -> syntheticRoot(composeTrees)
-        composeTrees.isEmpty() -> viewTree
-        else ->
-          graftComposeTrees(
-            viewTree = viewTree,
-            composeTrees = composeTrees,
-            hostSemanticsIdByNodeId = views.composeRootSemanticsIdByNodeId,
-            semanticsIdByNodeId = compose.semanticsIdByNodeId,
-          )
+        nextId = maxOf(maxViewId, compose.trees.maxNodeId()) + 1
+        views to compose
       }
+    }
+    val hybrids = windows.map { (views, compose) -> hybridOf(views, compose) }
     return Collected(
-      trailblazeTree = hybrid,
-      legacyViewTree = views.legacyTree,
-      viewByNodeId = views.viewByNodeId,
-      semanticsIdByNodeId = compose.semanticsIdByNodeId,
+      trailblazeTree = hybrids.singleOrNull() ?: syntheticRoot(hybrids),
+      // The focused window's: the legacy tree has one root, and that window is what it described.
+      legacyViewTree = windows.first().first.legacyTree,
+      viewByNodeId = windows.fold(emptyMap()) { all, (views, _) -> all + views.viewByNodeId },
+      semanticsIdByNodeId = windows.fold(emptyMap()) { all, (_, compose) -> all + compose.semanticsIdByNodeId },
     )
   }
+
+  private fun hybridOf(
+    views: AndroidViewHierarchyCollector.Collected,
+    compose: AndroidComposeHierarchyCollector.Collected,
+  ): TrailblazeNode {
+    val viewTree = views.trailblazeTree
+    val composeTrees = compose.trees
+    return when {
+      viewTree == null && composeTrees.isEmpty() -> syntheticRoot(emptyList())
+      viewTree == null -> syntheticRoot(composeTrees)
+      composeTrees.isEmpty() -> viewTree
+      else ->
+        graftComposeTrees(
+          viewTree = viewTree,
+          composeTrees = composeTrees,
+          hostSemanticsIdByNodeId = views.composeRootSemanticsIdByNodeId,
+          semanticsIdByNodeId = compose.semanticsIdByNodeId,
+        )
+    }
+  }
+
+  private fun List<TrailblazeNode>.maxNodeId(): Long =
+    maxOfOrNull { tree -> tree.aggregate().maxOf(TrailblazeNode::nodeId) } ?: 0L
 
   internal fun graftForTest(
     viewTree: TrailblazeNode,
@@ -148,7 +162,8 @@ object AndroidHybridHierarchyCollector {
   }
 
   /**
-   * The root view of the window an interaction would actually reach — the FOCUSED one.
+   * The root views of the windows a user sees on top: the FOCUSED window, then every window of
+   * this app stacked above it, which are the popups that do not take focus.
    *
    * A modal dialog (a bottom sheet, a confirmation) is its own window, not a subtree of the
    * activity's decor, so a tree built from the decor alone cannot see it at all — and worse,
@@ -156,13 +171,24 @@ object AndroidHybridHierarchyCollector {
    * opposite semantics: UiAutomator dumps the active window, and an accessibility projection
    * hides what a modal window occludes. A transactions trail's status filter is the concrete
    * failure: with a sheet open, the decor-only tree offered the OCCLUDED filter chips and never
-   * the sheet's own rows. Windows are checked topmost-first, and the activity's decor is the
-   * fallback for the moments (transitions) where no window reports focus.
+   * the sheet's own rows.
+   *
+   * A popup that does not take focus is the other half. A search field's suggestion menu leaves
+   * focus — and the keyboard — on the field, so the menu's window never reports focus, yet it is
+   * on screen and in the accessibility tree recordings were made against: a search trail
+   * can assert a menu that sits in one.
+   *
+   * Windows are listed bottom to top; the activity's decor is the fallback for the moments
+   * (transitions) where no window reports focus.
    */
-  private fun focusedWindowRoot(activity: Activity): View = onMainThread {
+  internal fun windowRoots(activity: Activity): List<View> = onMainThread {
     val decor = activity.window.decorView
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@onMainThread decor
-    WindowInspector.getGlobalWindowViews().lastOrNull { it.hasWindowFocus() } ?: decor
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@onMainThread listOf(decor)
+    val windows = WindowInspector.getGlobalWindowViews()
+    val focused = windows.indexOfLast { it.hasWindowFocus() }
+    if (focused < 0) return@onMainThread listOf(decor)
+    listOf(windows[focused]) +
+      windows.drop(focused + 1).filter { it.isShown && it.width > 0 && it.height > 0 }
   }
 
   private fun syntheticRoot(children: List<TrailblazeNode>) =

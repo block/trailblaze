@@ -165,7 +165,7 @@ class AndroidVideoCaptureTest {
       fallback = fallback,
       screenrecordAvailable = { true },
       firstPictureTimeoutMs = 50,
-      picturelessDevices = mutableSetOf(),
+      picturelessDevices = mutableMapOf(),
     )
 
     capture.start(tempDir, DEVICE_ID, appId = null)
@@ -176,20 +176,57 @@ class AndroidVideoCaptureTest {
     assertEquals(1, mux.stopCount, "the empty stream is stopped once, when the fallback takes over")
   }
 
-  @Test
-  fun `a device found to stream no pictures skips the wait in its next session`() {
-    // On a pictureless device every session would otherwise sit out the full first-picture wait,
-    // and lose that much of its opening footage, before the fallback starts.
-    val pictureless = mutableSetOf<String>()
-    val first = AndroidVideoCapture(
-      muxFactory = { _, _, _ -> FakeMux(result = null, pictureAfterPolls = null) },
+  /** Runs one session whose stream does or does not carry a picture, sharing [pictureless]. */
+  private fun session(pictureless: MutableMap<String, Int>, picture: Boolean) {
+    val capture = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> FakeMux(result = null, pictureAfterPolls = if (picture) 0 else null) },
       fallback = RecordingFallback(artifact = null),
       screenrecordAvailable = { true },
       firstPictureTimeoutMs = 50,
       picturelessDevices = pictureless,
     )
-    first.start(tempDir, DEVICE_ID, appId = null)
-    first.stop(CaptureOptions(captureVideo = true))
+    capture.start(tempDir, DEVICE_ID, appId = null)
+    capture.stop(CaptureOptions(captureVideo = true))
+  }
+
+  /** Whether the next session on [pictureless]'s device streams, rather than going straight to the fallback. */
+  private fun nextSessionStreams(pictureless: MutableMap<String, Int>): Boolean {
+    val mux = FakeMux(result = null, pictureAfterPolls = 0)
+    AndroidVideoCapture(
+      muxFactory = { _, _, _ -> mux },
+      fallback = RecordingFallback(artifact = null),
+      screenrecordAvailable = { true },
+      picturelessDevices = pictureless,
+    ).start(tempDir, DEVICE_ID, appId = null)
+    return mux.startCount == 1
+  }
+
+  @Test
+  fun `one session with no picture does not stop the next from streaming`() {
+    // The start can meet the device or adb briefly unavailable, such as while the device connects.
+    // Judged on that one session, the device would record from screenshots until the daemon restarts.
+    val pictureless = mutableMapOf<String, Int>()
+    session(pictureless, picture = false)
+
+    assertTrue(nextSessionStreams(pictureless))
+  }
+
+  @Test
+  fun `a session with a picture starts the count again`() {
+    val pictureless = mutableMapOf<String, Int>()
+    session(pictureless, picture = false)
+    session(pictureless, picture = true)
+    session(pictureless, picture = false)
+
+    assertTrue(nextSessionStreams(pictureless), "no-picture sessions only count in a row")
+  }
+
+  @Test
+  fun `a device found to stream no pictures skips the wait in its next session`() {
+    // On a pictureless device every session would otherwise sit out the full first-picture wait,
+    // and lose that much of its opening footage, before the fallback starts.
+    val pictureless = mutableMapOf<String, Int>()
+    repeat(AndroidVideoCapture.PICTURELESS_AFTER_SESSIONS) { session(pictureless, picture = false) }
 
     val secondMux = FakeMux(result = null, pictureAfterPolls = null)
     val secondFallback = RecordingFallback(artifact = null)
@@ -216,7 +253,7 @@ class AndroidVideoCaptureTest {
       fallback = RecordingFallback(artifact = null),
       screenrecordAvailable = { true },
       firstPictureTimeoutMs = 60_000,
-      picturelessDevices = mutableSetOf(),
+      picturelessDevices = mutableMapOf(),
     )
     var thrown: Throwable? = null
     val starter = Thread { thrown = runCatching { capture.start(tempDir, DEVICE_ID, appId = null) }.exceptionOrNull() }

@@ -126,7 +126,7 @@ describe("ctx.history", () => {
       return "ok";
     });
     await expect(def({}, {} as never, hostClient(calls, () => []))).rejects.toThrow(
-      'ctx.history.toolCalls: section must be one of "trailhead", "trail", "teardown", not "s2".',
+      'ctx.history.toolCalls: section must be one of "deviceSetup", "trailhead", "trail", "teardown", not "s2".',
     );
     expect(calls).toEqual([]);
   });

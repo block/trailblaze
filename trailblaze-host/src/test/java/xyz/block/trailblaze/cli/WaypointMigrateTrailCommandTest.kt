@@ -23,6 +23,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
@@ -303,6 +304,39 @@ class WaypointMigrateTrailCommandTest {
     assertEquals("Pending", result[0].loweredSelector.textRegex)
   }
 
+  @Test
+  fun `collectSourceSelectorsUnified includes an inputText field selector and rewrites it in place`() = pairs.forEach { pair ->
+    // A recorded `inputText` names its field with a selector of the same dialect as the taps
+    // around it; leaving it behind would keep the trail on the source driver's selectors.
+    val cmd = WaypointMigrateTrailCommand()
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap the field, then type into it",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Name"))),
+              wrap("inputText", InputTextTrailblazeTool(text = "Jane", selector = sourceSelector(pair, "Name"))),
+              wrap("inputText", InputTextTrailblazeTool(text = "typed into the focused field")),
+            ),
+          ),
+        ),
+      ),
+    )
+    val collected = cmd.collectSourceSelectorsUnified(trail, "android", pair)
+    assertEquals(listOf("tapOnElementBySelector", "inputText"), collected.map { it.toolName })
+
+    val migrated = targetSelector(pair, "Name")
+    val result = cmd.migrateUnifiedTrail(
+      trail, "android", mapOf(0 to migrated, 1 to migrated), WaypointMigrateTrailCommand.IndexedCursor(), pair,
+    )
+    val tools = result.trail[0].recordings["android"]!!.map { it.trailblazeTool }
+    assertEquals(migrated, (tools[1] as InputTextTrailblazeTool).selector)
+    assertEquals("Jane", (tools[1] as InputTextTrailblazeTool).text)
+    assertNull((tools[2] as InputTextTrailblazeTool).selector)
+  }
+
   // ----- countUnmigratableNotVisibleUnified ---------------------------------------
 
   @Test
@@ -516,6 +550,10 @@ class WaypointMigrateTrailCommandTest {
     assertEquals(
       AssertVisibleBySelectorTrailblazeTool::class.simpleName,
       cmd.classNameFromYamlToolName("assertVisibleBySelector"),
+    )
+    assertEquals(
+      InputTextTrailblazeTool::class.simpleName,
+      cmd.classNameFromYamlToolName("inputText"),
     )
   }
 

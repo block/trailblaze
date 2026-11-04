@@ -3,7 +3,9 @@ package xyz.block.trailblaze.cli
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlMap
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import picocli.CommandLine
 import picocli.CommandLine.Command
@@ -59,6 +61,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.resolveRunTargetApp
@@ -72,6 +75,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.displayTitle
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import java.io.File
@@ -415,6 +419,21 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   var argsFile: File? = null
 
   @Option(
+    names = ["--device-setup"],
+    paramLabel = "<file|json>",
+    description = [
+      "Device setup: tool calls each trail runs first, before its trailhead, to put the device in a " +
+        "lane-wide or one-off state the trail doesn't own (a theme, a locale). A `*.tools.yaml` file or inline " +
+        "JSON, listed like a trail's `tools:` items " +
+        "(`- sample_setAppearance: { appearance: dark }`). A call naming a tool the device " +
+        "doesn't have fails the trail before any call runs. Tools and trailheads read the calls with " +
+        "`ctx.history.toolCalls({ section: \"deviceSetup\" })`. A run with device setup never saves its " +
+        "recording back into the trail.",
+    ],
+  )
+  var deviceSetup: String? = null
+
+  @Option(
     names = ["--max-llm-calls"],
     description = [
       "Cap the number of LLM calls per objective. " +
@@ -670,8 +689,22 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    */
   internal open val trailheadReuse: Boolean? get() = null
 
-  /** One run of a trail on a device that got as far as a session, as [runAgain] sees it. */
-  internal data class FinishedRun(val passed: Boolean, val sessionDir: File)
+  /**
+   * One run of a trail on a device that got as far as a session, as [runAgain] sees it. [abandoned]
+   * is why this client stopped waiting for a run it then cancelled, when it did, and [abandonedAtMs]
+   * when: the run may still be letting go of the device, and its session ends cancelled by that, not
+   * by a person. [letGo] asks the daemon whether it has, cleanup and capture included. [cancelled]:
+   * [cancelRunInFlight] cancelled it, so the daemon named no session and [sessionDir] is the one
+   * this client pinned for it.
+   */
+  internal data class FinishedRun(
+    val passed: Boolean,
+    val sessionDir: File,
+    val abandoned: String? = null,
+    val abandonedAtMs: Long? = null,
+    val letGo: (() -> DaemonClient.RunRelease)? = null,
+    val cancelled: Boolean = false,
+  )
 
   /**
    * Whether to run the same trail on the same device again after [run]. Subclasses may ask for it.
@@ -687,8 +720,35 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    */
   internal open fun sessionStarting(sessionDir: File) {}
 
+  /** The process's exit code once every run is done and the trails ended with [code]; subclasses may reinterpret it. */
+  internal open fun finalExitCode(code: Int): Int = code
+
   /** Set by both run loops after each run that recorded a session; null otherwise. */
   private var lastRun: FinishedRun? = null
+
+  /** Cancels the daemon run in flight; set while runs go through a daemon. */
+  @Volatile private var runCanceller: (() -> Boolean)? = null
+
+  /** Whether [cancelRunInFlight] cancelled the daemon run in flight; reset as each run starts. */
+  @Volatile private var cancelledInFlight = false
+  /** Held for a whole cancel, so a run that came back reads its verdict only once a cancel in progress settles. */
+  private val cancelLock = Any()
+
+  /**
+   * Cancels the run in flight, as Ctrl+C would, so its session ends cancelled. False when no run is
+   * in flight, or it runs in process, where nothing can cancel it short of exiting.
+   */
+  internal fun cancelRunInFlight(): Boolean {
+    val canceller = runCanceller ?: return false
+    // The run can come back cancelled before the request returns; the lock holds its verdict until then.
+    return synchronized(cancelLock) { canceller().also { if (it) cancelledInFlight = true } }
+  }
+
+  /** Whether the run that just came back was cancelled by [cancelRunInFlight], once any cancel in progress settles. */
+  private fun cancelledByThisClient(): Boolean = synchronized(cancelLock) { cancelledInFlight }
+
+  /** Whether [cancelRunInFlight] can cancel a run: runs go through a daemon. */
+  internal val canCancelRuns: Boolean get() = runCanceller != null
 
   /** Each device spec, repeated for as long as [runAgain] asks. Lazy: it asks after each run. */
   private fun withReruns(deviceSpecs: List<String?>): Sequence<String?> = sequence {
@@ -765,7 +825,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     val parsedMemorySeeds: Map<String, String>
     val parsedSensitiveSeeds: Map<String, String>
     try {
-      parsedMemorySeeds = parseMemorySeeds(memorySeeds)
+      // The setup tool calls ride memory, the one per-trail channel every runner (host or
+      // on-device) already seeds, so each can run them before the trailhead.
+      parsedMemorySeeds = parseMemorySeeds(memorySeeds) +
+        listOfNotNull(deviceSetup?.let { DeviceSetupToolsMemory.DEVICE_SETUP_TOOLS_MEMORY_KEY to parseSetupOption(it) })
       parsedSensitiveSeeds = parseMemorySeeds(sensitiveSeeds)
     } catch (e: IllegalArgumentException) {
       Console.error("Error: ${e.message}")
@@ -1283,7 +1346,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       }
     }
 
-    exitProcess(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code)
+    exitProcess(finalExitCode(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code))
   }
 
   /**
@@ -1389,6 +1452,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     // RPC grows a full typed exit code in its response, swap this in.
     var worstExitCode = TrailblazeExitCode.SUCCESS.code
 
+    runCanceller = { daemon.currentRunId?.let { daemon.cancelRunBlocking(it) } ?: false }
+
     // Register Ctrl+C handler to cancel the in-flight daemon run
     Runtime.getRuntime().addShutdownHook(Thread {
       val runId = daemon.currentRunId
@@ -1476,6 +1541,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               originalYaml = rawYaml,
               sessionId = sessionId,
             )
+            cancelledInFlight = false
             sessionStarting(File(daemonLogsDir, sessionId.value))
 
             var lastProgress: String? = null
@@ -1488,7 +1554,33 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // exactly what someone comparing against a green run wants to read.
             response.sessionId?.let { delegatedSessions += SessionId(it) to sessionLogsDir(response, daemonLogsDir) }
             lastRun = response.sessionId?.let {
-              FinishedRun(passed = response.success, sessionDir = File(sessionLogsDir(response, daemonLogsDir), it))
+              FinishedRun(
+                passed = response.success,
+                sessionDir = File(sessionLogsDir(response, daemonLogsDir), it),
+                cancelled = !response.success && cancelledByThisClient(),
+              )
+            } ?: if (DaemonClient.abandonedForNoProgress(response)) {
+              // The daemon names no session for a run this client gave up on, but it ran in the
+              // one this client pinned for it, under the daemon's logs directory.
+              val runId = daemon.lastRunId
+              FinishedRun(
+                passed = false,
+                sessionDir = File(sessionLogsDir(response, daemonLogsDir), sessionId.value),
+                abandoned = response.error,
+                abandonedAtMs = daemon.lastRunAbandonedAtMs ?: System.currentTimeMillis(),
+                letGo = runId?.let { id -> { daemon.runReleaseBlocking(id) } },
+              )
+            } else if (cancelledByThisClient()) {
+              // Cancelled by this client: it ran in the pinned session, which may still be cleaning up.
+              val runId = daemon.lastRunId
+              FinishedRun(
+                passed = false,
+                sessionDir = File(sessionLogsDir(response, daemonLogsDir), sessionId.value),
+                letGo = runId?.let { id -> { daemon.runReleaseBlocking(id) } },
+                cancelled = true,
+              )
+            } else {
+              null
             }
 
             if (response.success) {
@@ -1539,7 +1631,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     // Flush output before exiting so error messages are visible in CI logs
     System.out.flush()
     System.err.flush()
-    exitProcess(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code)
+    exitProcess(finalExitCode(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code))
   }
 
   /**
@@ -2131,7 +2223,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       // emptyMap() and dropping any args the config wanted to forward (LLM auth tokens, the
       // migration-mode dual-tree capture flag, etc.). Calling the same provider keeps env-var
       // bridging consistent across CLI and UI invocations.
-      additionalInstrumentationArgs = runBlocking { config.additionalInstrumentationArgs() },
+      additionalInstrumentationArgs = { runCanReachLlm -> config.additionalInstrumentationArgs(runCanReachLlm) },
       composeRpcPort = composePort,
       // Forward the CLI capture flags into the in-process (`--no-daemon`) run path. The daemon
       // path forwards these via `CliRunRequest`; without this the no-daemon path dropped them
@@ -2160,14 +2252,19 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // Trail-execution failure means an objective or recorded assertion did not pass
             // — that's an ASSERTION_FAILED (1) outcome, not an infra (2) one. Infra failures
             // are surfaced via the `onConnectionStatus` callback above (daemon/device
-            // unreachable) and the interrupted/cancelled paths below.
+            // unreachable), a run that could not be prepared ([TrailExecutionResult.Failed.infrastructure]),
+            // and the interrupted/cancelled paths below.
             val err = result.errorMessage ?: "Unknown error"
             if (failureBodyAlreadyStreamed(lastProgress, err)) {
               Console.error("\n❌ Trail failed")
             } else {
               Console.error("\n❌ Trail failed: $err")
             }
-            exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
+            exitCode = if (result.infrastructure) {
+              TrailblazeExitCode.INFRA_FAILED.code
+            } else {
+              TrailblazeExitCode.ASSERTION_FAILED.code
+            }
           }
           is TrailExecutionResult.Cancelled -> {
             Console.info("\n⚠️ Trail was cancelled")
@@ -2186,11 +2283,15 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     val existingSessionIds = logsRepo.getSessionIds().toSet()
 
     // Run the trail
-    app.desktopYamlRunner.runYaml(params)
+    val executionFinished = CountDownLatch(1)
+    app.desktopYamlRunner.runYaml(params, onExecutionFinished = { executionFinished.countDown() })
 
     // Wait for completion
     try {
       completionLatch.await()
+      // The result callback precedes job completion. Wait for child cleanup and all lease
+      // release attempts before the unlogged early return or the eventual JVM exit.
+      executionFinished.await()
     } catch (e: InterruptedException) {
       Console.info("Execution interrupted")
       exitCode = TrailblazeExitCode.INFRA_FAILED.code
@@ -2906,8 +3007,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
-   * Defaults to `true` (save by default) when the user didn't specify either form. */
-  internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
+   * Defaults to `true` (save by default) when the user didn't specify either form. Always off
+   * under `--device-setup`: that run's recording carries its setup, not the trail's default. */
+  internal fun resolveEffectiveSaveRecording(): Boolean = deviceSetup == null && (saveRecording ?: true)
 
   /**
    * Companion of [shouldSaveRecording], called only when it returned `false`. Emits one
@@ -3570,6 +3672,47 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     }
 
     /**
+     * Reads `--device-setup`: a path to a `*.tools.yaml` file, or the list itself as inline JSON (a value
+     * starting with `[`). Returns its tool calls as the JSON string seeded under
+     * [DeviceSetupToolsMemory.DEVICE_SETUP_TOOLS_MEMORY_KEY]: an array of single-key `{toolName: args}` objects.
+     */
+    internal fun parseSetupOption(value: String): String {
+      val file = File(value)
+      if (!file.isFile && value.trimStart().startsWith("[")) return parseSetup(value, "(inline)").toString()
+      return parseSetupFile(file)
+    }
+
+    /** [parseSetupOption] for a file. */
+    internal fun parseSetupFile(file: File): String {
+      require(file.isFile) { "--device-setup not found: ${file.path}" }
+      val text = try {
+        file.readText()
+      } catch (e: java.io.IOException) {
+        throw IllegalArgumentException("--device-setup ${file.path} could not be read: ${e.message}")
+      }
+      return parseSetup(text, file.path).toString()
+    }
+
+    /** Validates setup-tools YAML (or JSON) [text] and returns it as a JSON array. */
+    internal fun parseSetup(text: String, source: String): JsonArray {
+      val node = try {
+        Yaml.default.parseToYamlNode(text)
+      } catch (e: Exception) {
+        throw IllegalArgumentException("--device-setup $source is not valid YAML/JSON: ${e.message}")
+      }
+      val calls = YamlJsonBridge.yamlNodeToJsonElement(node)
+      require(calls is JsonArray && calls.isNotEmpty()) {
+        "--device-setup $source must be a non-empty list of tool calls (`- toolName: { ... }`)."
+      }
+      calls.forEachIndexed { index, call ->
+        require(call is JsonObject && call.size == 1 && call.values.single() !is JsonArray) {
+          "--device-setup $source item ${index + 1} must be one tool call: `toolName: { args }`."
+        }
+      }
+      return calls
+    }
+
+    /**
      * Derives a meaningful test name from a trail file.
      *
      * For the standard subdirectory layout (e.g., `test-counter/trail.yaml` or
@@ -4029,9 +4172,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           TrailExecutionItem.Skip(
             file = file,
             reason = skipReason,
-            title = config.title?.takeIf { it.isNotBlank() }
-              ?: config.id?.takeIf { it.isNotBlank() }
-              ?: shortName,
+            title = config.displayTitle() ?: shortName,
             testKey = config.id?.takeIf { it.isNotBlank() } ?: shortName,
             trailId = config.id?.takeIf { it.isNotBlank() },
             target = config.target?.takeIf { it.isNotBlank() },

@@ -60,6 +60,10 @@ import xyz.block.trailblaze.util.Console
  *  - The tool returns a [TrailblazeToolResult.Error] (mapped to the same envelope shape so
  *    the JS side can branch on `isError`).
  *
+ * A tool that returns [TrailblazeToolResult.Error.FatalError] additionally carries `"fatal":true`,
+ * which the SDK keeps on the error it throws so the failure stays fatal when it propagates out of
+ * the calling tool.
+ *
  * The failures that stop the call before the tool runs (no context, rejected argument keys, args
  * that don't decode, a failed lookup, an unknown name, a same-host re-entry or a cycle) also carry
  * `"dispatchFailed":true`, so a caller can tell "this call could not run" from "the tool ran and
@@ -274,7 +278,7 @@ class SessionScopedHostBinding(
     // Surface tool-reported errors via the same envelope shape as exceptions so the JS
     // side has a single branch (`isError`) rather than two failure modes to discriminate.
     if (result is TrailblazeToolResult.Error) {
-      return errorEnvelope(result.errorMessage)
+      return errorEnvelope(result.errorMessage, fatal = result is TrailblazeToolResult.Error.FatalError)
     }
 
     return TrailblazeJsonInstance.encodeToString(TrailblazeToolResult.serializer(), result)
@@ -338,11 +342,12 @@ class SessionScopedHostBinding(
    * names would leak class info to the JS side; the binding-error envelope is intentionally
    * minimal).
    */
-  private fun errorEnvelope(message: String, dispatchFailed: Boolean = false): String {
+  private fun errorEnvelope(message: String, dispatchFailed: Boolean = false, fatal: Boolean = false): String {
     val obj: JsonObject = buildJsonObject {
       put("isError", true)
       put("error", message)
       if (dispatchFailed) put("dispatchFailed", true)
+      if (fatal) put("fatal", true)
     }
     return obj.toString()
   }

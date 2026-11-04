@@ -6,10 +6,11 @@
 // Run: `bun test run-report-cli.test.ts` from this directory.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { gunzipSync } from "zlib";
+import { sidecarScript } from "../trailrunner/web/app/run-report-payload";
 import { isSelectorAnalyzableTree } from "../trailrunner/web/app/run-report-selectors";
 import { MAX_ATTACHMENTS_PER_SESSION } from "./run-report-events";
 import { MAX_TRACE_BYTES } from "./run-report-trace-spans";
@@ -18,6 +19,8 @@ import {
   formatterContext,
   isRemoteScreenshot,
   isSafeSessionRelativePath,
+  eventsSidecarFile,
+  linkEventsGz,
   localShotUrl,
   packDeviceLog,
   packHierarchies,
@@ -32,6 +35,8 @@ import {
   readNetworkLog,
   readTraceFile,
   readVideo,
+  recompressScreenshot,
+  recompressScreenshots,
   remoteShotValue,
   reportShotFiles,
   screenshotDataUri,
@@ -68,39 +73,73 @@ function writeLargePng(name: string): Buffer {
   return require("fs").readFileSync(join(sessionDir, name));
 }
 
+/** What the report embeds for each of [files]: recompressed up front, then inlined. */
+async function embed(files: string[], ffmpeg?: string, concurrency?: number): Promise<Array<string | null>> {
+  const recompressed = await recompressScreenshots(files.map((f) => join(sessionDir, f)), ffmpeg, concurrency);
+  return files.map((f) => screenshotDataUri(sessionDir, f, recompressed));
+}
+
 describe("screenshot recompression budget", () => {
-  test.skipIf(!ffmpegPresent)("a large screenshot is re-encoded to a much smaller bounded JPEG", () => {
+  test.skipIf(!ffmpegPresent)("a large screenshot is re-encoded to a much smaller bounded JPEG", async () => {
     const original = writeLargePng("big.png");
     expect(original.length).toBeGreaterThan(100 * 1024); // over the recompression threshold
-    const uri = screenshotDataUri(sessionDir, "big.png");
+    const [uri] = await embed(["big.png"]);
     expect(uri).toStartWith("data:image/jpeg;base64,");
     expect(bytesOf(uri!).length).toBeLessThan(original.length / 2);
   });
 
-  test.skipIf(!ffmpegPresent)("a screenshot ffmpeg cannot decode falls back to the original bytes", () => {
+  test.skipIf(!ffmpegPresent)("a screenshot ffmpeg cannot decode falls back to the original bytes", async () => {
     const junk = Buffer.alloc(200 * 1024, 7); // .png extension, not a decodable image
     writeFileSync(join(sessionDir, "corrupt.png"), junk);
-    const uri = screenshotDataUri(sessionDir, "corrupt.png");
+    const [uri] = await embed(["corrupt.png"]);
     expect(uri).toBe(`data:image/png;base64,${junk.toString("base64")}`);
   });
 
-  test("without ffmpeg the original bytes are inlined unchanged", () => {
-    const bytes = Buffer.alloc(200 * 1024, 9);
-    writeFileSync(join(sessionDir, "no-ffmpeg.png"), bytes);
-    const uri = screenshotDataUri(sessionDir, "no-ffmpeg.png", MISSING_FFMPEG);
+  test.skipIf(!ffmpegPresent)("encoding in parallel gives each screenshot the same bytes as encoding one at a time", async () => {
+    const files = ["par-0.png", "par-1.png", "par-2.png", "par-3.png", "par-4.png", "corrupt-par.png"];
+    for (const f of files.slice(0, 5)) writeLargePng(f);
+    writeFileSync(join(sessionDir, "corrupt-par.png"), Buffer.alloc(200 * 1024, 5));
+    const serial = await embed(files, "ffmpeg", 1);
+    const parallel = await embed(files, "ffmpeg", 4);
+    expect(parallel).toEqual(serial);
+    expect(serial.slice(0, 5).every((uri) => uri!.startsWith("data:image/jpeg;base64,"))).toBe(true);
+    expect(serial[5]).toStartWith("data:image/png;base64,");
+  });
+
+  test.skipIf(process.platform === "win32")("an encode that outgrows the original is cut off and the original is inlined", async () => {
+    // A stand-in ffmpeg that answers -version, then streams output forever. If the encoder were
+    // not killed once its output reached the original's size, this would never return.
+    const stub = join(sessionDir, "endless-ffmpeg");
+    writeFileSync(stub, '#!/bin/sh\n[ "$1" = "-version" ] && exit 0\nexec yes\n');
+    chmodSync(stub, 0o755);
+    const bytes = Buffer.alloc(200 * 1024, 4);
+    writeFileSync(join(sessionDir, "endless.png"), bytes);
+    const [uri] = await embed(["endless.png"], stub);
     expect(uri).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
   });
 
-  test("a screenshot already under the budget skips recompression entirely", () => {
+  test("a spawn that throws synchronously yields null instead of rejecting", async () => {
+    // A NUL byte in an argument makes child_process.spawn throw ERR_INVALID_ARG_VALUE.
+    expect(await recompressScreenshot("bad\0path.png", 200 * 1024, "ffmpeg")).toBeNull();
+  });
+
+  test("without ffmpeg the original bytes are inlined unchanged", async () => {
+    const bytes = Buffer.alloc(200 * 1024, 9);
+    writeFileSync(join(sessionDir, "no-ffmpeg.png"), bytes);
+    const [uri] = await embed(["no-ffmpeg.png"], MISSING_FFMPEG);
+    expect(uri).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
+  });
+
+  test("a screenshot already under the budget skips recompression entirely", async () => {
     const bytes = Buffer.alloc(40 * 1024, 3); // e.g. an already-compressed WEBP
     writeFileSync(join(sessionDir, "small.webp"), bytes);
     // Even a broken ffmpeg wouldn't matter: under the threshold no subprocess is involved.
-    const uri = screenshotDataUri(sessionDir, "small.webp", MISSING_FFMPEG);
+    const [uri] = await embed(["small.webp"], MISSING_FFMPEG);
     expect(uri).toBe(`data:image/webp;base64,${bytes.toString("base64")}`);
   });
 
-  test("a missing screenshot file stays null", () => {
-    expect(screenshotDataUri(sessionDir, "does-not-exist.png")).toBeNull();
+  test("a missing screenshot file stays null", async () => {
+    expect(await embed(["does-not-exist.png"])).toEqual([null]);
   });
 });
 
@@ -666,6 +705,69 @@ describe("device/network log gzip packing", () => {
     const { network, networkGz } = packNetwork(many);
     expect(network).toBeNull();
     expect(JSON.parse(gunzipSync(Buffer.from(networkGz!, "base64")).toString("utf8"))).toEqual(many);
+  });
+});
+
+describe("event streams linked beside a linked-media report (linkEventsGz)", () => {
+  const eventsGz = Buffer.from("packed events").toString("base64");
+
+  /** Runs a sidecar the way a <script src> would, returning what it hands the viewer's callback. */
+  function runSidecar(file: string): { script: unknown; text: unknown } {
+    const script = { tag: "script" };
+    let received: { script: unknown; text: unknown } | null = null;
+    new Function("self", "document", readFileSync(file, "utf8"))(
+      { __tbReportSidecar: (s: unknown, t: unknown) => { received = { script: s, text: t }; } },
+      { currentScript: script },
+    );
+    expect(received).not.toBeNull();
+    return received!;
+  }
+
+  test("a linked report writes the events beside the session and links them", () => {
+    const dir = mkdtempSync(join(sessionDir, "linked-"));
+    const linked = linkEventsGz(eventsGz, dir, "sess 1", "../", sidecarScript);
+    const name = eventsSidecarFile(eventsGz);
+    expect(name).toMatch(/^report-events-[0-9a-f]{16}\.js$/);
+    expect(linked).toEqual({ eventsGz: null, eventsHref: `../sess%201/${name}` });
+    const { script, text } = runSidecar(join(dir, name));
+    expect(script).toEqual({ tag: "script" });
+    expect(text).toBe(eventsGz);
+  });
+
+  test("an embedded report, or a session with nothing packed, keeps the events inline", () => {
+    const dir = mkdtempSync(join(sessionDir, "embedded-"));
+    expect(linkEventsGz(eventsGz, dir, "s", null, sidecarScript)).toEqual({ eventsGz, eventsHref: null });
+    expect(linkEventsGz(null, dir, "s", "../", sidecarScript)).toEqual({ eventsGz: null, eventsHref: null });
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("a sidecar that can't be put in place keeps the events inline and leaves no partial file behind", () => {
+    // A non-empty directory where the sidecar goes fails the rename for every user, root included.
+    const dir = mkdtempSync(join(sessionDir, "blocked-"));
+    const name = eventsSidecarFile(eventsGz);
+    mkdirSync(join(dir, name, "occupied"), { recursive: true });
+    expect(linkEventsGz(eventsGz, dir, "s", "../", sidecarScript)).toEqual({ eventsGz, eventsHref: null });
+    expect(readdirSync(dir)).toEqual([name]);
+  });
+
+  test("two renders of one session each keep the events they were built with", () => {
+    const dir = mkdtempSync(join(sessionDir, "rerender-"));
+    const first = Buffer.from("events of the first render").toString("base64");
+    const second = Buffer.from("events of the second render").toString("base64");
+    const a = linkEventsGz(first, dir, "s", "../", sidecarScript);
+    const b = linkEventsGz(second, dir, "s", "../", sidecarScript);
+    expect(a.eventsHref).not.toBe(b.eventsHref);
+    expect(runSidecar(join(dir, basename(a.eventsHref!))).text).toBe(first);
+    expect(runSidecar(join(dir, basename(b.eventsHref!))).text).toBe(second);
+    expect(linkEventsGz(first, dir, "s", "../", sidecarScript)).toEqual(a);
+    expect(readdirSync(dir)).toHaveLength(2);
+  });
+
+  test("a payload with quotes, backslashes or a closing script tag survives the round trip", () => {
+    const dir = mkdtempSync(join(sessionDir, "escape-"));
+    const hostile = `"\\'</script><script>alert(1)</script>\u2028`;
+    linkEventsGz(hostile, dir, "s", "", sidecarScript);
+    expect(runSidecar(join(dir, eventsSidecarFile(hostile))).text).toBe(hostile);
   });
 });
 

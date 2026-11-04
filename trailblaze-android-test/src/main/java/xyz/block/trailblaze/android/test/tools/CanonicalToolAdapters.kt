@@ -1,19 +1,36 @@
 package xyz.block.trailblaze.android.test.tools
 
+import xyz.block.trailblaze.android.test.AndroidTestInstrumentation
+import xyz.block.trailblaze.trailhead.InProcessDataClearedArg
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
+import xyz.block.trailblaze.android.test.perf
+import android.app.Activity
+import android.app.UiAutomation
+import android.os.SystemClock
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.ResultReceiver
+import android.view.KeyEvent
+import android.view.View
+import android.view.inspector.WindowInspector
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.android.test.onMainThread
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.espresso.Espresso
-import androidx.test.espresso.NoMatchingViewException
-import androidx.test.espresso.action.ViewActions
-import androidx.test.espresso.matcher.ViewMatchers.hasFocus
-import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.random.Random
-import org.hamcrest.CoreMatchers.allOf
+import kotlinx.serialization.json.JsonPrimitive
 import maestro.SwipeDirection
 import xyz.block.trailblaze.android.test.AndroidTestTarget
+import xyz.block.trailblaze.android.test.AppUnderTestLauncher
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.maestro.TrailblazeScrollStartPosition
@@ -21,20 +38,28 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
+import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
+import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.WaitUntilNotVisibleTrailblazeTool
 
 /**
  * Dispatches the CANONICAL recorded-trail tools — `tapOnElementBySelector` and the rest of the
- * vocabulary every recorded trail in the estate is written in — onto this driver's own backends.
+ * vocabulary every recorded trail is written in — onto this driver's own backends.
  *
  * Without this, those tools reach their generic `execute()`, which routes through
  * `maestroTrailblazeAgent` / `runMaestroCommands` — dispatch surfaces an in-process agent does not
@@ -49,7 +74,7 @@ import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
  *
  * A canonical option this driver cannot honor fails LOUDLY naming the option, rather than
  * degrading — a trail relying on `longPress` must not pass because the press was short. The set
- * covered here is the estate's measured vocabulary; growing it is adding an arm.
+ * covered here is the recorded trails' measured vocabulary; growing it is adding an arm.
  */
 internal object CanonicalToolAdapters {
 
@@ -66,12 +91,11 @@ internal object CanonicalToolAdapters {
     is TapOnByElementSelector -> CanonicalDispatch { target, context ->
       val selector = tool.nodeSelector
         ?: return@CanonicalDispatch malformed("tapOnElementBySelector has no nodeSelector", tool)
-      // tapRoute is ignored, matching every non-accessibility driver: it pins how the
-      // ACCESSIBILITY driver routes a tap, and its own contract says other drivers dispatch
-      // their one native gesture unconditionally.
       AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
     }
+
+    is LaunchAppTrailblazeTool -> CanonicalDispatch { _, _ -> launchAppUnderTest(tool) }
 
     is AssertVisibleBySelectorTrailblazeTool -> CanonicalDispatch { target, context ->
       val selector = tool.nodeSelector
@@ -98,13 +122,42 @@ internal object CanonicalToolAdapters {
       AndroidTestAssertNotVisibleTool(nodeSelector = selector).executeWithAndroidTest(target, context)
     }
 
+    is AssertNotVisibleBySelectorTrailblazeTool -> CanonicalDispatch { target, context ->
+      val selector = tool.nodeSelector
+        ?: return@CanonicalDispatch malformed("assertNotVisibleBySelector has no nodeSelector", tool)
+      AndroidTestAssertNotVisibleTool(nodeSelector = selector, timeoutMs = tool.timeoutMs)
+        .executeWithAndroidTest(target, context)
+    }
+
+    // A query, not an assertion: "still visible" is an answer, so it is a Success carrying the
+    // boolean, exactly as the other drivers return it.
+    is WaitUntilNotVisibleTrailblazeTool -> CanonicalDispatch { target, context ->
+      val notVisible = AndroidTestAssertNotVisibleTool(nodeSelector = tool.nodeSelector, timeoutMs = tool.timeoutMs)
+        .executeWithAndroidTest(target, context) is TrailblazeToolResult.Success
+      TrailblazeToolResult.Success(
+        message =
+          if (notVisible) {
+            "waitUntilNotVisible: selector is not visible"
+          } else {
+            "waitUntilNotVisible: selector still visible after ${tool.timeoutMs ?: "default"}ms"
+          },
+        structuredContent = JsonPrimitive(notVisible),
+      )
+    }
+
+    is PressKeyTrailblazeTool -> CanonicalDispatch { target, _ -> pressKey(target, tool.keyCode) }
+
+    is HideKeyboardTrailblazeTool -> CanonicalDispatch { target, _ ->
+      hideKeyboard(target)
+      TrailblazeToolResult.Success(message = "Keyboard hidden")
+    }
+
     is ScrollUntilTextIsVisibleTrailblazeTool -> CanonicalDispatch { target, context ->
       // Which options this driver's scroll loop can carry out is decided in one place, shared with
       // the Maestro interpreter's `scrollUntilVisible`, so the two entry points onto the same loop
       // cannot answer differently. A non-default value refuses rather than being quietly dropped.
       val refusal = ScrollOptionSupport.unsupportedDirection(tool.direction)
         ?: ScrollOptionSupport.unsupportedVisibilityPercentage(tool.visibilityPercentage)
-        ?: ScrollOptionSupport.unsupportedCenterElement(tool.centerElement)
       if (refusal != null) {
         return@CanonicalDispatch unsupported(refusal, tool)
       }
@@ -151,6 +204,7 @@ internal object CanonicalToolAdapters {
         // builds a ScrollUntilVisibleCommand that takes Maestro's default. Taking the same default
         // here is what makes an unwritten bound mean the same thing on both.
         timeoutMs = ScrollOptionSupport.DEFAULT_TIMEOUT_MS,
+        centerElement = ScrollOptionSupport.centerElement(tool.centerElement),
       ).executeWithAndroidTest(target, context)
     }
 
@@ -170,11 +224,24 @@ internal object CanonicalToolAdapters {
               tool,
             )
           }
+        // Finger down = reveal content above = scroll back. A list already at its top does not
+        // move, as under a real swipe, so that is success rather than a failure.
+        SwipeDirection.DOWN ->
+          if (AndroidScrollActions.scrollBackward(target)) {
+            TrailblazeToolResult.Success(message = "Swiped DOWN (scrolled the largest container back).")
+          } else {
+            TrailblazeToolResult.Success(message = "Swiped DOWN: nothing on screen could scroll back.")
+          }
+        SwipeDirection.LEFT, SwipeDirection.RIGHT -> {
+          val towardsLeft = tool.direction == SwipeDirection.LEFT
+          AndroidScrollActions.swipeHorizontally(target, towardsLeft)
+          TrailblazeToolResult.Success(message = "Swiped ${tool.direction} across the screen centre.")
+        }
         else -> unsupported("direction=${tool.direction}", tool)
       }
     }
 
-    // Raw Maestro command lists — the shape the estate's scripted launch tools fall back to on
+    // Raw Maestro command lists — the shape scripted launch tools fall back to on
     // every non-accessibility driver. Interpreted per-command; see [MaestroCommandAdapters].
     is MaestroTrailblazeTool -> CanonicalDispatch { target, context ->
       MaestroCommandAdapters.run(tool, target, context)
@@ -191,31 +258,52 @@ internal object CanonicalToolAdapters {
       TrailblazeToolResult.Success(message = "Waited for idle (ceiling ${tool.timeToWaitInSeconds}s).")
     }
 
+    // The accessibility driver settles `waitForChange` on its service's event stream: quiet for
+    // the window, or a timeout that `requireChange` decides. The in-process capture's UiAutomation
+    // receives the same events, so it waits on the same signal. The base tool's fallback needs a
+    // Maestro agent, which this driver does not have.
+    is WaitForChangeTrailblazeTool -> CanonicalDispatch { _, _ ->
+      when {
+        InProcessAccessibilityTree.awaitEventsQuiet(tool.quietWindowMs, tool.timeoutMs) ->
+          TrailblazeToolResult.Success(message = "UI settled")
+        tool.requireChange ->
+          TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "UI did not change and settle within ${tool.timeoutMs}ms",
+            command = tool,
+          )
+        else -> TrailblazeToolResult.Success(message = "No settled UI within ${tool.timeoutMs}ms; treated as a settle wait")
+      }
+    }
+
     is InputTextTrailblazeTool -> CanonicalDispatch { target, context ->
       // A named field is tapped first so the keys reach it rather than whatever holds focus, and
       // a field that isn't there fails the step instead of typing into the wrong one.
       tool.selector?.let { selector ->
-        val tapped = AndroidTestTapTool(nodeSelector = selector).executeWithAndroidTest(target, context)
+        val tapped = perf("input.tap") { AndroidTestTapTool(nodeSelector = selector).executeWithAndroidTest(target, context) }
         if (tapped !is TrailblazeToolResult.Success) return@CanonicalDispatch tapped
       }
+      // The tap can have landed in another app's window (a browser's sign-in form), where this
+      // process holds no field: typed there through its accessibility node, as that driver does.
+      if (ForeignWindow.frontPackage() != null) return@CanonicalDispatch typeIntoForeignWindow(tool)
       // After the tap, so the field emptied is the one the keys are about to reach.
       if (tool.clearFirst) {
         val cleared = clearFocusedTextField(target, tool)
         if (cleared !is TrailblazeToolResult.Success) return@CanonicalDispatch cleared
       }
-      // Key-event injection into the focused window — the same semantics the instrumentation
-      // driver this vocabulary was recorded under gives `inputText`, and the only shape that
-      // also reaches a passcode keypad listening for key presses rather than an EditText.
-      InstrumentationRegistry.getInstrumentation().sendStringSync(tool.text)
-      target.waitForIdle()
+      // The focused field's text is set directly, as the accessibility driver's `ACTION_SET_TEXT`
+      // does. Key events are the fallback for screens with no focused field, such as a passcode
+      // keypad listening for key presses rather than an EditText.
+      if (!perf("input.setText") { appendToFocusedField(target, tool.text) }) {
+        perf("input.keys") { InstrumentationRegistry.getInstrumentation().sendStringSync(tool.text) }
+      }
+      perf("input.idle") { target.waitForIdle() }
       // `hideKeyboardAfter` defaults TRUE and every recorded trail omits it, so this half runs on
       // essentially every recorded `inputText` — skipping it made this driver the only one that
-      // leaves the field focused afterwards, and that is a state the app can see. One trail
-      // types an item note and taps Save: while the note field holds focus the app renders its
-      // footer as Clear + "close keyboard" and the recorded `id~"item-details-done"` Save button
-      // does not exist, so the next step failed on a screen the recording never encountered.
+      // leaves the field focused afterwards, and that is a state the app can see. An app can render
+      // a different footer while a field holds focus — a close-keyboard button where Save was — so
+      // a recorded tap on Save then fails on a screen the recording never encountered.
       if (tool.hideKeyboardAfter) {
-        hideKeyboard(target)
+        perf("input.hideKeyboard") { hideKeyboard(target) }
       }
       TrailblazeToolResult.Success(message = "Typed '${tool.text}'")
     }
@@ -232,7 +320,18 @@ internal object CanonicalToolAdapters {
     // in one action, the same shape `AndroidViewActions.replaceText` uses so a field that re-renders
     // mid-erase cannot drop half the keystrokes. Selector-free by design, like the canonical tool:
     // "the focused field" is the whole contract.
-    is ClearTextTrailblazeTool -> CanonicalDispatch { target, _ -> clearFocusedTextField(target, tool) }
+    is ClearTextTrailblazeTool -> CanonicalDispatch { target, _ ->
+      if (ForeignWindow.frontPackage() != null) {
+        when (ForeignWindow.clearFocusedField()) {
+          ForeignWindow.ClearOutcome.CLEARED ->
+            TrailblazeToolResult.Success(message = "Cleared the focused field in another app's window")
+          ForeignWindow.ClearOutcome.NO_FIELD -> noFocusedFieldToClear(tool)
+          ForeignWindow.ClearOutcome.KEPT_TEXT -> foreignFieldKeptText(tool)
+        }
+      } else {
+        clearFocusedTextField(target, tool)
+      }
+    }
 
     is InputTextRandomTrailblazeTool -> CanonicalDispatch { target, context ->
       if (tool.digitCount <= 0) {
@@ -261,40 +360,176 @@ internal object CanonicalToolAdapters {
   }
 
   /**
+   * Appends [text] to the focused Compose text input or, failing that, the focused EditText, in one
+   * edit. A Compose input inserts at its end (see [AndroidComposeActions.appendText]); otherwise it is
+   * the accessibility driver's `ACTION_SET_TEXT` of existing + [text], which is what its recordings
+   * replay with. Key events cost about a millisecond a character to inject and go
+   * through the IME, which reshapes some of them (autocorrect, capitalisation).
+   *
+   * False when neither is focused, or the EditText kept its text, so the caller falls back to key
+   * events.
+   */
+  private suspend fun appendToFocusedField(target: AndroidTestTarget, text: String): Boolean {
+    val focusedCompose = focusedComposeTextInput(target)
+    if (focusedCompose != null) {
+      if (AndroidComposeActions.appendText(target, focusedCompose.id, text)) return true
+      val existing = focusedCompose.config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty()
+      AndroidComposeActions.replaceText(target, focusedCompose.id, existing + text)
+      return true
+    }
+    val activity = target.currentActivity()
+    return onMainThread {
+      val field = inputFocusView(activity) as? EditText ?: return@onMainThread false
+      val existing = field.text.toString()
+      field.setText(existing + text)
+      field.setSelection(field.length())
+      // A masked field's TextWatcher can undo a bulk edit while it takes keys one at a time.
+      text.isEmpty() || field.text.toString() != existing
+    }
+  }
+
+  /**
+   * The focused Compose text input the keyboard is attached to, or null.
+   *
+   * Every Compose host keeps focus of its own, so a field left focused in a host the user has
+   * moved on from still reads `Focused`. A sheet over a search screen is one: the search box
+   * behind it can stay focused, come first in the root order, and take the text typed into the
+   * sheet. So when the window's input focus sits in a Compose host, only that host's tree is
+   * searched, and when it sits in a classic View no Compose input is the target. With no View
+   * focus to go by, every host is searched as before.
+   */
+  private suspend fun focusedComposeTextInput(target: AndroidTestTarget): SemanticsNode? {
+    val activity = target.currentActivity()
+    val focus = onMainThread { inputFocusView(activity)?.let { FocusedHost(it.composeHostRootId()) } }
+    val roots = target.composeRoots()
+    val searched = when {
+      focus == null -> roots
+      focus.rootId == null -> emptyList()
+      else -> roots.filter { it.id == focus.rootId }
+    }
+    return searched.firstNotNullOfOrNull { findFocusedEditableText(it) }
+  }
+
+  /** Where input focus sits: [rootId] is its Compose host's semantics root, null for a classic View. */
+  private class FocusedHost(val rootId: Int?)
+
+  /**
+   * The View holding input focus in the focused window: what the keyboard types into. A dialog or
+   * sheet is a window of its own, so the activity's `currentFocus` alone would name the View
+   * behind it.
+   */
+  private fun inputFocusView(activity: Activity): View? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      WindowInspector.getGlobalWindowViews().lastOrNull { it.hasWindowFocus() }?.findFocus()?.let { return it }
+    }
+    return activity.currentFocus
+  }
+
+  /**
+   * The focused EditText: the one in the focused window first, then one focused in any of this
+   * process's windows, which is where focus sits while the window that owns it is still taking
+   * window focus.
+   */
+  private fun focusedEditText(activity: Activity): EditText? {
+    (inputFocusView(activity) as? EditText)?.let { return it }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      WindowInspector.getGlobalWindowViews().asReversed()
+        .firstNotNullOfOrNull { it.findFocus() as? EditText }
+        ?.let { return it }
+    }
+    return activity.window.decorView.findFocus() as? EditText
+  }
+
+  private const val FOCUS_SETTLE_MS = 2_000L
+  private const val FOCUS_POLL_MS = 100L
+
+  private fun View.composeHostRootId(): Int? {
+    var view: View? = this
+    while (view != null) {
+      if (view is ViewRootForTest) return runCatching { view.semanticsOwner.unmergedRootSemanticsNode.id }.getOrNull()
+      view = view.parent as? View
+    }
+    return null
+  }
+
+  /**
    * Empties the focused Compose text input or, failing that, the focused EditText — `clearText`, and
    * `inputText`'s `clearFirst`. Fails when neither is on screen, rather than letting the typing
    * that follows land on whatever the field still holds.
    */
   private suspend fun clearFocusedTextField(target: AndroidTestTarget, tool: TrailblazeTool): TrailblazeToolResult {
-    val focusedCompose = target.composeRoots().firstNotNullOfOrNull { findFocusedEditableText(it) }
-    val cleared =
-      when {
-        focusedCompose != null -> {
-          AndroidComposeActions.replaceText(target, focusedCompose.id, "")
+    val activity = target.currentActivity()
+    // Polled briefly: with no idle wait in front of it, this can run before the tap that focused
+    // the field has moved focus, and Espresso's wait used to cover that.
+    val deadline = SystemClock.uptimeMillis() + FOCUS_SETTLE_MS
+    var cleared: String?
+    while (true) {
+      cleared = focusedComposeTextInput(target)?.let {
+        AndroidComposeActions.replaceText(target, it.id, "")
+        "the focused Compose text input"
+      }
+        // Set directly on the main thread, as [appendToFocusedField] types, rather than through
+        // Espresso's `clearText`: `onView().perform()` waits for the app to go idle FIRST and fails
+        // when it never does, so on a screen that never goes idle a clearText times out with the
+        // field focused the whole time.
+        ?: onMainThread {
+          focusedEditText(activity)?.let {
+            it.setText("")
+            "the focused EditText"
+          }
+        }
+        // Last, a focused Compose input in any host. A transient popup can hold window focus while
+        // the field under it keeps input focus, which the focused-host search above cannot see; it
+        // comes after the EditText so a stale focus in a host left behind never beats a live one.
+        ?: target.composeRoots().firstNotNullOfOrNull { findFocusedEditableText(it) }?.let {
+          AndroidComposeActions.replaceText(target, it.id, "")
           "the focused Compose text input"
         }
-        else ->
-          try {
-            target.dispatchAndAwaitSettle {
-              target.performViewAction(
-                allOf(isAssignableFrom(EditText::class.java), hasFocus()),
-                ViewActions.clearText(),
-              )
-            }
-            "the focused EditText"
-          } catch (_: NoMatchingViewException) {
-            null
-          }
-      }
-    if (cleared == null) {
-      return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Found no focused text field to clear — neither a focused Compose text " +
-          "input nor a focused EditText is on screen.",
-        command = tool,
-      )
+      if (cleared != null || SystemClock.uptimeMillis() >= deadline) break
+      SystemClock.sleep(FOCUS_POLL_MS)
     }
+    if (cleared == null) return noFocusedFieldToClear(tool)
     target.waitForIdle()
     return TrailblazeToolResult.Success(message = "Cleared $cleared")
+  }
+
+  private fun noFocusedFieldToClear(tool: TrailblazeTool): TrailblazeToolResult =
+    TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "Found no focused text field to clear — neither a focused Compose text " +
+        "input nor a focused EditText is on screen.",
+      command = tool,
+    )
+
+  private fun foreignFieldKeptText(tool: TrailblazeTool): TrailblazeToolResult =
+    TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "The focused field in another app's window kept its text after clearing, " +
+        "by setting it and by delete keys.",
+      command = tool,
+    )
+
+  /**
+   * `inputText` into the field focused in another app's window. Key events are the fallback, as
+   * in-app, through the shell: this process may not inject keys into a window it does not own.
+   */
+  private fun typeIntoForeignWindow(tool: InputTextTrailblazeTool): TrailblazeToolResult {
+    if (tool.clearFirst) {
+      when (ForeignWindow.clearFocusedField()) {
+        ForeignWindow.ClearOutcome.CLEARED -> Unit
+        ForeignWindow.ClearOutcome.NO_FIELD -> return noFocusedFieldToClear(tool)
+        ForeignWindow.ClearOutcome.KEPT_TEXT -> return foreignFieldKeptText(tool)
+      }
+    }
+    if (ForeignWindow.appendToFocusedField(tool.text, fieldKnownEmpty = tool.clearFirst) == ForeignWindow.AppendOutcome.REJECTED) {
+      ForeignWindow.typeKeys(tool.text)?.let { reason ->
+        return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = reason, command = tool)
+      }
+    }
+    // The keyboard is left up: the only hide that reaches another app's window is BACK, which can
+    // also close or leave the form just typed into. An explicit hideKeyboard step still sends it.
+    return TrailblazeToolResult.Success(
+      message = "Typed '${tool.text}' in another app's window" +
+        if (tool.hideKeyboardAfter) " (keyboard left up: hiding it there can leave the form)" else "",
+    )
   }
 
   /**
@@ -305,20 +540,48 @@ internal object CanonicalToolAdapters {
    * (`AccessibilityDeviceManager.hideKeyboard`), and BACK only means "hide the keyboard" while a
    * keyboard is on screen to consume it — the IME window takes the event first. With no IME up it
    * is ordinary back navigation. Sending it unconditionally therefore does not reproduce that
-   * driver; it reproduces one of that driver's two behaviours in both situations. One CI run lost
-   * a trail to `No activities found` on the team-passcode screen, whose keypad is drawn by the
-   * app and raises no IME, so the BACK that followed `inputText` finished the Activity.
+   * driver; it reproduces one of that driver's two behaviours in both situations. On a passcode
+   * screen whose keypad is drawn by the app and raises no IME, the BACK that followed `inputText`
+   * finished the Activity and the trail failed with `No activities found`.
    *
-   * Espresso's close-keyboard action rather than a key event, because it is conditioned on the
-   * thing that decides which of those two meanings applies: it asks the
-   * [android.view.inputmethod.InputMethodManager] to hide the focused window's IME, which no-ops
-   * when none is showing and can never navigate. It fails loudly when it cannot reach a focused
-   * root, which is not a failure of the trail — the typing already landed — so that is swallowed.
+   * An IME hide request rather than a key event, because it is conditioned on the thing that
+   * decides which of those two meanings applies: it asks the [InputMethodManager] to hide the
+   * focused window's IME, which no-ops when none is showing and can never navigate. Failing to
+   * reach a focused window is not a failure of the trail — the typing already landed — so that is
+   * swallowed.
    */
   private fun hideKeyboard(target: AndroidTestTarget) {
-    runCatching { Espresso.closeSoftKeyboard() }
-    target.waitForIdle()
+    if (ForeignWindow.frontPackage() != null) return ForeignWindow.hideKeyboard()
+    val sent = perf("input.hideIme") { runCatching { hideImeAndAwaitReply(target) }.getOrDefault(false) }
+    if (!sent) perf("input.closeSoftKeyboard") { runCatching { Espresso.closeSoftKeyboard() } }
+    perf("input.hideIdle") { target.waitForIdle() }
   }
+
+  /**
+   * Asks the [InputMethodManager] to hide the focused window's IME and waits for its reply — the
+   * request Espresso's close-keyboard makes, without the two app syncs it wraps around it, which
+   * cost each `inputText` about a second. The [AndroidTestTarget.waitForIdle] after it is the sync.
+   *
+   * False when the request could not be sent: focus is in a window this Activity's focused View
+   * does not own, such as a dialog's. Espresso finds that window itself, so it takes over then.
+   */
+  private fun hideImeAndAwaitReply(target: AndroidTestTarget): Boolean {
+    val activity = target.currentActivity()
+    val replied = CountDownLatch(1)
+    val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+      override fun onReceiveResult(resultCode: Int, resultData: Bundle?) = replied.countDown()
+    }
+    val sent = onMainThread {
+      val view = activity.currentFocus ?: activity.window.decorView
+      activity.getSystemService(InputMethodManager::class.java)
+        .hideSoftInputFromWindow(view.windowToken, 0, receiver)
+    }
+    if (sent) replied.await(IME_REPLY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    return sent
+  }
+
+  /** Espresso's own wait for the same reply. */
+  private const val IME_REPLY_TIMEOUT_SECONDS = 2L
 
   /** The focused node under [node] that carries editable text, or null — the field `clearText` erases. */
   private fun findFocusedEditableText(node: SemanticsNode): SemanticsNode? {
@@ -329,6 +592,144 @@ internal object CanonicalToolAdapters {
       return node
     }
     return node.children.firstNotNullOfOrNull { findFocusedEditableText(it) }
+  }
+
+  /**
+   * `launchApp` of the app under test, in-process. Every mode relaunches the entry Activity; what
+   * differs is what has to be true BEFORE it, because this process is the app and cannot stop or
+   * clear itself.
+   *
+   * - `RESUME` brings the existing task forward.
+   * - `FORCE_RESTART` restarts at the entry point. Only the first launch in a process is a real
+   *   cold start; the host force-stops the app before every trail, so a trailhead's launch is.
+   * - `REINSTALL` needs the app's data cleared. The host runs `pm clear` before starting the
+   *   instrumentation when a trailhead's launch asks for it, and says whether it did
+   *   ([InProcessDataClearedArg]); [FRESH_DATA_MARKER], written by every launch, and
+   *   [AppUnderTestLauncher.usedSinceProcessStart] tell a REINSTALL on that cleared data from one
+   *   after the app was launched or driven. A REINSTALL
+   *   on data that was not cleared refuses by name rather than launching on old data.
+   */
+  private fun launchAppUnderTest(tool: LaunchAppTrailblazeTool): TrailblazeToolResult {
+    val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
+    val self = targetContext.packageName
+    if (tool.appId != self) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "launchApp targets '${tool.appId}', but in-process this driver can only " +
+          "launch the app under test ('$self').",
+        command = tool,
+      )
+    }
+    val mode = tool.launchMode
+    val marker = java.io.File(targetContext.noBackupFilesDir, FRESH_DATA_MARKER)
+    if (mode == LaunchAppTrailblazeTool.LaunchMode.REINSTALL) {
+      // Absent when no host started this run; a farm starts every test on a fresh install.
+      val hostCleared = AndroidTestInstrumentation.stringArg(InProcessDataClearedArg.KEY)?.toBooleanStrictOrNull()
+      if (hostCleared == false) {
+        return TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "launchApp REINSTALL needs '$self' to start with cleared data, and the host " +
+            "did not clear it before this run. It clears only for a trailhead whose launch is " +
+            "REINSTALL, or for a target that asks to be cleared before every trailhead; in-process " +
+            "the app cannot clear itself.",
+          command = tool,
+        )
+      }
+      if (marker.exists() || AppUnderTestLauncher.usedSinceProcessStart) {
+        return TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "launchApp REINSTALL needs '$self' to start with cleared data, and it was " +
+            "launched or used since it was last cleared. The host clears it before the instrumentation " +
+            "starts only for a launch in the trailhead; in-process the app cannot clear itself.",
+          command = tool,
+        )
+      }
+    }
+    // Every mode, so a REINSTALL after a RESUME or FORCE_RESTART launch sees the data was used.
+    marker.parentFile?.mkdirs()
+    marker.createNewFile()
+    // The instrumentation already cold-launched the app at its entry point when this process
+    // started, after the host's force-stop (and `pm clear` for REINSTALL). Until something else
+    // runs, a restart or reinstall launch would only pay that cold start a second time.
+    if (mode != LaunchAppTrailblazeTool.LaunchMode.RESUME && AppUnderTestLauncher.untouchedSinceColdLaunch) {
+      return TrailblazeToolResult.Success(
+        message = "'$self' ($mode) was cold-launched at its entry point when this in-process run " +
+          "started, and nothing has run since; not launching it again.",
+      )
+    }
+    val coldStart = !AppUnderTestLauncher.hasLaunched
+    AppUnderTestLauncher.launchAppUnderTest(clearTask = mode != LaunchAppTrailblazeTool.LaunchMode.RESUME)
+    return TrailblazeToolResult.Success(
+      message = "Launched '$self' ($mode) in-process" +
+        if (mode == LaunchAppTrailblazeTool.LaunchMode.FORCE_RESTART && !coldStart) {
+          " at its entry point; the process was not restarted."
+        } else {
+          "."
+        },
+    )
+  }
+
+  /**
+   * Written to the app's own no-backup dir on its first launch. `pm clear` deletes it, so its
+   * absence proves the data was cleared since the app was last launched.
+   */
+  private const val FRESH_DATA_MARKER = ".trailblaze-in-process-launched"
+
+  /**
+   * BACK waits for idle first, then is injected without synchronizing, so it is delivered exactly
+   * once even on a screen that never goes idle, and may leave the app. HOME
+   * leaves the app's windows, which an instrumentation's own key injection cannot reach, so it goes
+   * through the shell. Every other key lands in the focused window like a hardware key.
+   *
+   * While another app is in front, every key but HOME goes to it through [ForeignWindow]: this
+   * process may not inject keys into a window it does not own.
+   */
+  private fun pressKey(target: AndroidTestTarget, key: PressKeyCode): TrailblazeToolResult {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    if (key != PressKeyCode.HOME && ForeignWindow.frontPackage() != null) {
+      when (key) {
+        PressKeyCode.BACK -> ForeignWindow.pressBack()
+        else -> ForeignWindow.pressKey(key.keyCode())
+      }
+      return TrailblazeToolResult.Success(message = "Pressed ${key.name} in another app's window.")
+    }
+    when (key) {
+      // Settle, deliver, settle, as separate steps. Espresso's press waits for idle on both sides
+      // of the key, so its timeout cannot say whether the key went out, and retrying on one could
+      // pop a second screen. waitForIdle gives up quietly on a screen that never goes idle.
+      PressKeyCode.BACK -> {
+        target.waitForIdle()
+        injectKey(instrumentation, KeyEvent.KEYCODE_BACK)
+      }
+      PressKeyCode.HOME ->
+        instrumentation.automation().executeShellCommand("input keyevent ${KeyEvent.KEYCODE_HOME}").close()
+      PressKeyCode.ENTER, PressKeyCode.BACKSPACE, PressKeyCode.TAB, PressKeyCode.ESCAPE ->
+        instrumentation.sendKeyDownUpSync(key.keyCode())
+    }
+    target.waitForIdle()
+    return TrailblazeToolResult.Success(message = "Pressed ${key.name}.")
+  }
+
+  /**
+   * UiAutomation with the flags every other caller here uses: asking with different ones reconnects
+   * it, which switches accessibility off and on for every app and drops a capture in flight.
+   */
+  private fun android.app.Instrumentation.automation(): UiAutomation =
+    getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+
+  /** Down and up, injected and waited for, with no Espresso or Compose synchronization. */
+  private fun injectKey(instrumentation: android.app.Instrumentation, keyCode: Int) {
+    val downAt = android.os.SystemClock.uptimeMillis()
+    for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+      val event = KeyEvent(downAt, android.os.SystemClock.uptimeMillis(), action, keyCode, 0)
+      check(instrumentation.automation().injectInputEvent(event, true)) { "The device refused key $keyCode." }
+    }
+  }
+
+  private fun PressKeyCode.keyCode(): Int = when (this) {
+    PressKeyCode.BACK -> KeyEvent.KEYCODE_BACK
+    PressKeyCode.HOME -> KeyEvent.KEYCODE_HOME
+    PressKeyCode.ENTER -> KeyEvent.KEYCODE_ENTER
+    PressKeyCode.BACKSPACE -> KeyEvent.KEYCODE_DEL
+    PressKeyCode.TAB -> KeyEvent.KEYCODE_TAB
+    PressKeyCode.ESCAPE -> KeyEvent.KEYCODE_ESCAPE
   }
 
   private fun malformed(reason: String, tool: TrailblazeTool): TrailblazeToolResult =

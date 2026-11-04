@@ -39,6 +39,7 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailblazeException
@@ -732,6 +733,38 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         )
     }
     assertThat(result).isNull()
+  }
+
+  /**
+   * `android_accessibilityClick` is the only tool that carries an ACTION_CLICK pin to the device; if
+   * the host sent `tapOnElementBySelector` instead, the pin would be silently dropped. The selector
+   * is `containsChild`-only, the shape of a row picked out by its label, so this also proves a
+   * nested accessibility match is forwarded rather than falling through to Maestro.
+   */
+  @Test
+  fun `executeNodeSelectorTap forwards an ACTION_CLICK pin as android_accessibilityClick`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+
+    runBlocking {
+      createAgent().executeNodeSelectorTap(
+        nodeSelector = TrailblazeNodeSelector(
+          containsChild = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "All add-ons"),
+          ),
+        ),
+        longPress = false,
+        tapRoute = TapRouteOverride.ACTION_CLICK,
+        traceId = null,
+      )
+    }
+
+    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
+    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
+    assertThat(yaml).contains("android_accessibilityClick")
+    assertThat(yaml).doesNotContain("tapOnElementBySelector")
+    assertThat(yaml).contains("All add-ons")
   }
 
   /**

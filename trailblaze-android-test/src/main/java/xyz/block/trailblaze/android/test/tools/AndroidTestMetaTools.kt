@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.android.test.tools
 
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
+import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollector
+import xyz.block.trailblaze.android.test.onMainThread
+import androidx.compose.ui.platform.ViewRootForTest
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import android.os.SystemClock
 import android.view.View
@@ -8,7 +12,9 @@ import xyz.block.trailblaze.android.test.AndroidTestPhaseAttribution
 import xyz.block.trailblaze.android.test.AndroidTestScreenState
 import xyz.block.trailblaze.android.test.AndroidTestStopwatch
 import xyz.block.trailblaze.android.test.AndroidTestTarget
+import xyz.block.trailblaze.android.test.perf
 import xyz.block.trailblaze.android.test.DRIVER_TRACE_CAT
+import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -64,6 +70,22 @@ data class AndroidTestTapTool(
         } else {
           succeeded(verb, nodeSelector, resolved, AndroidComposeActions.click(target, resolved.semanticsId))
         }
+      is ResolvedNode.ScreenPoint -> {
+        if (resolved.inForeignWindow) {
+          ForeignWindow.tap(resolved.x, resolved.y, longPress)
+          return@runCatching TrailblazeToolResult.Success(
+            message = "$verb ${nodeSelector.description()} at its centre, in another app's window.",
+          )
+        }
+        if (longPress || !AndroidScrollActions.tapScreenPoint(target, resolved.x, resolved.y)) {
+          throw TrailblazeToolExecutionException(
+            "Matched ${nodeSelector.description()} in the accessibility tree, but no live View or " +
+              "Compose node owns it and it can't be tapped by position here.",
+            this,
+          )
+        }
+        TrailblazeToolResult.Success(message = "$verb ${nodeSelector.description()} at its centre.")
+      }
     }
   }.getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
 }
@@ -97,6 +119,11 @@ data class AndroidTestTypeTool(
           resolved,
           AndroidComposeActions.replaceText(target, resolved.semanticsId, value),
         )
+      is ResolvedNode.ScreenPoint -> throw TrailblazeToolExecutionException(
+        "Matched ${nodeSelector.description()} in the accessibility tree, but no live View or " +
+          "Compose node owns it, so there is nothing to type into.",
+        this,
+      )
     }
   }.getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
 }
@@ -133,12 +160,25 @@ data class AndroidTestAssertVisibleTool(
     // trees they were made against project a container and its text into one node, so a recorded
     // assert that resolved to one element routinely resolves to that pair on this driver's denser
     // tree.
-    when (val resolved = resolveNode(target, nodeSelector, this, context, timeoutMs)) {
-      is ResolvedNode.ViewNode -> AndroidViewActions.assertDisplayed(target, resolved.view)
-      is ResolvedNode.ComposeNode ->
-        AndroidComposeActions.assertDisplayed(target, resolved.semanticsId)
+    //
+    // A view that detaches between the two was the outgoing screen's: a selector that names a
+    // title bar by id alone matches the screen being replaced as well as its replacement, so it
+    // resolves again against the screen that arrived rather than failing on the one that left.
+    var attempts = 0
+    while (true) {
+      try {
+        when (val resolved = resolveNode(target, nodeSelector, this, context, timeoutMs)) {
+          is ResolvedNode.ViewNode -> AndroidViewActions.assertDisplayed(target, resolved.view)
+          is ResolvedNode.ComposeNode ->
+            AndroidComposeActions.assertDisplayed(target, resolved.semanticsId)
+          // Placed in the platform's own accessibility tree, which is what the recording asserted.
+          is ResolvedNode.ScreenPoint -> Unit
+        }
+        return TrailblazeToolResult.Success(message = "Verified ${nodeSelector.description()} is visible.")
+      } catch (e: ElementDetachedException) {
+        if (++attempts >= DETACHED_RESOLVE_ATTEMPTS) throw e
+      }
     }
-    return TrailblazeToolResult.Success(message = "Verified ${nodeSelector.description()} is visible.")
   }
 }
 
@@ -171,11 +211,19 @@ data class AndroidTestAssertNotVisibleTool(
     try {
       val budgetMs = timeoutMs ?: RESOLVE_TIMEOUT_MS
       val deadline = SystemClock.uptimeMillis() + budgetMs
-      while (isOnScreen(target, nodeSelector, context)) {
+      // A read that could not see the whole screen proves nothing about absence, so it is polled
+      // again like a match would be.
+      while (true) {
+        val placed = placedOnScreen(target, nodeSelector, context)
+        if (placed != null && placed.isEmpty()) break
         if (SystemClock.uptimeMillis() >= deadline) {
+          ForeignWindow.frontPackage()?.let { requireMatchableInForeignWindow(it, nodeSelector) }
           throw SelectorWaitMissException(
-            "Selector still matched a visible element after ${budgetMs}ms: " +
-              nodeSelector.description(),
+            if (placed == null) {
+              "Could not read the whole screen within ${budgetMs}ms to confirm this is gone: "
+            } else {
+              "Selector still matched a visible element after ${budgetMs}ms: "
+            } + nodeSelector.description(),
           )
         }
         SystemClock.sleep(RESOLVE_POLL_MS)
@@ -208,23 +256,57 @@ data class AndroidTestScrollUntilVisibleTool(
    * scrolls. Both bounds apply, and whichever is reached first ends the loop.
    */
   val timeoutMs: Long? = null,
+  /**
+   * Once the element is on screen, scroll its container so the element sits at the container's
+   * vertical centre, as far as the content allows — what a recording's `centerElement: true` asks
+   * of the Maestro-backed drivers.
+   */
+  val centerElement: Boolean = false,
 ) : AndroidTestExecutableTool {
   override suspend fun executeWithAndroidTest(
     target: AndroidTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runCatching {
+    suspend fun found(scrolls: Int): TrailblazeToolResult {
+      val centred = centerElement && centreOnScreen(target, nodeSelector, context)
+      return TrailblazeToolResult.Success(
+        message = "Scrolled ${nodeSelector.description()} into view after $scrolls scrolls" +
+          (if (centred) ", then centred it." else "."),
+      )
+    }
     var scrolls = 0
     var idleAttempts = 0
     var triedOwnAncestor = false
+    var unreadableReads = 0
     val deadline = timeoutMs?.let { SystemClock.uptimeMillis() + it }
     while (scrolls < MAX_SCROLLS && (deadline == null || SystemClock.uptimeMillis() < deadline)) {
       // Matched against a snapshot directly rather than through the resolver: the element is
       // expected to be absent for most of this loop, and paying the resolver's settle budget on
       // every attempt would turn a ten-row scroll into a minute of waiting.
-      if (isOnScreen(target, nodeSelector, context)) {
-        return@runCatching TrailblazeToolResult.Success(
-          message = "Scrolled ${nodeSelector.description()} into view after $scrolls scrolls.",
-        )
+      val placed = placedOnScreen(target, nodeSelector, context)
+      if (!placed.isNullOrEmpty()) return@runCatching found(scrolls)
+      // A screen read only in part (an index counts matches, so a dropped one shifts it) says
+      // neither yes nor no. Scrolling on it could move a target already in view out of it, so read
+      // again first, a few times, before treating it as absent.
+      if (placed == null && unreadableReads < UNREADABLE_RETRIES) {
+        unreadableReads++
+        SystemClock.sleep(UNSCROLLABLE_RETRY_MS)
+        continue
+      }
+      unreadableReads = 0
+      // Every scroll below works on this app's own containers and waits for its Activity, which is
+      // paused behind another app's window. With a time bound, keep looking until it runs out (the
+      // other app may still be loading); without one, say this driver does not scroll that window.
+      ForeignWindow.frontPackage()?.let { foreignPackage ->
+        if (deadline == null) {
+          throw TrailblazeToolExecutionException(
+            "${nodeSelector.description()} is not on screen, and $foreignPackage's window is in " +
+              "front of the app: this driver does not scroll another app's window.",
+            this,
+          )
+        }
+        SystemClock.sleep(UNSCROLLABLE_RETRY_MS)
+        continue
       }
       // A node that is already in the tree but has no bounds is inside a container that has not
       // scrolled to it, and only the node knows which container that is. Scrolling "the biggest
@@ -258,8 +340,13 @@ data class AndroidTestScrollUntilVisibleTool(
       // "Nothing can scroll" is not a reliable end-of-content signal on its own: a lazy list that
       // has been composed but not yet measured reports the same thing as one scrolled to its
       // bottom. Only a container that stays unable to move across several attempts is at its end.
+      //
+      // With a time bound, the end of the list does not end the search either: the Maestro-backed
+      // drivers keep looking until the bound runs out, and recordings lean on that as a wait. A
+      // screen still behind a loading overlay has nothing to scroll for a few
+      // seconds, and giving up then fails a step those drivers pass.
       idleAttempts++
-      if (idleAttempts >= UNSCROLLABLE_ATTEMPTS) {
+      if (deadline == null && idleAttempts >= UNSCROLLABLE_ATTEMPTS) {
         throw TrailblazeToolExecutionException(
           if (scrolls == 0) {
             "Nothing on this screen can scroll, and ${nodeSelector.description()} is not on it. " +
@@ -276,19 +363,20 @@ data class AndroidTestScrollUntilVisibleTool(
     // The loop tests visibility BEFORE each scroll, so the last permitted scroll's result would
     // otherwise never be looked at: reaching the cap with the target now on screen would report a
     // failure the screen contradicts.
-    if (isOnScreen(target, nodeSelector, context)) {
-      return@runCatching TrailblazeToolResult.Success(
-        message = "Scrolled ${nodeSelector.description()} into view after $scrolls scrolls.",
-      )
-    }
+    if (isOnScreen(target, nodeSelector, context)) return@runCatching found(scrolls)
     // Which bound ended the search, read from the bound itself. Inferring it from the scroll count
     // instead would name the wrong one whenever both are reached in the same pass — and the count
     // is the one that gets there first on a screen whose snapshot is cheap.
     throw TrailblazeToolExecutionException(
       if (deadline != null && SystemClock.uptimeMillis() >= deadline) {
-        "Gave up after ${timeoutMs}ms without ${nodeSelector.description()} appearing, having " +
-          "scrolled $scrolls times. Either the element is further down than the timeout allows " +
-          "for, or the selector is wrong."
+        if (idleAttempts >= UNSCROLLABLE_ATTEMPTS) {
+          "Scrolled to the end after $scrolls scrolls and ${nodeSelector.description()} never " +
+            "appeared within ${timeoutMs}ms."
+        } else {
+          "Gave up after ${timeoutMs}ms without ${nodeSelector.description()} appearing, having " +
+            "scrolled $scrolls times. Either the element is further down than the timeout allows " +
+            "for, or the selector is wrong."
+        }
       } else {
         "Gave up after $MAX_SCROLLS scrolls without ${nodeSelector.description()} appearing. The " +
           "container was still scrolling, so either the element is much further down than a trail " +
@@ -306,6 +394,17 @@ private sealed interface ResolvedNode {
   data class ViewNode(override val node: TrailblazeNode, val view: View) : ResolvedNode
 
   data class ComposeNode(override val node: TrailblazeNode, val semanticsId: Int) : ResolvedNode
+
+  /**
+   * Matched in the accessibility tree and owned by nothing live here, so acted on by its centre.
+   * [inForeignWindow] when another app's window holds it, which only an injected touch can reach.
+   */
+  data class ScreenPoint(
+    override val node: TrailblazeNode,
+    val x: Int,
+    val y: Int,
+    val inForeignWindow: Boolean = false,
+  ) : ResolvedNode
 }
 
 /**
@@ -319,7 +418,11 @@ private fun succeeded(
   resolved: ResolvedNode,
   relocation: String?,
 ): TrailblazeToolResult {
-  val backend = if (resolved is ResolvedNode.ComposeNode) "Compose node" else "View"
+  val backend = when (resolved) {
+    is ResolvedNode.ComposeNode -> "Compose node"
+    is ResolvedNode.ViewNode -> "View"
+    is ResolvedNode.ScreenPoint -> "accessibility node"
+  }
   val message = "$verb $backend ${selector.description()}."
   return TrailblazeToolResult.Success(
     message = if (relocation == null) message else "$message $relocation",
@@ -338,17 +441,81 @@ private fun isOnScreen(
   target: AndroidTestTarget,
   selector: TrailblazeNodeSelector,
   context: TrailblazeToolExecutionContext,
-): Boolean {
-  target.waitForIdle()
+): Boolean = placedOnScreen(target, selector, context).orEmpty().isNotEmpty()
+
+/**
+ * The laid-out nodes [selector] matches on the screen as it is right now, or null when the screen
+ * could not be read in full (no accessibility root, or a child the app did not answer for): an
+ * empty answer from such a read is not proof that the element is gone. Null too while another app
+ * is in front of a selector only the app's own tree can match: that app is often in front only
+ * for a moment, so callers wait on it as on any unreadable screen rather than failing at once.
+ */
+private fun placedOnScreen(
+  target: AndroidTestTarget,
+  selector: TrailblazeNodeSelector,
+  context: TrailblazeToolExecutionContext,
+): List<TrailblazeNode>? {
+  val foreignPackage = ForeignWindow.frontPackage()
+  if (foreignPackage == null) target.waitForIdle()
   val templateContext = context.resolvedTarget?.let { resolved ->
     TargetTemplateContext(appId = context.appId, appIds = resolved.appIds)
   }
-  val tree = AndroidTestScreenState(target, includeScreenshot = false).requiredNodeTree
-  return when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector, templateContext)) {
-    is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node.isPlaced()
-    is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> result.nodes.any { it.isPlaced() }
-    is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> false
-  }
+  if (foreignPackage != null && !selector.isAccessibilityShaped()) return null
+  if (foreignPackage != null || usesAccessibilityTree(selector)) return placedA11yMatches(selector, templateContext)
+  val screenState = AndroidTestScreenState(target, includeScreenshot = false)
+  val placed = placedMatches(TrailblazeNodeSelectorResolver.resolve(screenState.requiredNodeTree, selector, templateContext))
+  // A virtual node (one a View draws and exposes only through its own provider) is not in that
+  // tree, and the positive lookup finds it in the accessibility tree, so absence is not confirmed
+  // until that tree agrees.
+  if (placed.isNotEmpty() || !screenState.exposesVirtualNodes(selector)) return placed
+  return placedA11yMatches(selector, templateContext)
+}
+
+/** Placed matches in the accessibility tree, or null when it could not be read in full. */
+private fun placedA11yMatches(
+  selector: TrailblazeNodeSelector,
+  templateContext: TargetTemplateContext?,
+): List<TrailblazeNode>? {
+  val a11y = InProcessAccessibilityTree.capture(uncached = true) ?: return null
+  // A partial read would shift an index onto the next match, so it is not an answer either way.
+  if (selector.countsMatches() && !a11y.isComplete) return null
+  val placed = placedMatches(xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst(a11y.tree, selector, templateContext))
+  return if (placed.isEmpty() && !a11y.isComplete) null else placed
+}
+
+/**
+ * Another app's window is read only as an accessibility tree, so only an accessibility selector
+ * can be matched in it. Anything else fails here: matching nothing would read as "not there",
+ * and pass an absence check while the element is on screen.
+ */
+private fun requireMatchableInForeignWindow(foreignPackage: String, selector: TrailblazeNodeSelector) {
+  if (selector.isAccessibilityShaped()) return
+  throw IllegalStateException(
+    "${selector.description()} cannot be matched in $foreignPackage's window, which is in front of " +
+      "the app: only accessibility selectors are matched against another app's window. Record this " +
+      "step with an accessibility selector.",
+  )
+}
+
+/**
+ * Scrolls the first placed match to its container's vertical centre. False when it was no longer
+ * on screen or nothing around it scrolls; the element is still visible either way, which is what
+ * the scroll was for.
+ */
+private suspend fun centreOnScreen(
+  target: AndroidTestTarget,
+  selector: TrailblazeNodeSelector,
+  context: TrailblazeToolExecutionContext,
+): Boolean {
+  // Centring scrolls this app's own containers, and waits for its Activity to find them. Another
+  // app's window has none of those; the element is already on screen, so leave it where it is.
+  if (ForeignWindow.frontPackage() != null) return false
+  val bounds = placedOnScreen(target, selector, context)?.firstOrNull()?.bounds ?: return false
+  return AndroidScrollActions.centreVertically(
+    target,
+    x = (bounds.left + bounds.right) / 2,
+    y = (bounds.top + bounds.bottom) / 2,
+  )
 }
 
 /** Why an own-ancestor scroll did or did not happen — the caller spends its one attempt on two of these. */
@@ -384,20 +551,43 @@ private suspend fun scrollToOwnAncestor(
     TargetTemplateContext(appId = context.appId, appIds = resolved.appIds)
   }
   val screenState = AndroidTestScreenState(target, includeScreenshot = false)
-  val match =
-    TrailblazeNodeSelectorResolver.resolve(
-      screenState.requiredNodeTree,
-      selector,
-      templateContext,
-    ) as? TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch
+  if (usesAccessibilityTree(selector)) {
+    val a11y = InProcessAccessibilityTree.capture(uncached = true) ?: return OwnAncestorScroll.NO_NODE_TO_ASK
+    if (selector.countsMatches() && !a11y.isComplete) return OwnAncestorScroll.NO_NODE_TO_ASK
+    val node = (xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst(a11y.tree, selector, templateContext) as?
+      TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch)?.node ?: return OwnAncestorScroll.NO_NODE_TO_ASK
+    val owner = a11y.infoFor(node)?.let { screenState.ownerOf(it) } as? InProcessAccessibilityTree.Owner.ComposeOwner
       ?: return OwnAncestorScroll.NO_NODE_TO_ASK
-  val semanticsId =
-    screenState.semanticsIdByNodeId[match.node.nodeId] ?: return OwnAncestorScroll.NO_NODE_TO_ASK
+    return if (runCatching { AndroidComposeActions.scrollTo(target, owner.semanticsId) }.isSuccess) {
+      OwnAncestorScroll.SCROLLED
+    } else {
+      OwnAncestorScroll.REFUSED
+    }
+  }
+  val semanticsId = singleComposeMatch(screenState.requiredNodeTree, screenState.semanticsIdByNodeId, selector, templateContext)
+    // A composed item clipped to nothing inside its scroller is left out of every capture, though
+    // its own container can still bring it back; so it is looked for again with such nodes kept.
+    ?: AndroidHybridHierarchyCollector.collect(target.currentActivity(), target, keepClipped = true).let { unpruned ->
+      singleComposeMatch(unpruned.trailblazeTree, unpruned.semanticsIdByNodeId, selector, templateContext)
+    }
+    ?: return OwnAncestorScroll.NO_NODE_TO_ASK
   return if (runCatching { AndroidComposeActions.scrollTo(target, semanticsId) }.isSuccess) {
     OwnAncestorScroll.SCROLLED
   } else {
     OwnAncestorScroll.REFUSED
   }
+}
+
+/** The semantics id of the one node [selector] matches in [tree], or null. */
+private fun singleComposeMatch(
+  tree: TrailblazeNode,
+  semanticsIdByNodeId: Map<Long, Int>,
+  selector: TrailblazeNodeSelector,
+  templateContext: TargetTemplateContext?,
+): Int? {
+  val match = TrailblazeNodeSelectorResolver.resolve(tree, selector, templateContext) as?
+    TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch ?: return null
+  return semanticsIdByNodeId[match.node.nodeId]
 }
 
 /**
@@ -456,14 +646,79 @@ private fun pollForNode(
     var ambiguousCount = 0
     lateinit var screenState: AndroidTestScreenState
     while (true) {
-      target.waitForIdle()
-      screenState = AndroidTestScreenState(target, includeScreenshot = false)
-      val result =
+      // Another app in front (a browser, a permission prompt) is matched and acted on through the
+      // platform's accessibility tree alone: the app's own capture would describe the screen
+      // behind it, and waits for an Activity that is paused until the other app goes away.
+      val foreignPackage = perf("poll.foreign") { ForeignWindow.frontPackage() }
+      if (foreignPackage == null) {
+        perf("poll.waitForIdle") { target.waitForIdle() }
+        screenState = perf("poll.screenState") { AndroidTestScreenState(target, includeScreenshot = false) }
+      }
+      // Another app is often in front only for a moment, as a sign-in browser hands back to the
+      // app: a selector only the app's own tree can match waits for the app until the deadline.
+      if (foreignPackage != null && !selector.isAccessibilityShaped()) {
+        if (SystemClock.uptimeMillis() >= deadline) requireMatchableInForeignWindow(foreignPackage, selector)
+        SystemClock.sleep(RESOLVE_POLL_MS)
+        continue
+      }
+      if (foreignPackage != null || usesAccessibilityTree(selector)) {
+        val a11y = perf("poll.a11yTree") { InProcessAccessibilityTree.capture(uncached = true) }
+        // An index counts matches, and a capture that dropped an earlier one would shift it onto
+        // the next: wait for a full read rather than act on a partial one.
+        val indexUnsure = selector.countsMatches() && a11y?.isComplete == false
+        val matched = a11y?.takeIf { selector.isAccessibilityShaped() && !indexUnsure }?.let {
+          placedMatches(xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst(it.tree, selector, templateContext))
+        }.orEmpty()
+        val owner = matched.firstOrNull()?.takeIf { foreignPackage == null }?.let { node ->
+          a11y?.infoFor(node)?.let { perf("poll.a11yOwner") { screenState.ownerOf(it) } }
+        }
+        if (owner != null) return owner.toResolvedNode()
+        matched.firstOrNull()?.let { node ->
+          val b = node.bounds ?: return@let null
+          return ResolvedNode.ScreenPoint(
+            node,
+            (b.left + b.right) / 2,
+            (b.top + b.bottom) / 2,
+            inForeignWindow = foreignPackage != null,
+          )
+        }
+        if (SystemClock.uptimeMillis() >= deadline) {
+          if (indexUnsure) {
+            throw IllegalStateException(
+              "The accessibility tree could not be read in full for ${timeoutMs}ms, so the index " +
+                "of ${selector.description()} could not be counted: ${a11y?.droppedFetches} " +
+                "node(s) were dropped.",
+            )
+          }
+          throw SelectorWaitMissException(
+            if (foreignPackage != null) {
+              // Same "matched no element after Nms" wording, so a probe reads it as "not there".
+              "Selector matched no element after ${timeoutMs}ms (in $foreignPackage's window, in " +
+                "front of the app): ${selector.description()}" +
+                a11y?.tree?.let { "\n" + InProcessAccessibilityTree.describe(it) }.orEmpty()
+            } else if (matched.isNotEmpty()) {
+              "Selector matched an accessibility node after ${timeoutMs}ms, but no View or Compose " +
+                "node in this process owns it (another window, or one the in-process capture " +
+                "lacks): ${selector.description()}"
+            } else {
+              // The same wording as every other driver's miss: scripted tools read "matched no
+              // element after Nms" as the "not there" answer to a probe, and anything else as a
+              // failure. A scripted sign-in that polls that way would fail on its first probe.
+              "Selector matched no element after ${timeoutMs}ms (in the accessibility tree): ${selector.description()}" +
+                a11y?.tree?.let { "\n" + InProcessAccessibilityTree.describe(it) }.orEmpty()
+            },
+          )
+        }
+        SystemClock.sleep(RESOLVE_POLL_MS)
+        continue
+      }
+      val result = perf("poll.resolve") {
         TrailblazeNodeSelectorResolver.resolve(
           screenState.requiredNodeTree,
           selector,
           templateContext,
         )
+      }
       when (result) {
         is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch ->
           // A Compose semantics node exists before it is laid out, and reads as zero-area until
@@ -480,11 +735,11 @@ private fun pollForNode(
         // An ambiguous match takes the first PLACED node, which is what the driver these recordings
         // were made on does — `AccessibilityDeviceManager.pickPreferredMatch`: first visible-to-user
         // match, else the first. Refusing ambiguity instead was stricter than the recorded
-        // semantics, and strictness the corpus never agreed to is indistinguishable from a bug:
-        // one trail taps `checkout_button_title`, which is unique in the tree it was recorded
-        // against and names two live buttons here ("Save ticket" and "Review sale") the moment the
-        // merchant has open tickets on. The recording cannot be more specific than the driver that
-        // produced it, so an in-process replay that demands more replays nothing.
+        // semantics, and strictness the recordings never agreed to is indistinguishable from a bug:
+        // a trail can tap a resource id that is unique in the tree it was recorded against and
+        // names two live buttons here once the app shows a second button with it. The recording
+        // cannot be more specific than the driver that produced it, so an in-process replay that
+        // demands more replays nothing.
         //
         // Placement is still a gate, and is the reason this is not simply `nodes.first()`: a
         // zero-area node is as unactionable as no node, so a match set with none placed keeps
@@ -497,6 +752,8 @@ private fun pollForNode(
         is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
           unplacedNode = null
           ambiguousCount = 0
+          perf("poll.virtualNodes") { virtualNodeMatch(screenState, selector, templateContext) }
+            ?.let { return it }
         }
       }
       if (SystemClock.uptimeMillis() >= deadline) {
@@ -648,6 +905,90 @@ private const val REDACTED = "<redacted>"
  * window coordinates, and a node that has been composed but not yet laid out reports an empty
  * rectangle — indistinguishable, by any other property, from one that is ready.
  */
+/**
+ * Whether a recorded accessibility selector is matched against the app's real accessibility tree
+ * rather than this driver's View/Compose tree: opt-in per device, see [InProcessAccessibilityTree].
+ */
+private fun usesAccessibilityTree(selector: TrailblazeNodeSelector): Boolean =
+  selector.isAccessibilityShaped() && InProcessAccessibilityTree.isEnabled()
+
+/**
+ * Any accessibility match anywhere in the selector, and no other driver's at any depth: a native
+ * match under a relation-only node would match nothing in the accessibility tree, which an
+ * absence check reads as "gone".
+ */
+private fun TrailblazeNodeSelector.isAccessibilityShaped(): Boolean =
+  hasOnlyAccessibilityMatches() && hasAccessibilityMatch()
+
+private fun TrailblazeNodeSelector.relationParts(): List<TrailblazeNodeSelector> =
+  listOfNotNull(below, above, leftOf, rightOf, childOf, containsChild) + containsDescendants.orEmpty()
+
+/** Whether an `index` anywhere in [this], its relations included, counts matches. */
+private fun TrailblazeNodeSelector.countsMatches(): Boolean =
+  index != null || relationParts().any { it.countsMatches() }
+
+private fun TrailblazeNodeSelector.hasOnlyAccessibilityMatches(): Boolean =
+  (driverMatch == null || driverMatch is xyz.block.trailblaze.api.DriverNodeMatch.AndroidAccessibility) &&
+    relationParts().all { it.hasOnlyAccessibilityMatches() }
+
+private fun TrailblazeNodeSelector.hasAccessibilityMatch(): Boolean =
+  driverMatch is xyz.block.trailblaze.api.DriverNodeMatch.AndroidAccessibility ||
+    relationParts().any { it.hasAccessibilityMatch() }
+
+/**
+ * Placed matches, the ones visible to the user first, then in match order: the first is what the
+ * accessibility driver acts on too (`pickPreferredMatch`). A popup's control and an occluded one
+ * behind it can share a label, and only the visible one takes a tap.
+ */
+private fun placedMatches(result: TrailblazeNodeSelectorResolver.ResolveResult): List<TrailblazeNode> =
+  when (result) {
+    is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> listOf(result.node)
+    is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> result.nodes
+    is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> emptyList()
+  }.filter { it.isPlaced() }
+    .sortedBy { (it.driverDetail as? xyz.block.trailblaze.api.DriverNodeDetail.AndroidAccessibility)?.isVisibleToUser == false }
+
+/**
+ * A recorded accessibility selector the View/Compose tree cannot match because what it names is a
+ * VIRTUAL accessibility node: one a View draws itself and exposes only through its own
+ * [android.view.accessibility.AccessibilityNodeProvider] (a text field's clear button, a chart's
+ * bars). Read from the platform's accessibility tree, the one the recording was made against, and
+ * only when some View on screen exposes such nodes, so an ordinary miss costs one View walk.
+ */
+private fun virtualNodeMatch(
+  screenState: AndroidTestScreenState,
+  selector: TrailblazeNodeSelector,
+  templateContext: TargetTemplateContext?,
+): ResolvedNode? {
+  if (!screenState.exposesVirtualNodes(selector)) return null
+  val a11y = InProcessAccessibilityTree.capture(uncached = true) ?: return null
+  // A partial read would shift an index onto the next match; the caller polls again.
+  if (selector.countsMatches() && !a11y.isComplete) return null
+  val node = placedMatches(
+    xyz.block.trailblaze.api.resolveImportantForAccessibilityFirst(a11y.tree, selector, templateContext),
+  ).firstOrNull() ?: return null
+  a11y.infoFor(node)?.let { screenState.ownerOf(it) }?.let { return it.toResolvedNode() }
+  val b = node.bounds ?: return null
+  return ResolvedNode.ScreenPoint(node, (b.left + b.right) / 2, (b.top + b.bottom) / 2)
+}
+
+/** Whether [selector] could name a virtual node: it is accessibility-shaped and some View on screen exposes them. */
+private fun AndroidTestScreenState.exposesVirtualNodes(selector: TrailblazeNodeSelector): Boolean {
+  if (!selector.isAccessibilityShaped()) return false
+  val views = viewByNodeId.values
+  return onMainThread { views.any { it !is ViewRootForTest && it.accessibilityNodeProvider != null } }
+}
+
+private fun AndroidTestScreenState.ownerOf(
+  info: android.view.accessibility.AccessibilityNodeInfo,
+): InProcessAccessibilityTree.Owner? =
+  InProcessAccessibilityTree.ownerOf(info, requiredNodeTree, viewByNodeId, semanticsIdByNodeId)
+
+private fun InProcessAccessibilityTree.Owner.toResolvedNode(): ResolvedNode = when (this) {
+  is InProcessAccessibilityTree.Owner.ViewOwner -> ResolvedNode.ViewNode(node, view)
+  is InProcessAccessibilityTree.Owner.ComposeOwner -> ResolvedNode.ComposeNode(node, semanticsId)
+}
+
 private fun TrailblazeNode.isPlaced(): Boolean {
   val bounds = bounds ?: return false
   return bounds.width > 0 && bounds.height > 0
@@ -682,3 +1023,8 @@ private const val MAX_SCROLLS = 25
 /** How long a container gets to finish measuring before "cannot scroll" is believed. */
 private const val UNSCROLLABLE_ATTEMPTS = 6
 private const val UNSCROLLABLE_RETRY_MS = 250L
+private const val UNREADABLE_RETRIES = 4
+
+/** How many times an assert resolves its selector again after the matched view detached. */
+private const val DETACHED_RESOLVE_ATTEMPTS = 3
+

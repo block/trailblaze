@@ -58,20 +58,11 @@ internal object ScrollOptionSupport {
   val DEFAULT_TIMEOUT_MS: Long = ScrollUntilVisibleCommand.DEFAULT_TIMEOUT_IN_MILLIS.toLong()
 
   /**
-   * `null` means the recording left `centerElement` unwritten, which is not a request to centre:
-   * it hands the decision to the driver, and this driver declares
-   * [TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault] false. Resolving it here from
-   * that same declaration — rather than accepting null outright — is what keeps the refusal honest
-   * if the driver's declared default ever changes. The raw Maestro entry point reaches the same
-   * answer by not asking at all when the key is absent.
+   * Whether to centre the found element. `null` means the recording left `centerElement`
+   * unwritten, which hands the decision to the driver: read from
+   * [TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault]. Only the canonical tool reads
+   * it; the Maestro command adapter defaults to Maestro's own `centerElement`.
    */
-  fun unsupportedCenterElement(centerElement: Boolean?): String? {
-    val resolved = centerElement ?: TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault
-    return if (resolved == ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT) {
-      null
-    } else {
-      "centerElement=$resolved (this driver stops as soon as the element is on screen and " +
-        "cannot keep scrolling to centre it)"
-    }
-  }
+  fun centerElement(centerElement: Boolean?): Boolean =
+    centerElement ?: TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault
 }

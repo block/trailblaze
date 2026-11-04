@@ -173,7 +173,7 @@ function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | n
   const byDeviceName = new Map<string | null, number>();
   let sessionWideMs = Infinity;
   for (const [key, samples] of samplesByDevice) {
-    const min = Math.min(...samples);
+    const min = samples.reduce((a, b) => Math.min(a, b), Infinity);
     byDeviceName.set(key, min);
     sessionWideMs = Math.min(sessionWideMs, min);
   }
@@ -799,8 +799,9 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
       // can nest the tool calls / assertions that follow under their step. `trailhead` marks the
       // objective lowered from the trail's `trailhead:` (its step 0) — the DirectionStep.isTrailhead
       // flag rides through the ObjectiveStartLog's promptStep. `teardown` marks the teardown
-      // objective the runner adds after the trail (DirectionStep.isTeardown).
-      const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(isObjective && log.promptStep?.isTeardown === true ? { teardown: true } : {}), ...(llmAt != null ? { llm: llmAt } : {}) };
+      // objective the runner adds after the trail (DirectionStep.isTeardown), and `setup` the run's
+      // device setup, the setup tool calls that run before the trailhead (DirectionStep.isSetup).
+      const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(isObjective && log.promptStep?.isTeardown === true ? { teardown: true } : {}), ...(isObjective && log.promptStep?.isSetup === true ? { setup: true } : {}), ...(llmAt != null ? { llm: llmAt } : {}) };
       out.push(prow);
       if (isObjective) objRow = prow;
       continue;
@@ -1644,6 +1645,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     objective: !!t.objective,
     trailhead: !!t.trailhead,
     ...(t.teardown ? { teardown: true } : {}),
+    ...(t.setup ? { setup: true } : {}),
     selfHeal: !!t.selfHeal,
     selfHealTool: t.selfHealTool || null,
     selfHealError: t.selfHealError || null,
@@ -1721,10 +1723,11 @@ function isLlmTurnRow(t: { tool?: string | null; llm?: number | null }): boolean
   return tool === 'agent step' || tool.indexOf('llm') === 0;
 }
 
-// Count real test steps from a trace: objective rows, trailhead and teardown excluded — `meta.steps`
-// is the flat trace length (action rows AND step headers), which overstates what a reader calls a step.
+// Count real test steps from a trace: objective rows, device setup, trailhead and teardown excluded —
+// `meta.steps` is the flat trace length (action rows AND step headers), which overstates what a reader
+// calls a step.
 function traceStepCount(trace: TraceStep[]): number {
-  return trace.filter((t) => t.objective && !t.trailhead && !t.teardown).length;
+  return trace.filter((t) => t.objective && !t.trailhead && !t.teardown && !t.setup).length;
 }
 
 // Count executed tool calls from a trace. Terminal snapshot/error rows carry `terminal` and stay
@@ -1885,6 +1888,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       networkGz: s.networkGz || null,
       events: s.events || null,
       eventsGz: s.eventsGz || null,
+      eventsHref: s.eventsHref || null,
       spans: s.spans || null,
       spansGz: s.spansGz || null,
       visibleStrings: s.visibleStrings && s.visibleStrings.length ? s.visibleStrings : null,

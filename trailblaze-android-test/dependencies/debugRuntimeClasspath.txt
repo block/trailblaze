@@ -1,3 +1,5 @@
+:trailblaze-agent
+:trailblaze-android-ondevice-mcp
 :trailblaze-common
 :trailblaze-http
 :trailblaze-models
@@ -8,6 +10,8 @@
 :trailblaze-trail-format
 ai.koog:agents-core-android:1.2.0
 ai.koog:agents-core:1.2.0
+ai.koog:agents-ext-android:1.2.0-beta
+ai.koog:agents-ext:1.2.0-beta
 ai.koog:agents-features-event-handler-android:1.2.0
 ai.koog:agents-features-event-handler:1.2.0
 ai.koog:agents-features-memory-android:1.2.0
@@ -144,10 +148,14 @@ io.ktor:ktor-serialization-kotlinx:3.5.0
 io.ktor:ktor-serialization:3.5.0
 io.ktor:ktor-server-cio-jvm:3.5.0
 io.ktor:ktor-server-cio:3.5.0
+io.ktor:ktor-server-content-negotiation-jvm:3.5.0
+io.ktor:ktor-server-content-negotiation:3.5.0
 io.ktor:ktor-server-core-jvm:3.5.0
 io.ktor:ktor-server-core:3.5.0
 io.ktor:ktor-server-sse-jvm:3.5.0
 io.ktor:ktor-server-sse:3.5.0
+io.ktor:ktor-server-websockets-jvm:3.5.0
+io.ktor:ktor-server-websockets:3.5.0
 io.ktor:ktor-sse-jvm:3.5.0
 io.ktor:ktor-sse:3.5.0
 io.ktor:ktor-utils-jvm:3.5.0

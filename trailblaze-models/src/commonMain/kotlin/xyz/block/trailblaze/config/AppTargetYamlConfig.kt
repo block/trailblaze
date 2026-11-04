@@ -13,6 +13,8 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.temp.JsonElementSerializer
@@ -158,6 +160,13 @@ data class AndroidTestInstrumentationConfig(
   @SerialName("test_app_id") val testAppId: String,
   /** Fully-qualified class name of the standalone RPC server test inside that APK. */
   @SerialName("fq_test_name") val fqTestName: String,
+  /**
+   * Clear the app's data before any trail whose trailhead runs, not only one that opens with a
+   * `launchApp` REINSTALL. For a target whose scripted trailhead clears data on the other drivers:
+   * in-process that trailhead runs inside the app and cannot clear it, so without this the trail
+   * starts on whatever the previous trail left behind. Skipped when the trailhead is being reused.
+   */
+  @SerialName("clear_data_before_trailhead") val clearDataBeforeTrailhead: Boolean = false,
 )
 
 /**
@@ -207,9 +216,8 @@ data class InlineScriptToolConfig(
    * Top-level shortcut for `_meta: { trailblaze/requiresHost: true }`. Setting this to `true`
    * marks the tool as host-only — the on-device agent skips it at registration via the same
    * `TrailblazeToolMeta.shouldRegister` gate that Kotlin
-   * `@TrailblazeToolClass(requiresHost = true)` already uses. Use it for tools that need
-   * Node/Bun APIs (`node:fs`, `node:child_process`) or otherwise can't run inside the
-   * on-device QuickJS bundle.
+   * `@TrailblazeToolClass(requiresHost = true)` already uses. Use it when an in-process Android
+   * tool calls a host-only tool like `exec`. Subprocess tools are host-only already ([hostOnly]).
    *
    * Setting this to `true` forces `_meta["trailblaze/requiresHost"] = true` in the synthesized
    * wrapper. The default `false` is a no-op — any `_meta["trailblaze/requiresHost"]` you set
@@ -281,7 +289,18 @@ data class InlineScriptToolConfig(
   @kotlinx.serialization.Transient
   val inputSchemaExhaustive: Boolean = false,
 ) {
+  /** True for [requiresHost] or a subprocess runtime (a host Bun process). Gates read this. */
+  val hostOnly: Boolean
+    get() = requiresHost || runtime == ScriptedToolRuntime.SUBPROCESS
+
   init {
+    require(
+      runtime != ScriptedToolRuntime.SUBPROCESS ||
+        (meta?.get("trailblaze/requiresHost") as? JsonPrimitive)?.booleanOrNull != false,
+    ) {
+      "Scripted tool '$name' (script: $script): `runtime: subprocess` is always host-only. " +
+        "Remove `trailblaze/requiresHost: false`."
+    }
     // Enforce at the canonical runtime construction site so EVERY decode path is gated:
     // - `TrailmapScriptedToolFile.toInlineScriptToolConfig()` (per-file `<trailmap>/tools/<id>.yaml`)
     // - direct YAML decode under `target.tools:` in trailmap manifests

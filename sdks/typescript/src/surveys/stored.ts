@@ -12,8 +12,9 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
+import { DERIVED_OWN_FILE, derivedFiles } from "./derived-files.js";
 import type { SessionResult, SurveyReport } from "./runner.js";
 import type { Finding, LabelRecord, SessionRecord } from "./types.js";
 
@@ -161,7 +162,11 @@ const OWN_FILE = /^surveys\.json(?:\.lock(?:\.[\w-]+(?:\.stale)?)?|\.[\w-]+\.tmp
 
 export function sessionInputs(dir: string): string | undefined {
   let linked = false;
-  const lines: string[] = [];
+  // What a derived stream wrote is not an input: writing one must not make stored results stale.
+  const derived = derivedFiles(dir);
+  // Which files are inputs is unknown, so nothing vouches for the session.
+  if (derived === undefined) return undefined;
+  const lines: Array<[rel: string, line: string]> = [];
   const walk = (at: string) => {
     let names: string[];
     try {
@@ -178,14 +183,23 @@ export function sessionInputs(dir: string): string | undefined {
         continue;
       }
       if (at === dir && !stat.isDirectory() && OWN_FILE.test(name)) continue;
+      if (at === join(dir, "events") && !stat.isDirectory() && DERIVED_OWN_FILE.test(name)) continue;
+      const rel = relative(dir, path);
+      // `derivedFiles` is `/`-separated, which `relative` is not on Windows.
+      const posix = sep === "/" ? rel : rel.split(sep).join("/");
+      if (derived.has(posix)) continue;
       if (stat.isSymbolicLink()) linked = true;
       else if (stat.isDirectory()) walk(path);
-      else lines.push(`${relative(dir, path)}\t${stat.size}\t${stat.mtimeMs}\t${stat.ctimeMs}`);
+      else lines.push([posix, `${rel}\t${stat.size}\t${stat.mtimeMs}\t${stat.ctimeMs}`]);
     }
   };
   walk(dir);
   if (linked) return undefined;
-  return createHash("sha256").update(lines.sort().join("\n")).digest("hex");
+  // A stream another run derived and listed while this walked is not an input either.
+  const after = derivedFiles(dir);
+  if (after === undefined) return undefined;
+  const inputs = lines.filter(([posix]) => !after.has(posix)).map(([, line]) => line);
+  return createHash("sha256").update(inputs.sort().join("\n")).digest("hex");
 }
 
 /**
@@ -240,7 +254,8 @@ function merged(report: SurveyReport, s: SessionResult): string {
     };
     if (row.version !== undefined) entry.version = row.version;
     if (s.skipped.includes(row.id)) entry.skipped = true;
-    const errors = s.errors.filter((e) => e.survey === row.id).map((e) => e.message);
+    // A stream that failed left its readers short of rows, so none of this session's surveys is current.
+    const errors = s.errors.filter((e) => e.survey === row.id || e.survey.startsWith("stream:")).map((e) => e.message);
     if (errors.length > 0) entry.errors = errors;
     entry.seal = sealOf(key, entry, s.session.id, row.id);
     stored.surveys[row.id] = entry;
@@ -295,6 +310,20 @@ function writeLocked(file: string, content: () => string): void {
       release(lock, token);
     }
     if (Date.now() > deadline) throw new Error(`Could not hold ${lock}: another survey run kept taking it over.`);
+  }
+}
+
+/**
+ * Runs [fn] holding [lock], waiting while another run holds it. A run that holds a lock past its
+ * lease can lose it to another, so [fn] asks `held()` before each change it must not make unless
+ * it still holds the lock.
+ */
+export function withLock<T>(lock: string, fn: (held: () => boolean) => T): T {
+  const token = acquire(lock, Date.now() + STALE_LOCK_MS * 2);
+  try {
+    return fn(() => holderOf(lock) === token);
+  } finally {
+    release(lock, token);
   }
 }
 

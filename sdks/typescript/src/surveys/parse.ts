@@ -184,6 +184,7 @@ export function networkFromRows(
           file,
           line,
           timeMs: asNumber(rec.timestampMs),
+          ...(rec.clock === "device" ? { clock: "device" as const } : {}),
           summary: "",
         };
         byId.set(id, r);
@@ -201,6 +202,8 @@ export function networkFromRows(
         if (rec.method) r.method = (asString(rec.method) ?? r.method).toUpperCase();
         r.startMs = asNumber(rec.timestampMs) ?? r.startMs;
         r.timeMs = r.startMs;
+        if (rec.clock === "device") r.clock = "device";
+        else delete r.clock;
         r.requestHeaders = asRecord(rec.requestHeaders) as Record<string, string> | undefined;
         const reqBody = readBody(rec.requestBodyRef);
         r.requestBody = reqBody.text ?? r.requestBody;
@@ -258,6 +261,7 @@ function enrichFromInAppNetworkStreams(byId: Map<string, NetworkRequest>, order:
           file: ev.file,
           line: ev.line,
           timeMs: ev.timeMs,
+          ...(ev.clock === "device" ? { clock: "device" as const } : {}),
           summary: "",
         };
         byId.set(id, r);
@@ -324,6 +328,7 @@ export function analyticsFrom(streams: StreamEvent[]): AnalyticsEvent[] {
       timeMs: ev.timeMs,
       summary: `${source ? source + ": " : ""}${name}`,
       detail: { name, source },
+      ...(ev.clock === "device" ? { clock: "device" as const } : {}),
     });
   }
   return out;
@@ -348,6 +353,6 @@ export function streamEventOf(stream: string, row: unknown, file: string, line?:
   const rec = asRecord(row);
   const time = timeMs ?? asNumber(rec?.timeMs) ?? asNumber(rec?.timestampMs);
   const data = rec && "data" in rec ? rec.data : row;
-  return { kind: "event", stream, data, file, line, timeMs: time, summary: `${stream} event` };
+  return { kind: "event", stream, data, file, line, timeMs: time, summary: `${stream} event`, ...(rec?.clock === "device" ? { clock: "device" as const } : {}) };
 }
 

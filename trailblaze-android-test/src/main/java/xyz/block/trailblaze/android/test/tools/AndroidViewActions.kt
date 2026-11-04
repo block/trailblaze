@@ -13,6 +13,7 @@ import org.hamcrest.CoreMatchers.sameInstance
 import xyz.block.trailblaze.android.test.AndroidTestTarget
 import xyz.block.trailblaze.android.test.hierarchy.AndroidViewHierarchyCollector
 import xyz.block.trailblaze.android.test.onMainThread
+import xyz.block.trailblaze.android.test.perf
 
 /**
  * Acts on a classic Android View that has already been chosen, by identity.
@@ -50,6 +51,8 @@ internal object AndroidViewActions {
     if (onMainThread { grantsClickAction(site) }) {
       target.dispatchAndAwaitSettle { onMainThread { site.performClick() } }
     } else {
+      // A touch, which only reaches the view once it has stopped moving; see [awaitStill].
+      perf("click.awaitStill") { awaitStill { site.screenBox() } }
       perform(target, site, ViewActions.click())
     }
     return relocation
@@ -87,7 +90,14 @@ internal object AndroidViewActions {
    * ancestor would move the press somewhere the recording never touched.
    */
   suspend fun longClick(target: AndroidTestTarget, view: View) {
+    awaitStill { view.screenBox() }
     perform(target, view, ViewActions.longClick())
+  }
+
+  /** Where the view is on screen and how big, as a value two frames can be compared by. */
+  private fun View.screenBox(): List<Int> {
+    val location = IntArray(2).also(::getLocationOnScreen)
+    return listOf(location[0], location[1], width, height)
   }
 
   suspend fun replaceText(target: AndroidTestTarget, view: View, value: String): String? {
@@ -100,15 +110,22 @@ internal object AndroidViewActions {
 
   fun assertDisplayed(target: AndroidTestTarget, view: View) {
     guardingDetachment {
-      target.checkView(sameInstance(view), ViewAssertions.matches(ViewMatchers.isDisplayed()))
+      target.checkView(sameInstance(view), ViewAssertions.matches(ViewMatchers.isDisplayed()), view.windowRoot())
     }
   }
 
   private suspend fun perform(target: AndroidTestTarget, view: View, action: ViewAction) {
     target.dispatchAndAwaitSettle {
-      guardingDetachment { target.performViewAction(sameInstance(view), action) }
+      guardingDetachment { target.performViewAction(sameInstance(view), action, view.windowRoot()) }
     }
   }
+
+  /**
+   * The root of the window [this] is drawn in, so Espresso looks there rather than in the focused
+   * window only. Null once the view is detached, which leaves Espresso's own lookup to report it
+   * gone, as [guardingDetachment] expects.
+   */
+  private fun View.windowRoot(): View? = if (isAttachedToWindow) rootView else null
 
   /**
    * Espresso reports a view it cannot find in the hierarchy the same way it reports a selector that
@@ -119,10 +136,7 @@ internal object AndroidViewActions {
     try {
       block()
     } catch (e: NoMatchingViewException) {
-      throw IllegalStateException(
-        "The element left the screen between observation and action.",
-        e,
-      )
+      throw ElementDetachedException(e)
     }
 
   /**
@@ -212,3 +226,7 @@ internal object AndroidViewActions {
     return if (entry != null) "${javaClass.simpleName}#$entry" else javaClass.simpleName
   }
 }
+
+/** The view a selector resolved to left the hierarchy before the action or check reached it. */
+internal class ElementDetachedException(cause: Throwable) :
+  IllegalStateException("The element left the screen between observation and action.", cause)

@@ -7,6 +7,10 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.logs.model.SessionStartFields
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
@@ -92,6 +96,14 @@ class OnDeviceRpcProtoCodecTest {
       deviceClassifierOverride = listOf("android", "phone", "es"),
       trailSourceUrl = "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml",
       keepDeviceLanguage = true,
+      sessionStart = SessionStartFields(
+        trailConfig = TrailConfig(
+          id = "checkout/card",
+          title = "Pay by card",
+          metadata = mapOf("priority" to TrailMetadataValue.StringValue("p0"), "tags" to TrailMetadataValue.ListValue.of("pay")),
+        ),
+        targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.shop", versionName = "6.80"),
+      ),
     )
     val response = RunYamlResponse(
       sessionId = SessionId("session"),

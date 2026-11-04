@@ -286,13 +286,13 @@ object ResolvedTargetToolDetailRenderer {
       //
       // `requiresHost` is opt-in OR, which no single runtime site computes — the flag is genuinely
       // three-way. `SubprocessToolRegistrar.advertisedMeta` folds a typed `requiresHost = true`
-      // into the `_meta` key at advertisement time (the OR); `ScriptedToolHostOnlyPartitioner`
+      // (and a subprocess runtime) into the `_meta` key at advertisement time (the OR); `ScriptedToolHostOnlyPartitioner`
       // reads the typed field alone; `QuickJsToolBundleLauncher` hands `QuickJsToolMeta.fromSpec`
       // only `_meta`, so it reads that side alone. The OR is the union, and a tool that any of
       // those three treats as host-only is one a reader should see as host-only.
       surfaceToLlm = detail.config.surfaceToLlm && meta.metaFlag(META_SURFACE_TO_LLM, default = true),
       isRecordable = detail.config.isRecordable && meta.metaFlag(META_IS_RECORDABLE, default = true),
-      requiresHost = detail.config.requiresHost || meta.metaFlag(META_REQUIRES_HOST, default = false),
+      requiresHost = detail.config.hostOnly || meta.metaFlag(META_REQUIRES_HOST, default = false),
       keys = ContractKeys.SCRIPTED_FIELD_NAMES,
       section = section,
     )

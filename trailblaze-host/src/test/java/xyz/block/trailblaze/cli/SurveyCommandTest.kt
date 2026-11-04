@@ -131,6 +131,106 @@ class SurveyCommandTest {
   }
 
   @Test
+  fun `report writes derived streams, and a stream that fails is recorded on the session`() {
+    assumeBun()
+    writeWorkspace()
+    val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val surveys = File(workspace, "trailblaze-config/surveys")
+    File(surveys, "streams.survey.ts").writeText(
+      """
+      import { trailblaze } from "@trailblaze/scripting/surveys";
+      export const journeyRows = trailblaze.eventStream({
+        name: "journey-rows",
+        derive: (session) => session.analytics.filter({ name: "Journey Complete" }).map((e) => ({ timeMs: e.timeMs!, data: {}, from: e })),
+      });
+      """.trimIndent() + "\n",
+    )
+    fun streams() = CliCallerContext.withCallerCwd(workspace.toPath()) { writeDerivedStreams(listOf(checkout)) }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, streams())
+    assertTrue(File(checkout, "events/journey-rows.ndjson").isFile)
+
+    File(surveys, "broken.survey.ts").writeText(
+      """
+      import { trailblaze } from "@trailblaze/scripting/surveys";
+      export const broken = trailblaze.eventStream({ name: "broken", derive: () => { throw new Error("no rows today"); } });
+      """.trimIndent() + "\n",
+    )
+    assertTrue(streams() != TrailblazeExitCode.SUCCESS.code, "a stream that fails is not a success")
+    assertTrue("no rows today" in File(checkout, "events/derived.json").readText(), "the session records why the stream failed")
+    assertEquals(
+      TrailblazeExitCode.SUCCESS.code,
+      CliCallerContext.withCallerCwd(workspace.toPath()) {
+        writeSurveyReport(listOf(checkout), names = emptyList(), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
+      },
+      "a stream that fails does not fail the surveys that ran",
+    )
+
+    val empty = File(root, "no-sessions").apply { mkdirs() }
+    assertEquals(
+      TrailblazeExitCode.MISUSE.code,
+      CliCallerContext.withCallerCwd(workspace.toPath()) { writeDerivedStreams(listOf(empty)) },
+      "a path with no sessions in it is a mistake, not a success",
+    )
+  }
+
+  @Test
+  fun `a report has stream work only when the workspace declares a stream or a session holds one`() {
+    writeWorkspace()
+    val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val config = File(workspace, "trailblaze-config")
+    assertTrue(!hasDerivedStreamWork(config, listOf(checkout)), "surveys alone are no stream work, so no runtime starts")
+
+    File(checkout, "events").mkdirs()
+    File(checkout, "events/derived.json").writeText("{\"format\": 1, \"streams\": {}}")
+    assertTrue(hasDerivedStreamWork(config, listOf(checkout)), "streams written before may need removing")
+
+    File(checkout, "events/derived.json").delete()
+    File(config, "surveys/streams.survey.ts").writeText(
+      "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const rows = trailblaze.eventStream({ name: \"rows\", derive: () => [] });\n",
+    )
+    assertTrue(hasDerivedStreamWork(config, listOf(checkout)))
+
+    File(config, "surveys/streams.survey.ts").writeText("export { rows } from \"./helpers/rows.js\";\n")
+    File(config, "surveys/helpers").mkdirs()
+    File(config, "surveys/helpers/rows.ts").writeText(
+      "import { trailblaze } from \"@trailblaze/scripting/surveys\";\n" +
+        "export const rows = trailblaze.eventStream({ name: \"rows\", derive: () => [] });\n",
+    )
+    assertTrue(hasDerivedStreamWork(config, listOf(checkout)), "a stream re-exported from a helper module counts")
+  }
+
+  @Test
+  fun `a report outside a workspace writes no streams and succeeds`() {
+    val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val outside = File(root, "elsewhere").apply { mkdirs() }
+    assertEquals(TrailblazeExitCode.SUCCESS.code, CliCallerContext.withCallerCwd(outside.toPath()) { writeDerivedStreams(listOf(checkout)) })
+    assertTrue(!File(checkout, "events/derived.json").exists())
+  }
+
+  @Test
+  fun `report --surveys over a workspace of streams alone succeeds`() {
+    assumeBun()
+    val config = File(workspace, "trailblaze-config").apply { mkdirs() }
+    File(config, "trailblaze.yaml").writeText("trailmaps: []\n")
+    File(config, "surveys").mkdirs()
+    File(config, "surveys/streams.survey.ts").writeText(
+      """
+      import { trailblaze } from "@trailblaze/scripting/surveys";
+      export const rows = trailblaze.eventStream({ name: "rows", derive: () => [] });
+      """.trimIndent() + "\n",
+    )
+    val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+
+    val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
+      writeSurveyReport(listOf(checkout), names = emptyList(), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit)
+  }
+
+  @Test
   fun `report --surveys parses bare, with names, and is off by default`() {
     fun surveysOf(vararg args: String): List<String>? {
       val parsed = commandLine().parseArgs("report", *args)

@@ -2,6 +2,10 @@ package xyz.block.trailblaze.capture
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.BrokenBarrierException
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture
 import xyz.block.trailblaze.capture.logcat.IosLogCapture
 import xyz.block.trailblaze.capture.memory.MemoryCapture
@@ -86,6 +90,90 @@ class CaptureSessionTest {
       session.stopAll()
 
       assertTrue(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").isFile)
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `streams start together and startAll returns once every one is recording`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      // Each start returns only once every stream is inside its own start: streams started one
+      // after another would each wait out the timeout instead.
+      val allStarting = CyclicBarrier(3)
+      val streams = listOf(CaptureType.VIDEO, CaptureType.LOGCAT, CaptureType.MEMORY).map { type ->
+        BarrierStream(type, startBarrier = allStarting)
+      }
+      val session = CaptureSession(streams, CaptureOptions.NONE)
+
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+
+      assertTrue(streams.all { it.recording }, "every stream should be recording when startAll returns")
+      assertTrue(streams.none { it.timedOut }, "the streams should have started at the same time")
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a stream another stream's start ended is recording again when startAll returns`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val log = EndableStream()
+      // Starts last and, like a start that loses the device's connection, ends the log stream.
+      val video = object : CaptureStream {
+        override val type = CaptureType.VIDEO
+        override fun start(sessionDir: File, deviceId: String, appId: String?) {
+          while (!log.recording) Thread.sleep(5)
+          log.recording = false
+        }
+        override fun stop(options: CaptureOptions): CaptureArtifact? = null
+      }
+      val session = CaptureSession(listOf(log, video), CaptureOptions.NONE)
+
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+
+      assertTrue(log.recording, "the ended stream should be recording again")
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /** Records until something ends it, and starts again when told to confirm. */
+  private class EndableStream : CaptureStream {
+    override val type = CaptureType.LOGCAT
+
+    @Volatile var recording = false
+
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      recording = true
+    }
+
+    override fun confirmRecording() {
+      recording = true
+    }
+
+    override fun stop(options: CaptureOptions): CaptureArtifact? = null
+  }
+
+  @Test
+  fun `streams stop together and their artifacts keep the streams' order`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val allStopping = CyclicBarrier(2)
+      // The video finishes last, as an encoder flushing its muxer does.
+      val video = BarrierStream(CaptureType.VIDEO_WEBM, stopBarrier = allStopping, stopDelayMs = 100, sessionDir = sessionDir)
+      val logcat = BarrierStream(CaptureType.LOGCAT, stopBarrier = allStopping, sessionDir = sessionDir)
+      val session = CaptureSession(listOf(video, logcat), CaptureOptions.NONE)
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+
+      val artifacts = session.stopAll()
+
+      assertTrue(video.timedOut.not() && logcat.timedOut.not(), "the streams should have stopped at the same time")
+      assertEquals(listOf(CaptureType.VIDEO_WEBM, CaptureType.LOGCAT), artifacts.map { it.type })
+      val metadata = File(sessionDir, "capture_metadata.json").readText()
+      assertTrue(metadata.indexOf("VIDEO_WEBM") < metadata.indexOf("LOGCAT"))
     } finally {
       sessionDir.deleteRecursively()
     }
@@ -488,6 +576,42 @@ class CaptureSessionTest {
         startTimestampMs = 1772846522234L,
         endTimestampMs = 1772846522234L,
       )
+    }
+  }
+
+  /** A stream whose start and stop each wait at an optional barrier the other streams share. */
+  private class BarrierStream(
+    override val type: CaptureType,
+    private val startBarrier: CyclicBarrier? = null,
+    private val stopBarrier: CyclicBarrier? = null,
+    private val stopDelayMs: Long = 0,
+    private val sessionDir: File? = null,
+  ) : CaptureStream {
+    @Volatile var recording = false
+
+    @Volatile var timedOut = false
+
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      await(startBarrier)
+      recording = true
+    }
+
+    override fun stop(options: CaptureOptions): CaptureArtifact? {
+      await(stopBarrier)
+      Thread.sleep(stopDelayMs)
+      recording = false
+      val file = File(sessionDir ?: return null, "${type.name.lowercase()}.out").apply { writeText(type.name) }
+      return CaptureArtifact(file = file, type = type, startTimestampMs = 1L, endTimestampMs = 2L)
+    }
+
+    private fun await(barrier: CyclicBarrier?) {
+      try {
+        barrier?.await(5, TimeUnit.SECONDS)
+      } catch (e: TimeoutException) {
+        timedOut = true
+      } catch (e: BrokenBarrierException) {
+        timedOut = true
+      }
     }
   }
 

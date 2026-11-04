@@ -149,7 +149,7 @@ class ComposeRpcTrailblazeAgent(
     // send: unlike the Android on-device RPC path, the remote ComposeRpcServer receives no
     // memory snapshot and runs no dispatch loop of its own, so tokens must resolve before the
     // tool crosses the wire. `toolsExecuted` keeps the authored instance (base-loop convention).
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     val rawTool = tool.takeIf { it !== memoryResolvedTool }
     return when (memoryResolvedTool) {
       // compose_request_details is applied CLIENT-SIDE — it is NOT sent over RPC. Instead it arms

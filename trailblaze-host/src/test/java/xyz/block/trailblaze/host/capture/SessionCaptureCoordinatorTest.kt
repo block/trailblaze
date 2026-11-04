@@ -28,12 +28,14 @@ import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
 import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.logs.model.DeviceClockSample
 import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.ToolCallObservers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -125,6 +127,41 @@ class SessionCaptureCoordinatorTest {
 
   private fun sessionId(id: String = "test-session"): SessionId = SessionId(id)
 
+  /**
+   * A recorder that takes [startDelayMs] to start, as a video recorder waiting for its first
+   * picture does, and is recording only once its start has returned.
+   */
+  private class SlowStartStream(override val type: CaptureType, private val startDelayMs: Long) : CaptureStream {
+    val startBegan = CountDownLatch(1)
+
+    @Volatile var recording = false
+
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      startBegan.countDown()
+      Thread.sleep(startDelayMs)
+      recording = true
+    }
+
+    override fun stop(options: CaptureOptions): CaptureArtifact? {
+      recording = false
+      return null
+    }
+  }
+
+  /** Starts [id]'s capture the way a run does: while its device connects, through [connect]. */
+  private fun startWhileConnecting(
+    coord: SessionCaptureCoordinator,
+    id: SessionId,
+    connect: suspend () -> Unit,
+  ): Boolean = runBlocking {
+    DesktopYamlRunner.connectWhileRecordingStarts(
+      pinnedSessionId = id,
+      startRecording = { coord.startForSession(it, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions()) },
+      onAbandoned = { coord.stopForSession(it) },
+      connect = connect,
+    ).second
+  }
+
   // --- Tests -------------------------------------------------------------------
 
   @Test
@@ -135,6 +172,117 @@ class SessionCaptureCoordinatorTest {
     assertTrue(started, "first call should return true")
     assertTrue(coord.isActive(id), "session should be active after start")
     assertEquals(1, stream.startCalls.get(), "stream.start should fire exactly once")
+  }
+
+  @Test
+  fun `every stream is recording before the session's first step runs`() {
+    // A device that is ready long before capture has started: the first step must still wait.
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 300)
+    val logcat = SlowStartStream(CaptureType.LOGCAT, startDelayMs = 300)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video, logcat), opts) })
+    val id = sessionId()
+
+    val started = startWhileConnecting(coord, id) {}
+
+    // What the first step, trailhead included, sees as it starts.
+    assertTrue(started)
+    assertTrue(video.recording, "video must be recording before the first step")
+    assertTrue(logcat.recording, "logcat must be recording before the first step")
+    assertTrue(coord.isActive(id))
+  }
+
+  @Test
+  fun `capture starts while the device is still connecting`() {
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 0)
+    val logcat = SlowStartStream(CaptureType.LOGCAT, startDelayMs = 0)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video, logcat), opts) })
+
+    var startedDuringConnect = false
+    startWhileConnecting(coord, sessionId()) {
+      // A connect that ends only once capture has begun: a capture start queued behind the connect
+      // would leave this waiting out its timeout.
+      startedDuringConnect = video.startBegan.await(5, TimeUnit.SECONDS) && logcat.startBegan.await(5, TimeUnit.SECONDS)
+    }
+
+    assertTrue(startedDuringConnect, "every stream should begin starting before the connect returns")
+  }
+
+  @Test
+  fun `a device that fails to connect stops the capture started for it`() {
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 100)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video), opts) })
+    val id = sessionId()
+
+    assertFailsWith<IllegalStateException> {
+      startWhileConnecting(coord, id) { error("readiness probe timed out") }
+    }
+
+    // No session runs, so nothing else would ever stop this recorder.
+    assertFalse(coord.isActive(id))
+    assertFalse(video.recording)
+  }
+
+  @Test
+  fun `a failed connect leaves alone a capture that was already recording`() {
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 0)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video), opts) })
+    val id = sessionId()
+    // An interactive session's capture, started when the session was resolved.
+    assertTrue(coord.startForSession(id, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions()))
+
+    assertFailsWith<IllegalStateException> {
+      startWhileConnecting(coord, id) { error("readiness probe timed out") }
+    }
+
+    assertTrue(coord.isActive(id), "the session's own capture is its own end's to stop")
+    assertTrue(video.recording)
+  }
+
+  @Test
+  fun `a run that fails to connect leaves the session it would replace recording`() {
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 0)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video), opts) })
+    // An interactive session the device is on, still recording.
+    val interactive = sessionId("interactive")
+    assertTrue(coord.startForSession(interactive, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions()))
+    val run = sessionId("run")
+
+    assertFailsWith<IllegalStateException> {
+      runBlocking {
+        DesktopYamlRunner.connectWhileRecordingStarts(
+          pinnedSessionId = run,
+          startRecording = DesktopYamlRunner.startRecordingUnlessReplacing(interactive, coord::isActive) {
+            coord.startForSession(it, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+          },
+          onAbandoned = { coord.stopForSession(it) },
+        ) { error("readiness probe timed out") }
+      }
+    }
+
+    assertTrue(coord.isActive(interactive), "the device still points at the interactive session")
+    assertTrue(video.recording)
+    assertFalse(coord.isActive(run))
+  }
+
+  @Test
+  fun `a run replacing a session that stopped recording starts recording while it connects`() {
+    val video = SlowStartStream(CaptureType.VIDEO, startDelayMs = 0)
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(video), opts) })
+    val previous = sessionId("previous")
+    val run = sessionId("run")
+
+    val started = runBlocking {
+      DesktopYamlRunner.connectWhileRecordingStarts(
+        pinnedSessionId = run,
+        startRecording = DesktopYamlRunner.startRecordingUnlessReplacing(previous, coord::isActive) {
+          coord.startForSession(it, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+        },
+        onAbandoned = { coord.stopForSession(it) },
+      ) {}.second
+    }
+
+    assertTrue(started)
+    assertTrue(coord.isActive(run))
   }
 
   @Test

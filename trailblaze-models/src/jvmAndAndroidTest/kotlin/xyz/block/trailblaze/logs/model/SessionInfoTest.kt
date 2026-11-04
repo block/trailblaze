@@ -2,6 +2,7 @@ package xyz.block.trailblaze.logs.model
 
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -57,6 +58,22 @@ class SessionInfoTest {
   fun `displayName tolerates surrounding whitespace on the MCP marker`() {
     val si = info(testClass = "  MCP  ", testName = "Capture screen state")
     assertEquals("Capture screen state", si.displayName)
+  }
+
+  @Test
+  fun `displayName prefers the metadata title over the trail id, which stays the stable key`() {
+    val uuid = "3505fa57-8a2a-42d8-af99-30737ead0bd5"
+    val si = info(
+      trailConfig = TrailConfig(id = uuid, metadata = mapOf("title" to TrailMetadataValue.StringValue("Sign in"))),
+    )
+    assertEquals("Sign in", si.displayName)
+    assertEquals(uuid, si.stableTestKey)
+  }
+
+  @Test
+  fun `displayName keeps the trail id when the metadata title is blank`() {
+    val si = info(trailConfig = TrailConfig(id = "sample-app/taps/simple-tap", metadata = mapOf("title" to TrailMetadataValue.StringValue(" "))))
+    assertEquals("sample-app/taps/simple-tap", si.displayName)
   }
 
   @Test

@@ -73,19 +73,38 @@ export function sanitizeStreamName(name: string): string {
  */
 export function clockTrackForStream(sync: DeviceClockSync | null | undefined, streamName: string): DeviceClockTrack | null {
   const file = sanitizeStreamName(streamName);
-  let owner: DeviceClockTrack | null = null;
-  let ownerName = "";
-  for (const d of sync?.devices || []) {
-    if (!d || d.deviceName == null) continue;
-    const name = sanitizeStreamName(d.deviceName);
-    if (!file.endsWith(`.${name}`)) continue;
-    if (!owner || name.length > ownerName.length) {
-      owner = d;
-      ownerName = name;
-    }
+  // The longest device name the stream ends in, after a '.'. Only the lengths device names have are
+  // tried, longest first, so a long name costs no more than the devices' own names.
+  const { byName, lengths } = devicesByName(sync);
+  let owner: DeviceClockTrack | undefined;
+  for (const length of lengths) {
+    if (length >= file.length || file[file.length - length - 1] !== ".") continue;
+    owner = byName.get(file.slice(file.length - length));
+    if (owner) break;
   }
   if (!owner) return clockTrackFor(sync);
   return (owner.samples || []).length > 0 ? owner : null;
+}
+
+// Each device by its sanitized name, and the distinct name lengths, longest first: built once per
+// sync, so a lookup never scans the devices. The first device listed under a name keeps it.
+interface DeviceIndex { byName: Map<string, DeviceClockTrack>; lengths: number[] }
+const BY_NAME = new WeakMap<DeviceClockSync, DeviceIndex>();
+const NO_DEVICES: DeviceIndex = { byName: new Map(), lengths: [] };
+function devicesByName(sync: DeviceClockSync | null | undefined): DeviceIndex {
+  if (!sync) return NO_DEVICES;
+  let index = BY_NAME.get(sync);
+  if (!index) {
+    const byName = new Map<string, DeviceClockTrack>();
+    for (const d of sync.devices || []) {
+      if (!d || d.deviceName == null) continue;
+      const name = sanitizeStreamName(d.deviceName);
+      if (!byName.has(name)) byName.set(name, d);
+    }
+    index = { byName, lengths: [...new Set([...byName.keys()].map((n) => n.length))].sort((a, b) => b - a) };
+    BY_NAME.set(sync, index);
+  }
+  return index;
 }
 
 // Sorted once per track, as Kotlin's `byDeviceTime`. Stable sort, matching Kotlin's `sortedBy`.

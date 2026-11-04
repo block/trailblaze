@@ -679,6 +679,30 @@ describe("resolve — Compose driver", () => {
     expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
   });
 
+  test("a role carrier is not a second native match", () => {
+    // Mirrors the Kotlin `Compose - a role carrier is not a second match for its button` case: each
+    // button has the synthetic child that carries its role in the accessibility tree.
+    resetIds();
+    const button = (top: number) =>
+      nodeOf(
+        { class: "compose", role: "Button" },
+        {
+          bounds: bounds(0, top, 100, top + 50),
+          children: [
+            nodeOf(
+              { class: "compose", role: "Button", accessibilityProjectionOnly: true },
+              { bounds: bounds(0, top, 100, top + 50) },
+            ),
+          ],
+        },
+      );
+    const first = button(0);
+    const second = button(100);
+    const root = nodeOf({ class: "compose" }, { children: [first, second] });
+    const result = resolve(root, { ...selectors.compose({ role: "Button" }), index: 1 });
+    expect(asSingleMatch(result).nodeId).toBe(second.nodeId);
+  });
+
   test("match by toggleableState", () => {
     // Mirrors the Kotlin `Compose - match by toggleableState` case. The matchable
     // toggleable values are "On" / "Off" / "Indeterminate" — selector picks "On",

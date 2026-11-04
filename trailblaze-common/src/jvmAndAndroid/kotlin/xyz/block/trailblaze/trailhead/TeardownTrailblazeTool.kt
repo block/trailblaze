@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.trailhead
 
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
@@ -18,6 +19,7 @@ import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 
 /**
  * The one step of the "Teardown" finish objective: calls each started trailhead invocation's
@@ -36,7 +38,7 @@ class TeardownTrailblazeTool(
    * `teardown` is inside a nested tool call: the scripted host waits for that call to return
    * before the timeout can land, so the overrun is bounded by the nested tool's own timeouts.
    */
-  private val budget: Duration = DEFAULT_BUDGET,
+  private val budget: Duration = resolveBudget(),
 ) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
 
   override val advertisedToolName: String get() = TOOL_NAME
@@ -110,5 +112,17 @@ class TeardownTrailblazeTool(
   companion object {
     const val TOOL_NAME: String = "teardown"
     val DEFAULT_BUDGET: Duration = 45.seconds
+    const val BUDGET_ENV_VAR: String = "TRAILBLAZE_TRAILHEAD_TEARDOWN_TIMEOUT_MS"
+
+    /** Read in the process executing the trail; host shell overrides need a daemon restart. */
+    internal fun resolveBudget(raw: String? = System.getenv(BUDGET_ENV_VAR)): Duration {
+      if (raw == null) return DEFAULT_BUDGET
+      val milliseconds = raw.trim().toLongOrNull()?.takeIf { it in 1L..600_000L }
+      if (milliseconds == null) {
+        Console.log("[Teardown] $BUDGET_ENV_VAR must be an integer from 1 to 600000; using the default 45000ms")
+        return DEFAULT_BUDGET
+      }
+      return milliseconds.milliseconds
+    }
   }
 }

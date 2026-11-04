@@ -14,6 +14,7 @@ import xyz.block.trailblaze.logs.client.normalizedTimestamp
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.displayTitle
 
 /**
  * Sentinel value stamped into [SessionInfo.testClass] (via `SessionStatus.Started.testClassName`)
@@ -84,13 +85,12 @@ data class SessionInfo(
   val trailSourceUrl: String? = null,
 ) {
   // Title resolution priority:
-  //  1. trailConfig.title  — explicit human-readable title in YAML
-  //  2. trailConfig.id     — explicit stable ID in YAML (e.g. "sample-app/taps/simple-tap")
-  //  3. trailFilePath      — derived from asset path when running from a YAML file
+  //  1. trailConfig.displayTitle() — YAML title, then metadata.title, then the stable trail id
+  //  2. trailFilePath      — derived from asset path when running from a YAML file
   //                          e.g. "trails/EvaluationLongTest/tenKey.trail.yaml"
   //                               → "EvaluationLongTest/tenKey"
-  //  4. ClassName/method   — fully-qualified stable name for tool-based tests
-  //  5. sessionId          — last resort (includes timestamp+random, not stable across runs)
+  //  3. ClassName/method   — fully-qualified stable name for tool-based tests
+  //  4. sessionId          — last resort (includes timestamp+random, not stable across runs)
   //
   // MCP-initiated sessions (`trailblaze snapshot`, `ask`, `step` over the CLI/MCP
   // bridge) carry `testClass = MCP_TEST_CLASS_NAME` as a downstream marker — but
@@ -102,8 +102,7 @@ data class SessionInfo(
   val displayName: String = run {
     val displayTestClass = testClass
       ?.takeIf { it.isNotBlank() && it.trim().uppercase() != MCP_TEST_CLASS_NAME }
-    trailConfig?.title?.takeIf { it.isNotBlank() }
-      ?: trailConfig?.id?.takeIf { it.isNotBlank() }
+    trailConfig?.displayTitle()
       ?: trailFilePath?.takeIf { it.isNotBlank() }?.let { TrailRecordings.shortTrailName(it) }
       ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
         displayTestClass?.let { cls -> "$cls:$name" } ?: name

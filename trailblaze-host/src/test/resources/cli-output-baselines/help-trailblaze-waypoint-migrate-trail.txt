@@ -9,10 +9,10 @@ Usage: trailblaze waypoint migrate-trail [-hV] [--write]
        [--classifier=<classifier>] [--from=<fromDialectKey>]
        --session=<sessionDir> [--to=<toDialectKey>] <trailFile>
 Mechanically migrate a trail's selectors from one driver's dialect to another's.
-Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector`
-is still
-written in the source dialect is rewritten into the target dialect, using a
-recorded
+Every `tapOnElementBySelector` / `assertVisibleBySelector` `nodeSelector` and
+`inputText`
+`selector` still written in the source dialect is rewritten into the target
+dialect, using a recorded
 session that captured BOTH drivers' trees to resolve each selector the same way
 the
 runtime resolved it, then describe the element it landed on in the new dialect.

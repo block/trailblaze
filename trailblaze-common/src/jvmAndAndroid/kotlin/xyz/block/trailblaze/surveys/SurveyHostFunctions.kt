@@ -11,6 +11,9 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import xyz.block.trailblaze.logs.client.SessionStartRecords
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.SessionStartFields
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionException
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 
@@ -32,7 +35,8 @@ object SurveyHostFunctions {
     }
     val name = (args["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
       ?: throw TrailblazeHostFunctionException("$LOAD needs the survey's export name.")
-    val source = SurveyBundles.sourceFor(context.sessionProvider.invoke().sessionId)
+    val sessionId = context.sessionProvider.invoke().sessionId
+    val source = SurveyBundles.sourceFor(sessionId)
       ?: throw TrailblazeHostFunctionException(
         "Surveys can't run here: this runtime packaged no surveys. Run the trail through the " +
           "Trailblaze daemon, or rebuild the test APK with the Trailblaze Gradle plugin.",
@@ -52,6 +56,11 @@ object SurveyHostFunctions {
         bundle.targets.forEach { (id, platforms) ->
           putJsonObject(id) { platforms.forEach { (platform, appIds) -> putJsonArray(platform) { appIds.forEach { add(it) } } } }
         }
+      }
+      // The trail this session runs, in the shape its `Started` log has on disk, so a survey's
+      // summary mid-trail reads the same title, id, metadata and app version as after the run.
+      SessionStartRecords.forSession(sessionId)?.let { fields ->
+        put("started", TrailblazeJsonInstance.encodeToJsonElement(SessionStartFields.serializer(), fields))
       }
     }
   }

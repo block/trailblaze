@@ -42,7 +42,10 @@ object CliRunDriverResolver {
 
   fun resolve(driverString: String?): CliRunDriverResolution {
     if (driverString == null) return CliRunDriverResolution.Resolved(null)
+    // The enum name, or the short name `trailblaze config android-driver` takes (`in-process`,
+    // `accessibility`, `axe`), so the same word works in both places.
     val driverType = TrailblazeDriverType.fromString(driverString)
+      ?: TrailblazeDriverType.entries.firstOrNull { it.cliShortName.equals(driverString.trim(), ignoreCase = true) }
       ?: return CliRunDriverResolution.Unrecognized(
         reason = "unknown driver type '$driverString'",
         hint = "valid driver types: ${runnableDrivers.joinToString { it.name }}",

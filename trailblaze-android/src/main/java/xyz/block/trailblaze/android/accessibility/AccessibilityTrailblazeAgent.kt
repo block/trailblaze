@@ -8,6 +8,7 @@ import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.InputRandomCommand
 import maestro.orchestra.InputTextCommand
 import maestro.orchestra.LaunchAppCommand
+import xyz.block.trailblaze.device.AndroidAppLaunchHook
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
@@ -82,6 +83,13 @@ class AccessibilityTrailblazeAgent(
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
+
+  init {
+    // `openApp` starts apps with `am start`, outside [executeLaunchAppViaAdb], so it gets the same
+    // idle-detector re-attach through the hook. Without it a trailhead that clears the app and then
+    // opens it loses turbo for the whole trail.
+    AndroidAppLaunchHook.installed = InProcessIdleLaunchHook
+  }
 
   private val deviceManager =
     AccessibilityDeviceManager(

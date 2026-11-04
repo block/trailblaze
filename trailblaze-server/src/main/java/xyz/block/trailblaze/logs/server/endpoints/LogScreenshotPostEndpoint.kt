@@ -10,9 +10,20 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
 /**
- * Handles POST requests to the /agentlog endpoint to accept `TrailblazeLog` requests.
+ * Handles POST requests to the /log/screenshot endpoint to accept screenshots from the device.
  */
 object LogScreenshotPostEndpoint {
+
+  /** The formats the device names its screenshots with (`TrailblazeImageFormat.fileExtension`). */
+  private val SCREENSHOT_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+
+  /**
+   * Whether [filename] names an image. This endpoint and the `/logs-ws` socket write the bytes into
+   * the session folder under the name given, which a report later links and loads from, so a name
+   * that isn't an image would let an upload plant a script or page the report then runs.
+   */
+  fun isScreenshotFilename(filename: String): Boolean =
+    filename.substringAfterLast('.', missingDelimiterValue = "").lowercase() in SCREENSHOT_EXTENSIONS
 
   fun register(
     routing: Routing,
@@ -50,6 +61,11 @@ object LogScreenshotPostEndpoint {
 
       // Validate filename to prevent path traversal (e.g., "../../etc/cron.d/malicious")
       if (filename.contains("..") || filename.contains("/") || filename.contains("\\") || filename.contains("\u0000")) {
+        call.respond(HttpStatusCode.BadRequest, "Invalid filename")
+        return@post
+      }
+
+      if (!isScreenshotFilename(filename)) {
         call.respond(HttpStatusCode.BadRequest, "Invalid filename")
         return@post
       }

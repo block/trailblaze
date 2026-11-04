@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report
 
 import java.io.File
+import java.io.Writer
 import java.nio.file.Files
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -65,17 +66,17 @@ class RunReportGenerator(
 
   /**
    * Whether the interactive report can be generated at all (bun resolved). Lets callers skip
-   * work that only this generator would consume — e.g. `CliReportGenerator` skips its shared
-   * snapshot capture when this is false and the WASM leg is off too.
+   * work that only this generator would consume.
    */
   val isBunAvailable: Boolean get() = bunBinary != null
 
   /**
    * Generate the interactive HTML report for [sessionIds] into `logsRepo.logsDir/reports/`.
    *
-   * Convenience over the [SessionLogSnapshot] overload: captures a fresh snapshot of each
-   * session (after the cheap bun check, so a bun-less environment pays no parse). Callers
-   * that already hold snapshots — e.g. `CliReportGenerator`, which shares one capture across
+   * Convenience over the [SessionLogSnapshot] overload: captures each session's snapshot as the
+   * report reaches it, after the cheap bun check (so a bun-less environment pays no parse), and
+   * lets it go once that session is written, so the report never holds every session's logs at
+   * once. Callers that already hold snapshots — e.g. `ReportMain`, which shares one capture across
    * the interactive and WASM legs — use the overload directly.
    *
    * @return the report [File], or null if bun is unavailable, no session resolved, or the
@@ -96,11 +97,12 @@ class RunReportGenerator(
       logBunUnavailable()
       return null
     }
-    // Named: seven parameters, five of them optional and three of them nullable strings, so a
+    // Named: eight parameters, five of them optional and three of them nullable strings, so a
     // positional call would forward a mis-ordered pair without a type error.
-    return generateFromSnapshots(
+    return generateFromSnapshotSequence(
       logsRepo = logsRepo,
-      snapshots = SessionLogSnapshot.captureAll(logsRepo, sessionIds),
+      snapshots = sessionIds.asSequence().map { SessionLogSnapshot.capture(logsRepo, it) },
+      requested = sessionIds.size,
       shareUrl = shareUrl,
       fullEventPayloads = fullEventPayloads,
       imageBaseUrl = imageBaseUrl,
@@ -156,34 +158,65 @@ class RunReportGenerator(
       logBunUnavailable()
       return null
     }
+    return generateFromSnapshotSequence(
+      logsRepo = logsRepo,
+      snapshots = snapshots.asSequence(),
+      requested = snapshots.size,
+      shareUrl = shareUrl,
+      fullEventPayloads = fullEventPayloads,
+      imageBaseUrl = imageBaseUrl,
+      skips = skips,
+      allRunsUrl = allRunsUrl,
+    )
+  }
 
-    ReportTiming.stage("RunReportGenerator.saveVideoFrames") { saveVideoFrames(logsRepo, snapshots) }
-    val sessionsJson = ReportTiming.stage("RunReportGenerator.buildSessionJson") {
-      buildJsonArray {
-        for (snapshot in snapshots) {
-          val sessionObj = buildSessionJson(logsRepo, snapshot) ?: continue
-          add(sessionObj)
-        }
-        // Trails the runner held back. They opened no session, so they have no snapshot to build
-        // from; without these entries the report shows a run's passing trails and silently omits
-        // the ones a `config.skip:` disabled, which reads as "that trail doesn't exist here".
-        for (skip in skips) {
-          add(skipSessionJson(skip))
-        }
+  /**
+   * The shared body of [generate] and [generateFromSnapshots]: per session, take its snapshot from
+   * [snapshots], save its video frames, build its JSON and write it, then move on. [requested] is
+   * the number of snapshots the sequence will yield, for the empty-report message.
+   */
+  private fun generateFromSnapshotSequence(
+    logsRepo: LogsRepo,
+    snapshots: Sequence<SessionLogSnapshot>,
+    requested: Int,
+    shareUrl: String?,
+    fullEventPayloads: Boolean,
+    imageBaseUrl: String?,
+    skips: List<SkippedTrail>,
+    allRunsUrl: String?,
+  ): File? {
+    // Lazy: each session is captured (when [snapshots] is lazy), built and written as the writer
+    // reaches it, then dropped, so the report never holds every session's logs, built object or
+    // the serialized document at once.
+    val sessions = sequence {
+      for (snapshot in snapshots) {
+        saveVideoFrames(logsRepo, snapshot)
+        val sessionObj = buildSessionJson(logsRepo, snapshot) ?: continue
+        yield(sessionObj)
+      }
+      // Trails the runner held back. They opened no session, so they have no snapshot to build
+      // from; without these entries the report shows a run's passing trails and silently omits
+      // the ones a `config.skip:` disabled, which reads as "that trail doesn't exist here".
+      for (skip in skips) {
+        yield(skipSessionJson(skip))
       }
     }
-    if (sessionsJson.isEmpty()) {
-      Console.log("[RunReportGenerator] no resolvable sessions among ${snapshots.size} requested.")
-      return null
-    }
 
-    val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }
+    val reportsDir = File(logsRepo.logsDir, "reports")
     // The timestamp keeps repeated generate() calls from clobbering each other in reports/; the
     // "interactive" token distinguishes this from the legacy WASM report, which ReportMain writes
     // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
     // canonical trailblaze_report_interactive.html).
     val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
-    return render(sessionsJson, dest, shareUrl, fullEventPayloads, imageBaseUrl, allRunsUrl)
+    return renderSessions(
+      sessions,
+      dest,
+      shareUrl,
+      fullEventPayloads,
+      imageBaseUrl,
+      allRunsUrl,
+      emptyMessage = "[RunReportGenerator] no resolvable sessions among $requested requested.",
+    )
   }
 
   /**
@@ -207,6 +240,21 @@ class RunReportGenerator(
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
     allRunsUrl: String? = null,
+  ): File? = renderSessions(sessionsJson.asSequence(), destination, shareUrl, fullEventPayloads, imageBaseUrl, allRunsUrl)
+
+  /**
+   * [render] over a lazy [sessions] sequence, which is consumed once and encoded to input.json as
+   * it goes. When [emptyMessage] is set and the sequence yields nothing, it is logged and null is
+   * returned without running bun.
+   */
+  private fun renderSessions(
+    sessions: Sequence<JsonElement>,
+    destination: File,
+    shareUrl: String?,
+    fullEventPayloads: Boolean,
+    imageBaseUrl: String?,
+    allRunsUrl: String?,
+    emptyMessage: String? = null,
   ): File? {
     val bun = bunBinary
     if (bun == null) {
@@ -231,7 +279,7 @@ class RunReportGenerator(
       // degrades to no suggestions section when it's absent.
       val selectorEngineStaged = copyOptionalResource(SELECTOR_ENGINE_RESOURCE, File(workDir, SELECTOR_ENGINE_FILE_NAME))
       val formatterNames = stageEventFormatters(workDir)
-      val inputJson = buildJsonObject {
+      val header = buildJsonObject {
         put("generatedAt", generatedAt)
         shareUrl?.takeIf { it.isNotBlank() }?.let { put("shareUrl", it) }
         if (formatterNames.isNotEmpty()) {
@@ -244,15 +292,19 @@ class RunReportGenerator(
         if (imageBaseUrl != null) put("imageBaseUrl", imageBaseUrl)
         allRunsUrl?.takeIf { it.isNotBlank() }?.let { put("allRunsUrl", it) }
         if (selectorEngineStaged) put("selectorEngine", SELECTOR_ENGINE_FILE_NAME)
-        put("sessions", sessionsJson)
       }
-      val inputFile = ReportTiming.stage("RunReportGenerator.serializeAndWriteInputJson") {
-        File(workDir, "input.json").apply { writeText(inputJson.toString()) }
+      val inputFile = File(workDir, "input.json")
+      val sessionCount = ReportTiming.stage("RunReportGenerator.buildAndWriteInputJson") {
+        inputFile.bufferedWriter().use { writeInputJson(it, sessions, header) }
+      }
+      if (sessionCount == 0 && emptyMessage != null) {
+        Console.log(emptyMessage)
+        return null
       }
       val outputFile = File(workDir, "report.html")
 
       val exit = ReportTiming.stage("RunReportGenerator.bunSubprocess") {
-        runBun(bun, workDir, inputFile, outputFile)
+        runBun(bun, workDir, inputFile, outputFile, subprocessTimeoutSeconds(sessionCount, environment))
       }
       if (exit != 0 || !outputFile.exists() || outputFile.length() == 0L) {
         Console.error("[RunReportGenerator] report subprocess failed (exit=$exit).")
@@ -280,7 +332,7 @@ class RunReportGenerator(
   }
 
   /**
-   * Saves a frame from each session's recording for every capture that has no screenshot, before
+   * Saves a frame from the session's recording for every capture that has no screenshot, before
    * the renderer looks for images on disk. Done here because every report is built here, wherever
    * the session came from: a host run, a daemon session, or logs pulled back from a device farm,
    * where no Trailblaze code ran on the host to save them. A capture that already has a screenshot
@@ -288,19 +340,17 @@ class RunReportGenerator(
    * nothing pays only a file check per capture. Best-effort: a frame that can't be saved leaves
    * the report as it was, and the viewer takes that frame from the recording in the browser.
    */
-  private fun saveVideoFrames(logsRepo: LogsRepo, snapshots: List<SessionLogSnapshot>) {
-    for (snapshot in snapshots) {
-      try {
-        val result = CaptureVideoFrames.fill(logsRepo.getSessionDir(snapshot.sessionId), snapshot.logs)
-        if (result.written > 0) {
-          Console.log("[RunReportGenerator] ${snapshot.sessionId.value}: saved ${result.written} video frame(s)")
-        }
-      } catch (e: Exception) {
-        Console.log(
-          "[RunReportGenerator] ${snapshot.sessionId.value}: could not save video frames: " +
-            "${e::class.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
-        )
+  private fun saveVideoFrames(logsRepo: LogsRepo, snapshot: SessionLogSnapshot) {
+    try {
+      val result = CaptureVideoFrames.fill(logsRepo.getSessionDir(snapshot.sessionId), snapshot.logs)
+      if (result.written > 0) {
+        Console.log("[RunReportGenerator] ${snapshot.sessionId.value}: saved ${result.written} video frame(s)")
       }
+    } catch (e: Exception) {
+      Console.log(
+        "[RunReportGenerator] ${snapshot.sessionId.value}: could not save video frames: " +
+          "${e::class.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
+      )
     }
   }
 
@@ -396,7 +446,7 @@ class RunReportGenerator(
   }
 
   /** Run `bun run-report-cli.ts <input> <output>`, draining output, bounded by a timeout. */
-  private fun runBun(bun: File, workDir: File, input: File, output: File): Int {
+  private fun runBun(bun: File, workDir: File, input: File, output: File, timeoutSeconds: Long): Int {
     val proc = ProcessBuilder(
       bun.absolutePath,
       "run-report-cli.ts",
@@ -410,10 +460,13 @@ class RunReportGenerator(
       proc.inputStream.bufferedReader().forEachLine { line -> synchronized(sink) { sink.appendLine(line) } }
     }.apply { isDaemon = true; start() }
 
-    val finished = proc.waitFor(SUBPROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
     if (!finished) {
       proc.destroyForcibly()
-      Console.error("[RunReportGenerator] report subprocess timed out after ${SUBPROCESS_TIMEOUT_SECONDS}s.")
+      Console.error(
+        "[RunReportGenerator] report subprocess timed out after ${timeoutSeconds}s. " +
+          "Set $SUBPROCESS_TIMEOUT_ENV to allow longer.",
+      )
       return -1
     }
     drain.join(1_000)
@@ -423,6 +476,25 @@ class RunReportGenerator(
   }
 
   companion object {
+    /**
+     * Writes the driver's input document to [out]: [header] plus a `sessions` array. Each session is
+     * encoded as it is pulled from [sessions], so no more than one is serialized at a time.
+     *
+     * @return the number of sessions written.
+     */
+    internal fun writeInputJson(out: Writer, sessions: Sequence<JsonElement>, header: JsonObject): Int {
+      out.write("{\"sessions\":[")
+      var count = 0
+      for (session in sessions) {
+        if (count++ > 0) out.write(",")
+        out.write(session.toString())
+      }
+      // `header` is never empty, so dropping its opening brace leaves its fields plus the closing one.
+      out.write("],")
+      out.write(header.toString().substring(1))
+      return count
+    }
+
     // Both resources are packaged into THIS (:trailblaze-report) module's JAR — see
     // transpileRunReportCore in trailblaze-report/build.gradle.kts — despite CORE_RESOURCE's
     // "trailrunner" path segment. That segment is a historical artifact of where this class
@@ -510,7 +582,26 @@ class RunReportGenerator(
       }
       return found
     }
-    private const val SUBPROCESS_TIMEOUT_SECONDS = 120L
+
+    const val SUBPROCESS_TIMEOUT_ENV: String = "TRAILBLAZE_REPORT_TIMEOUT_SECONDS"
+    private const val MIN_SUBPROCESS_TIMEOUT_SECONDS = 120L
+
+    /**
+     * Budget per session for the default timeout. The bun render grows with the session count, so a
+     * flat budget that fits a small build kills a large one partway through and loses its report.
+     */
+    private const val SUBPROCESS_TIMEOUT_SECONDS_PER_SESSION = 2L
+
+    /**
+     * How long a report subprocess over [sessionCount] sessions may run before it is killed — the
+     * guard against a hung bun, shared by [PerformanceAnalysisGenerator]. A positive whole number of
+     * seconds in [SUBPROCESS_TIMEOUT_ENV] wins outright; otherwise the budget scales with the
+     * session count and never drops below [MIN_SUBPROCESS_TIMEOUT_SECONDS].
+     */
+    internal fun subprocessTimeoutSeconds(sessionCount: Int, environment: Map<String, String>): Long =
+      environment[SUBPROCESS_TIMEOUT_ENV]?.trim()?.toLongOrNull()?.takeIf { it > 0 }
+        ?: maxOf(MIN_SUBPROCESS_TIMEOUT_SECONDS, sessionCount * SUBPROCESS_TIMEOUT_SECONDS_PER_SESSION)
+
     private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
 

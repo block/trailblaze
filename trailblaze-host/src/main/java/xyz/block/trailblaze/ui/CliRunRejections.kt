@@ -39,19 +39,25 @@ internal fun cliRunMultipleDevicesResponse(specs: List<String>): CliRunResponse 
  * The daemon's response for a run the RUNNER rejected as invalid before attempting it
  * ([TrailExecutionResult.Failed] with [TrailExecutionResult.Failed.misuse] set, e.g. an
  * unrecognized unified-trail driver pin — only concrete against the connected device, so it
- * can only be validated runner-side). Null for every other outcome: an ordinary failure,
- * success, or cancellation keeps the handler's normal result flow.
+ * can only be validated runner-side), or could not prepare
+ * ([TrailExecutionResult.Failed.infrastructure], e.g. LLM credentials it could not obtain). Null
+ * for every other outcome: an ordinary failure, success, or cancellation keeps the handler's
+ * normal result flow.
  *
- * Callers must return a non-null response immediately: a misuse rejection is made before any
- * session is created, so the handler's session-log poll would stall its full timeout window
- * waiting on a session that never existed.
+ * Callers must return a non-null response immediately: either is decided before any session is
+ * created, so the handler's session-log poll would stall its full timeout window waiting on a
+ * session that never existed.
  */
-internal fun cliRunRunnerRejectionResponse(result: TrailExecutionResult): CliRunResponse? =
-  if (result is TrailExecutionResult.Failed && result.misuse) {
-    cliRunMisuseResponse(result.errorMessage ?: "Run request rejected as invalid")
-  } else {
-    null
-  }
+internal fun cliRunRunnerRejectionResponse(result: TrailExecutionResult): CliRunResponse? = when {
+  result !is TrailExecutionResult.Failed -> null
+  result.misuse -> cliRunMisuseResponse(result.errorMessage ?: "Run request rejected as invalid")
+  result.infrastructure -> CliRunResponse(
+    success = false,
+    error = result.errorMessage ?: "Run could not be prepared",
+    errorKind = CliRunResponse.ERROR_KIND_INFRA,
+  )
+  else -> null
+}
 
 /**
  * Why [target] must not run for a caller in [callerWorkspaceDir]: the caller's workspace has its own

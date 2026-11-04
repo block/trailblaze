@@ -185,7 +185,22 @@ class AnalyzerScriptedToolEnrichment(
     }
   }
 
+  /** [resolveDescriptor], but a config that fails its own validation fails only this descriptor. */
   private fun resolveOrFail(
+    trailmapDir: File,
+    deferred: ScriptedToolEnrichment.DeferredDescriptor,
+    analyzerOutputByPath: Map<String, List<ScriptedToolDefinition>>,
+    extraReasonByPath: Map<String, String>,
+  ): ScriptedToolEnrichment.EnrichmentResult = try {
+    resolveDescriptor(trailmapDir, deferred, analyzerOutputByPath, extraReasonByPath)
+  } catch (e: IllegalArgumentException) {
+    ScriptedToolEnrichment.EnrichmentResult.Failed(
+      relativePath = deferred.relativePath,
+      reason = e.message ?: e::class.simpleName.orEmpty(),
+    )
+  }
+
+  private fun resolveDescriptor(
     trailmapDir: File,
     deferred: ScriptedToolEnrichment.DeferredDescriptor,
     analyzerOutputByPath: Map<String, List<ScriptedToolDefinition>>,

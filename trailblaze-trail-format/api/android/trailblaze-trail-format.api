@@ -292,7 +292,6 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field LONG_PRESS Ljava/lang/String;
 	public static final field MOBILE_NETWORK_CONNECTION Ljava/lang/String;
 	public static final field NAVIGATE_BACK Ljava/lang/String;
-	public static final field NETWORK_CONNECTION Ljava/lang/String;
 	public static final field OBJECTIVE_STATUS Ljava/lang/String;
 	public static final field OPEN_APP Ljava/lang/String;
 	public static final field OPEN_URL Ljava/lang/String;
@@ -476,16 +475,17 @@ public final class xyz/block/trailblaze/util/StringUtilsKt {
 
 public final class xyz/block/trailblaze/yaml/DirectionStep : xyz/block/trailblaze/yaml/PromptStep {
 	public static final field Companion Lxyz/block/trailblaze/yaml/DirectionStep$Companion;
-	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZ)V
-	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZZ)V
+	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Z
 	public final fun component3 ()Lxyz/block/trailblaze/yaml/ToolRecording;
 	public final fun component4 ()Ljava/lang/Integer;
 	public final fun component5 ()Z
 	public final fun component6 ()Z
-	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZ)Lxyz/block/trailblaze/yaml/DirectionStep;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/DirectionStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZILjava/lang/Object;)Lxyz/block/trailblaze/yaml/DirectionStep;
+	public final fun component7 ()Z
+	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZZ)Lxyz/block/trailblaze/yaml/DirectionStep;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/DirectionStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ZZZILjava/lang/Object;)Lxyz/block/trailblaze/yaml/DirectionStep;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getMaxRetries ()Ljava/lang/Integer;
 	public fun getPrompt ()Ljava/lang/String;
@@ -493,6 +493,7 @@ public final class xyz/block/trailblaze/yaml/DirectionStep : xyz/block/trailblaz
 	public fun getRecording ()Lxyz/block/trailblaze/yaml/ToolRecording;
 	public final fun getStep ()Ljava/lang/String;
 	public fun hashCode ()I
+	public final fun isSetup ()Z
 	public final fun isTeardown ()Z
 	public final fun isTrailhead ()Z
 	public fun toString ()Ljava/lang/String;
@@ -727,6 +728,10 @@ public final synthetic class xyz/block/trailblaze/yaml/TrailConfig$$serializer :
 
 public final class xyz/block/trailblaze/yaml/TrailConfig$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailConfigKt {
+	public static final fun displayTitle (Lxyz/block/trailblaze/yaml/TrailConfig;)Ljava/lang/String;
 }
 
 public class xyz/block/trailblaze/yaml/TrailFormatYaml {

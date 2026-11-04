@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.capture
 
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.networkcapture.WebCompanionNetworkCapture
@@ -75,25 +76,48 @@ internal fun finalizeHostSessionResources(
       }
     // Same rationale as network capture: restore in the shared barrier rather than trusting every
     // entry point to pair its own restore with the start. No-op for sessions that never disabled
-    // animations.
-    runCatching { SessionAnimationDisabler.restoreForSession(sessionId) }
-      .onFailure {
-        failures += it
-        Console.log(
-          "[HostSessionFinalizerRegistry] animation restore failed for $sessionId: ${it.message}"
-        )
-      }
-    runCatching { stopCapture(sessionId) }
-      .onFailure {
-        failures += it
-        Console.log(
-          "[HostSessionFinalizerRegistry] capture stop failed for $sessionId: ${it.message}"
-        )
-      }
+    // animations. Runs while capture stops below, since neither waits on the other; the barrier
+    // still returns only once both are done, so the next run on the device finds them restored.
+    val restoreFailure = AtomicReference<Throwable?>()
+    val restore = Thread(
+      { runCatching { SessionAnimationDisabler.restoreForSession(sessionId) }.onFailure(restoreFailure::set) },
+      "session-animation-restore",
+    ).apply {
+      isDaemon = true
+      start()
+    }
+    val captureStopFailure = runCatching { stopCapture(sessionId) }.exceptionOrNull()
+    joinUninterruptibly(restore)
+    restoreFailure.get()?.let {
+      failures += it
+      Console.log(
+        "[HostSessionFinalizerRegistry] animation restore failed for $sessionId: ${it.message}"
+      )
+    }
+    captureStopFailure?.let {
+      failures += it
+      Console.log(
+        "[HostSessionFinalizerRegistry] capture stop failed for $sessionId: ${it.message}"
+      )
+    }
   }
   if (failures.isNotEmpty()) {
     val failure = failures.first()
     failures.drop(1).forEach(failure::addSuppressed)
     throw failure
   }
+}
+
+/** Joins [thread], keeping an interrupt for the caller rather than abandoning the join. */
+private fun joinUninterruptibly(thread: Thread) {
+  var interrupted = false
+  while (true) {
+    try {
+      thread.join()
+      break
+    } catch (e: InterruptedException) {
+      interrupted = true
+    }
+  }
+  if (interrupted) Thread.currentThread().interrupt()
 }

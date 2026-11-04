@@ -711,9 +711,14 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
       : (stream.events || []).map((event) => {
         try {
           const value = JSON.parse(event.d) as unknown;
+          const capture = isNetworkStream(name) && isNetworkCaptureRecord(value);
+          // A device-clock stamp is not on the host clock the step windows use. And `network`
+          // capture records stay unattributed like the side-channel's, which replaces them below
+          // its size cap, so a capture's size never moves its requests between steps.
+          const unclocked = event.clock === 'device' || (capture && name === 'network');
           return {
-            t: typeof event.t === 'number' && Number.isFinite(event.t) ? event.t : null,
-            value: isNetworkStream(name) ? withoutTrailPhase(value) : value,
+            t: !unclocked && typeof event.t === 'number' && Number.isFinite(event.t) ? event.t : null,
+            value: capture ? asNetworkSideChannelRecord(value) : isNetworkStream(name) ? withoutTrailPhase(value) : value,
           };
         } catch { return null; }
       }).filter((o): o is TimedEventObject => o != null);
@@ -727,6 +732,24 @@ export function timedEventObjectsOf(session: { events?: EventStream[] | null; ne
     byStream.set('network', session.network.map((value) => ({ t: null, value: withoutTrailPhase(value) })));
   }
   return byStream;
+}
+
+const NETWORK_CAPTURE_PHASES = new Set(['REQUEST_START', 'RESPONSE_END', 'FAILED']);
+
+/** A network capture's own record (`NetworkEvent`), as opposed to a generic event a producer named `network`. */
+function isNetworkCaptureRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && NETWORK_CAPTURE_PHASES.has((value as Record<string, unknown>).phase as string);
+}
+
+/**
+ * A capture record (a session-root capture, read as a stream) reduced to the fields the parsed
+ * side-channel keeps (`readNetworkLog`, less `trailPhase`). The side-channel owns `network`
+ * whenever it exists, but it is dropped above its size cap; without this, crossing the cap would
+ * change the compared schema, and run-specific ids and the session id would read as changes.
+ */
+function asNetworkSideChannelRecord(e: Record<string, unknown>): unknown {
+  return { method: e.method || '', statusCode: e.statusCode ?? null, durationMs: e.durationMs ?? null, urlPath: e.urlPath || e.url || '', phase: e.phase || '' };
 }
 
 function withoutTrailPhase(value: unknown): unknown {

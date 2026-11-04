@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.device.AndroidAppLaunchHook
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.device.androidPackageNameViolation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -34,6 +35,11 @@ import xyz.block.trailblaze.util.TrailblazeDispatchers
  *   `simctl launch` has no drawn signal, so the screen is captured before the launch and
  *   polled after it until it has changed and then held still, for up to a few seconds. See
  *   [awaitIosScreenReady].
+ *
+ * On an on-device Android run with the in-process idle detector enabled, the launch also
+ * re-attaches the detector to an app that is not running ([AndroidAppLaunchHook]), the same as the
+ * driver's own launch — typically right after a trailhead cleared the app. The attach restarts the
+ * app's process, so a running app is left as it is, detector or not.
  *
  * The settle waits are bounded and do not fail the tool: an app whose main thread never goes idle
  * (a constant animation) or whose screen never holds still (a spinner, a clock) is still open and
@@ -95,8 +101,11 @@ data class OpenAppTrailblazeTool(
           "installed (mobile_listInstalledApps lists what is).",
         command = this,
       )
+    // On device, the driver re-attaches its idle detector around the start, as its own launch does.
     val start = AndroidOpenAppReadiness.parseAmStartWait(
-      executor.executeShellCommandArgs(*AndroidOpenAppReadiness.amStartArgs(component).toTypedArray()),
+      AndroidAppLaunchHook.aroundLaunch(appId) {
+        executor.executeShellCommandArgs(*AndroidOpenAppReadiness.amStartArgs(component).toTypedArray())
+      },
     )
     if (!start.succeeded) {
       return TrailblazeToolResult.Error.ExceptionThrown(

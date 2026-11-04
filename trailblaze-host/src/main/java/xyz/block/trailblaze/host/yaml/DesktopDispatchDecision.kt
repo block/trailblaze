@@ -136,6 +136,22 @@ object DesktopDispatchDecision {
   }
 
   /**
+   * Why a run with a device setup (`--device-setup`) must be refused on [path], or null when [path] runs it. The
+   * on-device agent receives only the host's memory snapshot, never the CLI's memory seeds the
+   * setup travels in, so the trail would run without it and still pass.
+   */
+  fun setupRefusal(path: DispatchPath, driverType: TrailblazeDriverType): String? {
+    if (path != DispatchPath.ON_DEVICE_AGENT) return null
+    val remedy = if (driverType.hostAgentDispatchable) {
+      "Enable `preferHostAgent` to run it."
+    } else {
+      "The $driverType driver takes setup only from its instrumentation argument, on the device farm."
+    }
+    return "This run has a setup, but it executes on the device, which does not receive it: the " +
+      "trail would run without its setup. $remedy"
+  }
+
+  /**
    * Why a multi-device trail cannot run here, phrased as the change that would make it
    * dispatchable.
    *

@@ -523,6 +523,49 @@ describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
     expect(result.streams[0].changed).toBe(false);
   });
 
+  // The session-root capture reads as a raw `network` stream, and is the only network data once
+  // it outgrows the side-channel's size cap. It must compare under the side-channel's schema.
+  test("a raw network stream compares under the side-channel schema", () => {
+    const record = { method: "GET", statusCode: 200, durationMs: 42, urlPath: "/pay", phase: "RESPONSE_END" };
+    const raw = (sessionId: string, id: string) => ({
+      events: [{
+        name: "network", total: 1, truncated: false,
+        events: [{ t: 1, d: JSON.stringify({ ...record, id, sessionId, timestampMs: 1, trailPhase: "trail" }) }],
+      }] as any,
+    });
+
+    expect(eventObjectsOf(raw("s1", "r1")).get("network")).toEqual([record]);
+    expect(compareEventStreams(raw("s1", "r1"), raw("s2", "r2")).streams[0].changed).toBe(false);
+    expect(compareEventStreams({ network: [record] as any[] }, raw("s2", "r2")).streams[0].changed).toBe(false);
+  });
+
+  test("only capture records are reduced; a generic event named network keeps its payload", () => {
+    const generic = (journeyName: string) => ({ events: [{ name: "network", total: 1, truncated: false, events: [{ t: 1, d: JSON.stringify({ journeyName }) }] }] as any });
+    expect(eventObjectsOf(generic("AUTH")).get("network")).toEqual([{ journeyName: "AUTH" }]);
+    expect(compareEventStreams(generic("AUTH"), generic("CHECKOUT")).streams[0].changed).toBe(true);
+  });
+
+  test("a device's capture records are reduced too, keeping their clock", () => {
+    const record = { method: "GET", statusCode: 200, durationMs: 42, urlPath: "/pay", phase: "RESPONSE_END" };
+    const seller = (sessionId: string, id: string) => ({
+      events: [{ name: "network.seller", total: 1, truncated: false, events: [{ t: 5, d: JSON.stringify({ ...record, id, sessionId }) }] }] as any,
+    });
+    expect(timedEventObjectsOf(seller("s1", "r1")).get("network.seller")).toEqual([{ t: 5, value: record }]);
+    expect(compareEventStreams(seller("s1", "r1"), seller("s2", "r2")).streams[0].changed).toBe(false);
+  });
+
+  // Below its size cap the side-channel replaces the `network` capture with clockless records, so
+  // above it the capture must not gain step attribution from its timestamps.
+  test("network capture records stay unattributed whatever the capture size", () => {
+    const stream = { name: "network", total: 1, truncated: false, events: [{ t: 5, d: JSON.stringify({ phase: "REQUEST_START", urlPath: "/pay" }) }] } as any;
+    expect(timedEventObjectsOf({ events: [stream] }).get("network")![0].t).toBeNull();
+  });
+
+  test("a device-clock stamp is never placed against host-clock steps", () => {
+    const stream = { name: "custom", total: 2, truncated: false, events: [{ t: 5, d: '{"a":1}', clock: "device" }, { t: 6, d: '{"a":2}' }] } as any;
+    expect(timedEventObjectsOf({ events: [stream] }).get("custom")!.map((o) => o.t)).toEqual([null, 6]);
+  });
+
   test("ambiguous aliases keep their producer names instead of dropping or merging data", () => {
     const stream = (name: string) => ({
       name,

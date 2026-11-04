@@ -971,4 +971,29 @@ class HostAndroidDeviceConnectUtilsTest {
     assertThat(TrailblazeDriverType.INSTRUMENTATION_ARG_KEY).isEqualTo("trailblaze.driverType")
     assertThat(TrailblazeDriverType.ANDROID_TEST.name).isEqualTo("ANDROID_TEST")
   }
+
+  @Test
+  fun launchesTheRunnerTheTestApkDeclares() {
+    val pmList = """
+      instrumentation:xyz.block.trailblaze.runner/androidx.test.runner.AndroidJUnitRunner (target=xyz.block.trailblaze.runner)
+      instrumentation:com.example.app.test/com.example.app.test.AppRunner (target=com.example.app)
+    """.trimIndent()
+
+    val runner = HostAndroidDeviceConnectUtils.declaredInstrumentationRunner(pmList, "com.example.app.test")
+    assertThat(runner).isEqualTo("com.example.app.test.AppRunner")
+    val args = HostAndroidDeviceConnectUtils.instrumentationAdbShellCommandArgs(
+      trailblazeOnDeviceInstrumentationTarget =
+        TrailblazeOnDeviceInstrumentationTarget(testAppId = "com.example.app.test", fqTestName = "com.example.AppTest"),
+      deviceId = deviceId,
+      deviceApiLevel = null,
+      runnerClass = runner!!,
+    )
+    assertThat(args.last()).isEqualTo("com.example.app.test/com.example.app.test.AppRunner".shellEscape())
+  }
+
+  @Test
+  fun aTestApkThatIsNotInstalledDeclaresNoRunner() {
+    val pmList = "instrumentation:xyz.block.trailblaze.runner/androidx.test.runner.AndroidJUnitRunner (target=x)"
+    assertThat(HostAndroidDeviceConnectUtils.declaredInstrumentationRunner(pmList, "com.example.app.test")).isNull()
+  }
 }

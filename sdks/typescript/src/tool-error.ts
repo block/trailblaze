@@ -12,6 +12,13 @@
 const TOOL_ERROR_MARKER = Symbol.for("trailblaze.ToolError");
 
 /**
+ * Cross-realm marker for a fatal failure. Same `Symbol.for` rationale as [TOOL_ERROR_MARKER]; the
+ * in-process wrapper template and the QuickJS host's catch (`QuickJsToolHost.kt`) match the same
+ * registry key.
+ */
+const FATAL_ERROR_MARKER = Symbol.for("trailblaze.FatalError");
+
+/**
  * An error a tool throws to attach a STRUCTURED payload to its failure, alongside the
  * human-readable message. The catch paths (subprocess: `registerPendingTools` in tool.ts;
  * on-device: the QuickJS host's dispatch catch) lift [data] onto the error envelope's
@@ -59,4 +66,25 @@ export function toolErrorData(e: unknown): unknown {
     // Throwing marker/data accessor — treat as payload-less.
   }
   return undefined;
+}
+
+/**
+ * Marks [e] as a fatal failure: the nested tool call that produced it returned a fatal error, so
+ * the host must not retry or self-heal the step. The tool-catch paths lift the marker onto the
+ * result envelope as `_meta.trailblaze.variant = "FatalError"` when the error propagates out of the
+ * calling tool; a tool that catches it and returns normally is unaffected.
+ */
+export function markFatal<E extends object>(e: E): E {
+  Object.defineProperty(e, FATAL_ERROR_MARKER, { value: true });
+  return e;
+}
+
+/** Whether [e] carries the [markFatal] marker. Access-hardened like [toolErrorData]. */
+export function isFatalError(e: unknown): boolean {
+  try {
+    return typeof e === "object" && e !== null &&
+      (e as Record<PropertyKey, unknown>)[FATAL_ERROR_MARKER] === true;
+  } catch {
+    return false;
+  }
 }

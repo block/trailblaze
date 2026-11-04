@@ -381,7 +381,7 @@ class TrailblazeSettingsRepo(
         EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
         EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
         EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
-        EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
+        EffectiveDisableAnimationsConfig.set(it.disableAnimationsEnabled)
         EffectiveTurboConfig.enabled = it.turboEnabled ?: false
       },
     ),
@@ -421,8 +421,7 @@ class TrailblazeSettingsRepo(
           )
           EffectiveStreamScreenshotConfig.enabled =
             newState.appConfig.streamScreenshotsEnabled ?: false
-          EffectiveDisableAnimationsConfig.enabled =
-            newState.appConfig.disableAnimationsEnabled ?: false
+          EffectiveDisableAnimationsConfig.set(newState.appConfig.disableAnimationsEnabled)
           EffectiveTurboConfig.enabled = newState.appConfig.turboEnabled ?: false
         }
     }

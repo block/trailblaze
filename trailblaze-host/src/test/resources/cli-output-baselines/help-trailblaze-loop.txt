@@ -15,12 +15,14 @@ Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
                        use-recorded-steps] [--args-file=<file>]
                        [--compose-port=<composePort>] [--configuration=<name>]
                        [--device-classifier=<catalog-key>]
-                       [--driver=<driverType>] [--llm=<llm>]
-                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
-                       [--max-llm-calls=<maxLlmCalls>] -n=<count>
+                       [--device-setup=<file|json>] [--driver=<driverType>]
+                       [--llm=<llm>] [--llm-model=<llmModel>]
+                       [--llm-provider=<llmProvider>]
+                       [--max-llm-calls=<maxLlmCalls>] [-n=<count>]
                        [--on-failure=<command>] [--snapshot-baseline=<ref>]
                        [--snapshot-baseline-threshold=<percent>]
-                       [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
+                       [--test-name=<testNameOverride>]
+                       [--time-limit=<duration>] [--arg=KEY=VAL]...
                        [--bind=<name=deviceId>[,<name=deviceId>...]]...
                        [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
                        [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
@@ -36,13 +38,17 @@ A failed pass is reported, handed to --on-failure, and counted toward
 again, and continues with the passes left. It stops early after 3 sessions in a
 row that complete no pass. Exits non-zero if any pass failed.
 
+Give --iterations, --time-limit, or both: the loop ends at whichever comes
+first. At the time limit, a pass still running is cancelled and is not counted
+as a failure.
+
 With --reuse-trailhead, each pass's trailhead may reuse the setup the previous
 pass left instead of setting up again, when that trailhead supports it. Each
 pass then runs the whole trail in a session of its own.
 
 Takes the `trailblaze run` options, for one trail file. Several devices each
-loop in turn, for --iterations each. Never saves a recording: it would record
-every pass into the trail.
+loop in turn, for --iterations and --time-limit each. Never saves a recording:
+it would record every pass into the trail.
       [<trailFile>...]       Trail files (.trail.yaml or blaze.yaml), shell
                                globs, or directories. Directories expand
                                recursively to every named unified trail, plus
@@ -175,6 +181,19 @@ every pass into the trail.
                                this run (for example `ios-iphone-es`). The key
                                must refine the connected device's detected
                                classifiers. Only valid for a single-device run.
+      --device-setup=<file|json>
+                             Device setup: tool calls each trail runs first,
+                               before its trailhead, to put the device in a
+                               lane-wide or one-off state the trail doesn't own
+                               (a theme, a locale). A `*.tools.yaml` file or
+                               inline JSON, listed like a trail's `tools:`
+                               items (`- sample_setAppearance: { appearance:
+                               dark }`). A call naming a tool the device
+                               doesn't have fails the trail before any call
+                               runs. Tools and trailheads read the calls with
+                               `ctx.history.toolCalls({ section: "deviceSetup"
+                               })`. A run with device setup never saves its
+                               recording back into the trail.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_ACCESSIBILITY). Overrides
                                driver from trail config.
@@ -221,6 +240,7 @@ every pass into the trail.
                                the session-start snapshot — use --secret for
                                passwords, tokens, or other sensitive data.
   -n, --iterations=<count>   How many passes to run, failed ones included.
+                               Optional with --time-limit.
       --no-daemon            Run in-process without delegating to or starting a
                                persistent daemon. The server shuts down when
                                the run completes.
@@ -294,6 +314,13 @@ every pass into the trail.
                                environments where the caller can supply a
                                richer identifier (e.g. including
                                suite/section/case context).
+      --time-limit=<duration>
+                             How long to loop, as hours, minutes and seconds:
+                               8h, 90m, 1h30m, 45s. At the limit, a pass still
+                               running is cancelled and not counted as a
+                               failure. A run that is not delegated to a daemon
+                               (--no-daemon) can't be cancelled, so its pass
+                               finishes first. Optional with --iterations.
       --[no-]turbo           Turbo mode: let the Android app under test report
                                when it is idle so the driver waits less after
                                each action, instead of watching for its screen

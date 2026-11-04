@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.llm
 
+import xyz.block.trailblaze.logs.model.SessionStartFields
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -272,6 +273,14 @@ data class RunYamlRequest(
    * language. See [xyz.block.trailblaze.model.DesktopAppRunYamlParams.keepDeviceLanguage].
    */
   val keepDeviceLanguage: Boolean = false,
+
+  /**
+   * The host session's trail config and app under test, sent with each per-tool RPC of a
+   * host-driven session. The host writes that session's start log, so without this a survey run by
+   * an on-device tool would not know the trail it is in. Null when the device writes the start
+   * itself, and from older hosts.
+   */
+  val sessionStart: SessionStartFields? = null,
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

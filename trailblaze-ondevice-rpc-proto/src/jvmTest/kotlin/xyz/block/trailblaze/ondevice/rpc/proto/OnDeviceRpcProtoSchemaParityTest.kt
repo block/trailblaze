@@ -63,6 +63,7 @@ class OnDeviceRpcProtoSchemaParityTest {
         "trailblazeLlmModel" to setOf("llm_model"),
         // One word, not two: the wire field keeps the W3C spelling of the header it carries.
         "traceParent" to setOf("traceparent"),
+        "sessionStart" to setOf("session_start_json"),
       ),
       // Host-side orchestration, not run payload. The host resolves the whole device set before any
       // RPC and then talks to each device over its own connection, so a per-device request already

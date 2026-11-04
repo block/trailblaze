@@ -26,6 +26,7 @@ import xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
+import xyz.block.trailblaze.DeviceSetupToolsMemory
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
@@ -62,11 +63,13 @@ import xyz.block.trailblaze.quickjs.tools.BundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
+import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.failureMessage
 import xyz.block.trailblaze.toolcalls.carriesPayload
+import xyz.block.trailblaze.trailhead.DeviceSetupToolsInstrumentationArg
 import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
 import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -870,6 +873,12 @@ open class AndroidTrailblazeRule(
     // {{var}} step needs on the per-tool `./trailblaze run` RPC path.
     if (!memoryExternallyManaged) {
       trailblazeAgent.clearMemory()
+      // The lane's setup tool calls, which this rule runs before the trailhead. After the clear,
+      // which would wipe them, and only where this rule owns the memory: on the RPC path the host seeds its own.
+      DeviceSetupToolsInstrumentationArg.seed(
+        agentMemory,
+        InstrumentationArgUtil.getInstrumentationArg(DeviceSetupToolsInstrumentationArg.KEY),
+      )
     }
 
     requireActionableSteps(trailItems, trailConfig, trailFilePath)
@@ -883,163 +892,175 @@ open class AndroidTrailblazeRule(
     // cancelling at the first suspension point inside the bundle's shutdown — without it,
     // a cancelled run would leak the QuickJS native allocation plus the dynamic-tool
     // registrations into the next session's tool repo.
-    var launchedQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
-    var toolsetQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
+    return TrailExecution.within(trailConfig?.id) {
+      var launchedQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
+      var toolsetQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
 
-    // Track the last `Success` across all trail items so the on-device handler can mirror its
-    // `message` / `structuredContent` onto the RPC response envelope. Mirrors
-    // `BaseTrailblazeAgent.runTrailblazeTools`'s own `lastSuccessResult` semantics — the trail's
-    // terminal Success is what the host's `client.callTool(...)` consumer expects.
-    var lastToolSuccess: TrailblazeToolResult.Success? = null
-    // Hoisted out of the `try` so the `finally` can release a retained bundle launch by session
-    // rather than releasing whatever happens to be retained — see [ScriptedToolBundleReuse.release].
-    var thisDispatchSessionId: xyz.block.trailblaze.logs.model.SessionId? = null
-    // Cleared when the dispatch finishes or a tool reports an error; still set when anything threw
-    // or the dispatch was cancelled, which may leave a retained bundle engine mid-eval.
-    var endedInException = true
-    AccessibilityTrailRunner.beginDispatch(config.hostDrainsBeforeSessionEnd)
-    try {
-      val sessionId = (trailblazeLoggingRule.session
-        ?: error("Session not available for QuickJS bundle launch")).sessionId
-      thisDispatchSessionId = sessionId
-      if (quickjsToolBundles.isNotEmpty()) {
-        // No `advertisementOverrides` here on purpose: these are caller-supplied target-declared
-        // bundles (no YAML descriptor to source from at this site), so each advertises from its
-        // own bundle `spec`. The toolset-delivered path below builds overrides from YAML because
-        // its typed-tool wrappers are handler-only (no `spec`). See [launchToolsetScriptedToolBundles].
-        launchedQuickjsRuntime = QuickJsToolBundleLauncher.launchAll(
-          bundles = quickjsToolBundles,
-          deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-          sessionId = sessionId,
-          toolRepo = trailblazeToolRepo,
-          bundleSourceResolver = quickjsBundleSourceResolver,
-          // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher
-          // installs, so a scripted tool's HTTP works identically on-device and host-dispatched.
-          engineExtension = OkHttpFetchExtension(),
-        )
-      }
-
-      // On the host-drives-the-loop path this method runs once per ACTION, so without the reuse
-      // gate every replayed action stands up the catalog's QuickJS bundles, registers their tools
-      // and tears the whole lot down again a few hundred milliseconds later — for a recorded tool
-      // that calls none of them. Reuse keys on the tool repo instance: the launch registers INTO a
-      // repo, so a launch can only be reused by a dispatch that resolves against the same one.
-      if (ReplayCaptureOptions.reuseToolBundlesEnabled(target)) {
-        // Claim-or-launch in one step, and the cache keeps the launch instead of this run's
-        // `finally`. Deciding and launching separately would let two overlapping dispatches of one
-        // session both launch into the repo they now share, and the second would die on the tool
-        // names the first registered — see [ScriptedToolBundleReuse.claimOrLaunch].
-        // Keyed on the classifiers too: the launch registers only the tools the device's classifiers
-        // satisfied (`trailblaze/requiredClassifiers`), so a changed override must relaunch.
-        val reused = ScriptedToolBundleReuse.claimOrLaunch(
-          sessionId = sessionId,
-          repo = trailblazeToolRepo,
-          classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
-        ) {
-          launchToolsetScriptedToolBundles(toolRepo = trailblazeToolRepo, sessionId = sessionId)
-        }
-        if (reused) {
-          Console.log("[reused-tool-bundles] session=${sessionId.value} skipped launch and shutdown")
-        }
-      } else {
-        toolsetQuickjsRuntime = launchToolsetScriptedToolBundles(
-          toolRepo = trailblazeToolRepo,
-          sessionId = sessionId,
-        )
-      }
-
-      ActionTrace.mark(ActionTrace.Boundary.BUNDLES_LAUNCHED)
-
-      // One trail: the trailhead's teardown runs after it, whatever the outcome.
-      trailblazeRunnerUtil.runTrail {
-        trailItems.forEach { item ->
-          val itemResult = when (item) {
-            is TrailYamlItem.PromptsTrailItem ->
-              // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
-              // delegates only the unrecorded steps to the Koog [trailblazeRunner]. Suspending, so
-              // every tool a step dispatches is cancelled with the trail.
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = item.promptSteps,
-                useRecordedSteps = useRecordedSteps,
-                selfHeal = resolveSelfHealEnabled(),
-              )
-            is TrailYamlItem.TrailheadTrailItem ->
-              // The trailhead is step 0: run its single lowered step through the same path as any
-              // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = listOf(item.trailhead.toPromptStep()),
-                useRecordedSteps = true,
-                selfHeal = resolveSelfHealEnabled(),
-              )
-            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem {
-              runTrailblazeTool(item.tools.map { it.trailblazeTool }, traceId)
-            }
-            is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
-          }
-          if (itemResult is TrailblazeToolResult.Error) {
-            // A tool that reported an error left its engine in a known state, so the session's
-            // bundles stay reusable.
-            endedInException = false
-            throw TrailblazeException(itemResult.errorMessage)
-          }
-          // Only adopt a Success as the trail's last-tool payload if it actually carries data —
-          // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
-          // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
-          // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
-          // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
-          // Success() values produced by non-tool items must not overwrite a payload-bearing one.
-          if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
-            lastToolSuccess = itemResult
-          }
-        }
-      }
-      endedInException = false
-    } finally {
-      ActionTrace.mark(ActionTrace.Boundary.ITEMS_DONE)
-      withContext(NonCancellable) {
-        launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
-        toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
-        if (
-          ScriptedToolBundleReuse.releasesAfterDispatch(
-            ownsSessionEnd = sendSessionStartLog || sendSessionEndLog,
-            endedInException = endedInException,
+      // Track the last `Success` across all trail items so the on-device handler can mirror its
+      // `message` / `structuredContent` onto the RPC response envelope. Mirrors
+      // `BaseTrailblazeAgent.runTrailblazeTools`'s own `lastSuccessResult` semantics — the trail's
+      // terminal Success is what the host's `client.callTool(...)` consumer expects.
+      var lastToolSuccess: TrailblazeToolResult.Success? = null
+      // Hoisted out of the `try` so the `finally` can release a retained bundle launch by session
+      // rather than releasing whatever happens to be retained — see [ScriptedToolBundleReuse.release].
+      var thisDispatchSessionId: xyz.block.trailblaze.logs.model.SessionId? = null
+      // Cleared when the dispatch finishes or a tool reports an error; still set when anything threw
+      // or the dispatch was cancelled, which may leave a retained bundle engine mid-eval.
+      var endedInException = true
+      AccessibilityTrailRunner.beginDispatch(config.hostDrainsBeforeSessionEnd)
+      try {
+        val sessionId = (trailblazeLoggingRule.session
+          ?: error("Session not available for QuickJS bundle launch")).sessionId
+        thisDispatchSessionId = sessionId
+        if (quickjsToolBundles.isNotEmpty()) {
+          // No `advertisementOverrides` here on purpose: these are caller-supplied target-declared
+          // bundles (no YAML descriptor to source from at this site), so each advertises from its
+          // own bundle `spec`. The toolset-delivered path below builds overrides from YAML because
+          // its typed-tool wrappers are handler-only (no `spec`). See [launchToolsetScriptedToolBundles].
+          launchedQuickjsRuntime = QuickJsToolBundleLauncher.launchAll(
+            bundles = quickjsToolBundles,
+            deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+            sessionId = sessionId,
+            toolRepo = trailblazeToolRepo,
+            bundleSourceResolver = quickjsBundleSourceResolver,
+            // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher
+            // installs, so a scripted tool's HTTP works identically on-device and host-dispatched.
+            engineExtension = OkHttpFetchExtension(),
           )
-        ) {
-          // By session, because this teardown is NonCancellable and an interrupted session can
-          // reach it after its replacement has already retained a launch of its own.
-          thisDispatchSessionId?.let { ScriptedToolBundleReuse.release(it) }
         }
-        ActionTrace.mark(ActionTrace.Boundary.BUNDLES_SHUTDOWN)
-        // Join the accessibility driver's async log uploads before this run returns.
-        // `runActions` no longer flushes per action (https://github.com/block/trailblaze/issues/210) — the upload of
-        // action N's screenshot + hierarchy overlaps action N+1 — so this boundary is what
-        // keeps the guarantee that a completed run (an RPC response on the per-tool dispatch
-        // path, or a finished JUnit trail) has all of its driver logs landed before the host
-        // acts on the completion (session end → report generation).
-        //
-        // On the host-drives-the-loop path that "completed run" is ONE action, so the join sits in
-        // front of every reply and the host waits for an upload nothing is going to read yet. The
-        // deferred-flush gate moves it into the next action (see
-        // [AccessibilityTrailRunner.joinPreviousActionLogs]) — but only for dispatches that own
-        // neither end of the session. A dispatch that starts the session (the JUnit and
-        // desktop-dispatch paths) or ends it (the last host-driven dispatch, which emits
-        // SessionEnded as soon as this returns) still joins here, because for it this boundary
-        // really is the run's completion and the host acts on it.
-        val deferFlush = ReplayCaptureOptions.shouldDeferDispatchLogJoin(
-          gateOn = ReplayCaptureOptions.deferLogFlushEnabled(config.hostDrainsBeforeSessionEnd),
-          sendSessionStartLog = sendSessionStartLog,
-          sendSessionEndLog = sendSessionEndLog,
-        )
-        if (deferFlush) {
-          Console.log("[deferred-log-flush] skipped end-of-dispatch join")
-          AccessibilityTrailRunner.noteDispatchLeftLogsInFlight()
+
+        // On the host-drives-the-loop path this method runs once per ACTION, so without the reuse
+        // gate every replayed action stands up the catalog's QuickJS bundles, registers their tools
+        // and tears the whole lot down again a few hundred milliseconds later — for a recorded tool
+        // that calls none of them. Reuse keys on the tool repo instance: the launch registers INTO a
+        // repo, so a launch can only be reused by a dispatch that resolves against the same one.
+        if (ReplayCaptureOptions.reuseToolBundlesEnabled(target)) {
+          // Claim-or-launch in one step, and the cache keeps the launch instead of this run's
+          // `finally`. Deciding and launching separately would let two overlapping dispatches of one
+          // session both launch into the repo they now share, and the second would die on the tool
+          // names the first registered — see [ScriptedToolBundleReuse.claimOrLaunch].
+          // Keyed on the classifiers too: the launch registers only the tools the device's classifiers
+          // satisfied (`trailblaze/requiredClassifiers`), so a changed override must relaunch.
+          val reused = ScriptedToolBundleReuse.claimOrLaunch(
+            sessionId = sessionId,
+            repo = trailblazeToolRepo,
+            classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+          ) {
+            launchToolsetScriptedToolBundles(toolRepo = trailblazeToolRepo, sessionId = sessionId)
+          }
+          if (reused) {
+            Console.log("[reused-tool-bundles] session=${sessionId.value} skipped launch and shutdown")
+          }
         } else {
-          runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
+          toolsetQuickjsRuntime = launchToolsetScriptedToolBundles(
+            toolRepo = trailblazeToolRepo,
+            sessionId = sessionId,
+          )
         }
-        ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOGS_FLUSHED)
+
+        ActionTrace.mark(ActionTrace.Boundary.BUNDLES_LAUNCHED)
+
+        // One trail: the trailhead's teardown runs after it, whatever the outcome.
+        trailblazeRunnerUtil.runTrail {
+          // The run's setup tool calls, before anything else in the trail, the trailhead included.
+          // Only where this rule owns the memory: on the RPC path the host already ran them, and
+          // each request here is one of its tool calls, so running them again would nest setup.
+          DeviceSetupToolsMemory.read(agentMemory)?.takeUnless { memoryExternallyManaged }?.let { setup ->
+            trailblazeRunnerUtil.runDeviceSetup(
+              setup,
+              { trailblazeYaml.decodeTools(it).map { wrapper -> wrapper.trailblazeTool } },
+              trailblazeToolRepo,
+            ) { tools -> runTrailblazeTool(tools, traceId) }
+          }
+          trailItems.forEach { item ->
+            val itemResult = when (item) {
+              is TrailYamlItem.PromptsTrailItem ->
+                // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
+                // delegates only the unrecorded steps to the Koog [trailblazeRunner]. Suspending, so
+                // every tool a step dispatches is cancelled with the trail.
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = item.promptSteps,
+                  useRecordedSteps = useRecordedSteps,
+                  selfHeal = resolveSelfHealEnabled(),
+                )
+              is TrailYamlItem.TrailheadTrailItem ->
+                // The trailhead is step 0: run its single lowered step through the same path as any
+                // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = listOf(item.trailhead.toPromptStep()),
+                  useRecordedSteps = true,
+                  selfHeal = resolveSelfHealEnabled(),
+                )
+              is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runToolItem {
+                runTrailblazeTool(item.tools.map { it.trailblazeTool }, traceId)
+              }
+              is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
+            }
+            if (itemResult is TrailblazeToolResult.Error) {
+              // A tool that reported an error left its engine in a known state, so the session's
+              // bundles stay reusable.
+              endedInException = false
+              throw TrailblazeException(itemResult.errorMessage)
+            }
+            // Only adopt a Success as the trail's last-tool payload if it actually carries data —
+            // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
+            // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
+            // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
+            // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
+            // Success() values produced by non-tool items must not overwrite a payload-bearing one.
+            if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
+              lastToolSuccess = itemResult
+            }
+          }
+        }
+        endedInException = false
+      } finally {
+        ActionTrace.mark(ActionTrace.Boundary.ITEMS_DONE)
+        withContext(NonCancellable) {
+          launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
+          toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
+          if (
+            ScriptedToolBundleReuse.releasesAfterDispatch(
+              ownsSessionEnd = sendSessionStartLog || sendSessionEndLog,
+              endedInException = endedInException,
+            )
+          ) {
+            // By session, because this teardown is NonCancellable and an interrupted session can
+            // reach it after its replacement has already retained a launch of its own.
+            thisDispatchSessionId?.let { ScriptedToolBundleReuse.release(it) }
+          }
+          ActionTrace.mark(ActionTrace.Boundary.BUNDLES_SHUTDOWN)
+          // Join the accessibility driver's async log uploads before this run returns.
+          // `runActions` no longer flushes per action (https://github.com/block/trailblaze/issues/210) — the upload of
+          // action N's screenshot + hierarchy overlaps action N+1 — so this boundary is what
+          // keeps the guarantee that a completed run (an RPC response on the per-tool dispatch
+          // path, or a finished JUnit trail) has all of its driver logs landed before the host
+          // acts on the completion (session end → report generation).
+          //
+          // On the host-drives-the-loop path that "completed run" is ONE action, so the join sits in
+          // front of every reply and the host waits for an upload nothing is going to read yet. The
+          // deferred-flush gate moves it into the next action (see
+          // [AccessibilityTrailRunner.joinPreviousActionLogs]) — but only for dispatches that own
+          // neither end of the session. A dispatch that starts the session (the JUnit and
+          // desktop-dispatch paths) or ends it (the last host-driven dispatch, which emits
+          // SessionEnded as soon as this returns) still joins here, because for it this boundary
+          // really is the run's completion and the host acts on it.
+          val deferFlush = ReplayCaptureOptions.shouldDeferDispatchLogJoin(
+            gateOn = ReplayCaptureOptions.deferLogFlushEnabled(config.hostDrainsBeforeSessionEnd),
+            sendSessionStartLog = sendSessionStartLog,
+            sendSessionEndLog = sendSessionEndLog,
+          )
+          if (deferFlush) {
+            Console.log("[deferred-log-flush] skipped end-of-dispatch join")
+            AccessibilityTrailRunner.noteDispatchLeftLogsInFlight()
+          } else {
+            runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
+          }
+          ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOGS_FLUSHED)
+        }
       }
+      lastToolSuccess
     }
-    return lastToolSuccess
   }
 
   /**

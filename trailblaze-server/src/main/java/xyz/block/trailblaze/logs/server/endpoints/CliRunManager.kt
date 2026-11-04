@@ -18,6 +18,8 @@ import xyz.block.trailblaze.util.Console
  */
 class CliRunManager(
   private val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
+  /** Reported on every status, so a client that stops waiting can still find the run's session. */
+  private val logsDir: String? = null,
 ) : java.io.Closeable {
   private val runs = ConcurrentHashMap<String, MutableRunState>()
   // SupervisorJob, not Job: runs are independent, and this scope is shared by every one of them.
@@ -119,6 +121,8 @@ class CliRunManager(
         sessionId = run.sessionId,
         progressMessage = run.progressMessage,
         result = run.result,
+        logsDir = logsDir,
+        finished = run.job?.isCompleted == true,
       )
     }
   }
@@ -152,7 +156,10 @@ class CliRunManager(
     }
   }
 
-  /** Cancel an in-flight run. Returns true if the run was found and cancellation was requested. */
+  /**
+   * Cancel an in-flight run. Returns true if the run was found and cancellation was requested. The
+   * run reads cancelled at once; its status says when it has [CliRunStatusResponse.finished].
+   */
   fun cancelRun(runId: String): Boolean {
     val run = runs[runId] ?: return false
     synchronized(run) {

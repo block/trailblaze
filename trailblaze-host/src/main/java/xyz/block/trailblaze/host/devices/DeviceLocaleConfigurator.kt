@@ -254,6 +254,11 @@ internal object DeviceLocaleConfigurator {
    * written from the host while the device is booted is not picked up. SpringBoard reads the
    * language when it starts, so a change restarts it and waits until it is back (see
    * [restartSpringBoard]).
+   *
+   * An iPad reboots instead. After a SpringBoard restart, an iPad's apps stop following XCTest
+   * rotations: the device reads landscape while every app stays laid out in portrait, so taps land
+   * where nothing is drawn. A reboot leaves it as a fresh boot does, and drops its cached driver,
+   * so the next connect turns it to landscape again (see [rebootSimulator]).
    */
   internal fun applyIosSimulator(
     udid: String,
@@ -264,14 +269,19 @@ internal object DeviceLocaleConfigurator {
     val restartOwed = udid in springBoardRestartOwed
     if (iosLanguageMatches(locale, previousLanguage) && !restartOwed) return false
     val startedAt = simulator.nanoTime()
+    // Before the write: a guess here would restart an iPad's SpringBoard and leave it sideways.
+    val ipad = checkNotNull(simulator.isIpad(udid)) {
+      "Could not tell whether iOS Simulator `$udid` is an iPad, so device locale `$locale` was not applied."
+    }
 
     // From the write on, a failure is partial: the language may have changed while SpringBoard and
     // the app still show the old one. Put the old one back, or the next attempt would find the
     // language already set and skip the restart for good.
-    fun partial(reason: String): Nothing {
+    fun partial(reason: String, restartMayHaveRun: Boolean = false): Nothing {
       val restored = previousLanguage?.let { simulator.spawn(udid, iosSetLanguageCommand(it)).success } == true
-      // Back in the language SpringBoard is showing, so nothing is owed, unless it already was.
-      if (restored && !restartOwed) springBoardRestartOwed.remove(udid)
+      // Back in the language SpringBoard is showing, so nothing is owed, unless it already was or a
+      // reboot that failed partway may have started SpringBoard in the new one.
+      if (restored && !restartOwed && !restartMayHaveRun) springBoardRestartOwed.remove(udid)
       throw TrailDeviceLocale.PartiallyAppliedException(
         "$reason " + if (restored) "Restored `$previousLanguage`." else "Could not restore the previous language.",
       )
@@ -292,20 +302,24 @@ internal object DeviceLocaleConfigurator {
         )
       }
     }
-    val springBoardBackMs =
+    val restartedMs =
       try {
-        restartSpringBoard(udid, simulator)
+        if (ipad) rebootSimulator(udid, simulator) else restartSpringBoard(udid, simulator)
       } catch (e: IllegalStateException) {
-        partial(e.message.orEmpty())
+        partial(e.message.orEmpty(), restartMayHaveRun = ipad)
       }
     springBoardRestartOwed.remove(udid)
-    val springBoard =
-      springBoardBackMs?.let { "SpringBoard back after $it ms" }
-        ?: ("SpringBoard not confirmed back within ${SPRINGBOARD_RESTART_TIMEOUT_MS / 1000} s; the next " +
-          "launch waits for it")
+    val restarted =
+      when {
+        ipad -> "rebooted in $restartedMs ms"
+        restartedMs != null -> "SpringBoard back after $restartedMs ms"
+        else ->
+          "SpringBoard not confirmed back within ${SPRINGBOARD_RESTART_TIMEOUT_MS / 1000} s; the next " +
+            "launch waits for it"
+      }
     Console.log(
       "[device-locale] set iOS Simulator $udid to $locale in " +
-        "${(simulator.nanoTime() - startedAt) / 1_000_000} ms ($springBoard)",
+        "${(simulator.nanoTime() - startedAt) / 1_000_000} ms ($restarted)",
     )
     return true
   }
@@ -358,6 +372,31 @@ internal object DeviceLocaleConfigurator {
     }
   }
 
+  /**
+   * Shuts the simulator down and boots it again, returning once it has finished booting, in
+   * milliseconds. Its cached driver is closed first: the runner dies with the simulator, and only a
+   * new driver's connect turns an iPad back to landscape. A simulated GPS location does not survive
+   * a shutdown, so [IOS_SIMULATOR_LOCATION_ENV] is set again afterwards.
+   */
+  internal fun rebootSimulator(udid: String, simulator: IosSimulatorHost): Long {
+    val startedAt = simulator.nanoTime()
+    val reboot = simulator.reboot(udid)
+    check(reboot.success) {
+      "Applied a device locale to iOS Simulator `$udid`, but could not reboot it: " +
+        reboot.stderr.trim().ifBlank { "exit ${reboot.exitCode}" }
+    }
+    return (simulator.nanoTime() - startedAt) / 1_000_000
+  }
+
+  /** The simulated location (`<latitude>,<longitude>`) a reboot sets again, e.g. one CI set at boot. */
+  internal const val IOS_SIMULATOR_LOCATION_ENV = "TRAILBLAZE_IOS_SIMULATOR_LOCATION"
+
+  private val LATITUDE_LONGITUDE = Regex("-?\\d+(\\.\\d+)?,-?\\d+(\\.\\d+)?")
+
+  /** [value] when it is a `<latitude>,<longitude>` pair `simctl location set` takes, else null. */
+  internal fun iosSimulatorLocation(value: String?): String? =
+    value?.trim()?.replace(" ", "")?.takeIf { LATITUDE_LONGITUDE.matches(it) }
+
   private const val SPRINGBOARD_RESTART_TIMEOUT_MS = 30_000L
   private const val SPRINGBOARD_POLL_INTERVAL_MS = 100L
 
@@ -388,6 +427,11 @@ internal object DeviceLocaleConfigurator {
   internal fun iosPrimaryLanguageFromPlistCommand(file: File): List<String> =
     listOf("plutil", "-extract", "AppleLanguages.0", "raw", "-o", "-", file.path)
 
+  /** This UDID's device description in the default simulator device set; its `deviceType` names the model. */
+  /** True for a `deviceType` such as `com.apple.CoreSimulator.SimDeviceType.iPad-A16`. */
+  internal fun isIpadDeviceType(deviceType: String?): Boolean =
+    deviceType?.trim()?.substringAfterLast('.')?.startsWith("iPad") == true
+
   /** The simulator as [applyIosSimulator] sees it, so tests can stand in for the Mac and the device. */
   internal interface IosSimulatorHost {
     fun spawn(udid: String, command: List<String>): SimctlCli.Result
@@ -400,6 +444,12 @@ internal object DeviceLocaleConfigurator {
 
     /** The process id of [udid]'s SpringBoard, or null when the host cannot find it. */
     fun springBoardPid(udid: String): Long?
+
+    /** Whether [udid] is an iPad; null when the host cannot tell. */
+    fun isIpad(udid: String): Boolean?
+
+    /** Closes [udid]'s cached driver, shuts the simulator down and boots it again. */
+    fun reboot(udid: String): SimctlCli.Result
 
     /** Sends SIGTERM to [pid]; false when the process is already gone. */
     fun terminate(pid: Long): Boolean
@@ -418,6 +468,28 @@ internal object DeviceLocaleConfigurator {
         }
         val defaults = spawn(udid, iosGetLanguagesCommand())
         return defaults.stdout.takeIf { defaults.success }?.let(::iosFirstLanguage)
+      }
+
+      override fun isIpad(udid: String): Boolean? =
+        (SimctlCli.deviceTypeIdentifier(udid) ?: SimctlCli.deviceTypeIdentifier(udid))?.let(::isIpadDeviceType)
+
+      override fun reboot(udid: String): SimctlCli.Result {
+        HostIosDriverFactory.discard(udid)
+        // Also after a boot a Stop left to the background, so the next trail still has its location.
+        return SimctlCli.reboot(udid, afterBoot = { restoreLocation(udid) })
+      }
+
+      private fun restoreLocation(udid: String) {
+        val configured = System.getenv(IOS_SIMULATOR_LOCATION_ENV)
+        if (configured.isNullOrBlank()) return
+        // Advisory: a trail that needs no location must not fail because it could not be set.
+        val set = iosSimulatorLocation(configured)?.let { SimctlCli.setLocation(udid, it) }
+        if (set?.success != true) {
+          Console.log(
+            "[device-locale] could not set $IOS_SIMULATOR_LOCATION_ENV=`$configured` on $udid after its reboot: " +
+              (set?.stderr?.trim()?.ifBlank { null } ?: "expected `<latitude>,<longitude>`"),
+          )
+        }
       }
 
       override fun springBoardPid(udid: String): Long? {

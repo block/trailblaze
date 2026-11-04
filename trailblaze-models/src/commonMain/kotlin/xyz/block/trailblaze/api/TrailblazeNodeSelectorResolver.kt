@@ -501,8 +501,20 @@ object TrailblazeNodeSelectorResolver {
    *   made against that tree can be naming. A collector that projects none leaves the field null
    *   and the predicate declines, as it did for every Compose node before the projection existed.
    *
-   * Unanswerable on a Compose node (set means no match): `uniqueId`, `hintTextRegex`,
-   * `labeledByTextRegex`, `roleDescriptionRegex`, `isMultiLine`, and `inputType`.
+   * - `hintTextRegex` matches [DriverNodeDetail.Compose.accessibilityHintText], the text field's
+   *   label or placeholder, and declines where the collector projected none.
+   *
+   * - `stateDescriptionRegex` matches [DriverNodeDetail.Compose.accessibilityStateDescription], the
+   *   delegate's "Selected"/"Not selected" or "On"/"Off", falling back to the app's own
+   *   description on a tree that projects none.
+   *
+   * - `roleDescriptionRegex` matches the role description Compose's accessibility delegate
+   *   publishes for [DriverNodeDetail.Compose.role]: `"Switch"` for `Role.Switch` and `"Tab"` for
+   *   `Role.Tab`, the only roles it describes. Every other role publishes none, so the predicate
+   *   declines there. The delegate's strings are localized; this projection is the English text
+   *   recordings carry.
+   *
+   * Unanswerable on a Compose node (set means no match): `uniqueId`, `labeledByTextRegex`, `isMultiLine`, and `inputType`.
    */
   private fun matchesAndroidAccessibilityAgainstCompose(
     detail: DriverNodeDetail.Compose,
@@ -510,11 +522,17 @@ object TrailblazeNodeSelectorResolver {
   ): Boolean {
     // Predicates the Compose semantics tree cannot answer: set means no match.
     if (match.uniqueId != null) return false
-    if (match.hintTextRegex != null) return false
     if (match.labeledByTextRegex != null) return false
-    if (match.roleDescriptionRegex != null) return false
     if (match.isMultiLine != null) return false
     if (match.inputType != null) return false
+    match.roleDescriptionRegex?.let { pattern ->
+      val published = when (detail.role) {
+        "Switch" -> "Switch"
+        "Tab" -> "Tab"
+        else -> return false
+      }
+      if (!requirePattern(pattern, published)) return false
+    }
 
     // Declines rather than matches when the collector projected nothing: a null here means "this
     // tree cannot answer the question", and treating that as a match would let a className
@@ -524,10 +542,18 @@ object TrailblazeNodeSelectorResolver {
     }
     if (!requirePattern(match.resourceIdRegex, detail.testTag)) return false
     if (!requirePattern(match.composeTestTagRegex, detail.testTag)) return false
+    // Declines on a null projection for the same reason as classNameRegex above.
+    match.hintTextRegex?.let { pattern ->
+      if (!requirePattern(pattern, detail.accessibilityHintText ?: return false)) return false
+    }
     // Compose resolveText: editableText > text > contentDescription.
     if (!requirePattern(match.textRegex, detail.resolveText())) return false
     if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
-    if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
+    // The delegate's text where the collector projected it; a tree without the projection still
+    // answers with the app's own description, as it did before the projection existed.
+    if (!requirePattern(match.stateDescriptionRegex, detail.accessibilityStateDescription ?: detail.stateDescription)) {
+      return false
+    }
     if (!requirePattern(match.paneTitleRegex, detail.paneTitle)) return false
     if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
     if (!requireEqual(match.isClickable, detail.hasClickAction)) return false
@@ -708,6 +734,7 @@ object TrailblazeNodeSelectorResolver {
     detail: DriverNodeDetail.Compose,
     match: DriverNodeMatch.Compose,
   ): Boolean {
+    if (detail.accessibilityProjectionOnly) return false
     if (!requireEqual(match.testTag, detail.testTag)) return false
     if (!requireEqual(match.role, detail.role)) return false
     if (!requirePattern(match.textRegex, detail.resolveText())) return false

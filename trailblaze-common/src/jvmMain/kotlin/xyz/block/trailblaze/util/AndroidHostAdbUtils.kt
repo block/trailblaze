@@ -25,6 +25,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
@@ -655,6 +656,36 @@ object AndroidHostAdbUtils {
   }
 
   /**
+   * One bounded shell call that rejects a nonzero device exit status instead of returning its
+   * diagnostics as data. Arguments have the same shell-quoting contract as [execAdbShellCommand].
+   * The caller supplies its remaining budget; this call never starts a second attempt.
+   */
+  fun execAdbShellCommandChecked(
+    deviceId: TrailblazeDeviceId,
+    args: List<String>,
+    timeoutMs: Long,
+  ): String {
+    require(timeoutMs > 0) { "Shell timeout must be positive." }
+    val command = args.joinToString(" ")
+    val redactedCommand = redactSecretsForLog(command)
+    val attempt = runSingleAdbShellAttempt(
+      deviceId, command, redactedCommand, timeoutMs,
+      shellCall = { onClientResolved ->
+        withDadbNoRetry(deviceId, onClientResolved) { dadb ->
+          val response = dadb.shell(command)
+          checkedShellOutput(response.exitCode, response.output, response.errorOutput)
+        }
+      },
+    )
+    return hostShellOutputOrThrow(attempt, deviceId.instanceId, command, timeoutMs)
+  }
+
+  internal fun checkedShellOutput(exitCode: Int, output: String, errorOutput: String): String {
+    check(exitCode == 0) { "Device shell exited with $exitCode: ${errorOutput.ifBlank { output }}" }
+    return output
+  }
+
+  /**
    * Runs [attempt] with the whole [timeoutMs] budget and, if it failed on a transport
    * `IOException`, once more with whatever budget is left. A timeout is not retried: the budget is
    * already spent. Neither is a non-transport failure, which the device itself reported.
@@ -800,6 +831,55 @@ object AndroidHostAdbUtils {
   }
 
   /**
+   * One bounded `adb shell` attempt on a connection of its own, closed afterwards. The device's
+   * shared client is never used, so a transport failure here cannot evict it and take down what
+   * runs over it, such as the instrumentation a trail is about to drive. For a background call
+   * whose failure must cost only its own answer.
+   */
+  fun execAdbShellCommandOnOwnConnection(
+    deviceId: TrailblazeDeviceId,
+    args: List<String>,
+    timeoutMs: Long,
+    quiet: Boolean = false,
+  ): String? = execAdbShellCommandOnOwnConnection(deviceId, args, timeoutMs, quiet, openClient = ::createDadb)
+
+  internal fun execAdbShellCommandOnOwnConnection(
+    deviceId: TrailblazeDeviceId,
+    args: List<String>,
+    timeoutMs: Long,
+    quiet: Boolean,
+    openClient: (serial: String) -> Dadb,
+  ): String? {
+    val command = args.joinToString(" ")
+    val redactedCommand = redactSecretsForLog(command)
+    if (!quiet) Console.log("adb shell ($timeoutMs ms timeout, own connection) $redactedCommand")
+    val client = AtomicReference<Dadb?>()
+    val expired = AtomicBoolean(false)
+    return try {
+      runSingleAdbShellAttempt(
+        deviceId,
+        command,
+        redactedCommand,
+        timeoutMs,
+        evictClientOnTimeout = false,
+        // Never reports its client, so neither a timeout nor an interrupt evicts a shared one.
+        shellCall = { _ ->
+          openClient(deviceId.instanceId).use { own ->
+            client.set(own)
+            // Opened after the caller gave up: its cleanup may have missed it, so never send.
+            if (expired.get()) null else shellOutputOf(own, command)
+          }
+        },
+      ).value
+    } finally {
+      // Unblocks a worker still reading after a timeout. A client published after this read sees
+      // [expired] and closes without sending.
+      expired.set(true)
+      client.get()?.let { runCatching { it.close() } }
+    }
+  }
+
+  /**
    * Retry policy for [execAdbShellCommandWithTimeout], extracted as pure control flow so it is
    * unit-testable without real threads or a live device. Runs [attempt] up to [maxAttempts] times,
    * returning early on any non-[ShellAttemptOutcome.TIMED_OUT] outcome (a success, or a thrown
@@ -878,8 +958,10 @@ object AndroidHostAdbUtils {
       // The calling thread was interrupted while waiting (e.g. discovery's name-resolution pool was
       // shut down after its deadline). Restore the interrupt flag, abandon the wedged worker and its
       // possibly-stale client, and report a terminal failure — interruption means "stop", not "retry".
+      // A caller that leaves the shared client alone on a timeout does so here too: a background
+      // poller stopped at session end says nothing about the transport the session still uses.
       Thread.currentThread().interrupt()
-      evictExactClient(dadbClients, deviceId.instanceId, usedClientRef.get())
+      if (evictClientOnTimeout) evictExactClient(dadbClients, deviceId.instanceId, usedClientRef.get())
       worker.interrupt()
       return ShellAttemptResult(null, ShellAttemptOutcome.FAILED)
     }
@@ -1051,25 +1133,29 @@ object AndroidHostAdbUtils {
    * Streams `adb shell <command>` and writes raw stdout/stderr bytes to [outputFile]. Returns an
    * [AutoCloseable] that closes the underlying stream and waits (briefly) for the reader thread to
    * flush and close the file before returning, so callers observe a fully-flushed file
-   * immediately after `close()`. Equivalent to `adb shell <command> > outputFile` but routed
-   * through the adb wire protocol.
+   * immediately after `close()`. Equivalent to `adb shell <command> > outputFile` (`>>` with
+   * [append]) but routed through the adb wire protocol.
    */
   fun streamingShellToFile(
     deviceId: TrailblazeDeviceId,
     command: String,
     outputFile: File,
-  ): AutoCloseable {
+    append: Boolean = false,
+  ): ShellStreamToFile {
     Console.log("adb shell (streaming -> ${outputFile.name}) ${redactSecretsForLog(command)}")
     val stream = withDadb(deviceId) { it.openShell(command) }
     // Open the file *after* the stream and close the stream if we can't open the file —
     // otherwise an open shell stream leaks any time the file system rejects us
     // (permission denied, parent dir gone, full disk).
     val out: OutputStream = try {
-      FileOutputStream(outputFile)
+      FileOutputStream(outputFile, append)
     } catch (e: Exception) {
       runCatching { stream.close() }
       throw e
     }
+    // Set as the read loop ends, before the reader logs and flushes, so [ShellStreamToFile.isRunning]
+    // reads false for a stream that can read no more even while its thread is still finishing.
+    val ended = AtomicBoolean(false)
     val readerThread = thread(name = "dadb-shell-stream", isDaemon = true) {
       try {
         while (true) {
@@ -1080,6 +1166,7 @@ object AndroidHostAdbUtils {
           }
         }
       } catch (e: Exception) {
+        ended.set(true)
         // Most exits here are benign — the caller closed the stream or the device disconnected.
         // But if a parse error or unexpected packet sneaks in, log so debugging the symptom
         // (empty/short capture file) doesn't dead-end at "the reader thread vanished silently."
@@ -1088,11 +1175,12 @@ object AndroidHostAdbUtils {
             "${e.javaClass.simpleName}: ${e.message}",
         )
       } finally {
+        ended.set(true)
         runCatching { out.flush() }
         runCatching { out.close() }
       }
     }
-    return AutoCloseable {
+    return ShellStreamToFile(readerThread, ended) {
       runCatching { stream.close() }
       readerThread.interrupt()
       // Give the reader's `finally` block a brief window to flush and close the file before we
@@ -1103,6 +1191,22 @@ object AndroidHostAdbUtils {
         Thread.currentThread().interrupt()
       }
     }
+  }
+
+  /** A [streamingShellToFile] stream. [close] stops it and waits for the file to be flushed. */
+  class ShellStreamToFile internal constructor(
+    private val readerThread: Thread,
+    private val ended: AtomicBoolean,
+    private val onClose: () -> Unit,
+  ) : AutoCloseable {
+    /**
+     * False once the stream ended on its own: the command exited, or its transport closed, as when
+     * a recovered adb timeout replaces the device's connection.
+     */
+    val isRunning: Boolean
+      get() = !ended.get() && readerThread.isAlive
+
+    override fun close() = onClose()
   }
 
   /**
@@ -1438,6 +1542,15 @@ object AndroidHostAdbUtils {
    */
   fun listInstalledPackages(deviceId: TrailblazeDeviceId): List<String> =
     parsePmListPackages(execAdbShellCommand(deviceId, PM_LIST_PACKAGES_ARGV))
+
+  /**
+   * [listInstalledPackages] on a short-lived connection of its own, or null when the device did not
+   * answer within [timeoutMs]. For a probe that runs while instrumentation connects: a transport
+   * failure or timeout costs this answer only, never the shared client the trail runs over.
+   */
+  fun listInstalledPackagesOnOwnConnection(deviceId: TrailblazeDeviceId, timeoutMs: Long): List<String>? =
+    execAdbShellCommandOnOwnConnection(deviceId, PM_LIST_PACKAGES_ARGV, timeoutMs, quiet = true)
+      ?.let(::parsePmListPackages)
 
   /**
    * The device's Android API level via `getprop ro.build.version.sdk`, or null when it can't be read

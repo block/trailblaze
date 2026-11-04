@@ -123,16 +123,17 @@ class TrailblazeDriverTypeTest {
   }
 
   /**
-   * Only the accessibility driver defaults `scrollUntilTextIsVisible` to centering its target,
-   * because only its swipes have been measured to travel materially less (no fling through
-   * `dispatchGesture`). Adding a driver here changes where every un-parameterized scroll on it
-   * comes to rest — and therefore whether the steps recorded after that scroll still find their
-   * target — so the set is pinned rather than derived from a broader trait like "runs on device".
+   * The accessibility driver defaults `scrollUntilTextIsVisible` to centering its target, because
+   * its swipes travel materially less (no fling through `dispatchGesture`). The in-process driver
+   * matches it, because it replays recordings made there and its own scroll stops at first
+   * visibility. Adding a driver here changes where every un-parameterized scroll on it comes to
+   * rest — and therefore whether the steps recorded after that scroll still find their target — so
+   * the set is pinned rather than derived from a broader trait like "runs on device".
    */
   @Test
   fun `scroll-centering default membership is pinned`() {
     assertEquals(
-      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, TrailblazeDriverType.ANDROID_TEST),
       TrailblazeDriverType.entries.filter { it.centersScrollTargetByDefault }.toSet(),
     )
   }

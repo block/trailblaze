@@ -144,6 +144,11 @@ internal data class QuickJsDeviceContext(
   @OptIn(ExperimentalSerializationApi::class)
   @EncodeDefault(EncodeDefault.Mode.NEVER)
   val trailblazePort: Int? = null,
+  /**
+   * `TrailblazeDeviceInfo.classifiers` (e.g. `["android", "phone"]`) — the same list a finished
+   * session's log records, so a survey run mid-trail can branch on device type.
+   */
+  val classifiers: List<String> = emptyList(),
 )
 
 /**

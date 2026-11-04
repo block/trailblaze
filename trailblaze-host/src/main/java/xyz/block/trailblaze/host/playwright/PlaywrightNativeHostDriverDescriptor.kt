@@ -231,7 +231,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
             if (!keepBrowserAlive) {
               playwrightTest.close()
-              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+              deviceManager.releaseDeviceAfterRun(trailblazeDeviceId)
             }
           }
         }

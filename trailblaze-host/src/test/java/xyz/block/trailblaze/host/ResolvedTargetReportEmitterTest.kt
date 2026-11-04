@@ -655,7 +655,7 @@ class ResolvedTargetReportEmitterTest {
       "tap", "tapOnPoint", "swipe", "launchApp", "inputText", "hideKeyboard",
       "android_adbShell", "android_sendBroadcast", "mobile_listInstalledApps",
       "mobile_pasteClipboard", "mobile_setClipboard", "scrollUntilTextIsVisible",
-      "mobile_networkConnection", "networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
+      "mobile_networkConnection", "pressKey", "openUrl", "takeSnapshot", "wait",
     )
     for (leaked in mustNotLeak) {
       assertFalse(

@@ -368,9 +368,10 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
 
           val objectiveComplete = logs[completeIndex] as ObjectiveCompleteLog
 
-          // A trailhead's `teardown` runs after the trail, outside it: its calls are
-          // never written into the trail, the same way trailhead calls never become prompt steps.
-          if (promptStep is DirectionStep && promptStep.isTeardown) {
+          // A trailhead's `teardown` runs after the trail, and a run's setup before it, outside it:
+          // their calls are never written into the trail, the same way trailhead calls never
+          // become prompt steps.
+          if (promptStep is DirectionStep && (promptStep.isTeardown || promptStep.isSetup)) {
             currentLogIndex = completeIndex
             continue
           }

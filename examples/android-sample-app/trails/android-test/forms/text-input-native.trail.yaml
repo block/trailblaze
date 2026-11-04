@@ -1,0 +1,94 @@
+config:
+  id: sample-app/forms/text-input-native
+  target: sampleapp
+  devices:
+    android-phone:
+      driver: ANDROID_TEST
+
+trailhead:
+  step: "Launch the sample app"
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Navigate to the \"Forms\" tab"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The app's main navigation is visible. The Forms tab is present as ref s726, while Taps is currently selected. I have completed locating the Forms tab; next I will tap it and then verify the Forms screen is shown.
+            nodeSelector:
+              compose:
+                contentDescriptionRegex: Forms
+        - assertVisibleBySelector:
+            reason: The Forms tab was tapped successfully and the current screen shows the Forms content with Name, Email, Submit, and Clear All controls. The Forms tab remains selected. No further navigation is needed; I am verifying the selected Forms tab.
+            nodeSelector:
+              compose:
+                contentDescriptionRegex: Forms
+
+  - step: "Tap the \"Name\" field and type \"Jane Doe\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The screen shows the top green-outlined text field labeled by ref w96, which is the Name field. No steps have been completed yet. I will tap the Name field first, then type the requested name into the focused field.
+            nodeSelector:
+              compose:
+                textRegex: Name
+        - inputText:
+            text: Jane Doe
+            reasoning: The Name field w96 is currently focused, as confirmed by the prior screen state. The field has been tapped successfully; the only remaining step is to enter the exact requested text Jane Doe.
+            selector:
+              compose:
+                textRegex: Name
+
+  - step: "Tap the \"Email\" field and type \"jane@example.com\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: 'The detailed hierarchy identifies the Email field as ref p820. Completed: located the Email field. Next: tap it to focus, then enter jane@example.com.'
+            nodeSelector:
+              compose:
+                textRegex: Email
+        - inputText:
+            text: jane@example.com
+            reasoning: 'The Email field p820 is focused, as confirmed in the latest screen state. Completed: identified and focused Email. Next: type the exact requested address into the focused field.'
+            selector:
+              compose:
+                textRegex: Email
+        - assertVisibleBySelector:
+            reason: 'The Email field is visibly populated with the exact requested value jane@example.com and remains focused. Completed: tapped Email and entered the address. Next: verify the rendered field value, which is the final objective.'
+            nodeSelector:
+              compose:
+                testTag: field_email
+                editableTextRegex: \Qjane@example.com\E
+
+  - step: "Tap the \"Submit\" button"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The detailed hierarchy shows the Submit button as [s228]. No steps have been completed yet. The next step is to tap Submit, then inspect the resulting screen to verify submission.
+            nodeSelector:
+              compose:
+                textRegex: Submit
+
+  - step: "Verify \"Jane Doe\" and \"jane@example.com\" appear in the submission result"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: The form fields already contain the requested values, and the submission result is visible with both values. No interaction is needed; I am verifying the exact result text now.
+            nodeSelector:
+              compose:
+                testTag: tv_submission_result
+                textRegex: "\\QName: Jane Doe\nEmail: jane@example.com\\E"
+
+  - step: "Tap \"Clear All\" and verify \"Jane Doe\" is no longer visible"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: 'The hierarchy shows the Clear All button at [b651], and Jane Doe is currently visible in the Name field and submission result. Completed: located the target control and confirmed the pre-action state. Next: tap Clear All, wait for the UI to settle, then assert that Jane Doe is no longer visible.'
+            nodeSelector:
+              compose:
+                textRegex: Clear All
+        - assertNotVisibleWithText:
+            text: Jane Doe

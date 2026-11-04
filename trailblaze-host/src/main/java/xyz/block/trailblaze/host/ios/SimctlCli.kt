@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.ios
 
 import java.io.IOException
+import java.io.InputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -9,12 +10,20 @@ import java.nio.file.Paths
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.io.path.CopyActionResult
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteRecursively
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.SimctlCommand
 
 /**
@@ -89,6 +98,84 @@ object SimctlCli {
     run(SimctlCommand.argv("spawn", udid) + command, timeoutSeconds)
 
   /**
+   * Shuts the simulator down, boots it again and returns once it has finished booting, running
+   * [afterBoot] once it has. An interrupt leaves the boot and [afterBoot] to a background thread, so
+   * a cancelled run never leaves the device shut down.
+   */
+  fun reboot(udid: String, timeoutSeconds: Long = 120, afterBoot: () -> Unit = {}): Result =
+    try {
+      val shutdown = run(SimctlCommand.argv("shutdown", udid), timeoutSeconds)
+      bootAfterShutdown(udid, shutdown, timeoutSeconds).also { if (it.success) afterBoot() }
+    } catch (e: InterruptedException) {
+      thread(isDaemon = true, name = "simctl-reboot-$udid") {
+        runCatching { if (bootAfterShutdown(udid, shutdown = null, timeoutSeconds).success) afterBoot() }
+      }
+      throw e
+    }
+
+  /**
+   * Boots [udid] once its shutdown has finished. The device's state decides, not [shutdown]'s exit:
+   * a shutdown that timed out may still be under way. A device still booted after a failed
+   * [shutdown] was never shut down, so that failure is returned. A null [shutdown] (interrupted)
+   * leaves a booted device alone. A failed boot is tried again while the device stays shut down.
+   */
+  internal fun bootAfterShutdown(
+    udid: String,
+    shutdown: Result?,
+    timeoutSeconds: Long,
+    state: () -> String? = { deviceState(udid) },
+    boot: () -> Result = { run(SimctlCommand.argv("bootstatus", udid, "-b"), timeoutSeconds) },
+    nanoTime: () -> Long = System::nanoTime,
+    sleep: (Long) -> Unit = Thread::sleep,
+  ): Result {
+    val deadline = nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+    var failedBoot: Result? = null
+    while (true) {
+      val current = state()
+      when (current) {
+        "Shutdown" -> boot().let { if (it.success) return it else failedBoot = it }
+        "Booted" -> return when {
+          failedBoot != null -> boot()
+          shutdown == null -> Result(0, "", "")
+          shutdown.success -> boot()
+          else -> shutdown
+        }
+      }
+      if (nanoTime() >= deadline) {
+        return failedBoot
+          ?: Result(-1, "", "simulator $udid still `${current ?: "missing"}` after ${timeoutSeconds}s of rebooting")
+      }
+      sleep(REBOOT_POLL_INTERVAL_MS)
+    }
+  }
+
+  /** The state `simctl list devices` shows for [udid] (`Booted`, `Shutdown`, `Shutting Down`, ...), or null. */
+  fun deviceState(udid: String): String? = parseDeviceState(run(SimctlCommand.argv("list", "devices"), 15).stdout, udid)
+
+  internal fun parseDeviceState(listing: String, udid: String): String? =
+    Regex("\\(${Regex.escape(udid)}\\) \\(([^)]+)\\)").find(listing)?.groupValues?.get(1)
+
+  private const val REBOOT_POLL_INTERVAL_MS = 500L
+
+  /** The device type `simctl` reports for [udid], such as `com.apple.CoreSimulator.SimDeviceType.iPad-A16`, or null. */
+  fun deviceTypeIdentifier(udid: String): String? {
+    val listing = run(SimctlCommand.argv("list", "devices", "-j"), 15)
+    return listing.stdout.takeIf { listing.success }?.let { parseDeviceTypeIdentifier(it, udid) }
+  }
+
+  internal fun parseDeviceTypeIdentifier(listingJson: String, udid: String): String? = runCatching {
+    Json.parseToJsonElement(listingJson).jsonObject["devices"]?.jsonObject?.values
+      ?.flatMap { it.jsonArray }
+      ?.map { it.jsonObject }
+      ?.firstOrNull { it["udid"]?.jsonPrimitive?.contentOrNull == udid }
+      ?.get("deviceTypeIdentifier")?.jsonPrimitive?.contentOrNull
+  }.getOrNull()
+
+  /** Sets the simulated GPS location, `<latitude>,<longitude>`. It lasts until the device shuts down. */
+  fun setLocation(udid: String, latitudeLongitude: String, timeoutSeconds: Long = 15): Result =
+    run(SimctlCommand.argv("location", udid, "set", latitudeLongitude), timeoutSeconds)
+
+  /**
    * Resets the simulator's keychain — the whole device keychain, same as Maestro's
    * `clearKeychain` on simulators. iOS keychain entries survive app uninstall/reinstall, so
    * [clearAppState] alone can leave an app "signed in" after a wipe; this is the missing half.
@@ -138,6 +225,7 @@ object SimctlCli {
       // launch the next trail against dirty state, which is the exact bug clearState closes.
       return Result(-1, "", "failed to delete: ${undeleted.joinToString(", ")}")
     }
+    IosHostSimctlUtils.recreateStockAppDataDirectories(dataPath)
     // Uninstall implicitly drops the app's TCC privacy grants (location, camera, ...), so flows
     // that expect a fresh permission prompt would silently keep a prior trail's grant under an
     // in-place wipe. Reset them explicitly to keep [clearAppState]'s fresh-install semantics.
@@ -323,13 +411,31 @@ object SimctlCli {
 
   private fun run(args: List<String>, timeoutSeconds: Long): Result {
     val proc = ProcessBuilder(args).redirectErrorStream(false).start()
+    // Read while it runs: output larger than the pipe buffer (`list devices -j` on a busy Mac)
+    // would otherwise block the child until the timeout.
+    val stdout = drain(proc.inputStream)
+    val stderr = drain(proc.errorStream)
     val finished = waitForOrKill(proc, timeoutSeconds)
     if (!finished) {
       proc.destroyForcibly()
       return Result(-1, "", "simctl timed out after ${timeoutSeconds}s")
     }
-    val stdout = proc.inputStream.bufferedReader().readText()
-    val stderr = proc.errorStream.bufferedReader().readText()
-    return Result(proc.exitValue(), stdout, stderr)
+    // Output that could not be read fails the command: callers use stdout as a path to delete.
+    val output = try {
+      stdout.get(OUTPUT_DRAIN_SECONDS, TimeUnit.SECONDS) to stderr.get(OUTPUT_DRAIN_SECONDS, TimeUnit.SECONDS)
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw e
+    } catch (e: Exception) {
+      return Result(-1, "", "simctl exited but its output could not be read: $e")
+    }
+    return Result(proc.exitValue(), output.first, output.second)
   }
+
+  private fun drain(stream: InputStream): FutureTask<String> =
+    FutureTask { stream.bufferedReader().use { it.readText() } }
+      .also { thread(isDaemon = true, name = "simctl-output") { it.run() } }
+
+  /** How long a child that left the pipe open (a process it started) may hold up the result. */
+  private const val OUTPUT_DRAIN_SECONDS = 5L
 }

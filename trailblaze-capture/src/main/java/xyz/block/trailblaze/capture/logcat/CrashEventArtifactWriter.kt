@@ -1,15 +1,12 @@
 package xyz.block.trailblaze.capture.logcat
 
 import java.io.File
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.events.FileEventSink
-import xyz.block.trailblaze.events.SessionEvent
+import xyz.block.trailblaze.events.SessionCaptureHealth
 import xyz.block.trailblaze.events.SessionEvents
 import xyz.block.trailblaze.util.Console
 
@@ -24,7 +21,10 @@ object CrashEventArtifactWriter {
   private const val MAX_EVENTS = 100
   private const val MAX_SUMMARY_CHARS = 500
 
-  // A crash fails its run, so the runtimes' own banners match exactly: the app's log lines that
+  /** Enough of an Android crash's record for its exception line and first frames. */
+  private const val MAX_DETAIL_LINES = 8
+
+  // Only the runtimes' own banners count as a crash: the app's log lines that
   // merely mention one ("reported a non-fatal exception") must not.
   private val signatures = mapOf(
     TrailblazeDevicePlatform.ANDROID to listOf(
@@ -46,21 +46,30 @@ object CrashEventArtifactWriter {
 
   /**
    * Indexes [deviceLog]'s crashes into the session's crash stream. With [appProcessName], a crash
-   * counts only when that process logged it, so another process crashing beside the app does not
-   * fail the run. A crash with no process to attribute it to still counts.
+   * counts only when that process logged it, so another process crashing beside the app is not
+   * recorded as the app's. A crash with no process to attribute it to still counts. On Android, with
+   * or without [appProcessName], a crash in a shell-launched tool (see [androidShellToolOf]) never
+   * counts: such as Trailblaze's own screen recorder failing to start its encoder.
    *
    * iOS: a continuation line belongs to the record above it. Android: the process is named by a
    * later record — `AndroidRuntime`'s `Process: <name>, PID: <pid>` or the tombstone's
    * `pid: <pid>, … >>> <name> <<<` — so a match is held until one arrives or the log ends. The
-   * app's `<name>:<suffix>` processes are the app's.
+   * app's `<name>:<suffix>` processes are the app's. An Android crash also keeps, as its `detail`,
+   * the next few records its process logs under the same tag: the summary is only the banner
+   * (`FATAL EXCEPTION: main`), and the exception that names the crash follows it.
+   *
+   * A crash in the first [bytesBeforeSessionStart] bytes was logged before the session took the
+   * device over (while it connected), so it is left out of the index and stays only in the log.
    */
   internal fun write(
     sessionDir: File,
     deviceLog: File,
     platform: TrailblazeDevicePlatform,
     appProcessName: String? = null,
+    bytesBeforeSessionStart: Long = 0,
   ) {
-    val events = detect(deviceLog, platform, appProcessName)
+    val linesBeforeSession = completeLinesIn(deviceLog, bytesBeforeSessionStart)
+    val events = detect(sessionDir, deviceLog, platform, appProcessName, linesBeforeSession)
     if (events.isEmpty()) return
 
     runCatching {
@@ -71,7 +80,10 @@ object CrashEventArtifactWriter {
           sink.closeChecked()
         }
       }
-      .onFailure { Console.log("[crash-events] could not write ${deviceLog.name}: ${it.message}") }
+      .onFailure {
+        Console.log("[crash-events] could not write ${deviceLog.name}: ${it.message}")
+        SessionCaptureHealth.markIncomplete(sessionDir, "crash-event-capture: could not write the crash index", STREAM_NAME)
+      }
       .onSuccess {
         Console.log(
           "[crash-events] captured ${events.size} event(s) from ${deviceLog.name} into " +
@@ -81,9 +93,11 @@ object CrashEventArtifactWriter {
   }
 
   private fun detect(
+    sessionDir: File,
     deviceLog: File,
     platform: TrailblazeDevicePlatform,
     appProcessName: String?,
+    linesBeforeSession: Int,
   ): List<CrashEvent> {
     if (!deviceLog.isFile || deviceLog.length() == 0L) return emptyList()
 
@@ -91,10 +105,18 @@ object CrashEventArtifactWriter {
     val otherProcesses = mutableMapOf<String, Int>()
     // Android crashes waiting for the record that names their process, by pid.
     val unattributed = LinkedHashMap<String, MutableList<CrashEvent>>()
+    // Each Android pid's latest crash, still taking its detail lines, with the tag they come under.
+    val takingDetail = HashMap<String, Pair<String, CrashEvent>>()
+    // Android pids running a shell-launched tool, by the tool's main class, until the pid is reused.
+    val shellTools = HashMap<String, String>()
+    // Crashes in those pids, by pid with their tool: the tool's unless a later record names the pid.
+    val heldForTools = LinkedHashMap<String, MutableList<Pair<String, CrashEvent>>>()
+    val shellToolCrashes = mutableMapOf<String, Int>()
     var lastTimestampMs: Long? = null
     // The process column of the record the current line belongs to; its continuation lines inherit it.
     var recordColumn: String? = null
     var lineNumber = 0
+    var beforeSession = 0
 
     fun countOther(process: String) {
       otherProcesses[process] = (otherProcesses[process] ?: 0) + 1
@@ -122,14 +144,42 @@ object CrashEventArtifactWriter {
             if (platform == TrailblazeDevicePlatform.IOS && IOS_RECORD_START.containsMatchIn(line)) {
               recordColumn = iosProcessColumnOf(line)
             }
-            val record = if (platform == TrailblazeDevicePlatform.ANDROID && appProcessName != null) androidRecordOf(line) else null
+            val androidRecord = if (platform == TrailblazeDevicePlatform.ANDROID) androidRecordOf(line) else null
+            if (androidRecord != null) {
+              androidShellToolOf(androidRecord)?.let { shellTools[androidRecord.pid] = it }
+              androidProcessStartOf(androidRecord)?.let { shellTools.remove(it) }
+              // A tool's own crash names no process, so a name means the pid is an app's, reused.
+              androidAttributionOf(androidRecord)
+                ?.takeUnless { (_, process) -> androidProcessIsShellTool(process) }
+                ?.let { (pid, process) ->
+                  shellTools.remove(pid)
+                  heldForTools.remove(pid)?.forEach { (_, event) -> settle(event, process) }
+                }
+              if (events.size >= MAX_EVENTS) break
+            }
+            val record = androidRecord?.takeIf { appProcessName != null }
             val attribution = record?.let(::androidAttributionOf)
             if (attribution != null) {
               val (pid, process) = attribution
               unattributed.remove(pid)?.forEach { settle(it, process) }
               if (events.size >= MAX_EVENTS) break
             }
-            val (kind, match) = signatureFor(line, platform) ?: continue
+            val signature = signatureFor(line, platform)
+            if (signature == null) {
+              androidRecord?.let { next ->
+                val (tag, crash) = takingDetail[next.pid] ?: return@let
+                if (next.tag == tag && crash.detail.size < MAX_DETAIL_LINES) {
+                  crash.detail += next.message.trim().take(MAX_SUMMARY_CHARS)
+                }
+              }
+              continue
+            }
+            // Skipped here, not after, so they never use up the session's [MAX_EVENTS].
+            if (lineNumber <= linesBeforeSession) {
+              beforeSession++
+              continue
+            }
+            val (kind, match) = signature
             if (platform == TrailblazeDevicePlatform.IOS && appProcessName != null) {
               val column = recordColumn
               if (column != null && !iosColumnNames(column = column, process = appProcessName)) {
@@ -144,7 +194,12 @@ object CrashEventArtifactWriter {
               summary = line.substring(match.range.first).trim().take(MAX_SUMMARY_CHARS),
               sourceLine = lineNumber,
             )
-            if (record == null) {
+            androidRecord?.let { takingDetail[it.pid] = it.tag to event }
+            // Known, not a doubt, so it holds with no app name to compare against too.
+            val shellTool = androidRecord?.let { shellTools[it.pid] }
+            if (shellTool != null) {
+              heldForTools.getOrPut(androidRecord.pid) { mutableListOf() } += shellTool to event
+            } else if (record == null) {
               events += event
             } else {
               unattributed.getOrPut(record.pid) { mutableListOf() } += event
@@ -153,9 +208,25 @@ object CrashEventArtifactWriter {
           }
         }
       }
-      .onFailure { Console.log("[crash-events] could not read ${deviceLog.absolutePath}: ${it.message}") }
+      .onFailure {
+        Console.log("[crash-events] could not read ${deviceLog.absolutePath}: ${it.message}")
+        // Crashes past the failed read went unscanned, so the index can't prove they were expected.
+        SessionCaptureHealth.markIncomplete(sessionDir, "crash-event-capture: could not read ${deviceLog.name}", STREAM_NAME)
+      }
     // Never named: a doubt keeps the crash.
     unattributed.values.flatten().forEach { settle(it, null) }
+    heldForTools.values.flatten().forEach { (tool, _) -> shellToolCrashes[tool] = (shellToolCrashes[tool] ?: 0) + 1 }
+    if (beforeSession > 0) {
+      Console.log(
+        "[crash-events] not counting $beforeSession crash line(s) in ${deviceLog.name} logged before the session started",
+      )
+    }
+    if (shellToolCrashes.isNotEmpty()) {
+      Console.log(
+        "[crash-events] not counting crash line(s) from shell-launched tools: " +
+          shellToolCrashes.entries.joinToString { (tool, count) -> "$tool ($count)" },
+      )
+    }
     if (otherProcesses.isNotEmpty()) {
       Console.log(
         "[crash-events] not counting crash line(s) from processes other than '$appProcessName': " +
@@ -163,6 +234,28 @@ object CrashEventArtifactWriter {
       )
     }
     return events.sortedBy { it.sourceLine }.take(MAX_EVENTS)
+  }
+
+  /**
+   * The lines [file]'s first [bytes] bytes end; a line cut by the boundary is not one of them, so
+   * it counts as the session's.
+   */
+  private fun completeLinesIn(file: File, bytes: Long): Int {
+    if (bytes <= 0) return 0
+    var lines = 0
+    var remaining = bytes
+    runCatching {
+      file.inputStream().buffered().use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (remaining > 0) {
+          val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+          if (read < 0) break
+          for (i in 0 until read) if (buffer[i] == '\n'.code.toByte()) lines++
+          remaining -= read
+        }
+      }
+    }.onFailure { Console.log("[crash-events] could not read ${file.name} up to the session start: ${it.message}") }
+    return lines
   }
 
   /** A `logcat -v epoch` record. */
@@ -186,6 +279,23 @@ object CrashEventArtifactWriter {
     return null
   }
 
+  /**
+   * The main class of the shell-launched Java tool [record] starts, or null. `app_process` logs
+   * `Calling main entry <class>` when the shell starts a tool such as `am`, `uiautomator` or a
+   * screen recorder's server; an app is forked from zygote and never logs it, so that pid is never
+   * the app's.
+   */
+  internal fun androidShellToolOf(record: AndroidRecord): String? =
+    if (record.tag == "AndroidRuntime") ANDROID_SHELL_TOOL_MAIN.find(record.message)?.groupValues?.get(1) else null
+
+  /** The pid ActivityManager's `Start proc <pid>:<name>/…` [record] starts an app in, or null. */
+  internal fun androidProcessStartOf(record: AndroidRecord): String? =
+    if (record.tag == "ActivityManager") ANDROID_PROCESS_START.find(record.message)?.groupValues?.get(1) else null
+
+  /** A tombstone names a shell-launched tool by its binary, `app_process` or `app_process64`. */
+  private fun androidProcessIsShellTool(process: String): Boolean =
+    ANDROID_APP_PROCESS_BINARY.matches(process.substringAfterLast('/'))
+
   /** The app's processes are its package and `package:<suffix>`. */
   internal fun androidProcessIsApp(process: String, appProcessName: String): Boolean =
     process == appProcessName || process.startsWith("$appProcessName:")
@@ -193,6 +303,9 @@ object CrashEventArtifactWriter {
   /** `1772846522.234  5432  5432 E AndroidRuntime: FATAL EXCEPTION: main` → pid, tag, message. */
   private val ANDROID_RECORD = Regex("^\\s*\\d{10}\\.\\d{3}\\s+(\\d+)\\s+\\d+\\s+[VDIWEFS]\\s+(.*?):\\s(.*)$")
   private val ANDROID_RUNTIME_PROCESS = Regex("^Process: (\\S+), PID: (\\d+)")
+  private val ANDROID_SHELL_TOOL_MAIN = Regex("^Calling main entry (\\S+)")
+  private val ANDROID_PROCESS_START = Regex("^Start proc (\\d+):")
+  private val ANDROID_APP_PROCESS_BINARY = Regex("app_process(32|64)?")
   private val ANDROID_TOMBSTONE_PROCESS = Regex("^pid: (\\d+), tid: \\d+, name: .*>>> (\\S+) <<<")
 
   /**
@@ -224,50 +337,6 @@ object CrashEventArtifactWriter {
   /** A `log stream` record starts with its date; any other line continues the record above it. */
   private val IOS_RECORD_START = Regex("^\\d{4}-\\d{2}-\\d{2}\\s")
 
-  /**
-   * The failure for a run whose session recorded a crash, naming the first one; null when the
-   * session recorded none. Reads the index [write] left, so it is only complete once capture stopped.
-   */
-  fun failure(sessionDir: File): CrashFailure? {
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/${SessionEvents.fileName(STREAM_NAME)}")
-    val lines = runCatching { file.takeIf { it.isFile }?.readLines() }.getOrNull()
-      ?.filter { it.isNotBlank() }
-      .orEmpty()
-    if (lines.isEmpty()) return null
-    val first = runCatching { Json.decodeFromString(SessionEvent.serializer(), lines.first()).data.jsonObject }
-      .getOrNull()
-    val summary = first?.get("summary")?.jsonPrimitive?.contentOrNull ?: "unreadable crash event"
-    val details = buildList {
-      first?.get("source")?.jsonObject?.let { source ->
-        add("${source["path"]?.jsonPrimitive?.contentOrNull} line ${source["line"]?.jsonPrimitive?.contentOrNull}")
-      }
-      if (lines.size > 1) add("${lines.size} crash events in total")
-    }
-    return CrashFailure(
-      message = "App crashed: $summary" + if (details.isEmpty()) "" else " (${details.joinToString(", ")})",
-      payload = JsonObject(
-        buildMap {
-          put("code", JsonPrimitive(FAILURE_CODE))
-          put("crashCount", JsonPrimitive(lines.size))
-          first?.let { put("firstCrash", it) }
-        },
-      ),
-    )
-  }
-
-  /**
-   * A run failed by its app crashing: [message] for the run's error, [payload] for the session's
-   * `failurePayload` (`code` [FAILURE_CODE], `crashCount`, and `firstCrash`, the first record of
-   * the crash stream). The session's `failureKind` is [FAILURE_KIND].
-   */
-  data class CrashFailure(val message: String, val payload: JsonObject)
-
-  /** `SessionStatus.Ended.Failed.failureKind` of a run failed by its app crashing. */
-  const val FAILURE_KIND: String = "APP_CRASHED"
-
-  /** The failure payload's `code`, which reports surface as `failure_code`. */
-  const val FAILURE_CODE: String = "app_crashed"
-
   /** The crash signature [line] carries on [platform], as its kind and match, or null for an ordinary line. */
   internal fun signatureFor(line: String, platform: TrailblazeDevicePlatform): Pair<String, MatchResult>? =
     signatures[platform]?.firstNotNullOfOrNull { signature ->
@@ -281,19 +350,25 @@ object CrashEventArtifactWriter {
     val kind: String,
     val summary: String,
     val sourceLine: Int,
+    /** The records that followed the crash line from its process, under its tag (Android only). */
+    val detail: MutableList<String> = mutableListOf(),
   ) {
     fun payload(platform: TrailblazeDevicePlatform, sourcePath: String): JsonObject = JsonObject(
-      mapOf(
-        "kind" to JsonPrimitive(kind),
-        "platform" to JsonPrimitive(platform.name.lowercase()),
-        "summary" to JsonPrimitive(summary),
-        "source" to JsonObject(
-          mapOf(
-            "path" to JsonPrimitive(sourcePath),
-            "line" to JsonPrimitive(sourceLine),
+      buildMap {
+        put("kind", JsonPrimitive(kind))
+        put("platform", JsonPrimitive(platform.name.lowercase()))
+        put("summary", JsonPrimitive(summary))
+        if (detail.isNotEmpty()) put("detail", JsonArray(detail.map(::JsonPrimitive)))
+        put(
+          "source",
+          JsonObject(
+            mapOf(
+              "path" to JsonPrimitive(sourcePath),
+              "line" to JsonPrimitive(sourceLine),
+            ),
           ),
-        ),
-      ),
+        )
+      },
     )
   }
 }

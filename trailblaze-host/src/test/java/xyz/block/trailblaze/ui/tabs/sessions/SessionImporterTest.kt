@@ -264,6 +264,60 @@ class SessionImporterTest {
     }
   }
 
+  @Test
+  fun `importSessionFromZip cannot write into another session or bring report event files`() {
+    val tempDir = createTempDir("import-test")
+    try {
+      val logsDir = File(tempDir, "logs-output").also { it.mkdirs() }
+      val victimLog = File(logsDir, "victim/log.json").also {
+        it.parentFile.mkdirs()
+        it.writeText("original")
+      }
+      val zipFile = createTestZip(
+        tempDir,
+        mapOf(
+          "fresh/0001.json" to """{"type":"session"}""",
+          "fresh/../victim/log.json" to "replaced",
+          "fresh/../victim/report-events-0123456789abcdef.js" to "alert(1)",
+          "fresh/report-events-0123456789abcdef.js" to "alert(1)",
+        )
+      )
+
+      val result = SessionImporter.importSessionFromZip(zipFile, LogsRepo(logsDir))
+
+      assertIs<SessionImportResult.Success>(result)
+      assertEquals(1, result.fileCount)
+      assertEquals("original", victimLog.readText())
+      assertEquals(listOf("log.json"), File(logsDir, "victim").list()!!.toList())
+      assertTrue(!File(logsDir, "fresh/report-events-0123456789abcdef.js").exists())
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `importSessionFromZip refuses a session folder that is a path, and writes nothing`() {
+    val tempDir = createTempDir("import-test")
+    try {
+      val logsDir = File(tempDir, "logs-output").also { it.mkdirs() }
+      val zipFile = createTestZip(
+        tempDir,
+        mapOf(
+          "safe/0001.json" to """{"type":"session"}""",
+          "..\\outside/payload.json" to "payload",
+        )
+      )
+
+      val result = SessionImporter.importSessionFromZip(zipFile, LogsRepo(logsDir))
+
+      assertIs<SessionImportResult.Error>(result)
+      assertEquals(emptyList<String>(), logsDir.list()!!.toList())
+      assertTrue(!File(tempDir, "outside").exists())
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
   // endregion
 
   // region helpers

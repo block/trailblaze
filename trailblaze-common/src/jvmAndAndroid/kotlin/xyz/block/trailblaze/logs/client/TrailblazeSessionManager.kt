@@ -170,6 +170,7 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
+    SessionStartRecords.observe(startLog)
     logEmitter.emit(startLog)
   }
 
@@ -208,6 +209,7 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
+    SessionStartRecords.observe(endLog)
     logEmitter.emit(endLog)
   }
 
@@ -238,6 +240,7 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
+    SessionStartRecords.observe(endLog)
     logEmitter.emit(endLog)
   }
 

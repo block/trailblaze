@@ -461,7 +461,7 @@ abstract class TrailblazeDesktopApp(
           completionLatch.countDown()
         }
       },
-        additionalInstrumentationArgs = desktopAppConfig.additionalInstrumentationArgs(),
+      additionalInstrumentationArgs = { runCanReachLlm -> desktopAppConfig.additionalInstrumentationArgs(runCanReachLlm) },
       onComplete = { result ->
         completionResult.set(result)
         when (result) {

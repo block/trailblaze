@@ -46,6 +46,7 @@ class DemoRunTest {
   fun markStartThreadsTheResolvedAppIdentityIntoDemoCapture() = runBlocking {
     val run = startDemo()
     var capturedAppIds: List<String>? = null
+    var capturedTargetId: String? = null
     AndroidNetworkCaptureRegistry.activator =
       object : AndroidNetworkCaptureActivator {
         override fun start(
@@ -55,8 +56,10 @@ class DemoRunTest {
           targetAppIds: List<String>?,
           deviceLabel: String?,
           requireTraffic: Boolean,
+          targetId: String?,
         ) {
           capturedAppIds = targetAppIds
+          capturedTargetId = targetId
         }
 
         override fun stop(sessionId: String) = Unit
@@ -70,6 +73,7 @@ class DemoRunTest {
       .getOrThrow()
 
     assertEquals(listOf("com.example.myapp"), capturedAppIds)
+    assertEquals("myapp", capturedTargetId)
     val demo = assertNotNull(assertNotNull(ExternalAgentSupervisor.runs[run.id]).demo)
     assertTrue(demo.captureStarted)
   }

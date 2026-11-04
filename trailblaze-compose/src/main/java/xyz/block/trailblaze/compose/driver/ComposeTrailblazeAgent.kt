@@ -155,7 +155,7 @@ class ComposeTrailblazeAgent(
   ): TrailblazeToolResult = runBlocking {
     // Memory-interpolation boundary for the in-process Compose driver — the tool executes with
     // resolved args; the log carries resolved + authored so recordings keep their tokens.
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     // Capture screen state BEFORE execution for the screenshot overlay.
     // Catch Throwable because ComposeUiTest throws AssertionError (not Exception) when
     // there are multiple root nodes (e.g., dialog overlays).
@@ -188,7 +188,7 @@ class ComposeTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
     // Same memory boundary as executeComposeToolBlocking, for generic host-JVM executables.
-    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory, context.trailblazeDeviceInfo)
     val timeBeforeExecution = Clock.System.now()
     val result = memoryResolvedTool.execute(context)
     // Compose tools run in-process on the host JVM (Compose Desktop / Compose Multiplatform

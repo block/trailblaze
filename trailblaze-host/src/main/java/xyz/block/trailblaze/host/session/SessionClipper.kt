@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import xyz.block.trailblaze.capture.CaptureMetadata
@@ -25,6 +26,8 @@ import xyz.block.trailblaze.logs.model.DeviceClockSync
 import xyz.block.trailblaze.logs.model.DeviceClockSyncFile
 import xyz.block.trailblaze.report.trace.SessionTraceFile
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -50,7 +53,9 @@ import java.time.ZoneId
  *   frame-to-clock scale as the original. A recording that can't be cut is left out.
  * - Metadata with no time in it (the device clock samples, scripted tool bundles) is copied whole.
  *   Files derived from the whole session (`recording.trail.yaml`, `visible-strings.ndjson`,
- *   `capture_debug.txt`, `session_result.json`) and anything else unknown are left out.
+ *   `capture_debug.txt`, `session_result.json`) and anything else unknown are left out, as are the
+ *   streams a survey derived (listed in `events/derived.json`): the next `report --surveys` derives
+ *   them again from what the clip kept, where a copy without that list would read as captured.
  */
 class SessionClipper(
   private val sliceVideo: (source: File, offsetMs: Long, durationMs: Long, output: File) -> Boolean =
@@ -59,10 +64,28 @@ class SessionClipper(
   private val paddingMs: Long = 1_000,
 ) {
 
+  /**
+   * The `events/` file names of the streams `events/derived.json` lists; none when it is absent.
+   * Throws when it is there but cannot be read: which streams were derived is then unknown, and a
+   * clip that copied them without it would pass them off as captured for good.
+   */
+  private fun derivedStreamFiles(sessionDir: File): Set<String> {
+    val manifest = File(sessionDir, "${SessionEvents.DIR_NAME}/$DERIVED_STREAMS_MANIFEST")
+    if (!Files.exists(manifest.toPath(), LinkOption.NOFOLLOW_LINKS)) return emptySet()
+    val streams = runCatching {
+      check(Files.isRegularFile(manifest.toPath(), LinkOption.NOFOLLOW_LINKS) && manifest.length() <= DERIVED_STREAMS_MANIFEST_MAX_BYTES)
+      val json = TrailblazeJsonInstance.parseToJsonElement(manifest.readText()).jsonObject
+      check((json["format"] as? JsonPrimitive)?.intOrNull == DERIVED_STREAMS_MANIFEST_FORMAT)
+      json["streams"] as JsonObject
+    }.getOrElse { throw IllegalStateException("$manifest cannot be read, so which event streams were derived is unknown; fix or delete it") }
+    return streams.keys.mapTo(HashSet()) { "$it.${SessionEvents.EXTENSION}" }
+  }
+
   /** Writes the part of [sessionDir] in [startMs]..[endMs] into [outDir], which must not exist yet. */
   fun clip(sessionDir: File, startMs: Long, endMs: Long, outDir: File) {
     require(endMs >= startMs) { "window ends before it starts: $startMs..$endMs" }
     require(!outDir.exists()) { "$outDir already exists" }
+    val derived = derivedStreamFiles(sessionDir)
     outDir.mkdirs()
     val clocks = Clocks(DeviceClockSyncFile.read(sessionDir), null)
     val logs = readLogs(sessionDir)
@@ -75,14 +98,22 @@ class SessionClipper(
     val from = startMs - paddingMs
     val to = endMs + paddingMs
     val blobs = mutableSetOf<String>()
+    // Per stream, so a stream dropped below takes the attachments only it referenced with it.
+    val streamBlobs = mutableMapOf<String, MutableSet<String>>()
     sessionFiles(sessionDir, File(sessionDir, SessionEvents.DIR_NAME)).forEach { file ->
       val stream = SessionEvents.parseFileName(file.name) ?: return@forEach
+      if (file.name in derived) return@forEach
       // A crash is an incident, not state: carried to the window's start it would read as one in the pass.
       val carryLast = stream != CrashEventArtifactWriter.STREAM_NAME
-      filterNdjson(file, File(outDir, "${SessionEvents.DIR_NAME}/${file.name}"), from, to, blobs, carryLast) { deviceMs ->
+      val referenced = streamBlobs.getOrPut(file.name) { mutableSetOf() }
+      filterNdjson(file, File(outDir, "${SessionEvents.DIR_NAME}/${file.name}"), from, to, referenced, carryLast) { deviceMs ->
         logClocks.toHost(deviceMs, stream)
       }
     }
+    // A writer lists a stream before its file appears, so one written while this copied is listed by now.
+    val lateDerived = derivedStreamFiles(sessionDir) - derived
+    lateDerived.forEach { File(outDir, "${SessionEvents.DIR_NAME}/$it").delete() }
+    streamBlobs.forEach { (name, referenced) -> if (name !in lateDerived) blobs += referenced }
     val metadata = captureMetadata(sessionDir)
     // A file's device is the one its metadata names: a name bound twice takes a `-2` filename.
     val owners = (metadata?.get("artifacts") as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
@@ -489,6 +520,10 @@ class SessionClipper(
     val VIDEO_TYPES = setOf("VIDEO", "VIDEO_WEBM")
     val WHOLE_FILES = setOf(DeviceClockSync.FILE_NAME, ".imported", ".trailrunner-trail-id")
     val WHOLE_DIRS = setOf("in-process-scripted-tools", "inline-script-tools")
+    /** Lists the streams a survey derived, written by the TypeScript SDK's `stream-write.ts`. */
+    const val DERIVED_STREAMS_MANIFEST = "derived.json"
+    const val DERIVED_STREAMS_MANIFEST_MAX_BYTES = 1024L * 1024
+    const val DERIVED_STREAMS_MANIFEST_FORMAT = 1
     val DERIVED_FILES = setOf("visible-strings.ndjson", "recording.trail.yaml", "capture_debug.txt", "session_result.json")
     val DEVICE_LOG_NAME = Regex("^device-(.+)\\.log$")
     val WEB_CONSOLE_TIME = Regex("""^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) """)

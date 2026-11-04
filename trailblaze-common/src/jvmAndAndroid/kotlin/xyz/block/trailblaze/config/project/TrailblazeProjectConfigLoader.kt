@@ -1014,7 +1014,12 @@ object TrailblazeProjectConfigLoader {
     val configs = if (match.enrichedConfig != null) {
       listOf(match.enrichedConfig).filter { it.name == toolName }
     } else {
-      match.descriptor.toInlineScriptToolConfigs().filter { it.name == toolName }
+      // A descriptor whose config fails its own validation drops this trailmap, not the whole load.
+      try {
+        match.descriptor.toInlineScriptToolConfigs()
+      } catch (e: IllegalArgumentException) {
+        throw TrailblazeProjectConfigException("Invalid ${match.relativePath}: ${e.message}", e)
+      }.filter { it.name == toolName }
     }
     // Defensive invariant: a registry hit means the descriptor declared [toolName] (the registry
     // is keyed by every declared entry's `name:`), so the filter MUST produce at least one entry.

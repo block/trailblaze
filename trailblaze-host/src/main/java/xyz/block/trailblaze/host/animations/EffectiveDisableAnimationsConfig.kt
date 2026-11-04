@@ -17,8 +17,22 @@ object EffectiveDisableAnimationsConfig {
   @Volatile
   var enabled: Boolean = false
 
+  /**
+   * Whether the user explicitly said `false`, as opposed to never setting it. Only that answer
+   * turns off a driver that disables animations by default ([DisableAnimationsGate.enabled]).
+   */
+  @Volatile
+  var explicitlyOff: Boolean = false
+
+  /** Pushes the persisted tri-state into both fields. */
+  fun set(persisted: Boolean?) {
+    enabled = persisted == true
+    explicitlyOff = persisted == false
+  }
+
   /** Test-only reset so a suite that mutates the singleton can restore it in `@After`. */
   fun clearForTests() {
     enabled = false
+    explicitlyOff = false
   }
 }

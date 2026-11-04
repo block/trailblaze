@@ -253,7 +253,11 @@ matters as much as whether it did, so a trail can fail at the step where it was 
 
 By default a survey can run mid-trail. While a trail runs, only `session.network`,
 `session.analytics` and `session.events` hold records, and the survey runs in the scripted-tool
-sandbox. A survey that needs more sets `requiresFinishedSession: true` and runs only after the
+sandbox. `session.summary` carries the running trail's id, test key, title and metadata and the
+app version, read from the session's start as a finished session reads them, and the platform,
+target, app id, driver and device classifiers of the device the tool runs on. In a multi-device
+session that is the active device, while a finished session's summary records the device it
+started on. The outcome, timings, CI job and device log exist only after the run. A survey that needs more sets `requiresFinishedSession: true` and runs only after the
 session, on the host, where anything is allowed. That includes the outcome, tool calls, Trailblaze logs,
 screen text and session files, and `node:*` or Bun imports:
 
@@ -359,8 +363,10 @@ read finished-session data.
 `trailblaze check` fails, naming the fix, on:
 
 - a mid-trail survey that reads finished-session data, or whose file does not build for the
-  sandbox; and
-- a survey name that two files export.
+  sandbox;
+- a survey name that two files export; and
+- a derived stream name declared twice, or a stream whose `name` is not a plain string, which it
+  could not compare.
 
 Mid-trail surveys run wherever scripted tools run: trails run by `trailblaze run` and the daemon,
 on every platform, and trails a test APK runs on an Android device. The device has no esbuild, so
@@ -370,6 +376,98 @@ the APK build bundles each trailmap's `surveys/` and packages it: the Android Gr
 file that does not build for the sandbox does not fail the APK build; `ctx.surveys` on the device
 reports why to a trail that asks for one of its surveys. Surveys in the workspace-wide
 `<config>/surveys/` are not packaged.
+
+## Derived event streams
+
+Some events a session captured are only useful once they are reshaped: which screens the app showed,
+buried in its analytics, or which experiment arm the device landed in, buried in its log. A derived
+stream is that reshaping, written once as a pure function of the session and exported from a survey
+file:
+
+```ts
+export const screens = trailblaze.eventStream({
+  name: "screens",
+  description: "Each screen the app showed, in order",
+  derive: (session) =>
+    session.analytics.filter({ name: /^screen\./ }).map((e) => ({
+      timeMs: e.timeMs!, data: { screen: e.name.slice("screen.".length) }, from: e,
+    })),
+});
+```
+
+The same function serves every reader, so they can never disagree:
+
+- **Surveys** read the rows as one more event stream, `session.stream("screens")`, or through the
+  definition, `screens.of(session)`, after the run or mid-trail. Each row is marked `derived`, and
+  its `from` holds the records it came from; cite those as evidence. `trailblaze survey` re-derives
+  every stream its survey files declare before the surveys run, so a survey never reads rows older
+  than the code; a session's written rows stand only for a stream whose definition is not loaded.
+- **The report**: every `trailblaze report` run inside a workspace writes every stream into the
+  session's `events/<name>.ndjson` before it builds the HTML, with or without `--surveys`, so the
+  session carries its streams wherever it goes next and the Summary timeline shows each row as its
+  own event in a lane of its own. A report whose workspace declares no stream, over sessions that
+  hold none, starts nothing. Derived lanes open by default, in the live and shared reports too.
+  Each is tagged "derived" and names what it was derived from: the streams in its `dependsOn` and
+  every stream or log its rows cite in `from`.
+
+A stream can build on others, like steps of a pipeline. List them in `dependsOn`, and they are
+derived first:
+
+```ts
+export const cartVisits = trailblaze.eventStream({
+  name: "cart-visits",
+  dependsOn: [screens],
+  derive: (session) =>
+    session.stream("screens").filter((e) => e.data.screen === "Cart").map((e) => ({ timeMs: e.timeMs!, data: {}, from: e })),
+});
+```
+
+`derive` sees what the session captured and the fresh rows of the streams in its `dependsOn`, never
+a derived row a session's files hold, so a chain gives the same rows wherever it runs. A stream that
+depends on itself, however far round, fails naming the loop. A stream that throws while surveys run
+is reported as the session's error `stream:<name>`, with no rows, and the session's surveys still run.
+
+Stream names are unique across the workspace, every trailmap's `surveys/` and the shared one
+alike. `trailblaze check` refuses a name declared twice, naming both places, and a `name` that is
+not a plain string, so the clash is caught before any survey runs; the survey loader refuses it too.
+A stream another file re-exports is the same stream, not a second one.
+
+Give the lane a `title` and each row a `row` view, and the report shows a card per row rather than
+its raw JSON, with the full `data` one click away:
+
+```ts
+  title: "Screens",
+  row: (data) => ({ label: data.screen, fields: [{ k: "from", v: data.from ?? "" }] }),
+```
+
+`row` returns a `label` and optionally a `tone` (`ok`, `warn`, `error`), `badges` and `fields`, the
+same row shape a report formatter returns. Like `derive`, it must be a pure function of the row.
+
+Rows at one instant fold into a single "N events" card by default. A stream whose rows each matter
+on their own, such as one evaluation per flag, says so with `lane: { fold: "none" }`; `"label"` folds
+only runs of one label. A report formatter's `lane` option sets the same for the streams it owns, and
+`lane: { shown: true }` there opens a captured stream's lane by default, as derived lanes already are;
+`lane: { title }` names it, with a device-scoped `<stream>.<device>` lane reading `<title> (<device>)`.
+
+`derive` must be deterministic: no clock, randomness, sampling, network calls or environment. A
+written stream is rewritten when its defining file or the session's files change, and is never read
+back as captured data: `events/derived.json` lists what was derived, its rows read as `derived` and
+feed neither `analytics`, `network` nor the summary, and writing one leaves stored survey results current. A session whose `events/derived.json` is there but cannot be read is refused, by surveys and by session clipping alike, until it is fixed or deleted. A stream whose name is
+already a captured stream's is refused rather than written over it, and a name may not end in
+`.json`. The streams Trailblaze captures itself (`crash`, `memory`, `network`, `trailhead`, and their
+`.<device>` forms) are refused when the stream is declared, since some are written only as a run shuts down. So is a name the report would show on one of their lanes, where its rows would replace the captured ones: one with a `network` segment (`checkout.network`), or one holding `visible-strings` or `capture-notices`. Tool calls and Trailblaze logs already read on the host clock, as the report places their steps, so a row copying their time needs nothing more. A row derived only from device-clock events is marked so, and the report moves it onto the
+host timeline beside them, on the clock of the device that captured its first device-clock `from` record, so in a multi-device session list the record `timeMs` came from first. A row whose `from` mixes clocks says whose clock its `timeMs` is with `clock: "device"` or `"host"`. A stream that fails does not fail the report: the report is built without its rows, says so, and exits as it otherwise would, and the session's `events/derived.json` records why under that stream's `error`, so whoever opens the session later can tell a stream that failed from one with no rows. A report whose survey files cannot be loaded removes every derived stream, rather than show rows from code it could not check. Two reports writing one session take turns, and the session keeps the last one's streams. Which streams a report writes depends only on the survey files, not on `--survey`, so two reports differ only when they load different survey files; then one can show the other's lanes. A session that has not ended gets no derived streams: its capture may still be writing. A stream has no scope of its
+own: a session it means nothing for gets no rows from `derive`, and so no file and no lane. A stream
+no survey file declares any more is removed from every session on the next report. Mid-trail the session holds only
+its event streams, so a stream a mid-trail survey reads must derive from `network`, `analytics` or
+`events` alone. There, `ctx.surveys` derives the streams the survey's own file exports, again on
+every read, so `session.stream("screens")` reads the same rows it would after the run; a stream
+another file declares is not there unless this file exports it too. Only a stream the survey reads
+is derived: one its finding's `events` queries can match, or one its handler reads, so a stream
+that works only after the run cannot fail a survey that never reads it. A stream that throws when
+read mid-trail fails the survey, naming the stream. A derived row can stand for an absence (a request with no
+response yet), so a survey that derives streams mid-trail is judged as a handler is: it passes only
+on a complete read, with `network`, `analytics` and every stream it names captured.
 
 ## What a session exposes
 
@@ -439,7 +537,8 @@ trailblaze survey ./sessions -o report.json
 
 `trailblaze report --surveys` (bare for all, or `--surveys=journeys,jobs`) runs surveys while it
 builds a report and writes `surveys.md` (labels, then the findings behind each, then their runs)
-and `surveys.json` beside it. Nothing runs surveys unless asked.
+and `surveys.json` beside it. Nothing runs surveys unless asked; derived streams, which only
+present a session's own events, are written on every report.
 
 Both are built on the surveys CLI, which takes more filters:
 
