@@ -110,6 +110,8 @@ class AndroidVideoCapture(
   private var sessionDir: File? = null
   private var deviceId: String? = null
   private var mux: WallClockVideoMux? = null
+  /** The screen stream [mux] reads, held so a device reboot can restart it; see [onDeviceReconnected]. */
+  private var tee: H264Tee? = null
   private var format: RecordingFormat = RecordingFormat.MP4
 
   /** True when nothing could stream the device and [fallback] owns this session's recording. */
@@ -184,6 +186,17 @@ class AndroidVideoCapture(
     }
     picturelessDevices.remove(deviceId)
     mux = streaming
+    this.tee = tee
+  }
+
+  /**
+   * The device's screen stream died with the old boot. Its tee respawns the producer on its own
+   * while the device is down, but gives up on a device nothing can stream (scrcpy failing while
+   * adb is offline, no `screenrecord` to fall back to), and the recording would end there. Now the
+   * device is back, let the tee start the stream again; see [H264Tee.onDeviceReconnected].
+   */
+  override fun onDeviceReconnected() {
+    if (usingFallback) fallback.onDeviceReconnected() else tee?.onDeviceReconnected()
   }
 
   private fun awaitFirstPicture(streaming: WallClockVideoMux): Boolean {
@@ -200,6 +213,7 @@ class AndroidVideoCapture(
     val dir = sessionDir ?: return null
     val m = mux ?: return null
     mux = null
+    tee = null
     // Read before the drain: the session ends here, not when ffmpeg finishes finalizing.
     val stopRequestedAtMs = nowMs()
 

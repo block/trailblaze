@@ -81,6 +81,26 @@ object InProcessTrailheadReset {
    * retry after a transport failure could land after the run was cancelled, and clear the data of
    * the run that replaced it.
    */
+  /**
+   * Shows the home screen, so a fresh in-process run starts from it. The runner leaves the app's
+   * first launch to the first UI step and keeps another app it finds in front, as the trail opened
+   * that one (Settings, over adb); an app left over from an earlier run must not be mistaken for it.
+   * Best effort: a device that refuses the key keeps the run going as before.
+   */
+  fun goHome(deviceId: TrailblazeDeviceId) {
+    try {
+      AndroidHostAdbUtils.execAdbShellCommandChecked(
+        deviceId,
+        listOf("input", "keyevent", "KEYCODE_HOME"),
+        AndroidShellBounds.HOST_SHELL_TIMEOUT_MS,
+      )
+    } catch (e: InterruptedException) {
+      throw e
+    } catch (e: Exception) {
+      Console.log("Showing the home screen before the in-process run failed: ${e.message}")
+    }
+  }
+
   fun clear(deviceId: TrailblazeDeviceId, appId: String): Boolean {
     val output = try {
       AndroidHostAdbUtils.execAdbShellCommandChecked(

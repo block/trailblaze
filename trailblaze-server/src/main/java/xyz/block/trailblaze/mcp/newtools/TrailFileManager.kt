@@ -251,9 +251,9 @@ class TrailFileManager(
 
       // Same render + invariants as the shared-trail route, so a shape refused there (no
       // classifier, multi-tool trailhead, zero steps) can't be planted as a sibling instead.
-      val rendered = UnifiedRecordingWriter.renderStandalone(trailItems, classifier)
-        .getOrElse { return SaveResult(success = false, error = it.message) }
       val filePath = File(trailDir, fileName)
+      val rendered = UnifiedRecordingWriter.renderStandalone(trailItems, classifier, overwriting = filePath)
+        .getOrElse { return SaveResult(success = false, error = it.message) }
       filePath.writeText(rendered)
 
       Console.log("[TrailFileManager] Saved trail to: ${filePath.absolutePath}")

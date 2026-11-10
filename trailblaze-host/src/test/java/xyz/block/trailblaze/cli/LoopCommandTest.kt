@@ -95,6 +95,8 @@ class LoopCommandTest {
         "loop can't check a snapshot baseline: it would compare only the first pass's snapshots",
       listOf(stepless.path, "-n", "2") to "loop repeats a trail's `trail:` steps, and c.trail.yaml has none",
       listOf(first.path, "-n", "0") to "--iterations must be a positive integer (got 0)",
+      listOf(first.path, "-n", "2", "--reuse-trailhead", "--same-session") to
+        "--reuse-trailhead hands a setup from one session to the next, so it can't run with --same-session",
     )
     for ((args, reason) in cases) {
       val (exit, stderr) = captureStderr { root().execute("loop", "--verbose", *args.toTypedArray()) }
@@ -122,6 +124,7 @@ class LoopCommandTest {
   fun `loop rejects a snapshot baseline set in its environment`() {
     val file = Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) }
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 2
       trailFiles = listOf(file)
       envReader = { name -> "base.zip".takeIf { name == "TRAILBLAZE_SNAPSHOT_BASELINE" } }
@@ -189,6 +192,7 @@ class LoopCommandTest {
   fun `with only a time limit each session runs a batch of passes, and the loop keeps starting sessions until it is up`() {
     var now = 0L
     val loop = LoopCommand().apply {
+      sameSession = true
       timeLimit = "1h"
       nowMs = { now }
       cancelPassInFlight = { false }
@@ -458,6 +462,7 @@ class LoopCommandTest {
   @Test
   fun `in process, where nothing can cut a session, a timed loop runs one pass per session`() {
     val loop = LoopCommand().apply {
+      sameSession = true
       timeLimit = "1h"
       runsCancellable = { false }
     }
@@ -490,6 +495,7 @@ class LoopCommandTest {
   @Test
   fun `a full batch of passes between first-pass failures resets the failure streak`() {
     val loop = LoopCommand().apply {
+      sameSession = true
       timeLimit = "8h"
       nowMs = { 0L }
       cancelPassInFlight = { false }
@@ -554,7 +560,7 @@ class LoopCommandTest {
 
   @Test
   fun `after a failure in pass 2 of 5 the recovery session runs the 3 passes left`() {
-    val loop = LoopCommand().apply { iterations = 5 }
+    val loop = LoopCommand().apply { iterations = 5; sameSession = true }
     val yaml = createTrailblazeYaml()
     val steps = yaml.decodeUnifiedTrail(trail).trail
     assertEquals(5 * steps.size, yaml.decodeUnifiedTrail(loop.yamlToRun(trail)).trail.size)
@@ -577,7 +583,7 @@ class LoopCommandTest {
 
   @Test
   fun `with several devices each device loops for the full count`() {
-    val loop = LoopCommand().apply { iterations = 3 }
+    val loop = LoopCommand().apply { iterations = 3; sameSession = true }
     val yaml = createTrailblazeYaml()
     val steps = yaml.decodeUnifiedTrail(trail).trail.size
 
@@ -618,6 +624,7 @@ class LoopCommandTest {
   fun `a cancelled session stops the loop without reporting a failure`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 5
       onFailure = "printf '%s' >> '${out.path}'"
     }
@@ -638,6 +645,7 @@ class LoopCommandTest {
   fun `a session the on-device timeout cancelled recovers like a failure`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       onFailure = "printf '%s' >> '${out.path}'"
     }
@@ -664,6 +672,7 @@ class LoopCommandTest {
   fun `a pass the CLI abandoned for making no progress recovers like a failure, though its session ended cancelled`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       onFailure = "printf '%s' >> '${out.path}'"
     }
@@ -708,6 +717,7 @@ class LoopCommandTest {
   fun `an abandoned pass waits for its session to end before the hook and the recovery`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       onFailure = "printf '%s' >> '${out.path}'"
       passPollMillis = 10
@@ -731,6 +741,7 @@ class LoopCommandTest {
   fun `an abandoned run that never lets go of the device stops the loop without running --on-failure`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       onFailure = "printf '%s' >> '${out.path}'"
       passPollMillis = 10
@@ -750,6 +761,7 @@ class LoopCommandTest {
   @Test
   fun `an abandoned pass waits for its run to let go of the device, not only for its session to end`() {
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       passPollMillis = 10
     }
@@ -768,6 +780,7 @@ class LoopCommandTest {
   @Test
   fun `a failed status request keeps waiting rather than taking the ended session as let go`() {
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       passPollMillis = 10
     }
@@ -790,7 +803,7 @@ class LoopCommandTest {
 
   @Test
   fun `an abandoned run with no session and a daemon that can't say is not waited for`() {
-    val loop = LoopCommand().apply { iterations = 3 }
+    val loop = LoopCommand().apply { iterations = 3; sameSession = true }
     loop.yamlToRun(trail)
     val missing = File(Files.createTempDirectory("loop-logs").toFile(), "never-written")
 
@@ -808,7 +821,7 @@ class LoopCommandTest {
       .also { cancel(it, "Test cancelled") }
 
     for ((session, abandonedAt) in listOf(stoppedFromTrailRunner to 500L, stoppedBeforeTheCliGaveUp to 5_000L)) {
-      val loop = LoopCommand().apply { iterations = 3 }
+      val loop = LoopCommand().apply { iterations = 3; sameSession = true }
       loop.yamlToRun(trail)
       val output = captureConsoleInfo {
         assertFalse(loop.runAgain(TrailCommand.FinishedRun(false, session, abandoned = noProgress, abandonedAtMs = abandonedAt)))
@@ -819,7 +832,7 @@ class LoopCommandTest {
 
   @Test
   fun `the loop stops after sessions in a row that complete no pass`() {
-    val loop = LoopCommand().apply { iterations = 100 }
+    val loop = LoopCommand().apply { iterations = 100; sameSession = true }
     loop.yamlToRun(trail)
     val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
 
@@ -834,6 +847,7 @@ class LoopCommandTest {
   fun `each failed pass runs --on-failure with its session log directory, and the loop waits for it`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 1
       onFailure = "sleep 1; printf '%s' >> '${out.path}'"
     }
@@ -851,6 +865,7 @@ class LoopCommandTest {
     val out = File(work, "out.txt")
     val lock = File(work, "lock")
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 10
       onFailure = "mkdir '$lock' || printf 'overlap ' >> '$out'; sleep 0.3; rmdir '$lock'; printf '%s ' >> '$out'"
     }
@@ -869,6 +884,7 @@ class LoopCommandTest {
   fun `a recovery rejected before its session ends the loop and waits for the hook`() {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       onFailure = "sleep 1; printf '%s' >> '${out.path}'"
     }
@@ -888,6 +904,7 @@ class LoopCommandTest {
     val out = Files.createTempFile("on-failure", ".txt").toFile()
     val failed = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
     val loop = LoopCommand().apply {
+      sameSession = true
       iterations = 3
       trailFiles = listOf(Files.createTempFile("loop", ".trail.yaml").toFile().apply { writeText(trail) })
       onFailure = "sleep 1; printf '%s' >> '${out.path}'"
@@ -921,8 +938,13 @@ class LoopCommandTest {
   }
 
   @Test
-  fun `without --reuse-trailhead a run leaves reuse to the daemon`() {
-    for (command in listOf(LoopCommand().apply { iterations = 3 }, TrailCommand())) {
+  fun `without --reuse-trailhead a loop refuses reuse in either mode, and a run leaves it to the daemon`() {
+    val expected = mapOf<TrailCommand, Boolean?>(
+      LoopCommand().apply { iterations = 3 } to false,
+      LoopCommand().apply { iterations = 3; sameSession = true } to false,
+      TrailCommand() to null,
+    )
+    for ((command, reuse) in expected) {
       val request = command.delegatedRunRequest(
         file = File("loop.trail.yaml"),
         yamlContent = trail,
@@ -932,7 +954,7 @@ class LoopCommandTest {
         initialArgs = emptyMap(),
         envReader = { null },
       )
-      assertEquals(null, request.trailheadReuse, command::class.simpleName)
+      assertEquals(reuse, request.trailheadReuse, command::class.simpleName)
     }
   }
 
@@ -966,6 +988,52 @@ class LoopCommandTest {
       "Pass 3/4 failed at \"Open the menu\": Recording failed at tapOnElementBySelector: no Menu" in tally,
       "expected the failed pass, got: <<$tally>>",
     )
+  }
+
+  @Test
+  fun `by default each pass sends the trail as written and refuses trailhead reuse every time`() {
+    val loop = LoopCommand().also { CommandLine(it).parseArgs("loop.trail.yaml", "-n", "3") }
+    fun reuseRequest() = loop.delegatedRunRequest(
+      file = File("loop.trail.yaml"),
+      yamlContent = trail,
+      testName = "loop",
+      deviceSpec = null,
+      useRecordedSteps = true,
+      initialArgs = emptyMap(),
+      envReader = { null },
+    ).trailheadReuse
+
+    assertEquals(trail, loop.yamlToRun(trail))
+    captureConsoleInfo {
+      // False, not null: null would let the daemon's TRAILBLAZE_TRAILHEAD_REUSE turn it on.
+      assertEquals(false, reuseRequest())
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "fullSetup"))))
+      assertEquals(false, reuseRequest())
+    }
+  }
+
+  @Test
+  fun `by default the loop runs one session per pass, a failed one included`() {
+    val loop = LoopCommand().apply {
+      iterations = 3
+    }
+    val failed = sessionDir(
+      DirectionStep("Launch signed in", isTrailhead = true) to null,
+      DirectionStep("Open the menu") to "Recording failed at tapOnElementBySelector: no Menu",
+    ).also { writeSetup(it, "fullSetup") }
+
+    val tally = captureConsoleInfo {
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "fullSetup"))))
+      assertTrue(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = failed)))
+      assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = true, sessionDir = passedSession(setup = "fullSetup"))))
+    }
+
+    assertTrue(
+      "Loop: 2 of 3 pass(es) passed, 1 failed." in tally && "reused" !in tally,
+      "expected the tally, got: <<$tally>>",
+    )
+    assertTrue("Pass 2/3 failed at \"Open the menu\"" in tally, "expected the failed pass, got: <<$tally>>")
+    assertFalse("Recovering:" in tally, "a fresh pass has no setup to recover from, got: <<$tally>>")
   }
 
   @Test

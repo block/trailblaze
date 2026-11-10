@@ -343,6 +343,10 @@ class DeviceFrameTimesTest {
     calls.clear()
     flaky.respawn(device, "720x1280", "4000000", unlimited = false)
     assertEquals(listOf("screenrecord"), calls, "but not mid-recording, where a hung server would blank the video")
+    calls.clear()
+    flaky.onDeviceReconnected(device)
+    flaky.respawn(device, "720x1280", "4000000", unlimited = false)
+    assertEquals(listOf("scrcpy", "screenrecord"), calls, "a reboot's failure is forgotten once the device is back")
 
     calls.clear()
     AndroidScreenProducerFactory(scrcpy = factory("scrcpy"), screenrecord = factory("screenrecord"))

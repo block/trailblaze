@@ -33,6 +33,7 @@ import {
   readAttachments,
   readEvents,
   readNetworkLog,
+  readRunWarnings,
   readTraceFile,
   readVideo,
   recompressScreenshot,
@@ -768,6 +769,39 @@ describe("event streams linked beside a linked-media report (linkEventsGz)", () 
     const hostile = `"\\'</script><script>alert(1)</script>\u2028`;
     linkEventsGz(hostile, dir, "s", "", sidecarScript);
     expect(runSidecar(join(dir, eventsSidecarFile(hostile))).text).toBe(hostile);
+  });
+});
+
+describe("the session's warnings (readRunWarnings)", () => {
+  const warningsDir = mkdtempSync(join(tmpdir(), "tb-report-cli-warnings-"));
+  afterAll(() => rmSync(warningsDir, { recursive: true, force: true }));
+
+  test("reads what the session's warning surveys found from its surveys.json", () => {
+    const dir = join(warningsDir, "warned");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "surveys.json"), JSON.stringify({
+      format: 1,
+      surveys: { crashes: { warning: true, findings: [{ summary: "App crashed", evidence: [] }] } },
+    }));
+    expect(readRunWarnings(dir)).toEqual([{ survey: "crashes", summary: "App crashed" }]);
+  });
+
+  test("a session no warning survey ran over has no warnings", () => {
+    expect(readRunWarnings(join(warningsDir, "nowhere"))).toBeNull();
+  });
+
+  test("a derived stream that failed is a warning too, after the surveys' own", () => {
+    const dir = join(warningsDir, "stream-failed");
+    mkdirSync(join(dir, "events"), { recursive: true });
+    writeFileSync(join(dir, "surveys.json"), JSON.stringify({
+      format: 1,
+      surveys: { crashes: { warning: true, findings: [{ summary: "App crashed", evidence: [] }] } },
+    }));
+    writeFileSync(join(dir, "events", "derived.json"), JSON.stringify({ format: 1, streams: { feature: { rows: 0, error: "HTTP 404" } } }));
+    expect(readRunWarnings(dir)).toEqual([
+      { survey: "crashes", summary: "App crashed" },
+      { survey: "derived stream feature", summary: "The feature stream failed, so its lane is missing from this report: HTTP 404" },
+    ]);
   });
 });
 

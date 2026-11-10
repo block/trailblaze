@@ -38,32 +38,35 @@ define a waypoint, curate which tools the agent sees, write a
 
 | Layer | What it is | Where it lives |
 |---|---|---|
-| **Typed scripted tool** | A TypeScript function the agent sees as a named tool, with typed inputs, a typed result, and an LLM-facing description. Replayable like any built-in. | `trails/config/trailmaps/<id>/tools/<tool>.ts` (+ sibling YAML descriptor) |
-| **Waypoint** | A named, assertable location in the app, defined structurally (element identity, stable labels), never by content. Used as a checkpoint, target, or "am I on the Inbox?" predicate. | `trails/config/trailmaps/<id>/waypoints/<id>.waypoint.yaml` |
+| **Typed scripted tool** | A TypeScript function the agent sees as a named tool, with typed inputs, a typed result, and an LLM-facing description. Replayable like any built-in. | `trailblaze-config/trailmaps/<id>/tools/<tool>.ts` |
+| **Waypoint** | A named, assertable location in the app, defined structurally (element identity, stable labels), never by content. Used as a checkpoint, target, or "am I on the Inbox?" predicate. | `trailblaze-config/trailmaps/<id>/waypoints/<id>.waypoint.yaml` |
 | **Toolset selection** | The curated list of which primitives + custom tools the agent actually sees per platform. Surfaces your `login` and hides the low-level taps when that's what the test needs. | `trailmap.yaml` → `target.platforms.<platform>.tool_sets` |
 
 ## Directory layout
 
 ```text
 <repo>/
-└── trails/
-    └── config/
-        ├── trailblaze.yaml                    # workspace anchor
-        └── trailmaps/
-            └── myapp/
-                ├── trailmap.yaml              # the manifest
-                ├── tools/
-                │   ├── myapp_login.ts         # typed scripted tool
-                │   └── myapp_login.yaml       # `_meta:` anchor
-                └── waypoints/
-                    └── myapp-home.waypoint.yaml
+└── trailblaze-config/
+    ├── trailblaze.yaml                        # workspace anchor
+    └── trailmaps/
+        └── myapp/
+            ├── trailmap.yaml                  # the manifest
+            ├── tools/
+            │   └── myapp_login.ts             # typed scripted tool
+            └── waypoints/
+                └── myapp-home.waypoint.yaml
 ```
 
-`trailblaze.yaml` lists the trailmap:
+`trailblaze-config/` is the current layout. Older workspaces keep the same tree under
+`trails/config/` (the legacy layout, still read); if both exist, `trailblaze-config/` wins.
+
+Trailmaps under `<config dir>/trailmaps/<id>/` are discovered automatically; there is no
+`trailmaps:` list in `trailblaze.yaml`. The file only has to exist as the workspace anchor. To
+load a subset of the trailmaps on disk, name their ids under `targets:`:
 
 ```yaml
-trailmaps:
-  - trailmaps/myapp/trailmap.yaml
+targets:
+  - myapp
 ```
 
 ## Before you write a tool
@@ -88,7 +91,7 @@ Usually the answers are no and no.
   TypeScript helper and delete the Kotlin.
 
 ```ts
-// trails/config/trailmaps/myapp/tools/myapp_preferences.ts
+// trailblaze-config/trailmaps/myapp/tools/myapp_preferences.ts
 // A helper, not a tool: no trailblaze.tool(), no YAML descriptor, nothing registered.
 import type { ToolContext } from "@trailblaze/scripting";
 
@@ -104,13 +107,15 @@ Wikipedia and iOS Contacts examples share code this way (`wikipedia_shared.ts`,
 
 ## Authoring the smallest useful tool
 
-Recommended path: declare inputs as a TypeScript interface and export
-the handler via `trailblaze.tool<I>(handler)`. The framework derives
-the JSON schema, the LLM description (from TSDoc), and the typed
-binding for sibling tools.
+Declare inputs as a TypeScript interface and export the handler via
+`trailblaze.tool<I>([spec,] handler)`. The framework derives the JSON
+schema, the LLM description (from TSDoc), and the typed binding for
+sibling tools. The export name is the tool name, and the tool is
+registered automatically once the file sits in the trailmap's `tools/`
+directory.
 
 ```ts
-// trails/config/trailmaps/myapp/tools/myapp_login.ts
+// trailblaze-config/trailmaps/myapp/tools/myapp_login.ts
 import { trailblaze } from "@trailblaze/scripting";
 
 export interface LoginArgs {
@@ -125,6 +130,7 @@ export interface LoginArgs {
  * task is to authenticate as a known user before exercising other flows.
  */
 export const myapp_login = trailblaze.tool<LoginArgs>(
+  { supportedPlatforms: ["android"], sensitiveArgNames: ["password"] },
   async (input, ctx) => {
     await ctx.tools.tapOnElementBySelector({
       nodeSelector: { androidAccessibility: { textRegex: "(?is).*Sign in.*" } },
@@ -139,35 +145,15 @@ export const myapp_login = trailblaze.tool<LoginArgs>(
 );
 ```
 
-Pair it with a sibling YAML descriptor pointing at the source. Today's
-analyzer still wants `name:` + `description:` + `inputSchema:` on the
-descriptor — the analyzer derives the typed bindings, but the runtime
-loader reads the YAML. (A future "mode 3" collapses the descriptor to
-`script:` + `_meta:` only; that's on the roadmap, not wired yet — see
-the typed-authoring devlog in this repo's `docs/` for the contract.)
-
-```yaml
-# trails/config/trailmaps/myapp/tools/myapp_login.yaml
-script: ./myapp_login.ts        # descriptor-relative: resolves next to this YAML
-name: myapp_login
-description: Sign into the Android MyApp target with the supplied credentials.
-_meta:
-  trailblaze/supportedPlatforms: [android]
-inputSchema:
-  email:
-    type: string
-    description: Email to sign in with.
-  password:
-    type: string
-    description: Password for that account. Pass via --secret at runtime.
-```
-
-`script:` is **resolved relative to the directory containing this
-YAML**, not the workspace root — so co-locate the `.ts` next to the
-descriptor (the conventional layout) and write `./<tool>.ts`. Absolute
-paths also work and pass through unchanged.
-
-And list it in `trailmap.yaml`:
+`sensitiveArgNames` masks those top-level argument values in the
+tool-execution log; the handler still receives the real value. A call made
+directly over MCP or `trailblaze tool` is still recorded unmasked in the MCP
+request log and the daemon log, and anything the handler writes to stderr is
+copied into the daemon log verbatim (Trailblaze's
+`docs/scripted-tools-typed-authoring.md`, "Keeping a credential out of the
+session log"). There is no sibling
+YAML, `inputSchema:`, or `tools:` list to write: the `.ts` file is the
+whole tool. The trailmap manifest needs no entry for it:
 
 ```yaml
 id: myapp
@@ -175,16 +161,16 @@ dependencies:
   - trailblaze
 target:
   display_name: My App
-  tools:
-    - tools/myapp_login.yaml
   platforms:
     android:
       app_ids: [com.example.myapp]
 ```
 
-> The legacy authoring path (full YAML descriptor + `export async
-> function`) still works for older trailmaps but is not the recommended
-> shape for new tools. See the [Scripted Tools](https://block.github.io/trailblaze/scripted_tools/)
+> Legacy: older trailmaps pair each `.ts` with a descriptor YAML
+> (`script:`, `name:`, `description:`, `inputSchema:`) around an `export
+> async function`. It still works, and `script:` resolves relative to the
+> descriptor's own directory. New tools don't need it. See the
+> [Scripted Tools](https://block.github.io/trailblaze/scripted_tools/)
 > guide for the contrast and migration notes.
 
 ## Materializing the workspace
@@ -207,15 +193,17 @@ summary, so a missing-from-toolbox bug becomes a missing-from-check
 finding.
 
 **When `check` fails before it can report anything**, the message in
-the structured envelope usually names the cause. The four common ones:
+the structured envelope usually names the cause. The three common ones:
 
-- *bun/esbuild not on PATH* — install via Homebrew (`brew install bun esbuild`)
-  or follow the workspace's bootstrap docs.
-- *missing or stale `node_modules/`* — run `npm install` (or `bun install --frozen-lockfile`)
-  inside the workspace's TypeScript root.
+- *`bun` not on PATH* - the Homebrew install brings it in; with
+  `install.sh` or a source build, put `bun` on your `PATH`
+  ([bun.sh](https://bun.sh)). `esbuild` is optional (`brew install esbuild`);
+  `check` doesn't need it, but `usages --changed-since` does. You don't
+  need `bun install` or a `node_modules/`: the SDK and analyzer ship inside
+  the CLI.
 - *`@trailblaze/scripting` import won't resolve* — the workspace SDK
-  wasn't materialized; rerun `trailblaze check` after the dependency
-  install above so the SDK files land under the workspace's `node_modules`.
+  wasn't materialized; rerun `trailblaze check` so the SDK files land
+  under `<workspace>/.trailblaze/sdk/dist/`.
 - *`*.test.ts` unit test failure* — `check` runs your tests via
   `bun test`; a failing test blocks the type-check pass. Fix the test
   (or temporarily mark it `.skip` if it's a known unrelated breakage)
@@ -232,14 +220,15 @@ agent, walk the four checkpoints in order:
 2. **Confirm the trailmap doesn't exclude the tool.** Every scripted
    tool under `<trailmap>/tools/` is on the target; a
    `target.platforms.<platform>.excluded_tools:` entry removes it on that platform.
-3. **Confirm the sibling YAML's `script:` path resolves.** The path
-   is resolved against the JVM's working directory (repo root), not
-   the trailmap directory — the conventional shape is
-   `./trails/config/trailmaps/<id>/tools/<tool>.ts`.
-4. **Confirm the trailmap is loaded** by the workspace anchor — the
-   `trailmaps:` list in `<workspace>/trailblaze.yaml` must include
-   this trailmap's manifest. If it's missing, the trailmap is on
-   disk but invisible.
+3. **Confirm the `.ts` file is where the loader looks.** It must sit
+   under `<trailmap>/tools/` and export the tool as a
+   `trailblaze.tool(...)` binding. (For a legacy descriptor YAML, its
+   `script:` path resolves relative to the descriptor's own directory,
+   not the working directory.)
+4. **Confirm the trailmap is loaded.** Trailmaps under
+   `<config dir>/trailmaps/<id>/trailmap.yaml` are discovered
+   automatically. If `trailblaze.yaml` sets `targets:`, only the ids
+   listed there load, so add this trailmap's id.
 
 ## Inspecting your composed surface
 
@@ -261,31 +250,34 @@ In a `.trail.yaml`, custom tools are called the same way as
 primitives — by name, with typed arguments:
 
 ```yaml
-target: myapp
-steps:
-  - description: Sign in as the test user
-    tools:
-      - name: myapp_login
-        arguments:
-          email: { memory: TEST_EMAIL }
-          password: { secret: TEST_PASSWORD }
+config:
+  id: myapp/smoke
+  target: myapp
+
+trail:
+  - step: Sign in as the test user
+    recording:
+      android:
+        - myapp_login:
+            email: "{{TEST_EMAIL}}"
+            password: "{{TEST_PASSWORD}}"
 ```
 
 To verify the resulting screen state, follow the custom-tool step
 with a built-in assertion against the live view hierarchy — e.g.
-`assertVisible` with a ref captured from a `snapshot` step (refs are
-content-hashed, so they're frozen at record time per rung 1's design
-note), or `assertNotVisibleWithText` to check that a known-blocking
-element is gone. (Step-level waypoint matching as a single
-`matchWaypoint` tool is on the roadmap — see the "active prototype"
-partition below — but isn't yet a runnable primitive in the toolbox.
-Run `trailblaze toolbox --target myapp --device <platform>` to see
-the actual assertion verbs available on your platform.)
+`assertVisible` (driven by `ref=` from a `snapshot`; refs are never
+recorded, the trail saves an `assertVisibleBySelector` with a selector
+computed from the live tree), `assertNotVisibleWithText` to check that
+a known-blocking element is gone, or `assertWaypoint` to assert the
+screen is at a named waypoint (host-only). Run
+`trailblaze toolbox --target myapp --device <platform>` to see the
+actual assertion verbs available on your platform.
 
-Pass values at runtime with `--memory` / `--secret`:
+Pass values at runtime with `--memory` / `--secret`; the
+`{{TEST_EMAIL}}` and `{{TEST_PASSWORD}}` tokens above resolve from them:
 
 ```bash
-trailblaze run trails/smoke.trail.yaml -d android \
+trailblaze run trails/myapp/smoke/trail.yaml -d android \
   --memory TEST_EMAIL=test@example.com \
   --secret TEST_PASSWORD=hunter2
 ```
@@ -381,14 +373,14 @@ trailmap for someone else's app will look like `npm install
 Be honest with the user about which corners are still being shaped:
 
 - **Mature:** the typed scripted-tool authoring surface
-  (`trailblaze.tool<I>(handler)`), per-trailmap typed bindings via
+  (`trailblaze.tool<I>([spec,] handler)`), per-trailmap typed bindings via
   `trailblaze check`, structural waypoint definitions plus the
-  `trailblaze waypoint locate/validate` discovery commands, and
+  `trailblaze waypoint locate/validate` discovery commands, the
+  host-only `assertWaypoint` step-level check, and
   trailmap (`trailmap.yaml`) composition via `dependencies:`.
 - **Active prototype:** trail-as-tool (expose a saved trail as a tool
   callable from other trails), the waypoint navigation graph
-  (`trailblaze waypoint graph`), step-level waypoint matching as a
-  single `matchWaypoint` tool, and npm-based trailmap distribution.
+  (`trailblaze waypoint graph`), and npm-based trailmap distribution.
 
 When the user hits an edge case in one of the "active prototype"
 areas, point them at the [devlog index](https://block.github.io/trailblaze/devlog/)

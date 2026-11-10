@@ -11,6 +11,7 @@ import maestro.device.Device
 import maestro.drivers.IOSDriver
 import maestro.orchestra.WorkspaceConfig
 import maestro.utils.CliInsights
+import maestro.utils.TempFileHandler
 import util.IOSDeviceType
 import util.XCRunnerCLIUtils
 import xcuitest.XCTestClient
@@ -18,6 +19,7 @@ import xcuitest.XCTestDriverClient
 import xcuitest.installer.Context
 import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
+import xcuitest.installer.XCTestInstaller
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -213,6 +215,7 @@ internal object HostIosDriverFactory {
           openDriver = openDriver,
           targetPort = targetPort,
           reinstallDriver = reinstall,
+          keepRunnerOnClose = firstInitialization && !reinstallDriver,
           platformConfiguration = platformConfiguration,
           appTarget = appTarget,
         ).also { portOwners.connected(port = targetPort, deviceId = deviceId) }
@@ -231,6 +234,7 @@ internal object HostIosDriverFactory {
     openDriver: Boolean,
     targetPort: Int,
     reinstallDriver: Boolean,
+    keepRunnerOnClose: Boolean,
     platformConfiguration: WorkspaceConfig.PlatformConfiguration?,
     appTarget: TrailblazeHostAppTarget?,
   ): Driver {
@@ -242,6 +246,7 @@ internal object HostIosDriverFactory {
     )
     val deviceController = SimctlIOSDevice(deviceId = deviceId)
 
+    val installerTempFiles = TempFileHandler()
     val xcTestInstaller = LocalXCTestInstaller(
       deviceId = deviceId,
       host = defaultXctestHost,
@@ -250,6 +255,7 @@ internal object HostIosDriverFactory {
       deviceType = IOSDeviceType.SIMULATOR,
       iOSDriverConfig = iOSDriverConfig,
       deviceController = deviceController,
+      tempFileHandler = installerTempFiles,
       // Maestro 2.6.1 added a required logsDir for the XCUITest (xcodebuild) subprocess logs.
       // Trailblaze routes its own diagnostics through Console/Tracer, so point this at an
       // ephemeral temp dir rather than wiring in Maestro's DebugLogStore (which would also
@@ -259,8 +265,18 @@ internal object HostIosDriverFactory {
         .apply { mkdirs() },
     )
 
+    // A reinstalling installer's close() kills the runner, and restarting it between sessions can leave the
+    // app with accessibility off (kAXErrorAPIDisabled). Keep only its temp cleanup, as a non-reinstalling close does.
+    val installer: XCTestInstaller = if (keepRunnerOnClose) {
+      object : XCTestInstaller by xcTestInstaller {
+        override fun close() = installerTempFiles.close()
+      }
+    } else {
+      xcTestInstaller
+    }
+
     val xcTestDriverClient = XCTestDriverClient(
-      installer = xcTestInstaller,
+      installer = installer,
       client = XCTestClient(defaultXctestHost, targetPort),
       reinstallDriver = reinstallDriver,
     )

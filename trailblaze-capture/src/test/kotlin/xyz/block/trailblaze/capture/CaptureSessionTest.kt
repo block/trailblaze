@@ -140,7 +140,25 @@ class CaptureSessionTest {
     }
   }
 
-  /** Records until something ends it, and starts again when told to confirm. */
+  @Test
+  fun `a device reconnect reaches every stream even when one fails to resume`() {
+    val log = EndableStream()
+    val failing = object : CaptureStream {
+      override val type = CaptureType.VIDEO
+      override fun start(sessionDir: File, deviceId: String, appId: String?) {}
+      override fun onDeviceReconnected() = throw IllegalStateException("no stream to resume")
+      override fun stop(options: CaptureOptions): CaptureArtifact? = null
+    }
+    // Ended with the old boot; the failing stream is first so its failure would hide the resume.
+    log.recording = false
+    val session = CaptureSession(listOf(failing, log), CaptureOptions.NONE)
+
+    session.onDeviceReconnected()
+
+    assertTrue(log.recording, "the stream the reboot ended should be recording again")
+  }
+
+  /** Records until something ends it, and starts again when told to confirm or the device reconnects. */
   private class EndableStream : CaptureStream {
     override val type = CaptureType.LOGCAT
 
@@ -151,6 +169,10 @@ class CaptureSessionTest {
     }
 
     override fun confirmRecording() {
+      recording = true
+    }
+
+    override fun onDeviceReconnected() {
       recording = true
     }
 

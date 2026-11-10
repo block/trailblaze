@@ -2,6 +2,9 @@ package xyz.block.trailblaze.host
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.server.response.respond
+import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
@@ -9,6 +12,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import java.io.IOException
@@ -54,6 +58,10 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
   var responseBody: String =
     """{"errorType":"UNKNOWN_ERROR","message":"Mock: no handler","details":null}"""
 
+  /** Whether `GET /ping` answers 200, the way a live runner's server does. Off: it answers 503. */
+  @Volatile
+  var answersPing: Boolean = false
+
   /** Raw request bodies received, keyed by URL path (e.g., `/rpc/RunYamlRequest`). */
   val requestLog: MutableMap<String, MutableList<String>> = ConcurrentHashMap()
 
@@ -73,16 +81,43 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
     }
   }
 
+  /**
+   * Register a path whose next [times] requests are taken and then dropped before a reply, the way
+   * the device looks when the app's process ends mid-call. Later requests go to [onPost]'s handler.
+   */
+  fun dropMidCall(path: String, times: Int = 1) {
+    dropsRemaining[path] = java.util.concurrent.atomic.AtomicInteger(times)
+  }
+
+  private val dropsRemaining = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+
+  /** Promises a body and sends none, so the client reads the end of the stream mid-response. */
+  private object TruncatedBody : OutgoingContent.WriteChannelContent() {
+    override val contentLength: Long = 64
+    override val contentType: ContentType = ContentType.Application.Json
+    override suspend fun writeTo(channel: ByteWriteChannel) = Unit
+  }
+
   private val server =
     embeddedServer(CIO, host = LOOPBACK_HOST, port = port) {
       install(ContentNegotiation) { json(TrailblazeJsonInstance) }
       routing {
+        get("/ping") {
+          if (answersPing) {
+            call.respondText("""{ "status" : "Running" }""", ContentType.Application.Json)
+          } else {
+            call.respondText("", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+          }
+        }
         post("/rpc/{path...}") {
           val path = call.request.local.uri.substringBefore('?')
           val body = call.receiveText()
           requestLog.getOrPut(path) { mutableListOf() }.add(body)
           val handler = handlers[path]
-          if (handler != null) {
+          val drops = dropsRemaining[path]
+          if (drops != null && drops.getAndDecrement() > 0) {
+            call.respond(TruncatedBody)
+          } else if (handler != null) {
             val response = handler()
             call.respondText(response.body, ContentType.Application.Json, response.status)
           } else {

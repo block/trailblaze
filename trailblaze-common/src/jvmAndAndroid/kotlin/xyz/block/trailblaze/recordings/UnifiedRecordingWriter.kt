@@ -6,6 +6,9 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.TrailLabel
+import xyz.block.trailblaze.yaml.unified.TrailLabelDevices
+import xyz.block.trailblaze.yaml.unified.TrailLabels
 import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
@@ -272,6 +275,34 @@ object UnifiedRecordingWriter {
       // A trail of only exempt steps has nothing to record, so it is complete.
       needsRecording.all { it.resolvedClassifier != null }
     }.getOrDefault(false)
+  }
+
+  /**
+   * The raw Maestro tool's name. It replays but is never recorded, so a save-back that would rewrite
+   * a recording holding it has to refuse rather than drop the step.
+   */
+  const val RAW_MAESTRO_TOOL_NAME = "mobile_maestro"
+
+  /**
+   * Names of every tool a replay on this device runs from [trailFileOrDir]'s unified trail: for the
+   * trailhead and each step, the tools of the recording the device's chain resolves to (the same
+   * resolution [unifiedTrailFullyRecordedForDevice] uses). [trailheadOnly] narrows it to the
+   * trailhead's tools. Empty when the file is absent or unreadable.
+   */
+  fun replayedToolNamesForDevice(
+    trailFileOrDir: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+    trailheadOnly: Boolean = false,
+  ): Set<String> {
+    val unifiedFile = unifiedRecordingTarget(trailFileOrDir)?.takeIf { it.isFile } ?: return emptySet()
+    return runCatching {
+      UnifiedTrailAdapter.describeRecordingResolution(
+        createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()),
+        deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
+        selectedDeviceConfiguration,
+      ).steps.filter { !trailheadOnly || it.stepIndex == null }.flatMap { it.toolNames.orEmpty() }.toSet()
+    }.getOrDefault(emptySet())
   }
 
   /** Outcome of a [mergeIntoUnified] read-merge-write. */
@@ -658,11 +689,19 @@ object UnifiedRecordingWriter {
    * driver on it. The rendered document still carries no cast — a v1 recording has no `devices:` map
    * to seed one from — so a configuration's standalone render is a preserved recording to fold into
    * the real trail, not a replayable multi-device trail on its own.
+   *
+   * Pass [overwriting] when the render replaces an existing sibling file: its `labels` and
+   * `generatedLabels` carry over, because a v1 recording has no field to hold them and they describe
+   * the trail, not this run. Nothing else is copied; the rest of that file's config (another
+   * classifier's device pin, say) is what the recording replaces. Labels that file declares but
+   * that cannot be read refuse the render; see [labelsToCarry]. So does a `when`/`except` label that
+   * picks devices in that file but none in the render; see [scopedLabelsLost].
    */
   fun renderStandalone(
     recordedItems: List<TrailYamlItem>,
     classifier: String,
     selectedDeviceConfiguration: String? = null,
+    overwriting: File? = null,
   ): Result<String> {
     if (classifier.isBlank()) {
       return Result.failure(IllegalStateException(BLANK_CLASSIFIER_MESSAGE))
@@ -676,8 +715,96 @@ object UnifiedRecordingWriter {
     if (merged.trail.isEmpty()) {
       return Result.failure(IllegalStateException(EMPTY_MERGE_MESSAGE))
     }
-    return Result.success(createTrailblazeYaml().encodeUnifiedTrailToString(merged))
+    val kept = labelsToCarry(overwriting).getOrElse { return Result.failure(it) }
+    val rendered = kept?.applyTo(merged) ?: merged
+    if (overwriting != null) scopedLabelsLost(overwriting, rendered)?.let { return Result.failure(it) }
+    return Result.success(createTrailblazeYaml().encodeUnifiedTrailToString(rendered))
   }
+
+  /**
+   * A refusal when a `when`/`except` label carried from [file] picks its devices there but not in
+   * [replacement]: the recording declares only its own device, so a label scoped to another device
+   * [file] declared would be saved pointing at nothing, and `trailblaze check` would then fail the
+   * trail. Null when every scoped label still resolves. When [file] can't be decoded (a template in
+   * a typed field), any scoped label that no longer resolves refuses.
+   */
+  private fun scopedLabelsLost(file: File, replacement: UnifiedTrail): IllegalStateException? {
+    val scoped = (replacement.config.labels.orEmpty() + replacement.config.generatedLabels.orEmpty())
+      .filter { it.whenDevices != null || it.exceptDevices != null }
+    if (scoped.isEmpty()) return null
+    val before = runCatching { createTrailblazeYaml().decodeUnifiedTrail(file.readText()) }.getOrNull()
+      ?.let(TrailLabelDevices::devicesOf)
+    val after = TrailLabelDevices.devicesOf(replacement)
+    val lost = scoped.mapNotNull { label ->
+      val problem = TrailLabelDevices.resolve(label, after).problems.firstOrNull() ?: return@mapNotNull null
+      if (before != null && TrailLabelDevices.resolve(label, before).problems.isNotEmpty()) return@mapNotNull null
+      "`${label.type}:${label.name}` ($problem)"
+    }
+    if (lost.isEmpty()) return null
+    return IllegalStateException(
+      "Can't save this recording over ${file.absolutePath}: it declares only " +
+        "${after.joinToString { it.id }}, so these labels would pick no device: ${lost.joinToString("; ")}. " +
+        "Save it into the trail that declares those devices, or change the labels' `when`/`except`, then save again.",
+    )
+  }
+
+  /** The two label lists a replacement recording carries over from the file it overwrites. */
+  data class CarriedLabels(val labels: List<TrailLabel>?, val generatedLabels: List<TrailLabel>?) {
+    fun applyTo(trail: UnifiedTrail): UnifiedTrail =
+      trail.copy(config = trail.config.copy(labels = labels, generatedLabels = generatedLabels))
+  }
+
+  /**
+   * The labels on [file], which a recording is about to replace: null when there is no file or it
+   * declares no labels, and a failure when it declares labels that cannot be read. A failure refuses
+   * the save, because writing anyway would silently delete them. Only the two lists are read
+   * ([TrailLabels.readLists]), with templates masked rather than expanded, so a label keeps `{{VAR}}`
+   * as written and nothing else in the file can block the save.
+   */
+  fun labelsToCarry(file: File?): Result<CarriedLabels?> {
+    if (file == null || !file.isFile) return Result.success(null)
+    val text = file.readText()
+    fun refuse(reason: String?): Result<CarriedLabels?> = Result.failure(
+      IllegalStateException(
+        "Can't save this recording over ${file.absolutePath}: it has labels that can't be read " +
+          "($reason), and saving would delete them. Fix the file, or move its labels aside, then save again.",
+      ),
+    )
+    // Not YAML at all: it loses nothing unless it names a label list.
+    val lists = TrailLabels.readLists(text)
+      ?: return if (LABEL_KEY.containsMatchIn(text)) refuse("the file is not valid YAML") else Result.success(null)
+    val curated = lists.getValue(TrailLabels.CURATED_KEY)
+    val generated = lists.getValue(TrailLabels.GENERATED_KEY)
+    (curated.exceptionOrNull() ?: generated.exceptionOrNull())?.let {
+      return refuse(it.message?.lineSequence()?.firstOrNull())
+    }
+    val kept = CarriedLabels(curated.getOrThrow(), generated.getOrThrow())
+    return Result.success(kept.takeIf { it.labels != null || it.generatedLabels != null })
+  }
+
+  /**
+   * [recordedYaml], about to replace [file], with [file]'s labels carried over. Unchanged when [file]
+   * has none. A failure when [recordedYaml] cannot hold them (it does not decode as a unified trail),
+   * because writing it would delete them.
+   */
+  fun withLabelsCarried(recordedYaml: String, file: File): Result<String> {
+    val kept = labelsToCarry(file).getOrElse { return Result.failure(it) } ?: return Result.success(recordedYaml)
+    val yaml = createTrailblazeYaml()
+    val recorded = runCatching { yaml.decodeUnifiedTrail(recordedYaml) }.getOrElse {
+      return Result.failure(
+        IllegalStateException(
+          "Can't save this recording over ${file.absolutePath}: the file has labels, and the recording " +
+            "can't hold them (${it.message?.lineSequence()?.firstOrNull()}), so saving would delete them.",
+        ),
+      )
+    }
+    val replacement = kept.applyTo(recorded)
+    scopedLabelsLost(file, replacement)?.let { return Result.failure(it) }
+    return Result.success(yaml.encodeUnifiedTrailToString(replacement))
+  }
+
+  // Quoted keys too: `"labels":` decodes to the same field.
+  private val LABEL_KEY = Regex("""(^|[\s{,])["']?(labels|generatedLabels)["']?\s*:""", RegexOption.MULTILINE)
 
   /**
    * Write [content] to [target] via a temp file in the same directory followed by an atomic rename,

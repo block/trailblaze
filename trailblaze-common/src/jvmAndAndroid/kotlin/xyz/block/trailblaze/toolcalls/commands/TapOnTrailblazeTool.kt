@@ -162,7 +162,7 @@ data class TapOnTrailblazeTool(
      * that records as "50.8%" replays to the same integer pixel on the same bounds — no
      * IEEE-754 drift mismatching record vs. replay.
      */
-    internal fun tapPointIn(
+    fun tapPointIn(
       bounds: TrailblazeNode.Bounds,
       relativePoint: String?,
       tool: TrailblazeTool,
@@ -192,7 +192,7 @@ data class TapOnTrailblazeTool(
      * Parses `"90%,50%"` → `(90.0, 50.0)`. Clamps to `[0, 100]`. Tolerates whitespace and
      * raw numbers without `%` (so `"50,50"` works too). Returns null for malformed input.
      */
-    internal fun parseRelativePoint(s: String): Pair<Double, Double>? {
+    fun parseRelativePoint(s: String): Pair<Double, Double>? {
       val parts = s.trim().split(",").map { it.trim() }
       if (parts.size != 2) return null
       fun parsePct(p: String): Double? {

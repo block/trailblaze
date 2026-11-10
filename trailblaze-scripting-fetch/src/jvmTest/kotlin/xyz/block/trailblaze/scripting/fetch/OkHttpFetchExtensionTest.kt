@@ -3,6 +3,7 @@ package xyz.block.trailblaze.scripting.fetch
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -126,6 +127,31 @@ class OkHttpFetchExtensionTest {
     assertEquals("POST", seenMethod.get())
     assertEquals("application/json", seenContentType.get())
     assertEquals("""{"flag":true}""", seenBody.get())
+  }
+
+  @Test
+  fun `fetch carries text outside the BMP both ways`() = runBlocking {
+    val text = """{"content":"👍 Ship it 🚀 é"}"""
+    val seenBody = AtomicReference<String>()
+    val baseUrl = startServer { exchange ->
+      seenBody.set(exchange.requestBody.readBytes().decodeToString())
+      val body = text.toByteArray()
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.write(body)
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool(
+      "fetchProbe",
+      buildJsonObject {
+        put("url", "$baseUrl/publish")
+        put("init", buildJsonObject { put("method", "POST"); put("body", text) })
+      },
+    )
+    val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+
+    assertEquals(text, seenBody.get())
+    assertEquals(text, probe["body"]!!.jsonPrimitive.content)
   }
 
   // ---- Regression coverage for the __trailblazeFetch asyncFunction -> function + runBlocking
@@ -310,6 +336,121 @@ class OkHttpFetchExtensionTest {
 
     assertEquals(200, probe["status"]!!.jsonPrimitive.int, "the 302 should have been followed to /landed")
     assertEquals("landed", probe["body"]!!.jsonPrimitive.content)
+    assertEquals(true, probe["redirected"]!!.jsonPrimitive.boolean)
+  }
+
+  @Test
+  fun `redirect manual returns the 3xx with its Location instead of following it`() = runBlocking {
+    val landed = AtomicReference(false)
+    val baseUrl = startServer { exchange ->
+      if (exchange.requestURI.path.endsWith("/landed")) {
+        landed.set(true)
+        exchange.sendResponseHeaders(200, -1)
+      } else {
+        exchange.responseHeaders.add("Location", "/landed")
+        exchange.sendResponseHeaders(302, -1)
+      }
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool(
+      "fetchProbe",
+      buildJsonObject {
+        put("url", "$baseUrl/start")
+        put("init", buildJsonObject { put("redirect", "manual") })
+      },
+    )
+    val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+
+    assertEquals(302, probe["status"]!!.jsonPrimitive.int)
+    assertEquals("/landed", probe["location"]!!.jsonPrimitive.content)
+    assertEquals(false, probe["redirected"]!!.jsonPrimitive.boolean)
+    assertEquals(false, landed.get(), "the redirect target must not be requested")
+  }
+
+  @Test
+  fun `redirect error rejects on a 3xx`() = runBlocking {
+    val baseUrl = startServer { exchange ->
+      exchange.responseHeaders.add("Location", "/landed")
+      exchange.sendResponseHeaders(302, -1)
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool(
+      "fetchProbe",
+      buildJsonObject {
+        put("url", "$baseUrl/start")
+        put("init", buildJsonObject { put("redirect", "error") })
+      },
+    )
+    val error = Json.parseToJsonElement(textContent(result)).jsonObject["error"]?.jsonPrimitive?.content
+
+    assertTrue(error?.contains("redirect") == true, "expected a redirect rejection; got: $error")
+  }
+
+  @Test
+  fun `redirect error returns a 300, which fetch doesn't treat as a redirect`() = runBlocking {
+    val baseUrl = startServer { exchange ->
+      exchange.responseHeaders.add("Location", "/landed")
+      exchange.sendResponseHeaders(300, -1)
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool(
+      "fetchProbe",
+      buildJsonObject {
+        put("url", "$baseUrl/choices")
+        put("init", buildJsonObject { put("redirect", "error") })
+      },
+    )
+    val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+
+    assertEquals(300, probe["status"]!!.jsonPrimitive.int, "got: $probe")
+  }
+
+  @Test
+  fun `a retried 408 is not reported as redirected`() = runBlocking {
+    val requests = AtomicInteger(0)
+    val baseUrl = startServer { exchange ->
+      if (requests.getAndIncrement() == 0) {
+        exchange.sendResponseHeaders(408, -1)
+      } else {
+        val body = "retried".toByteArray()
+        exchange.sendResponseHeaders(200, body.size.toLong())
+        exchange.responseBody.write(body)
+      }
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool("fetchProbe", buildJsonObject { put("url", "$baseUrl/slow") })
+    val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+
+    assertEquals(200, probe["status"]!!.jsonPrimitive.int, "OkHttp should have retried the 408")
+    assertEquals(2, requests.get())
+    assertEquals(false, probe["redirected"]!!.jsonPrimitive.boolean)
+  }
+
+  @Test
+  fun `an empty redirect mode is rejected, not read as follow`() = runBlocking {
+    val baseUrl = startServer { exchange -> exchange.sendResponseHeaders(200, -1) }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = host.callTool(
+      "fetchProbe",
+      buildJsonObject {
+        put("url", "$baseUrl/start")
+        put("init", buildJsonObject { put("redirect", "") })
+      },
+    )
+    val error = Json.parseToJsonElement(textContent(result)).jsonObject["error"]?.jsonPrimitive?.content
+
+    assertTrue(error?.contains("unsupported redirect mode") == true, "got: $error")
+  }
+
+  @Test
+  fun `executeFetch rejects an unknown redirect mode`() = runBlocking {
+    val result = OkHttpFetchExtension().executeFetch("""{"url":"http://127.0.0.1/","redirect":"sideways"}""")
+    assertTrue(result.contains("unsupported redirect mode"), "got: $result")
   }
 
   @Test

@@ -3,6 +3,7 @@ id: navigation
 description: "Scroll until visible, open URLs, and app launching."
 drivers:
   - android-ondevice-accessibility
+  - android-test
   - ios-host
   - ios-axe
 tools:

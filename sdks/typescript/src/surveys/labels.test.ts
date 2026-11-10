@@ -172,19 +172,19 @@ describe("label phases", () => {
   });
 
   test("a label with no findings behind it is refused", async () => {
-    const empty = withId(survey({ label: () => ({ name: "unproven", findings: [] }) }), "empty");
+    const empty = withId(survey({ label: () => ({ type: "test", name: "unproven", findings: [] }) }), "empty");
     const report = await runSurveys({ surveys: [empty], sessions: [checkout] });
     expect(report.labels).toEqual([]);
     expect(report.labelErrors[0]!.message).toContain("returned label unproven with no findings");
   });
 
   test("dependsOn names one survey even when two exports share its spec object", async () => {
-    const shared = { label: (batch: { findings: ReadonlyArray<{ summary: string }> }) => batch.findings.map((f) => ({ name: f.summary, findings: [f] })) };
+    const shared = { label: (batch: { findings: ReadonlyArray<{ summary: string }> }) => batch.findings.map((f) => ({ type: "test", name: f.summary, findings: [f] })) };
     const from = (summary: string) => (session: { analytics: { filter(q: object): unknown[] } }) =>
       session.analytics.filter({ name: "Journey Complete" }).slice(0, 1).map((e) => ({ summary, evidence: [e] }));
     const a = survey(shared as never, from("from a") as never);
     const b = survey(shared as never, from("from b") as never);
-    const down = withId(survey({ dependsOn: { a }, label: ({ dependsOn }) => dependsOn.a.labels.map((l) => ({ name: l.name, findings: l.findings })) }), "down");
+    const down = withId(survey({ dependsOn: { a }, label: ({ dependsOn }) => dependsOn.a.labels.map((l) => ({ type: "test", name: l.name, findings: l.findings })) }), "down");
     const report = await runSurveys({ surveys: [down], available: [withId(a, "a"), withId(b, "b"), down], sessions: [checkout] });
     expect(report.labelErrors).toEqual([]);
     expect(report.labels.filter((l) => l.survey === "down").map((l) => l.name)).toEqual(["from a"]);
@@ -195,7 +195,7 @@ describe("label phases", () => {
     const forged = withId(
       survey({
         dependsOn: { journeys },
-        label: () => ({ name: "forged", findings: [{ survey: "journeys", session: "run-elsewhere", summary: "Completed take-payment", evidence: [] }] }),
+        label: () => ({ type: "test", name: "forged", findings: [{ survey: "journeys", session: "run-elsewhere", summary: "Completed take-payment", evidence: [] }] }),
       }),
       "forged",
     );
@@ -227,6 +227,44 @@ describe("label phases", () => {
     expect(report.labels.filter((l) => l.survey === "androidJobs").map((l) => [l.name, l.runs])).toEqual([["take-payment", ["run-checkout"]]]);
     // The unscoped survey still labels both.
     expect(report.labels.find((l) => l.survey === "journeys")!.runs).toEqual(["run-checkout", "run-ios"]);
+  });
+});
+
+describe("warning surveys", () => {
+  /** Warns on a run for each journey it completed, standing in for a crash or a failed request. */
+  function journeyWarning() {
+    return survey({
+      warning: true,
+      requiresFinishedSession: true,
+      find: (session) =>
+        session.analytics.filter({ name: "Journey Complete" }).map((e) => ({ summary: `Warning for ${String(e.properties.journey)}`, evidence: [e] })),
+    });
+  }
+
+  test("a warning survey's findings are stored marked as warnings, and other surveys' are not", async () => {
+    const dir = writeSession("run-warned", "Warned", ["take-payment"], { parent: join(root, "warnings") });
+    const report = await runSurveys({ surveys: [withId(journeyWarning(), "journeyWarning", "v1"), withId(journeySurvey(), "journeys", "v1")], sessions: [dir] });
+    expect(report.surveys.find((s) => s.id === "journeyWarning")?.warning).toBe(true);
+    writeStoredSurveys(report);
+    const stored = readStoredSurveys(dir)!.surveys;
+    expect(stored.journeyWarning!.warning).toBe(true);
+    expect(stored.journeyWarning!.findings.map((f) => f.summary)).toEqual(["Warning for take-payment"]);
+    expect(stored.journeys!.warning).toBeUndefined();
+  });
+
+  test("a warning survey skips a run that has not ended, and other surveys still read it", async () => {
+    const dir = writeSession("run-unfinished", "Still running", ["take-payment"], { ended: false, parent: join(root, "warnings") });
+    const report = await runSurveys({ surveys: [withId(journeyWarning(), "journeyWarning", "v1"), withId(journeySurvey(), "journeys", "v1")], sessions: [dir] });
+    const result = report.sessions[0]!;
+    expect(result.skipped).toEqual(["journeyWarning"]);
+    expect(result.findings.map((f) => f.survey)).toEqual(["journeys"]);
+  });
+
+  test("a warning survey reads the finished run and has a find phase, or it is refused when defined", () => {
+    const find = () => undefined;
+    expect(() => survey({ warning: true, find })).toThrow("requiresFinishedSession: true");
+    expect(() => survey({ warning: true, requiresFinishedSession: true, dependsOn: { j: journeySurvey() }, label: () => [] })).toThrow("needs a find phase");
+    expect(() => survey({ warning: false, find })).not.toThrow();
   });
 });
 
@@ -696,10 +734,45 @@ export const jobs = trailblaze.survey({
     expect(out.stderr).toContain(`Left out ${other}: it claims session run-checkout, as ${checkout} does, but records it differently`);
   });
 
+  test("with --format none and --quiet, a survey that throws still says which one failed, where, and why", () => {
+    const dir = join(root, "throwing-surveys");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "broken.survey.ts"),
+      `import { trailblaze } from "@trailblaze/scripting/surveys";
+export const broken = trailblaze.survey({ find: () => { throw new Error("boom"); } });
+`,
+    );
+    const out = spawnSync("bun", [join(import.meta.dir, "cli.ts"), "--surveys", dir, "--quiet", "--format", "none", checkout], { cwd: root, encoding: "utf8" });
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(`Survey broken failed on ${checkout}:`);
+    expect(out.stderr).toContain("boom");
+
+    // A session that would not load is told too: it was not surveyed at all.
+    const corrupt = join(root, "corrupt-session");
+    cpSync(checkout, corrupt, { recursive: true });
+    // A capture it cannot read: a directory where its file should be, which no user can read as one.
+    const capture = join(corrupt, "events", "app.analytics.ndjson");
+    rmSync(capture);
+    mkdirSync(capture);
+    const unread = spawnSync("bun", [join(import.meta.dir, "cli.ts"), "--surveys", dir, "--quiet", "--format", "none", corrupt], { cwd: root, encoding: "utf8" });
+    expect(unread.stderr).toContain(`Could not survey ${corrupt}:`);
+  });
+
   test("an unknown --survey name is a usage error that names it", () => {
     const out = cli("--survey", "nope", checkout);
     expect(out.status).toBe(2);
     expect(out.stderr).toContain("No survey named nope");
+  });
+
+  test("--warnings over a workspace with no warning survey is a usage error, unless --allow-none says nothing is fine", () => {
+    const out = cli("--warnings", "--quiet", "--format", "none", checkout);
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("No warning surveys found");
+
+    const allowed = cli("--warnings", "--allow-none", "--quiet", "--format", "none", checkout);
+    expect(allowed.status).toBe(0);
+    expect(allowed.stderr).toBe("");
   });
 
   test("a survey whose modules changed since this process first read them gets no version", async () => {
@@ -857,7 +930,7 @@ export const jobs = survey({
     const wrong: number[] = dependsOn.journeys.findings.map((f) => f.data.journey);
     // @ts-expect-error: only what dependsOn lists can be read.
     dependsOn.refunds.labels;
-    return [{ name: String(ids.length + names.length + wrong.length), findings: [] }];
+    return [{ type: "count", name: String(ids.length + names.length + wrong.length), findings: [] }];
   },
 });
 `,

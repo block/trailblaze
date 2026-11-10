@@ -2,6 +2,7 @@
 // browser page, and a survey asserted while the trail is still running.
 
 import { validateFinding, type SurveyContext, type SurveyDefinition, type FindResult } from "./survey.js";
+import { scopeOf, scopedSession } from "./phase.js";
 import type { SurveySession } from "./session.js";
 import type { Finding, SurveyFinding, SessionRecord } from "./types.js";
 
@@ -64,7 +65,9 @@ export async function runSurvey(
       onError?.({ survey: id, message });
     },
   };
-  const result = await def.handler(session, ctx);
+  // A finished run is read in the survey's scope; mid-trail, the read's own `since` already chose.
+  const view = session.final ? scopedSession(session, scopeOf(def.spec)) : session;
+  const result = await def.handler(view, ctx);
   return normalizeResult(result, found).map((f) => {
     validateFinding(f, id);
     const finding: Finding = { survey: id, session: session.id, summary: f.summary, evidence: f.evidence.map(compactRecord) };

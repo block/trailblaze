@@ -7,6 +7,7 @@
 
 import type { TrailblazeLog, TrailblazeToolLog } from "../generated/trailrunner-dtos.js";
 
+import type { SurveyScope } from "./phase.js";
 import type { FindingSpec, LabelBatch, LabelResult, SurveyDefinition, SurveyHandler } from "./survey.js";
 
 /** Where a piece of evidence came from. Drives how a report renders it. */
@@ -79,6 +80,14 @@ export interface NetworkRequest extends SessionRecord {
   bodyFiles?: string[];
   /** `device` when the device's clock stamped `timeMs`, as the capture said; absent means the host's. */
   clock?: "device";
+  /**
+   * The part of the run the request started in, as Trailblaze's capture tagged it: `trailhead` while
+   * a trailhead step set the run up, `trail` once the trail's own steps began, `teardown` once the
+   * trailhead's teardown ran. Absent when the capture
+   * tagged none (an app's own capture, or one older than the tag). `phaseOf` reads it first, since it
+   * holds whichever clock stamped `timeMs`.
+   */
+  trailPhase?: "trailhead" | "trail" | "teardown";
 }
 
 /** One analytics event, normalized from whatever stream shape the app's capture emits. */
@@ -123,6 +132,8 @@ export interface LogRecord<L extends TrailblazeLog = TrailblazeLog> extends Sess
   /** Position in the session's ordered log list. */
   index: number;
   log: L;
+  /** `device` when `timeMs` is still on the device's clock: device-stamped, and no log anchored that clock to the host's. Absent means the host's. */
+  clock?: "device";
 }
 
 /** One tool invocation, whether the runner, the LLM, or a recording issued it. */
@@ -134,6 +145,8 @@ export interface ToolCall extends SessionRecord {
   durationMs: number;
   /** Set when a multi-device trail bound this call to a named device. */
   deviceName?: string;
+  /** `device` when `timeMs` is still on the device's clock: device-stamped, and no log anchored that clock to the host's. Absent means the host's. */
+  clock?: "device";
   log: TrailblazeToolLog;
 }
 
@@ -149,6 +162,8 @@ export interface Objective extends SessionRecord {
   startMs?: number;
   endMs?: number;
   explanation?: string;
+  /** `device` when `timeMs` is still on the device's clock: device-stamped, and no log anchored that clock to the host's. Absent means the host's. */
+  clock?: "device";
 }
 
 /** One string in the view tree at some capture. */
@@ -255,8 +270,11 @@ export interface Finding<D extends object = Record<string, unknown>> extends Sur
  * type: the framework knows none. A label's runs are the sessions of its findings.
  */
 export interface LabelInput<LD extends object = Record<string, unknown>> {
-  /** What kind of label it is (`job`, `journey`, ...). The survey that emits a type owns it. */
-  type?: string;
+  /**
+   * What kind of label it is (`job`, `journey`, ...): lowercase letters, digits, `-` and `.`, starting
+   * with a letter or digit. Several surveys may emit one type; the survey is part of a label's identity.
+   */
+  type: string;
   /** Which one. Labels of one survey with the same type and name are one label, their findings combined. */
   name: string;
   /** One line on why the findings add up to this label. */
@@ -289,7 +307,7 @@ export interface FindingRef {
 export interface LabelRecord {
   survey: string;
   version?: string;
-  type?: string;
+  type: string;
   name: string;
   reasoning?: string;
   data?: object;
@@ -327,6 +345,27 @@ export interface SurveySpec<
    * same rules as a scripted tool, so it cannot import `node:*` or Bun APIs.
    */
   requiresFinishedSession?: boolean;
+  /**
+   * True when every finding this survey returns is a warning on its run: the run's verdict stands,
+   * and the finding says "look at this" (a crash, a failed request). `trailblaze survey --warnings`
+   * runs only the warning surveys over finished sessions. A warning judges the whole run, so a
+   * warning survey also sets `requiresFinishedSession: true`, and needs a find phase.
+   */
+  warning?: boolean;
+  /**
+   * Which part of a finished run the find phase reads, as a `SurveyScope`. `Trail` (the default, or
+   * `All` for a `warning` survey): only
+   * the trail's own steps, so what the run did to set up — signing in, the first sync, the screen it
+   * left the app on — is not taken for what the trail tested. `DeviceSetup`, `Trailhead` or
+   * `Teardown`: only that part. A list (`[SurveyScope.DeviceSetup, SurveyScope.Trailhead]`): those
+   * parts. `All`: the whole run, for a survey that measures setup, diagnoses any failure, or weighs
+   * the parts itself with `phaseOf`.
+   *
+   * Every record list is narrowed; files and the summary are not. A record with no time, and a run
+   * whose boundary can't be found, stay in every scope (see `trailStartOf`). Mid-trail, the tool's own
+   * `since` decides what is read instead, and this is not applied.
+   */
+  scope?: SurveyScope;
   /**
    * The find phase: runs once per session and returns what it found there. A function of the
    * session, or a declarative finding: the queries that prove it, when nothing needs computing.

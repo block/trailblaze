@@ -19,6 +19,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.AnnotatedString
 import xyz.block.trailblaze.android.test.AndroidTestTarget
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 import xyz.block.trailblaze.android.test.isIdleTimeout
 import xyz.block.trailblaze.android.test.onMainThread
 import xyz.block.trailblaze.android.test.perf
@@ -63,13 +64,32 @@ internal object AndroidComposeActions {
     // One read for the whole lookup: each [AndroidTestTarget.composeRoots] synchronizes with the
     // app, and finding the site, its node and its reachable point are questions about one frame.
     val roots = perf("click.roots") { target.composeRoots() }
-    val (site, relocation) = perf("click.nearestWith") { nearestWith(roots, semanticsId, "clickable", SemanticsActions.OnClick) }
+    val (site, relocation) = perf("click.nearestWith") { nearestWith(roots, semanticsId, "clickable", SemanticsActions.OnClick, touchSelfWhenAmbiguous = true) }
     val node = perf("click.findNode") { findSemanticsNode(roots, site) }
     // The touch below is only delivered once the node has stopped moving; see [awaitStill].
     node?.let { perf("click.awaitStill") { awaitStill { it.boundsInWindow } } }
-    val point = node?.let { perf("click.reachablePoint") { reachablePoint(roots, it) } }
+    // A node with no click handler of its own gets the plain touch at its centre the accessibility
+    // driver gives it: whatever is drawn there takes it, as it would for a finger.
+    val point = node?.let {
+      if (!it.config.contains(SemanticsActions.OnClick)) it.boundsInWindow.center
+      else perf("click.reachablePoint") { reachablePoint(roots, it) }
+    }
     val moved = point != null && point != node.boundsInWindow.center
+    // With a second window of the app on screen (a tooltip, a popup, a sheet), the tap goes
+    // through the window manager like a finger's, so the window on top at that point takes it.
+    // A touch injected into the node's own window skips whatever is drawn over it: a tooltip
+    // that swallows the first tap under the accessibility driver let it through here.
+    val throughWindowManager = point != null && ForeignWindow.applicationWindowCount() > 1
+    // Set once the touch or action has gone to the app. A failure after that (in the settle) is
+    // not a lookup failure: the tap happened, so it must not be retried or replaced by another.
+    var acted = false
     val dispatched = runCatching {
+      if (throughWindowManager) {
+        val windowToScreen = node!!.positionOnScreen - node.positionInWindow
+        perf("click.windowManagerTap") { AndroidScrollActions.injectTap(target, point!! + windowToScreen) }
+        acted = true
+        return@runCatching
+      }
       perf("click.dispatchAndSettle") { target.dispatchAndAwaitSettle {
         when {
           point != null ->
@@ -78,6 +98,7 @@ internal object AndroidComposeActions {
             rule.nodeWithId(site).performSemanticsAction(SemanticsActions.OnClick)
           else -> rule.nodeWithId(site).performClick()
         }
+        acted = true
       } }
     }
     // A rule action synchronizes with the app BEFORE it acts, so an idle timeout here means the
@@ -85,11 +106,31 @@ internal object AndroidComposeActions {
     // without end loses taps that way. The accessibility driver taps
     // there regardless, so this does too, with a raw touch at the same point. (A timeout in the
     // settle AFTER the action is already absorbed by dispatchAndAwaitSettle.)
+    //
+    // A covered node goes through its own click action instead, as the rule would have: a button
+    // under a handler-less node on a screen that never settles would otherwise wait out its idle
+    // timeouts and fail there.
     val unsynchronized = dispatched.exceptionOrNull()?.let { failure ->
-      if (!failure.isIdleTimeout() || node == null || point == null) throw failure
-      val windowToScreen = node.positionOnScreen - node.positionInWindow
-      AndroidScrollActions.injectTap(target, point + windowToScreen)
-      UNSYNCHRONIZED_TAP_NOTE
+      if (acted) throw failure
+      // The rule looks the node up again when it acts; a list re-rendered in between (search
+      // results arriving) leaves no node with that id, which the caller retries against the new frame.
+      if (!failure.isIdleTimeout() && findSemanticsNode(target.composeRoots(), site) == null) {
+        throw ComposeNodeGoneException(site)
+      }
+      if (!failure.isIdleTimeout() || node == null) throw failure
+      val onClick = node.config.getOrNull(SemanticsActions.OnClick)?.action
+      when {
+        point != null -> {
+          val windowToScreen = node.positionOnScreen - node.positionInWindow
+          AndroidScrollActions.injectTap(target, point + windowToScreen)
+          UNSYNCHRONIZED_TAP_NOTE
+        }
+        onClick != null && node.offersClickAction() -> {
+          target.dispatchAndAwaitSettle { onMainThread { onClick() } }
+          UNSYNCHRONIZED_ACTION_NOTE
+        }
+        else -> throw failure
+      }
     }
     return listOfNotNull(
       relocation,
@@ -160,12 +201,19 @@ internal object AndroidComposeActions {
       .firstOrNull { touchAtReaches(roots, node, it) }
   }
 
+  private const val AMBIGUOUS_CENTRE_TOUCH_NOTE =
+    "The element is not clickable and several clickable elements inside it are equally close, so " +
+      "it was touched at its centre, as the accessibility driver touches it."
+
   private const val RELOCATED_TAP_NOTE =
     "Another element was drawn over this one's center, so the tap was moved to the nearest point " +
       "on it the touch still reaches."
 
   private const val UNSYNCHRONIZED_TAP_NOTE =
     "The screen never went idle, so the tap was sent as a plain touch without waiting for it."
+
+  private const val UNSYNCHRONIZED_ACTION_NOTE =
+    "The screen never went idle, so the click action was invoked directly without waiting for it."
 
   private const val COVERED_NOTE =
     "Another element was drawn over this one, so the click action was dispatched to it directly " +
@@ -289,19 +337,20 @@ internal object AndroidComposeActions {
    * Descending stops at the shallowest depth that has any candidate and fails when that depth has
    * more than one, for the same reason [AndroidViewActions] does: the resolver refuses an ambiguous
    * selector, and taking the first of several equally close descendants would reinstate that guess.
+   * A tap is the exception ([touchSelfWhenAmbiguous]): the accessibility driver touches the resolved
+   * node's centre with the same recording, so the tap goes to the one child covering that centre,
+   * or, when none or several do, to the resolved node itself, touched at its centre.
    */
   private fun nearestWith(
     roots: List<SemanticsNode>,
     semanticsId: Int,
     capability: String,
     action: SemanticsPropertyKey<*>,
+    touchSelfWhenAmbiguous: Boolean = false,
   ): Pair<Int, String?> {
     val resolved =
       findSemanticsNode(roots, semanticsId)
-        ?: error(
-          "Compose node $semanticsId is no longer in the semantics tree; the screen changed " +
-            "between observation and action.",
-        )
+        ?: throw ComposeNodeGoneException(semanticsId)
     if (resolved.config.contains(action)) return semanticsId to null
 
     var ancestor = resolved.parent
@@ -318,7 +367,10 @@ internal object AndroidComposeActions {
       // name the missing action rather than paraphrasing it here.
       0 -> semanticsId to null
       1 -> nearest[0].id to resolved.relocationNote(capability, "descendant", nearest[0])
-      else -> error(
+      else -> nearest.singleOrNull { touchSelfWhenAmbiguous && it.boundsInWindow.contains(resolved.boundsInWindow.center) }
+        ?.let { it.id to resolved.relocationNote(capability, "descendant under its centre", it) }
+        ?: (semanticsId to AMBIGUOUS_CENTRE_TOUCH_NOTE).takeIf { touchSelfWhenAmbiguous }
+        ?: error(
         "Compose node $semanticsId is not $capability and ${nearest.size} of its descendants " +
           "are, all equally close: ${nearest.joinToString { it.id.toString() }}. Refusing to " +
           "pick one — narrow the selector to the node the action should land on.",
@@ -341,7 +393,7 @@ internal object AndroidComposeActions {
     return emptyList()
   }
 
-  private fun findSemanticsNode(roots: List<SemanticsNode>, semanticsId: Int): SemanticsNode? {
+  internal fun findSemanticsNode(roots: List<SemanticsNode>, semanticsId: Int): SemanticsNode? {
     fun walk(node: SemanticsNode): SemanticsNode? {
       if (node.id == semanticsId) return node
       node.children.forEach { child -> walk(child)?.let { return it } }
@@ -369,3 +421,12 @@ internal object AndroidComposeActions {
         "already installed by the app's test harness."
     }
 }
+
+/**
+ * The node a selector resolved to left the tree before the action reached it: the screen
+ * recomposed in between. Resolving the selector again finds the node that replaced it.
+ */
+class ComposeNodeGoneException(semanticsId: Int) : IllegalStateException(
+  "Compose node $semanticsId is no longer in the semantics tree; the screen changed between " +
+    "observation and action.",
+)

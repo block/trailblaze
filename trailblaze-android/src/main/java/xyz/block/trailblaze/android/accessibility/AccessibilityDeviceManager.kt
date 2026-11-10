@@ -955,16 +955,49 @@ class AccessibilityDeviceManager(
    * it actually matters.
    *
    * When no IME signal exists at all (the common case), this is a no-op.
+   *
+   * [retryDismissal] `false` (a step that set `hideKeyboardBefore: false`) skips the retry and
+   * fails at once: that step kept the keyboard up because closing it moves the screen, so
+   * dismissing it here would tap at coordinates resolved before the move.
    */
-  private fun failIfTapPointOccludedByIme(x: Int, y: Int, targetDescription: String) {
-    val firstSignal = imeOcclusionSignal(x, y)
+  private fun failIfTapPointOccludedByIme(
+    x: Int,
+    y: Int,
+    targetDescription: String,
+    retryDismissal: Boolean = true,
+  ) = failIfTapPointOccludedByIme(
+    x = x,
+    y = y,
+    targetDescription = targetDescription,
+    retryDismissal = retryDismissal,
+    occlusionSignal = { px, py -> imeOcclusionSignal(px, py) },
+    dismiss = { dismissKeyboard() },
+  )
+
+  /** [failIfTapPointOccludedByIme] with the IME probe and the dismissal injected, for tests. */
+  internal fun failIfTapPointOccludedByIme(
+    x: Int,
+    y: Int,
+    targetDescription: String,
+    retryDismissal: Boolean,
+    occlusionSignal: (x: Int, y: Int) -> String?,
+    dismiss: () -> Boolean,
+  ) {
+    val firstSignal = occlusionSignal(x, y)
     if (firstSignal == null) return
+    if (!retryDismissal) {
+      error(
+        "Tap target '$targetDescription' at ($x, $y) is occluded by the soft IME " +
+          "($firstSignal), and the step set hideKeyboardBefore=false, so the keyboard is " +
+          "left up. Tap would land on the keyboard instead of the intended target.",
+      )
+    }
     Console.log(
       "[ime-occlusion] resolved tap target ($x, $y) is occluded by the IME ($firstSignal) " +
         "— re-attempting dismissal before failing.",
     )
     val dismissalSent = try {
-      dismissKeyboard()
+      dismiss()
     } catch (e: Exception) {
       // Even GLOBAL_ACTION_BACK refused — propagate so caller sees the real reason.
       error(
@@ -972,7 +1005,7 @@ class AccessibilityDeviceManager(
           "($firstSignal), and the accessibility service refused GLOBAL_ACTION_BACK: ${e.message}",
       )
     }
-    val secondSignal = imeOcclusionSignal(x, y)
+    val secondSignal = occlusionSignal(x, y)
     if (secondSignal != null) {
       val likelyCause = if (dismissalSent) {
         "a modal screen whose BackHandler consumes GLOBAL_ACTION_BACK before the IME " +
@@ -1116,9 +1149,16 @@ class AccessibilityDeviceManager(
     // Auto-dismiss keyboard before element resolution (once, not per-retry).
     // During recording playback, there's no LLM to insert hideKeyboard steps,
     // so the keyboard may obscure the target element after inputText.
+    // A step can opt out: closing the IME can scroll a form back to its focused field, taking
+    // the target off screen. `failIfTapPointOccludedByIme` below still fails a covered target,
+    // without dismissing the keyboard either.
     if (isKeyboardVisible()) {
-      Console.log("Auto-hiding keyboard before element resolution")
-      hideKeyboard()
+      if (action.hideKeyboardBefore) {
+        Console.log("Auto-hiding keyboard before element resolution")
+        hideKeyboard()
+      } else {
+        Console.log("Keyboard is visible; leaving it up (hideKeyboardBefore=false)")
+      }
     }
 
     // --- Poll for element match (mirrors executeAssertVisible pattern) ---
@@ -1140,7 +1180,9 @@ class AccessibilityDeviceManager(
             val center = result.node.centerPoint()
               ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
             Console.log("Resolved via TrailblazeNode: ${action.nodeSelector.description()} at (${center.first}, ${center.second})")
-            failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
+            failIfTapPointOccludedByIme(
+              center.first, center.second, action.nodeSelector.description(), action.hideKeyboardBefore,
+            )
             // Against the unfiltered tree: `filterImportantForAccessibility` promotes children of
             // dropped nodes up, collapsing parent/child pairs into siblings, which would weaken
             // the ancestor/descendant exclusion exactly where the tree is most collapsed.
@@ -1164,7 +1206,9 @@ class AccessibilityDeviceManager(
             Console.log(
               "TrailblazeNode selector matched ${result.nodes.size} elements, using preferred (visible) match at (${center.first}, ${center.second})"
             )
-            failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
+            failIfTapPointOccludedByIme(
+              center.first, center.second, action.nodeSelector.description(), action.hideKeyboardBefore,
+            )
             warnIfTapPointOccluded(
               unfilteredTree, chosen, center.first, center.second, action.nodeSelector.description(),
             )
@@ -1208,6 +1252,7 @@ class AccessibilityDeviceManager(
           outcome.x,
           outcome.y,
           "fallback coordinates for ${action.nodeSelector.description()}",
+          action.hideKeyboardBefore,
         )
         tapOrLongPress(outcome.x, outcome.y, action.longPress)
         ExecutionResult(

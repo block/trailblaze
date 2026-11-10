@@ -27,6 +27,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /**
@@ -97,6 +98,18 @@ class ScrollUntilVisibleOnDeviceTest {
       ),
     )
     run(AndroidTestAssertVisibleTool(viewText(ScrollFixtureActivity.TARGET_LABEL)))
+  }
+
+  /**
+   * A recorded `swipeWithRelativeCoordinates` drags a finger across the screen, so a long list
+   * moves under it: the first row leaves the screen.
+   */
+  @Test
+  fun aRecordedRelativeSwipeDragsTheListUnderTheFinger() {
+    run(AndroidTestAssertVisibleTool(viewText(ScrollFixtureActivity.TOP_LABEL)))
+    @Suppress("DEPRECATION")
+    run(SwipeWithRelativeCoordinatesTool(startRelative = "50%,85%", endRelative = "50%,20%"))
+    run(AndroidTestAssertNotVisibleTool(viewText(ScrollFixtureActivity.TOP_LABEL)))
   }
 
   /**

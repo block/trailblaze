@@ -224,6 +224,50 @@ class QuickJsToolHostTest {
   }
 
   @Test
+  fun `text outside the BMP survives every crossing between the tool and the host`() = runBlocking {
+    // Emoji are surrogate pairs in JS. Each direction a string crosses the native boundary is
+    // covered: tool args in, host-call args out, host-call result back in, tool result out, console.
+    val text = "👍 Ship it 🚀 é 中"
+    var hostSaw: String? = null
+    val binding = object : HostBinding {
+      override suspend fun callFromBundle(name: String, argsJson: String): String = error("unused")
+      override suspend fun callHostFunction(name: String, argsJson: String): String {
+        hostSaw = Json.parseToJsonElement(argsJson).jsonObject["text"]?.jsonPrimitive?.content
+        return Json.encodeToString(
+          JsonObject.serializer(),
+          buildJsonObject {
+            put("ok", true)
+            put("value", hostSaw)
+          },
+        )
+      }
+    }
+    val logs = mutableListOf<String>()
+    val host = QuickJsToolHost.connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["roundTrip"] = {
+        name: "roundTrip",
+        spec: {},
+        handler: async (args) => {
+          console.log("sent", args.text);
+          const reply = JSON.parse(globalThis.__trailblazeHost("roundTrip", JSON.stringify({ text: args.text })));
+          return { content: [{ type: "text", text: reply.value + "|" + (reply.value === args.text) }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+      logSink = { logs += it },
+    ).also { hosts.add(it) }
+
+    val result = host.callTool("roundTrip", buildJsonObject { put("text", text) })
+
+    assertEquals(text, hostSaw)
+    assertEquals(listOf("[trailblaze-tools] level=log msg=sent $text"), logs)
+    assertEquals("$text|true", (result["content"] as JsonArray).first().jsonObject["text"]?.jsonPrimitive?.content)
+  }
+
+  @Test
   fun `on-device engine exposes the Date clock but no event-loop timers`() = runBlocking {
     // Pins the runtime split that wall-clock-bounded scripted tools depend on: `Date` IS available
     // on this engine, `setTimeout` is NOT. Scripted tools that need a real elapsed-time ceiling read

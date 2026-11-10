@@ -3,6 +3,7 @@ package xyz.block.trailblaze.android.test
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -13,6 +14,7 @@ import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 
 /**
  * Launching the app under test by intent — the launch every in-process harness needs and none
@@ -33,9 +35,10 @@ object AppUnderTestLauncher {
     private set
 
   /**
-   * True from this process's first launch until any tool other than `launchApp` runs. The screen
-   * is then the entry point on whatever data the process started with, so a trailhead's restart
-   * or reinstall launch would only repeat the cold start the instrumentation just paid for.
+   * True from this process's first launch until a tool that may move the screen runs (anything
+   * but `launchApp`, a read, a broadcast or a permission grant). The screen is then the entry
+   * point on whatever data the process started with, so a trailhead's restart or reinstall launch
+   * would only repeat the cold start the instrumentation just paid for.
    */
   @Volatile
   var untouchedSinceColdLaunch: Boolean = false
@@ -49,12 +52,66 @@ object AppUnderTestLauncher {
   var usedSinceProcessStart: Boolean = false
     private set
 
-  /** A UI tool other than `launchApp` acted on the app; see [usedSinceProcessStart]. */
-  fun markUsed() {
-    usedSinceProcessStart = true
+  /**
+   * Set by a harness that leaves this process's first launch to the first tool that needs the app
+   * (see [launchIfDeferred]). Off by default: a harness that launches its Activity some other way
+   * must not have the launcher Activity started under it.
+   */
+  @Volatile
+  var launchOnFirstUse: Boolean = false
+
+  /**
+   * Launches the app when [launchOnFirstUse] deferred its first launch and nothing has made it.
+   * A screen the trail opened before its first UI step is adopted as that launch instead, since
+   * starting the entry point with CLEAR_TASK would throw it away: one of this app's Activities
+   * already resumed (a deep link over adb), or another app in front (Settings, opened over adb).
+   * The home screen and the system UI are not such a screen. A host-driven run starts from the
+   * home screen (the host shows it before a fresh run), so another app in front is one it opened.
+   */
+  fun launchIfDeferred() {
+    if (!launchOnFirstUse || hasLaunched) return
+    if (resumedActivityOrNull() != null || anotherAppWasOpened()) hasLaunched = true else launchAppUnderTest()
   }
 
-  /** A tool other than `launchApp` ran, so the app may no longer be at its fresh entry point. */
+  /** True when an app other than this one, the home screen or the system UI is in front. */
+  private fun anotherAppWasOpened(): Boolean {
+    val front = ForeignWindow.frontPackage() ?: return false
+    val packageManager = InstrumentationRegistry.getInstrumentation().targetContext.packageManager
+    val home = packageManager
+      .resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY)
+      ?.activityInfo?.packageName
+      // Unresolvable (package visibility hides it) or ambiguous (the chooser, "android"): which
+      // window is home is unknown, so launch as a fresh run would.
+      ?.takeIf { it != "android" }
+      ?: return false
+    return front != home && front != SYSTEM_UI_PACKAGE
+  }
+
+  /**
+   * Written to the app's own no-backup dir by an explicit `launchApp` and by the first UI tool that
+   * acts on the app. `pm clear` deletes it, so its absence proves the data was cleared since then.
+   * On disk rather than in memory so it outlives a process restart (a broadcast the app answers by
+   * restarting): a REINSTALL launch in the next process must still see the data was used. The
+   * instrumentation's own cold launch does not write it; that start is on the host-cleared data.
+   */
+  fun freshDataMarker(): java.io.File =
+    java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir, FRESH_DATA_MARKER)
+
+  /** Records that the app has run on its current data; see [freshDataMarker]. */
+  fun markDataUsed() {
+    val marker = freshDataMarker()
+    marker.parentFile?.mkdirs()
+    marker.createNewFile()
+  }
+
+  /** A UI tool other than `launchApp` acted on the app; see [usedSinceProcessStart]. */
+  fun markUsed() {
+    if (usedSinceProcessStart) return
+    usedSinceProcessStart = true
+    markDataUsed()
+  }
+
+  /** A tool that may move the screen ran, so the app may no longer be at its fresh entry point. */
   fun markTouched() {
     untouchedSinceColdLaunch = false
   }
@@ -76,6 +133,15 @@ object AppUnderTestLauncher {
   fun launchAppUnderTest(clearTask: Boolean = true) {
     val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
     initializeOkHttpAndroidPlatform(targetContext.applicationContext)
+    val beforeLaunch = if (clearTask) resumedActivityOrNull() else null
+    val coldLaunch = !hasLaunched
+    targetContext.startActivity(entryPointIntent(targetContext, clearTask))
+    awaitResumedActivity(otherThan = beforeLaunch)
+    hasLaunched = true
+    if (coldLaunch) untouchedSinceColdLaunch = true
+  }
+
+  private fun entryPointIntent(targetContext: Context, clearTask: Boolean): Intent {
     val packageName = targetContext.packageName
     val launchIntent =
       checkNotNull(targetContext.packageManager.getLaunchIntentForPackage(packageName)) {
@@ -85,12 +151,7 @@ object AppUnderTestLauncher {
       }
     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     if (clearTask) launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-    val beforeLaunch = if (clearTask) resumedActivityOrNull() else null
-    val coldLaunch = !hasLaunched
-    targetContext.startActivity(launchIntent)
-    awaitResumedActivity(otherThan = beforeLaunch)
-    hasLaunched = true
-    if (coldLaunch) untouchedSinceColdLaunch = true
+    return launchIntent
   }
 
   /**
@@ -102,11 +163,17 @@ object AppUnderTestLauncher {
    * [otherThan] rejects one known instance, so a caller that just asked for a launch waits for the
    * Activity that launch produces rather than accepting the one already on screen. Callers reading
    * the CURRENT Activity mid-trail pass nothing.
+   *
+   * [yieldToAnotherApp] stops waiting with [AnotherAppInFrontException] once another app's window
+   * is in front: the app's Activity stays paused behind it, so the wait could only time out. A
+   * target reading the screen mid-trail passes it, and a launch, whose wait starts with the
+   * launcher still in front, does not.
    */
-  fun awaitResumedActivity(otherThan: Activity? = null): Activity {
+  fun awaitResumedActivity(otherThan: Activity? = null, yieldToAnotherApp: Boolean = false): Activity {
     val deadline = System.currentTimeMillis() + LAUNCH_TIMEOUT_MS
     while (true) {
       resumedActivityOrNull()?.takeIf { it !== otherThan }?.let { return it }
+      if (yieldToAnotherApp) ForeignWindow.frontPackage()?.let { throw AnotherAppInFrontException(it) }
       check(System.currentTimeMillis() < deadline) {
         "No Activity reached RESUMED within ${LAUNCH_TIMEOUT_MS}ms of launching the app under test."
       }
@@ -240,7 +307,17 @@ object AppUnderTestLauncher {
   // Generous: a big app's cold start on a farm emulator's first launch includes dex/AOT warmup
   // and can need several times the 30s a sample app does. The ceiling only costs time when the
   // launch has genuinely failed.
+  private const val FRESH_DATA_MARKER = ".trailblaze-in-process-launched"
   private const val LAUNCH_TIMEOUT_MS = 120_000L
   private const val POLL_MS = 100L
   private const val TAG = "AppUnderTestLauncher"
+  private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 }
+
+/**
+ * Another app's window came to the front while this process waited for the app's Activity: a
+ * browser the app opened, a permission prompt, a settings screen a trail started. The screen is
+ * read through that window instead; see [ForeignWindow.screenState].
+ */
+class AnotherAppInFrontException(val frontPackage: String) :
+  IllegalStateException("$frontPackage's window is in front of the app under test")

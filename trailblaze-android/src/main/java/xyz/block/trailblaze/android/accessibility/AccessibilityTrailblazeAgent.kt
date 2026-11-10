@@ -256,6 +256,7 @@ class AccessibilityTrailblazeAgent(
     longPress: Boolean,
     tapRoute: TapRouteOverride?,
     timeoutMs: Long?,
+    hideKeyboardBefore: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val action = AccessibilityAction.TapOnElement(
@@ -263,6 +264,7 @@ class AccessibilityTrailblazeAgent(
       longPress = longPress,
       timeoutMs = timeoutMs ?: DEFAULT_ELEMENT_TIMEOUT_MS,
       tapRoute = tapRoute,
+      hideKeyboardBefore = hideKeyboardBefore,
     )
 
     return AccessibilityTrailRunner.runActions(

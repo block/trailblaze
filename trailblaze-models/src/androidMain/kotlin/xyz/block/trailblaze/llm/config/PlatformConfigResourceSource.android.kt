@@ -60,19 +60,25 @@ private fun discoverMerged(
   return merged
 }
 
-actual fun platformConfigResourceSource(): ConfigResourceSource =
-  object : ConfigResourceSource {
-    override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> =
-      discoverMerged(
-        key = "flat|$directoryPath|$suffix",
-        fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
-        fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
-      )
+/**
+ * One instance for the process. Callers compare sources by identity to skip a second discovery of
+ * the same files (`ToolNameResolver.fromBuiltInAndCustomTools` reads the bundled view only when it
+ * differs from the one it was given), and a fresh object per call made that check always fail.
+ */
+actual fun platformConfigResourceSource(): ConfigResourceSource = AndroidPlatformConfigResourceSource
 
-    override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
-      discoverMerged(
-        key = "recursive|$directoryPath|$suffix",
-        fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
-        fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
-      )
-  }
+private object AndroidPlatformConfigResourceSource : ConfigResourceSource {
+  override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> =
+    discoverMerged(
+      key = "flat|$directoryPath|$suffix",
+      fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
+      fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
+    )
+
+  override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
+    discoverMerged(
+      key = "recursive|$directoryPath|$suffix",
+      fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
+      fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
+    )
+}

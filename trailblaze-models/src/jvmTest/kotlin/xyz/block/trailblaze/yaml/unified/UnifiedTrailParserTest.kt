@@ -788,31 +788,34 @@ class UnifiedTrailParserTest {
   }
 
   @Test
-  fun `requiresHost parses on a single-device entry`() {
+  fun `requires parses on a single-device entry, opaque values included`() {
     val trail = yaml.decodeUnifiedTrail(
       """
       config:
         devices:
           android-phone: {}
           lab-a:
-            requiresHost: true
+            requires: [android-host-execution, acme.printer.virtual]
       trail:
         - step: Do the thing
           recordable: false
       """.trimIndent(),
     )
     assertEquals(
-      mapOf("android-phone" to null, "lab-a" to true),
-      trail.config.devices?.mapValues { it.value.requiresHost },
+      mapOf(
+        "android-phone" to null,
+        "lab-a" to listOf("android-host-execution", "acme.printer.virtual"),
+      ),
+      trail.config.devices?.mapValues { it.value.requires },
     )
   }
 
   @Test
-  fun `requiresHost is rejected on a configuration and on its named devices`() {
-    // A multi-device session always runs on the host, so the flag there could only mislead.
+  fun `requires is rejected on a configuration and on its named devices`() {
+    // A multi-device session always runs on the host, so the list there could only mislead.
     listOf(
-      "pos-pair:\n      requiresHost: true\n      devices:\n        seller: { classifier: lab-a }",
-      "pos-pair:\n      devices:\n        seller: { classifier: lab-a, requiresHost: true }",
+      "pos-pair:\n      requires: [android-host-execution]\n      devices:\n        seller: { classifier: lab-a }",
+      "pos-pair:\n      devices:\n        seller: { classifier: lab-a, requires: [android-host-execution] }",
     ).forEach { entry ->
       val failure = assertFailsWith<Exception> {
         yaml.decodeUnifiedTrail(
@@ -821,7 +824,69 @@ class UnifiedTrailParserTest {
       }
       assertTrue(
         messageChain(failure).contains("always runs on the host"),
-        "expected the requiresHost level message for `$entry`, got: $failure",
+        "expected the requires level message for `$entry`, got: $failure",
+      )
+    }
+  }
+
+  @Test
+  fun `the removed requiresHost field fails loud with its replacement, strict or lenient`() {
+    // A lenient decode would otherwise drop it unread and hand a host-only leg to an on-device runner.
+    listOf(
+      "android-phone:\n      requiresHost: true",
+      "pos-pair:\n      devices:\n        seller: { classifier: lab-a, requiresHost: true }",
+    ).forEach { entry ->
+      val body = "config:\n  devices:\n    $entry\ntrail:\n  - step: Do the thing\n    recordable: false\n"
+      listOf(yaml, TrailblazeYaml(emptyMap(), true)).forEach { codec ->
+        val failure = assertFailsWith<Exception> { codec.decodeUnifiedTrail(body) }
+        assertTrue(
+          messageChain(failure).contains("requires: [android-host-execution]"),
+          "expected the replacement in the message for `$entry`, got: $failure",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `requires rejects an empty list, a blank value, a template and a duplicate`() {
+    listOf("[]", "['']", "['{{NEED}}']", "[android-host-execution, android-host-execution]").forEach { value ->
+      val failure = assertFailsWith<Exception> {
+        yaml.decodeUnifiedTrail(
+          "config:\n  devices:\n    android-phone:\n      requires: $value\n" +
+            "trail:\n  - step: Do the thing\n    recordable: false\n",
+        )
+      }
+      assertTrue(messageChain(failure).contains("requires:"), "for $value got: $failure")
+    }
+  }
+
+  @Test
+  fun `android-host-execution is refused on a driver that always runs on the host`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        "config:\n  devices:\n    ios-iphone:\n      driver: IOS_HOST\n" +
+          "      requires: [android-host-execution]\ntrail:\n  - step: Do the thing\n    recordable: false\n",
+      )
+    }
+    assertTrue(messageChain(failure).contains("always runs on the host"), "got: $failure")
+  }
+
+  @Test
+  fun `android-host-execution is refused on an entry whose key names a host platform`() {
+    listOf("ios", "ios-iphone", "web").forEach { key ->
+      val failure = assertFailsWith<Exception>(key) {
+        yaml.decodeUnifiedTrail(
+          "config:\n  devices:\n    $key:\n      requires: [android-host-execution]\n" +
+            "trail:\n  - step: Do the thing\n    recordable: false\n",
+        )
+      }
+      assertTrue(messageChain(failure).contains("always runs on the host"), "$key got: $failure")
+    }
+    // A key that names no platform, or Android, may still carry it.
+    listOf("all", "android-phone", "lab-a").forEach { key ->
+      yaml.decodeUnifiedTrail(
+        "config:\n  devices:\n    $key:\n      requires: [android-host-execution]\n" +
+          "trail:\n  - step: Do the thing\n    recordable: false\n",
       )
     }
   }

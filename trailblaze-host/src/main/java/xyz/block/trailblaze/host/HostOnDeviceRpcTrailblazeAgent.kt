@@ -1,16 +1,28 @@
 package xyz.block.trailblaze.host
 
+import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidGrantPermissionsTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import java.io.File
 import xyz.block.trailblaze.logs.client.SessionStartRecords
 import xyz.block.trailblaze.host.util.BufferedImageUtils
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
+import xyz.block.trailblaze.host.android.AndroidSessionReconnector
+import xyz.block.trailblaze.toolcalls.DeviceSessionReconnectSupport
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.device.withDeviceCommandSecretsRedacted
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
+import xyz.block.trailblaze.toolcalls.sensitiveLiteralValues
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
@@ -144,6 +156,22 @@ class HostOnDeviceRpcTrailblazeAgent(
    * can't rewrite the launch device's size; a session-wide hook could.
    */
   private val onScreenStateObserved: (GetScreenStateResponse) -> Unit = {},
+  /**
+   * Starts the on-device runner again after the app's process ended. Set only for the in-process
+   * driver, whose runner lives inside the app: a step that restarts the app (a launch, or a
+   * broadcast the app answers by restarting itself) ends the runner with it. Null for drivers whose
+   * runner is a process of its own, where a lost connection is a transport fault instead.
+   */
+  private val restartRunnerAfterAppExit: (suspend () -> Unit)? = null,
+  /** A package's pid(s), blank when it has no process, null when it can't be told. Tests script this. */
+  private val appProcessId: (packageName: String) -> String? = rpcClient::appProcessId,
+  /**
+   * How this device's session is re-established after the device reboots — see
+   * [reconnectSession]. Wired by the host runner from the same connect it bound the device with;
+   * null in callers that never run a reconnect step, where `android_reconnectSession` fails with a
+   * clear message instead of relaunching a runner it could not bind.
+   */
+  private val sessionReconnector: AndroidSessionReconnector? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -155,7 +183,8 @@ class HostOnDeviceRpcTrailblazeAgent(
   workingDirectory = workingDirectory,
   memory = memory,
   captureNetworkTraffic = runYamlRequestTemplate.config.captureNetworkTraffic,
-) {
+),
+  DeviceSessionReconnectSupport {
 
   override val usesAccessibilityDriver: Boolean = true
 
@@ -184,7 +213,8 @@ class HostOnDeviceRpcTrailblazeAgent(
 
   /** RPC-backed screen state provider for the host-side agent. */
   val screenStateProvider: () -> ScreenState = {
-    runBlocking { captureScreenState() }
+    // Linked to the trail's Job, as a dispatch is: a stopped run's screen read ends with it.
+    runBlocking { DispatchCancellation.linked(this) { captureScreenState() } }
       ?: error(
         "Failed to capture screen state from device via RPC" +
           (lastCaptureFailure?.let { ": $it" } ?: ""),
@@ -212,6 +242,7 @@ class HostOnDeviceRpcTrailblazeAgent(
    * early returns.
    */
   private suspend fun captureScreenStateUntraced(includeScreenshot: Boolean): ScreenState? {
+    ensureInProcessRunnerUp("a screen capture")
     // Forward the host's effective screenshot scaling config (driven by
     // `trailblaze config screenshot-*` and the desktop Settings panel) so the on-device
     // agent scales/encodes screenshots the way the user asked. Skipped when the request
@@ -244,6 +275,11 @@ class HostOnDeviceRpcTrailblazeAgent(
             (first.details?.let { "\n  Details: $it" } ?: "") +
             "\n  Re-warming connection and retrying once.",
         )
+        if (restartRunnerAfterAppExit != null && first.errorType == RpcResult.ErrorType.NETWORK_ERROR &&
+          !runnerStillAnswers()
+        ) {
+          restartRunner(restartRunnerAfterAppExit)
+        }
       }
     }
     try {
@@ -387,6 +423,30 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
   }
 
+  /**
+   * Brings this session back on the device's new boot for the `android_reconnectSession` step; the
+   * sequence is [AndroidSessionReconnector.reconnect]. What this agent contributes is the state of
+   * its own that died with the device and must go before the runner is relaunched: the
+   * stream-screenshot tee, and the wedge breaker's count of failures of a server that no longer
+   * exists.
+   */
+  override suspend fun reconnectSession(): String {
+    val reconnector = sessionReconnector
+      ?: throw TrailblazeException(
+        "This session was not bound with session reconnection, so it cannot reconnect to " +
+          "${runYamlRequestTemplate.trailblazeDeviceId.instanceId} after a reboot.",
+      )
+    return reconnector.reconnect(
+      deviceId = runYamlRequestTemplate.trailblazeDeviceId,
+      sessionId = { sessionProvider.invoke().sessionId },
+      beforeReconnect = {
+        closeStreamScreenshotSource()
+        consecutiveDeviceWedgeFailures.set(0)
+        lastCaptureFailure = null
+      },
+    )
+  }
+
   /** Circuit breaker for a wedged `system_server`: cache-clear-and-reconnect can't recover
    *  a dead remote, so fail fast after N consecutive wedge-signature failures. Also arms the
    *  on-device server relaunch before throwing — see the comment at the throw site. */
@@ -424,6 +484,15 @@ class HostOnDeviceRpcTrailblazeAgent(
 
     private const val MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES = 3
 
+    /** OkHttp's message when the server accepted a request and closed before replying. */
+    private const val CONNECTION_DROPPED_MID_CALL = "unexpected end of stream"
+
+    /** OkHttp's messages when a call never reached a listener, so the device cannot have run it. */
+    private val CONNECT_FAILURE_SIGNATURES = listOf("Failed to connect", "Connection refused")
+
+    /** Bound on the read that tells a live runner from a gone one after a failed call. */
+    private const val RUNNER_ALIVE_PROBE_MS = 3_000L
+
     /** Substrings identifying a wedged-device failure vs a recoverable transient.
      *  Both `connect` and `disconnect` throw `RuntimeException` from the platform's
      *  `UiAutomation` lifecycle when the inner remote object is gone (`id=-1`); the
@@ -443,6 +512,95 @@ class HostOnDeviceRpcTrailblazeAgent(
      * as much as the pre-stream path per capture rather than wedging it.
      */
     private const val STREAM_FRAME_TIMEOUT_MS = 2_500L
+  }
+
+  /**
+   * Set when a host-side tool finishes in an in-process session. Such a tool can stop the app over
+   * adb (a force-stop before re-seeding its prefs, say), and the runner inside the app stops with it
+   * without any RPC noticing. The next RPC would then read the dead runner as the app restarting
+   * mid-call, call the step done and never send it.
+   */
+  private val appMayHaveStoppedOffRpc = AtomicBoolean(false)
+
+  /**
+   * Set while the in-process runner is known to be gone with the app's process, and cleared by the
+   * restart. The restart waits for the first step that needs the runner: a seeded sign-in runs
+   * several adb commands while the app is stopped, and one of them restarts the app's process on
+   * its own, so restarting eagerly would start the runner for nothing.
+   */
+  private val runnerDown = AtomicBoolean(false)
+
+  /**
+   * The pid of the app process the runner lives in, read before the first host-side tool of each
+   * runner's life. A host-side tool that relaunches the app leaves it running under a new pid with
+   * no runner in it, so whether the app is running alone can't tell the runner is gone.
+   */
+  @Volatile private var runnerAppPid: String? = null
+
+  override fun onHostLocalToolStarting() {
+    if (restartRunnerAfterAppExit == null || runnerDown.get() || runnerAppPid != null) return
+    runnerAppPid = appId?.let(appProcessId)?.takeIf { it.isNotBlank() }
+  }
+
+  override fun onHostLocalToolFinished() {
+    if (restartRunnerAfterAppExit != null) appMayHaveStoppedOffRpc.set(true)
+  }
+
+  /** The runner just started, in a process whose pid is read before the next host-side tool. */
+  private fun markRunnerRestarted() {
+    runnerDown.set(false)
+    runnerAppPid = null
+  }
+
+  /** The runner ended with the app's process; the next step that needs it starts it again. */
+  private fun markRunnerDown() {
+    runnerDown.set(true)
+    runnerAppPid = null
+  }
+
+  /**
+   * Whether the in-process runner is gone, folding in what the last host-side tool may have done to
+   * the app: stopped it, or replaced its process. A `pidof` costs tens of milliseconds and runs only
+   * around a host-side tool, a handful per trail.
+   */
+  private fun inProcessRunnerDown(): Boolean {
+    if (restartRunnerAfterAppExit == null) return false
+    if (appMayHaveStoppedOffRpc.getAndSet(false)) {
+      val pkg = appId
+      val pid = pkg?.let(appProcessId)
+      val before = runnerAppPid
+      if (pid != null && (pid.isBlank() || (before != null && pid != before))) markRunnerDown()
+    }
+    return runnerDown.get()
+  }
+
+  /**
+   * Whether the runner's server still answers. A dropped connection or a refused forward says only
+   * that one call failed; restarting a runner that is still alive would force-stop the app and lose
+   * its screen, and calling a step done because its connection dropped would pass a step that never
+   * ran. Asked of the server's `/ping`, not a screen read: a screen read fails during an Activity
+   * transition or on a busy main thread with the process still alive.
+   */
+  private suspend fun runnerStillAnswers(): Boolean = rpcClient.answersPing(RUNNER_ALIVE_PROBE_MS)
+
+  /** Starts the runner again when it is down; see [runnerDown]. */
+  private suspend fun ensureInProcessRunnerUp(before: String) {
+    val restart = restartRunnerAfterAppExit ?: return
+    if (!inProcessRunnerDown()) return
+    Console.log("[HostOnDeviceRpcAgent] restarting the in-process runner, which stopped with the app, before '$before'.")
+    restartRunner(restart)
+  }
+
+  /**
+   * Starts the runner again, unless the trail was stopped. Stop kills the runner, so a stopped run's
+   * last screen read or step finds it gone; starting it again would relaunch the app, and force-stop
+   * a newer run's app if one already holds the device.
+   */
+  private suspend fun restartRunner(restart: suspend () -> Unit) {
+    DispatchCancellation.ensureTrailActive()
+    currentCoroutineContext().ensureActive()
+    restart()
+    markRunnerRestarted()
   }
 
   override fun executeTool(
@@ -514,7 +672,11 @@ class HostOnDeviceRpcTrailblazeAgent(
     return when (repoResolvedTool) {
       is ExecutableTrailblazeTool -> {
         toolsExecuted.add(repoResolvedTool)
-        if (repoResolvedTool is HostLocalExecutableTrailblazeTool || repoResolvedTool.requiresHostInstance()) {
+        if (
+          repoResolvedTool is HostLocalExecutableTrailblazeTool ||
+          repoResolvedTool.requiresHostInstance() ||
+          (repoResolvedTool.runsOverAdbAlone() && inProcessRunnerDown())
+        ) {
           // Host-local tools (subprocess MCP, QuickJS scripted, cbot / dip-slot ADB tools,
           // `requiresHost = true` class-backed tools) run on the host JVM — so the host IS their
           // memory boundary: resolve here, dispatch resolved, log raw + resolved.
@@ -536,7 +698,11 @@ class HostOnDeviceRpcTrailblazeAgent(
           // `OtherTrailblazeTool` → repo resolution from the parent delegating tool — the
           // base's `runTrailblazeTools` loop resolved the parent before dispatching here, so
           // we don't re-run repo resolution on each expanded subtool.
-          if (expandedTool is HostLocalExecutableTrailblazeTool || expandedTool.requiresHostInstance()) {
+          if (
+            expandedTool is HostLocalExecutableTrailblazeTool ||
+            expandedTool.requiresHostInstance() ||
+            (expandedTool.runsOverAdbAlone() && inProcessRunnerDown())
+          ) {
             // Host-local subtools must not be RPCed to the device — they read/write
             // host-side files and credentials that have no meaning on the device JVM.
             // Memory boundary is here (host) for them.
@@ -550,6 +716,13 @@ class HostOnDeviceRpcTrailblazeAgent(
             executeToolViaRpc(expandedTool, context.traceId)
           }
         }
+      }
+      // An in-process runner carries tools of its own (`androidTest_tap`, `androidTest_assertVisible`)
+      // whose classes live in the test APK and never load on the host. A recorded call to one is
+      // sent to the device as authored, where its own repo resolves it.
+      is OtherTrailblazeTool if restartRunnerAfterAppExit != null -> {
+        toolsExecuted.add(repoResolvedTool)
+        executeToolViaRpc(repoResolvedTool, context.traceId)
       }
       else -> TrailblazeToolResult.Error.FatalError(
         // Diagnostic detail: when the unresolved tool was an `OtherTrailblazeTool`, surface
@@ -591,6 +764,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     longPress: Boolean,
     tapRoute: TapRouteOverride?,
     timeoutMs: Long?,
+    hideKeyboardBefore: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     // Accessibility-shaped selectors are recorded under the accessibility driver and must
@@ -615,7 +789,12 @@ class HostOnDeviceRpcTrailblazeAgent(
       val tool = if (tapRoute == TapRouteOverride.ACTION_CLICK && !longPress) {
         AndroidAccessibilityClickTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = timeoutMs)
       } else {
-        TapOnByElementSelector(nodeSelector = nodeSelector, longPress = longPress, timeoutMs = timeoutMs)
+        TapOnByElementSelector(
+          nodeSelector = nodeSelector,
+          longPress = longPress,
+          timeoutMs = timeoutMs,
+          hideKeyboardBefore = hideKeyboardBefore,
+        )
       }
       return executeToolViaRpc(tool = tool, traceId = traceId)
     }
@@ -640,17 +819,25 @@ class HostOnDeviceRpcTrailblazeAgent(
     rawTool: TrailblazeTool? = null,
   ): TrailblazeToolResult {
     val timeBeforeExecution = Clock.System.now()
+    onHostLocalToolStarting()
     // Same exception-bypass guard as the base agent's host-local branch (#2924 review):
     // a thrown exception would otherwise skip `logToolExecution` and leave the dispatch
     // invisible. Convert non-cancellation throws into a `TrailblazeToolResult.Error` and
     // log it; re-throw `CancellationException` so coroutine cancellation still unwinds.
+    // The host resolved this tool's memory tokens, so a sensitive value may now sit in its
+    // arguments, and the adb transport logs a command line before running it (an `am broadcast`
+    // built from resolved extras, say). Masked there for the length of the call.
+    val sensitiveValues = sensitiveLiteralValues(memory)
     val result: TrailblazeToolResult = try {
-      runBlocking { tool.execute(context) }
+      withDeviceCommandSecretsRedacted(sensitiveValues) {
+        runBlocking { DispatchCancellation.linked(this) { tool.execute(context) } }
+      }
     } catch (e: CancellationException) {
       throw e
     } catch (e: Throwable) {
       TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, tool)
     }
+    onHostLocalToolFinished()
     logToolExecution(
       tool = tool,
       timeBeforeExecution = timeBeforeExecution,
@@ -687,8 +874,12 @@ class HostOnDeviceRpcTrailblazeAgent(
     // is not recording, and the device then records a trace of its own — the behavior that predates
     // the field.
     val dispatchTraceParent = TrailblazeTracer.currentTraceContext()?.toTraceParent()
-    val result: TrailblazeToolResult = runBlocking {
+    // Linked to the trail's Job, as a host-local dispatch is: Stop cancels the trail, and that must
+    // end this call too, runner restart and resend included, or a stopped run could bring the
+    // runner back and run its step anyway.
+    val result: TrailblazeToolResult = runBlocking { DispatchCancellation.linked(this) dispatch@{
       try {
+        ensureInProcessRunnerUp(tool::class.simpleName ?: "a step")
         // The tool is encoded AS AUTHORED (memory tokens intact) — the device's dispatch loop
         // resolves them against the memory snapshot below, so the device-side tool log carries
         // the raw + resolved pair and recordings keep their tokens.
@@ -739,6 +930,60 @@ class HostOnDeviceRpcTrailblazeAgent(
           }
           is RpcResult.Failure -> {
             val firstDetail = first.message + (first.details?.let { " | $it" } ?: "")
+            // A runner that still answers lost only its connection, so it gets the ordinary re-warm
+            // and retry below. Only a runner that is gone means the app's process ended.
+            if (restartRunnerAfterAppExit != null && first.errorType == RpcResult.ErrorType.NETWORK_ERROR &&
+              !runnerStillAnswers()
+            ) {
+              if (first.details?.contains(CONNECTION_DROPPED_MID_CALL) == true) {
+                // The device took the call and its process ended before replying. Running it again
+                // would end it again; the runner restarts when a step next needs it. That is the
+                // step's job only for a broadcast the app answers by restarting: any other step
+                // that ends the app's process crashed it, which must fail the gate.
+                Console.log("[HostOnDeviceRpcAgent] '$name' ended the app's process and the in-process runner with it.")
+                markRunnerDown()
+                return@dispatch if (tool.mayRestartApp()) {
+                  TrailblazeToolResult.Success(
+                    message = "The app's process restarted during '$name', taking the in-process " +
+                      "runner with it.",
+                  )
+                } else {
+                  TrailblazeToolResult.Error.ExceptionThrown(
+                    errorMessage = "The app's process ended during '$name', taking the in-process " +
+                      "runner with it. Only a broadcast is expected to restart the app, " +
+                      "so this looks like a crash: check the device log.",
+                  )
+                }
+              }
+              if (first.details?.let { d -> CONNECT_FAILURE_SIGNATURES.any { it in d } } != true) {
+                // Sent, then lost (a read timeout on a long step, say): the device may already have
+                // run it, and restarting the app to run it again could do it twice.
+                Console.log("[HostOnDeviceRpcAgent] '$name' lost the in-process runner after it was sent ($firstDetail).")
+                markRunnerDown()
+                return@dispatch rpcFailureToolResult(
+                  errorMessage = "'$name' lost the in-process runner after it was sent ($firstDetail). " +
+                    "Not sent again, since it may already have run.",
+                  firstDetail,
+                )
+              }
+              Console.log("[HostOnDeviceRpcAgent] '$name' lost the in-process runner ($firstDetail); restarting it.")
+              restartRunner(restartRunnerAfterAppExit)
+              return@dispatch when (val retry: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
+                is RpcResult.Success -> {
+                  applyMemorySnapshot(retry.data.memorySnapshot, retry.data.memoryDeletions, retry.data.sensitiveMemoryKeys)
+                  onDeviceToolLogCount.set(retry.data.onDeviceToolLogCount)
+                  toToolResult(name, retry, timeBeforeExecution)
+                }
+                is RpcResult.Failure -> {
+                  val retryDetail = retry.message + (retry.details?.let { " | $it" } ?: "")
+                  rpcFailureToolResult(
+                    errorMessage = "RPC call failed for '$name': $firstDetail | after runner restart: $retryDetail",
+                    firstDetail,
+                    retryDetail,
+                  )
+                }
+              }
+            }
             Console.log(
               "[HostOnDeviceRpcAgent] RPC failed for '$name' (${first.errorType}): " +
                 "${first.message}" +
@@ -754,7 +999,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             } catch (e: Exception) {
               val detail = "re-warm failed: ${e.message} | runner_pid=${rpcClient.probeRunnerPid()}"
               Console.log("[HostOnDeviceRpcAgent] $detail")
-              return@runBlocking rpcFailureToolResult(
+              return@dispatch rpcFailureToolResult(
                 errorMessage = "RPC call failed for '$name': $firstDetail | $detail",
                 firstDetail,
                 detail,
@@ -794,7 +1039,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           errorMessage = "Tool execution failed: ${e::class.simpleName}: ${e.message}",
         )
       }
-    }
+    } }
 
     // Emit a host-side TrailblazeToolLog ONLY when the on-device dispatch did not already log
     // the tool itself. The device runs the tool through
@@ -944,3 +1189,21 @@ internal fun AgentMemory.mergeDeviceMemory(
   variables.putAll(deviceSnapshot)
   deletions.forEach { variables.remove(it) }
 }
+
+/**
+ * A tool whose ordinary effect can end the app's process: a broadcast the app may answer by
+ * restarting itself. Not a launch: in-process, every launch form relaunches the entry Activity in
+ * the running process, so a launch that ends the process crashed it.
+ */
+private fun TrailblazeTool.mayRestartApp(): Boolean = this is AndroidSendBroadcastTrailblazeTool
+
+/**
+ * A tool that only runs adb commands (shell, broadcast, permission grant, package list), so the
+ * host can run it over adb while the in-process runner is down. The device runs it otherwise: from
+ * inside the app it skips an adb round trip.
+ */
+private fun TrailblazeTool.runsOverAdbAlone(): Boolean =
+  this is AdbShellTrailblazeTool ||
+    this is AndroidSendBroadcastTrailblazeTool ||
+    this is AndroidGrantPermissionsTrailblazeTool ||
+    this is ListInstalledAppsTrailblazeTool

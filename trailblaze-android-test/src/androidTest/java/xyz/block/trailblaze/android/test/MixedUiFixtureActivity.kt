@@ -13,6 +13,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.material3.Button as ComposeButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -24,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.ScrollAxisRange
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.verticalScrollAxisRange
 import androidx.compose.ui.unit.dp
@@ -47,6 +52,7 @@ class MixedUiFixtureActivity : ComponentActivity() {
    * content because the thing that flips it is a classic View's click listener.
    */
   private var latePlacementRevealed by mutableStateOf(false)
+  private var composeButtonCovered by mutableStateOf(false)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -160,11 +166,63 @@ class MixedUiFixtureActivity : ComponentActivity() {
               onValueChange = { composeText = it },
               modifier = Modifier.testTag(COMPOSE_INPUT_TAG),
             )
-            ComposeButton(
-              onClick = { composeStatus = COMPOSE_STATUS_CLICKED },
-              modifier = Modifier.testTag(COMPOSE_BUTTON_TAG),
-            ) {
-              Text(COMPOSE_BUTTON_LABEL)
+            // A masked date field, as a sign-up's date of birth is: empty, its text reads as the
+            // mask itself, and it keeps only up to eight digits, so the mask plus typed digits is
+            // an edit it refuses outright.
+            var maskedDigits by remember { mutableStateOf("") }
+            // A field already holding text that keeps only its first few characters, so a pasted
+            // value is clipped. It takes part of the edit, and what it held before has to survive
+            // the driver's retry. (Not in a Row beside the masked field: laid out that way, a tap on
+            // the Compose input above, even a real one, left nothing focused.)
+            var clipped by remember { mutableStateOf(CLIPPED_PREFILL) }
+            BasicTextField(
+              value = maskedDigits,
+              onValueChange = { typed -> if (typed.length <= 8 && typed.all(Char::isDigit)) maskedDigits = typed },
+              visualTransformation = { text ->
+                if (text.isEmpty()) {
+                  TransformedText(AnnotatedString(MASKED_DATE_MASK), EmptyMaskOffsets)
+                } else {
+                  TransformedText(text, OffsetMapping.Identity)
+                }
+              },
+              modifier = Modifier.testTag(MASKED_DATE_TAG),
+            )
+            Text("$MASKED_DATE_STATUS_PREFIX$maskedDigits")
+            BasicTextField(
+              value = clipped,
+              onValueChange = { clipped = it.take(CLIPPED_MAX_LENGTH) },
+              modifier = Modifier.testTag(CLIPPED_TAG),
+            )
+            Text("$CLIPPED_STATUS_PREFIX$clipped")
+            // A search field that names itself by its description and shows a placeholder while
+            // empty. The platform's accessibility tree publishes that description on a child node
+            // of its own, so a recording names the field by it as text.
+            var searchQuery by remember { mutableStateOf("") }
+            BasicTextField(
+              value = searchQuery,
+              onValueChange = { searchQuery = it },
+              modifier = Modifier.semantics { contentDescription = SEARCH_DESCRIPTION },
+              decorationBox = { inner ->
+                Box {
+                  if (searchQuery.isEmpty()) Text(SEARCH_PLACEHOLDER)
+                  inner()
+                }
+              },
+            )
+            Text("$SEARCH_STATUS_PREFIX$searchQuery")
+            Box {
+              ComposeButton(
+                onClick = { composeStatus = COMPOSE_STATUS_CLICKED },
+                modifier = Modifier.testTag(COMPOSE_BUTTON_TAG),
+              ) {
+                Text(COMPOSE_BUTTON_LABEL)
+              }
+              // A node drawn over the button with no handler of its own, as some apps draw a decorative
+              // overlay over a button. A touch still reaches the button; a
+              // hit test over semantics bounds alone calls it covered.
+              if (composeButtonCovered) {
+                Box(modifier = Modifier.matchParentSize().testTag(COMPOSE_COVER_TAG))
+              }
             }
             // Classic Views embedded back INSIDE the Compose content. Compose semantics stop at
             // this boundary — the host reports the interop node and nothing beneath it — so these
@@ -252,6 +310,11 @@ class MixedUiFixtureActivity : ComponentActivity() {
     runOnUiThread { latePlacementRevealed = true }
   }
 
+  /** Draws a handler-less node over the Compose button, from any thread. */
+  fun coverComposeButtonNow() {
+    runOnUiThread { composeButtonCovered = true }
+  }
+
   private fun duplicateRow(rowTag: String, onClick: () -> Unit): LinearLayout =
     LinearLayout(this).apply {
       tag = rowTag
@@ -300,6 +363,17 @@ class MixedUiFixtureActivity : ComponentActivity() {
     const val COMPOSE_STATUS_TAG = "compose_status"
     const val COMPOSE_INPUT_TAG = "compose_input"
     const val COMPOSE_BUTTON_TAG = "compose_button"
+    const val COMPOSE_COVER_TAG = "compose_cover"
+    const val MASKED_DATE_TAG = "masked_date"
+    const val MASKED_DATE_MASK = "MM/DD/YYYY"
+    const val MASKED_DATE_STATUS_PREFIX = "Masked date: "
+    const val CLIPPED_TAG = "clipped_field"
+    const val CLIPPED_PREFILL = "abc"
+    const val CLIPPED_MAX_LENGTH = 5
+    const val CLIPPED_STATUS_PREFIX = "Clipped: "
+    const val SEARCH_DESCRIPTION = "Search for people"
+    const val SEARCH_PLACEHOLDER = "Name or email"
+    const val SEARCH_STATUS_PREFIX = "Searched: "
     const val COMPOSE_STATUS_INITIAL = "Compose status: ready"
     const val COMPOSE_STATUS_CLICKED = "Compose status: clicked"
     const val COMPOSE_BUTTON_LABEL = "Compose Button"
@@ -361,4 +435,11 @@ object SemanticsReadProbe {
       "Compose semantics were read off the UI thread by ${readers.map(Thread::getName).distinct()}",
     )
   }
+}
+
+/** The empty field's offsets: every caret position in the mask is position 0 of the empty value. */
+private object EmptyMaskOffsets : OffsetMapping {
+  override fun originalToTransformed(offset: Int): Int = 0
+
+  override fun transformedToOriginal(offset: Int): Int = 0
 }

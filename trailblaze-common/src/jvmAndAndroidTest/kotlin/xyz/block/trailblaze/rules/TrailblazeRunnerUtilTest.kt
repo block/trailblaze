@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.rules
 
+import xyz.block.trailblaze.agent.RecordedStepsOnlyRunner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -539,6 +540,40 @@ class TrailblazeRunnerUtilTest {
     assertTrue(result is TrailblazeToolResult.Success)
     assertTrue(callbackInvocations.isEmpty())
     assertEquals(listOf<PromptStep>(step), runner.runSuspendCalls)
+  }
+
+  // --- recordings-only gate ----------------------------------------------------------------
+
+  @Test
+  fun `a recordings-only gate fails an unrecorded step by name instead of improvising`() {
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { _ -> TrailblazeToolResult.Success() },
+      trailblazeRunner = RecordedStepsOnlyRunner(screenStateProvider = { error("no screen needed") }),
+    )
+    val step = DirectionStep(step = "Log in", recordable = true, recording = null)
+
+    val ex = assertThrowsTrailblazeException {
+      runBlocking { util.runPromptSuspend(prompts = listOf(step), useRecordedSteps = true, selfHeal = false) }
+    }
+    val message = ex.message ?: ""
+    assertTrue(message.contains("\"Log in\" has no recorded tools"), message)
+  }
+
+  @Test
+  fun `a recordings-only gate refuses self-heal even when it is requested`() {
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { _ -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "selector broke") },
+      trailblazeRunner = RecordedStepsOnlyRunner(screenStateProvider = { error("no screen needed") }),
+    )
+
+    val ex = assertThrowsTrailblazeException {
+      runBlocking {
+        util.runPromptSuspend(prompts = listOf(recordedStep("Tap login", tool("tapLogin"))), useRecordedSteps = true, selfHeal = true)
+      }
+    }
+    val message = ex.message ?: ""
+    assertTrue(message.contains("failed at tapLogin"), message)
+    assertTrue(message.contains("self-heal is not available"), message)
   }
 
   // --- trailhead fail-fast -----------------------------------------------------------------

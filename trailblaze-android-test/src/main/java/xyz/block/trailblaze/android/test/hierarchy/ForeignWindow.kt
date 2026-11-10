@@ -2,12 +2,14 @@ package xyz.block.trailblaze.android.test.hierarchy
 
 import android.accessibilityservice.AccessibilityService
 import android.app.UiAutomation
+import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,6 +18,7 @@ import xyz.block.trailblaze.android.test.encodeScreenshot
 import xyz.block.trailblaze.android.test.hierarchy.a11y.isTextAcceptingNode
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.CompactScreenElements
+import xyz.block.trailblaze.android.test.AnotherAppInFrontException
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -72,6 +75,11 @@ object ForeignWindow {
     }
   }
 
+  /** How many application windows are on screen: more than one means a popup, sheet or dialog. */
+  fun applicationWindowCount(): Int =
+    runCatching { uiAutomation().windows }.getOrNull().orEmpty()
+      .count { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+
   private fun frontRoot(): AccessibilityNodeInfo? {
     val automation = uiAutomation()
     val windows = runCatching { automation.windows }.getOrNull().orEmpty()
@@ -85,13 +93,60 @@ object ForeignWindow {
       ?.takeIf { root -> root.window?.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD }
   }
 
-  /** A tap at a screen point, delivered to whichever window is there. */
-  fun tap(x: Int, y: Int, longPress: Boolean = false) {
-    val downAt = SystemClock.uptimeMillis()
-    inject(MotionEvent.ACTION_DOWN, downAt, downAt, x, y)
-    SystemClock.sleep(if (longPress) LONG_PRESS_MS else TAP_MS)
-    inject(MotionEvent.ACTION_UP, downAt, SystemClock.uptimeMillis(), x, y)
+  /**
+   * A tap at a screen point, delivered to whichever window is there. A [doubleTap] is two taps
+   * [DOUBLE_TAP_GAP_MS] apart, inside the platform's double-tap timeout, settled once after both.
+   */
+  fun tap(x: Int, y: Int, longPress: Boolean = false, doubleTap: Boolean = false) {
+    repeat(if (doubleTap) 2 else 1) { index ->
+      if (index > 0) SystemClock.sleep(DOUBLE_TAP_GAP_MS)
+      val downAt = SystemClock.uptimeMillis()
+      inject(MotionEvent.ACTION_DOWN, downAt, downAt, x, y)
+      SystemClock.sleep(if (longPress) LONG_PRESS_MS else TAP_MS)
+      inject(MotionEvent.ACTION_UP, downAt, SystemClock.uptimeMillis(), x, y)
+    }
     settle()
+  }
+
+  /**
+   * A finger drag from one screen point to another over [durationMs], delivered to whichever
+   * window is there, as `adb input swipe` does: a down, moves every frame along the line, an up.
+   */
+  fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long, fling: Boolean = true) {
+    val downAt = SystemClock.uptimeMillis()
+    inject(MotionEvent.ACTION_DOWN, downAt, downAt, startX, startY)
+    val steps = (durationMs / FRAME_MS).coerceAtLeast(1)
+    for (step in 1..steps) {
+      SystemClock.sleep(FRAME_MS)
+      val fraction = step.toFloat() / steps
+      inject(
+        MotionEvent.ACTION_MOVE,
+        downAt,
+        SystemClock.uptimeMillis(),
+        startX + ((endX - startX) * fraction).toInt(),
+        startY + ((endY - startY) * fraction).toInt(),
+      )
+    }
+    if (!fling) {
+      // Resting on the end point before lifting leaves the finger with no velocity, so the list
+      // stops where the drag did, as under the accessibility driver's gesture strokes.
+      SystemClock.sleep(NO_FLING_HOLD_MS)
+      inject(MotionEvent.ACTION_MOVE, downAt, SystemClock.uptimeMillis(), endX, endY)
+    }
+    inject(MotionEvent.ACTION_UP, downAt, SystemClock.uptimeMillis(), endX, endY)
+    settle()
+  }
+
+  /** The whole display in pixels, system bars included: the space recorded coordinates are in. */
+  fun screenSize(): Pair<Int, Int> {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val windowManager = context.getSystemService(WindowManager::class.java)
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      windowManager.maximumWindowMetrics.bounds.let { it.width() to it.height() }
+    } else {
+      @Suppress("DEPRECATION")
+      android.graphics.Point().also { windowManager.defaultDisplay.getRealSize(it) }.let { it.x to it.y }
+    }
   }
 
   private fun inject(action: Int, downAt: Long, at: Long, x: Int, y: Int) {
@@ -305,6 +360,13 @@ object ForeignWindow {
   }
 
   /**
+   * Activates [info] with the accessibility click action, as TalkBack would, then waits for the
+   * window to settle. False when the node refused the action.
+   */
+  fun accessibilityClick(info: AccessibilityNodeInfo): Boolean =
+    info.performAction(AccessibilityNodeInfo.ACTION_CLICK).also { if (it) settle() }
+
+  /**
    * Returns once the other app has reacted to an action: no accessibility events from it for
    * [SETTLE_QUIET_MS], measured from after the action. Nothing in this process can see that app go
    * idle, and its accessibility events are the signal the accessibility driver settles on too.
@@ -317,6 +379,38 @@ object ForeignWindow {
   private fun settle() {
     SystemClock.sleep(SETTLE_QUIET_MS)
     InProcessAccessibilityTree.awaitEventsQuiet(SETTLE_QUIET_MS, SETTLE_TIMEOUT_MS)
+  }
+
+  /**
+   * The screen as it is now: another app's window through [screenStateIfInFront], else the app's
+   * own capture from [appScreenState].
+   *
+   * The front can change between the two reads. An app launched a moment ago is not in front at
+   * the first and leaves this app's Activity paused by the second, whose wait then gives up with
+   * [AnotherAppInFrontException], so the screen is read again rather than waited on.
+   */
+  fun screenState(
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    includeScreenshot: Boolean,
+    appScreenState: () -> ScreenState,
+  ): ScreenState = retryWhileAnotherAppComesToFront {
+    screenStateIfInFront(deviceClassifiers, includeScreenshot) ?: appScreenState()
+  }
+
+  /**
+   * Runs [read] again when it gave up with [AnotherAppInFrontException], so a read that checks the
+   * front first then sees the other app there and reads its window instead.
+   */
+  fun <T> retryWhileAnotherAppComesToFront(read: () -> T): T {
+    val deadline = SystemClock.uptimeMillis() + FRONT_CHANGE_TIMEOUT_MS
+    while (true) {
+      try {
+        return read()
+      } catch (e: AnotherAppInFrontException) {
+        if (SystemClock.uptimeMillis() >= deadline) throw e
+        SystemClock.sleep(FRONT_CHANGE_POLL_MS)
+      }
+    }
   }
 
   /**
@@ -374,7 +468,12 @@ object ForeignWindow {
   }
 
   private const val TAP_MS = 50L
+  private const val FRONT_CHANGE_TIMEOUT_MS = 10_000L
+  private const val FRONT_CHANGE_POLL_MS = 100L
   private const val LONG_PRESS_MS = 800L
+  private const val DOUBLE_TAP_GAP_MS = 50L
+  private const val NO_FLING_HOLD_MS = 150L
+  private const val FRAME_MS = 16L
   private const val FOCUS_SETTLE_MS = 2_000L
   private const val FOCUS_POLL_MS = 100L
   private const val READBACK_MS = 1_000L

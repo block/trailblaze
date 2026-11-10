@@ -28,6 +28,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.SessionCleanups
 import xyz.block.trailblaze.toolcalls.TrailExecution
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -196,7 +197,16 @@ class TrailblazeRunnerUtil(
     val trailEndMs = System.currentTimeMillis()
     historySection?.let { section -> session?.let { ToolCallHistory.closeSection(it.sessionId, section.id, trailEndMs) } }
     historySection = null
+    val undos = session?.let { SessionCleanups.drain(it.sessionId) }.orEmpty()
     val run = session?.let { TrailheadRuns.current(it.sessionId) }
+    // The failure as the trail left it, before an undo or the teardown changes the screen.
+    if (session != null && (outcome == TrailOutcome.FAILED || outcome == TrailOutcome.SETUP_FAILED) &&
+      (undos.isNotEmpty() || run?.invocations?.isNotEmpty() == true)
+    ) {
+      captureFailureBeforeTeardown(session)
+    }
+    // Before the trailhead's teardown: the trailhead set up first, so it cleans up last.
+    session?.let { runSessionCleanups(it, undos) }
     if (run == null || run.invocations.isEmpty()) {
       // No teardown follows this trail, so nothing replaces what an earlier one handed on, yet it
       // may have changed the device. The runner doesn't know which device, so drop them all.
@@ -213,7 +223,6 @@ class TrailblazeRunnerUtil(
         name = run.invocations.joinToString { it.tool.trailheadToolName },
         startedAt = trailEndMs,
       )
-      if (outcome == TrailOutcome.FAILED || outcome == TrailOutcome.SETUP_FAILED) captureFailureBeforeTeardown(session)
       withContext(NonCancellable) {
         val step = DirectionStep(step = TeardownWire.OBJECTIVE_STEP, recordable = false, isTeardown = true)
         val stepStartTime = Clock.System.now()
@@ -238,6 +247,26 @@ class TrailblazeRunnerUtil(
       TrailheadRuns.close(run)
     }
   }
+
+  /**
+   * Runs the undo calls the trail's tools registered (`ctx.session.addCleanup`), newest first,
+   * through normal dispatch so each logs as a step, inside a teardown objective so no recording
+   * picks them up. A failed undo is reported and never changes the trail's verdict.
+   */
+  private suspend fun runSessionCleanups(session: TrailblazeSession, cleanups: List<SessionCleanups.Cleanup>) =
+    withContext(NonCancellable) {
+      if (cleanups.isEmpty()) return@withContext
+      val step = DirectionStep(step = SessionCleanups.OBJECTIVE_STEP, recordable = false, isTeardown = true)
+      val stepStartTime = Clock.System.now()
+      val taskId = TaskId.generate()
+      logBestEffort("undo start") { emitObjectiveStart(step) }
+      val failures = SessionCleanups.runAll(cleanups) { runTrailblazeTool(listOf(it.tool)) }
+      failures.forEach { Console.error("[SessionCleanup] $it") }
+      val failure = failures.takeIf { it.isNotEmpty() }?.joinToString("; ")
+      logBestEffort("undo end") {
+        emitObjectiveComplete(step, taskId, stepStartTime, success = failure == null, failureReason = failure)
+      }
+    }
 
   private inline fun logBestEffort(what: String, block: () -> Unit) {
     try {

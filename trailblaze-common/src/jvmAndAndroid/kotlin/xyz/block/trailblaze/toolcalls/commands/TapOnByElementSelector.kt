@@ -54,6 +54,15 @@ data class TapOnByElementSelector(
    * becomes a visibility wait ahead of the tap, so the author's budget holds there too.
    */
   val timeoutMs: Long? = null,
+  /**
+   * Whether the Android accessibility driver dismisses a visible soft keyboard before resolving
+   * the target. Default `true`: a keyboard left up by an earlier `inputText` can cover the target,
+   * and a replay has no LLM to insert the `hideKeyboard`. Set `false` to tap another field while
+   * the keyboard is up, on a form that scrolls its focused field back into view when the keyboard
+   * closes and so would take the target off screen. A target the keyboard covers still fails the
+   * tap rather than landing on a key. Other drivers never dismiss the keyboard here.
+   */
+  val hideKeyboardBefore: Boolean = true,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector) ?: return emptyList()
@@ -101,6 +110,7 @@ data class TapOnByElementSelector(
           nodeSelector = nodeSelector,
           longPress = longPress,
           timeoutMs = timeoutMs,
+          hideKeyboardBefore = hideKeyboardBefore,
           traceId = toolExecutionContext.traceId,
         )
         if (accessibilityResult != null) return accessibilityResult
@@ -131,6 +141,7 @@ data class TapOnByElementSelector(
             nodeSelector = nodeSelector,
             longPress = longPress,
             timeoutMs = timeoutMs,
+            hideKeyboardBefore = hideKeyboardBefore,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result
@@ -143,6 +154,7 @@ data class TapOnByElementSelector(
             nodeSelector = nodeSelector,
             longPress = longPress,
             timeoutMs = timeoutMs,
+            hideKeyboardBefore = hideKeyboardBefore,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result

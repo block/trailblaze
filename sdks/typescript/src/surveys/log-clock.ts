@@ -124,6 +124,36 @@ export function hostTimesOf(logs: ReadonlyArray<unknown>): Array<number | undefi
   });
 }
 
+/** Each device's device→host offset, as `hostTimesOf` applies it to that device's logs. */
+export interface DeviceOffsets {
+  /** By device name as a capture filename spells it (`streamFileName`), for the devices a multi-device session's tool logs name. */
+  byName: ReadonlyMap<string, number>;
+  /** The device the session started on: the first anchored tool log's. A stream with no device suffix is its. */
+  startMs: number;
+  /** Whether every anchored device runs on one offset, so any device-stamped record converts with it. */
+  single: boolean;
+}
+
+/** A device or stream name as a capture filename spells it: Kotlin's `SessionEvents.sanitizeName`. */
+export const streamFileName = (name: string): string => name.replace(/[^A-Za-z0-9._-]/g, "_") || "unknown";
+
+/** Each device's offset, from its anchored tool logs; null when nothing is anchored. */
+export function deviceOffsetsOf(logs: ReadonlyArray<unknown>): DeviceOffsets | null {
+  const clocked = logs as ReadonlyArray<ClockedLog>;
+  const offsets = offsetsOf(clocked);
+  if (!offsets) return null;
+  const first = clocked.find((log) => isTool(log) && log.clock === "device" && ms(log.timestamp) != null && ms(log.hostReceivedAt) != null)!;
+  const byName = new Map<string, number>();
+  // A stream's `.<device>` suffix is the name made filename-safe, so the names are keyed the same way.
+  // The first device under a name keeps it, as the report's clock tracks do.
+  for (const [device, offset] of offsets.byDeviceName) if (device !== null && !byName.has(streamFileName(device))) byName.set(streamFileName(device), offset);
+  return {
+    byName,
+    startMs: offsets.byDeviceName.get(toolDevice(first, offsets.handovers)) ?? offsets.sessionWideMs,
+    single: new Set(offsets.byDeviceName.values()).size === 1,
+  };
+}
+
 /** The session-wide device→host offset the logs give, the trace viewer's fallback; null when nothing is anchored. */
 export function sessionWideOffsetOf(logs: ReadonlyArray<unknown>): number | null {
   return offsetsOf(logs as ReadonlyArray<ClockedLog>)?.sessionWideMs ?? null;

@@ -10,9 +10,9 @@ Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
                        capture-memory] [--[no-]capture-network] [--[no-]
                        capture-video] [--full-report-payloads] [--[no-]
                        headless] [--markdown] [--no-daemon] [--no-logging]
-                       [--no-report] [--reuse-trailhead] [--[no-]
-                       save-recording] [--self-heal] [--[no-]turbo] [--[no-]
-                       use-recorded-steps] [--args-file=<file>]
+                       [--no-report] [--reuse-trailhead] [--same-session] [--
+                       [no-]save-recording] [--self-heal] [--[no-]turbo] [--
+                       [no-]use-recorded-steps] [--args-file=<file>]
                        [--compose-port=<composePort>] [--configuration=<name>]
                        [--device-classifier=<catalog-key>]
                        [--device-setup=<file|json>] [--driver=<driverType>]
@@ -27,24 +27,26 @@ Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
                        [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
                        [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
                        [<trailFile>...]
-Run a trail's trailhead once, then repeat its steps in a loop.
+Run a trail over and over.
 
-One session runs the `trailhead:`, then the `trail:` steps --iterations times
-in a row, each pass starting where the previous one left the app. The steps
-should end where they began.
+Each pass runs the whole trail, `trailhead:` included, in a session of its own,
+so it sets up from scratch and inherits nothing from the pass before.
 
 A failed pass is reported, handed to --on-failure, and counted toward
---iterations. The loop then recovers in a new session that runs the trailhead
-again, and continues with the passes left. It stops early after 3 sessions in a
-row that complete no pass. Exits non-zero if any pass failed.
+--iterations, and the loop goes on with the next pass. It stops early after 3
+passes in a row fail. Exits non-zero if any pass failed.
 
 Give --iterations, --time-limit, or both: the loop ends at whichever comes
 first. At the time limit, a pass still running is cancelled and is not counted
 as a failure.
 
 With --reuse-trailhead, each pass's trailhead may reuse the setup the previous
-pass left instead of setting up again, when that trailhead supports it. Each
-pass then runs the whole trail in a session of its own.
+pass left instead of setting up again, when that trailhead supports it.
+
+With --same-session, one session runs the `trailhead:` once, then the `trail:`
+steps --iterations times in a row, each pass starting where the previous one
+left the app. The steps should end where they began. After a failed pass, the
+loop recovers in a new session that runs the trailhead again.
 
 Takes the `trailblaze run` options, for one trail file. Several devices each
 loop in turn, for --iterations and --time-limit each. Never saves a recording:
@@ -255,11 +257,17 @@ it would record every pass into the trail.
                                starting the next one, and before exiting.
       --reuse-trailhead      Let each pass's trailhead reuse the setup the
                                previous pass handed on, instead of setting up
-                               again. Each pass then runs the whole trail,
-                               trailhead included, in a session of its own.
-                               Only a trailhead that defines `teardown` hands
-                               its setup on, and only after a pass that passed;
+                               again. A pass then inherits whatever the last
+                               one left in the app or on the account. Only a
+                               trailhead that defines `teardown` hands its
+                               setup on, and only after a pass that passed;
                                otherwise the next pass sets up from scratch.
+      --same-session         Run the trailhead once, then repeat the trail's
+                               steps in one session, each pass starting where
+                               the previous one left the app. Faster, for a
+                               trail whose steps end where they began. A failed
+                               pass ends the session, and a new one runs the
+                               trailhead again.
       --[no-]save-recording  Save the recording back to the trail source
                                directory after a successful run. Default: on.
                                Use --no-save-recording to skip. Even when on,

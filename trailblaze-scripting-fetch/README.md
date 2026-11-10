@@ -69,7 +69,9 @@ into `@trailblaze/scripting`'s `.d.ts`.
   in effect, redirects are NOT followed — otherwise a permitted host could 30x past the allow-list
   to a denied one (the list checks the request URL's host only). Under a restrictive list, a tool
   that must follow a redirect reads `res.status` / `res.headers.get("location")` and issues a
-  second `fetch` (re-checked).
+  second `fetch` (re-checked). `redirect: "manual"` stops at the first 3xx and returns it with its
+  `Location` header (as Bun and Node do, not a browser's opaque redirect); `redirect: "error"`
+  rejects on a 3xx.
 - **Logging.** Each request emits a breadcrumb (quiet-suppressed on the host; visible with `-v` or in
   the log file): `[OkHttpFetchExtension] <METHOD> <status> <url> (<ms>ms)` — e.g.
   `POST 200 https://host.com/path/goes/here?<redacted> (123ms)`. Failures and allow-list denials log

@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { DERIVED_LOCK, DERIVED_MANIFEST, readDerivedManifest, type DerivedManifest } from "./derived-files.js";
 import { SurveySession } from "./session.js";
 import { sessionInputs, withLock } from "./stored.js";
-import { envelopeOf, sourcesOf, type EventStreamDefinition } from "./stream.js";
+import { deriveMsOf, envelopeOf, nowMs, sourcesOf, type EventStreamDefinition } from "./stream.js";
 import type { SessionSummary } from "./types.js";
 
 export interface StreamWriteOptions {
@@ -87,7 +87,8 @@ function digestOf(file: string): string | undefined {
 /** This run's lock was taken over: whatever it changes now may undo what the run holding it has done since. */
 class LostLock extends Error {}
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** A failure's message; one that says nothing still records the stream as failed. */
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e)) || "failed without a message";
 
 /** The longest failure a session's manifest records for one stream, so a huge message never bloats it. */
 const ERROR_MAX = 500;
@@ -194,8 +195,14 @@ export function writeDerivedStreams(dir: string, streams: ReadonlyArray<EventStr
           (entry.rows === 0 ? result.empty : result.current).push(name);
           continue;
         }
+        // How long the stream's own code ran, for the report to show beside its lane. Timed where it runs,
+        // so a stream another one read first is not charged to that one; the stopwatch covers a stream
+        // that failed before its own code ran.
+        const started = nowMs();
+        const took = () => Math.round(deriveMsOf(def, session) ?? nowMs() - started);
         try {
           const rows = def.of(session);
+          const ms = took();
           let sha: string | undefined;
           if (rows.length === 0) {
             remove(file);
@@ -220,13 +227,15 @@ export function writeDerivedStreams(dir: string, streams: ReadonlyArray<EventStr
             ...(def.spec.title ? { title: def.spec.title } : {}),
             ...(def.spec.lane?.fold ? { lane: { fold: def.spec.lane.fold } } : {}),
             ...(rows.length ? { derivedFrom: sourcesOf(def, rows) } : {}),
+            ms,
           };
           changed = true;
         } catch (e) {
           if (e instanceof LostLock) throw e;
           result.errors.push({ stream: name, message: message(e) });
           // Recorded on the session, so whoever opens it later can tell a stream that failed from one with no rows. Kept listed, so a retry rewrites it.
-          manifest.streams[name] = { rows: 0, error: clampError(message(e)) };
+          // Keeps its title, so a report names a failed stream as it names a written one.
+          manifest.streams[name] = { rows: 0, ...(def.spec.title ? { title: def.spec.title } : {}), error: clampError(message(e)), ms: took() };
           changed = true;
           if (entry) {
             // The old rows would still show in the report as if they were current.

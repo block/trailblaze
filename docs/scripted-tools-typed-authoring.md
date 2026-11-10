@@ -627,6 +627,51 @@ async teardown(args, ctx, trailRun) {
   The value is the host's flat list: each call also has an `id` and the `parentId` of the call it
   ran inside (`null` for a top-level one), which the SDK nests into `calls`.
 
+## Undoing a device change via `ctx.session.addCleanup`
+
+A tool that changes the device (radios, location, a fingerprint, a PIN) reads the current state
+and adds the tool call that puts it back before making the change, so a tool that fails halfway is
+still undone. Where this runs in the trail, next to the trailhead's setup and teardown, is in
+[Trail lifecycle](trail-lifecycle.md).
+
+```ts
+const before = await ctx.tools.android_adbShell({ command: ["sh", "-c", READ_RADIOS] });
+await ctx.session!.addCleanup((tools) => tools.android_adbShell({ command: ["sh", "-c", restoreRadios(before)] }));
+```
+
+- **The builder runs now; its arguments are fixed at this call.** Only the calls it returns run
+  at the trail's end, so in the example `restoreRadios(before)` is evaluated here, and changing
+  `before` afterwards changes nothing.
+- **`tools.<tool>(args)` describes a call; it doesn't run it.** `tools` has the same typed methods as
+  `ctx.tools`, so a wrong tool name or argument fails `trailblaze check`. Return one call or a
+  list: `(tools) => [tools.a(...), tools.b(...)]` runs them in the order written.
+- **Build the cleanup from what this run did.** The builder runs right away, with the values in
+  hand now, and Trailblaze stores the calls it returns. They restore what this run saw, whichever
+  path it took; nothing has to predict it. The builder can't run tools, so keep it to returning calls.
+- **The calls run when the trail ends**: after its last step, before the trailhead's teardown,
+  whether the trail passed, failed or was cancelled. Separate `addCleanup`s run newest first. A
+  session that runs no trail (MCP, interactive) runs them when the session ends. Each one logs as
+  a step and stays out of recordings; a failed one is logged and never changes the verdict. Each
+  gets 20s, then is cancelled and the rest run. One still running 5s after that is stuck where
+  cancellation can't reach it (adb gone), so the rest are logged as not run rather than started
+  beside it.
+- **Teardown and reuse see the restored device.** The trailhead's teardown, and its reuse decision,
+  run after the undos, so a teardown that needs the network gets it back first. So a trailhead's
+  own setup shouldn't add a cleanup for a change its trails depend on: the undo runs at the end of
+  the first trail, and a reused trailhead skips setup, so later trails would start without it. Undo
+  that change in the trailhead's teardown instead.
+- **It works in every runtime**, including on the device: the calls are data, not a closure in
+  your tool. A call added more than once, in one list or across several, runs
+  once, at the last point it would have run, so the original state is still restored last.
+- **Make an undo set a state, not toggle one** (`svc wifi enable`, not "press the Wi-Fi tile").
+  Since a repeated call runs once, two toggles registered with the same args would undo only one
+  change.
+- A cleanup with several steps is a tool of its own, or an action of the same tool
+  (`(tools) => tools.my_tool({ action: "reset" })`).
+- **In a test**, `addCleanup` calls the hidden `trailblaze_registerCleanup` tool once: with
+  `{ tool, args }` for one call, or `{ calls: [{ tool, args }, ...] }` for a list; stub or assert
+  on that call.
+
 ## Worked examples
 
 ### Wikipedia: a typed web tool with conditional UI

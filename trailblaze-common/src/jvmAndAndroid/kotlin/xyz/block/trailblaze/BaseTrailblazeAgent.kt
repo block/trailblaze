@@ -82,6 +82,16 @@ abstract class BaseTrailblazeAgent(
   protected open val trailblazeToolRepo: TrailblazeToolRepo? = null
 
   /**
+   * Called after every host-local tool this agent runs, whatever its result. Such a tool reaches
+   * the device without going through the driver, so a driver that keeps state about the device
+   * (a runner that lives inside the app, say) learns here that the device may have changed under it.
+   */
+  protected open fun onHostLocalToolFinished() {}
+
+  /** Called before every host-local tool this agent runs; the counterpart of [onHostLocalToolFinished]. */
+  protected open fun onHostLocalToolStarting() {}
+
+  /**
    * Multi-device session bindings, shared by every agent the session constructed (one per bound
    * device). Set by the host runner after construction when the session binds a multi-device
    * configuration; stays null for single-device sessions. Subclass
@@ -319,6 +329,7 @@ abstract class BaseTrailblazeAgent(
               // log it, then surface it as a result so the early-exit branch downstream
               // treats it the same as a returned error. `CancellationException` re-throws so
               // structured concurrency for session teardown / agent abort stays intact.
+              onHostLocalToolStarting()
               val hostResult: TrailblazeToolResult = try {
                 runBlocking { DispatchCancellation.linked(this) { memoryResolvedTool.execute(context) } }
               } catch (e: CancellationException) {
@@ -328,6 +339,7 @@ abstract class BaseTrailblazeAgent(
                 // into LLM-facing error content and must keep the token-bearing form.
                 TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, resolved)
               }
+              onHostLocalToolFinished()
               logToolExecution(
                 tool = memoryResolvedTool,
                 timeBeforeExecution = timeBeforeExecution,

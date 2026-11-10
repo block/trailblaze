@@ -384,12 +384,21 @@ function vouchedVersion(file: string): string | undefined {
 }
 
 /**
- * A hash of a survey file and every local module it imports, followed through their own imports.
- * Only relative imports count: a package's version, or a data file the survey reads at run time,
- * does not change it. `onRead` sees each module as it is read.
+ * Changed when the framework changes what a survey's find phase is handed, so findings a session
+ * stored under the old reading are recomputed rather than reused. `trail-scope`: a find phase reads
+ * only its `scope` of the run, the trail's own steps by default.
+ */
+const FIND_PHASE_READS = "trail-scope";
+
+/**
+ * A hash of a survey file and every local module it imports, followed through their own imports,
+ * and of what the framework hands its find phase (`FIND_PHASE_READS`). Only relative imports count:
+ * a package's version, or a data file the survey reads at run time, does not change it. `onRead`
+ * sees each module as it is read.
  */
 export function versionOf(file: string, onRead?: (path: string, module: ReadModule) => void): string {
   const hash = createHash("sha256");
+  hash.update(`${FIND_PHASE_READS}\n`);
   const seen = new Set<string>();
   // By real path: a module reached through a link is the one Bun already loaded.
   const entry = realpathSync(resolve(file));

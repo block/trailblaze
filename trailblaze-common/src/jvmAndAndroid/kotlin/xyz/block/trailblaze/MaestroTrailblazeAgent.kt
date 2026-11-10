@@ -169,6 +169,11 @@ abstract class MaestroTrailblazeAgent(
      * not opinionated and each agent applies its own per-driver default.
      */
     timeoutMs: Long? = null,
+    /**
+     * Whether a driver that dismisses a visible soft keyboard before resolving the target (the
+     * Android accessibility driver) does so for this tap. Drivers that never dismiss it ignore this.
+     */
+    hideKeyboardBefore: Boolean = true,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 

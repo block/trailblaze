@@ -32,7 +32,6 @@ import {
   META_KEY_TRAILBLAZE,
   type TrailblazeMemory,
 } from "./memory.js";
-import { sessionResourcesFor, type TrailblazeSessionResources } from "./session-resources.js";
 export type { TrailblazeLogger, TrailblazeLogLevel } from "./logger.js";
 export type { TrailblazeMemory } from "./memory.js";
 
@@ -303,12 +302,6 @@ export interface TrailblazeContext {
    */
   logger: TrailblazeLogger;
   /**
-   * Process-local cleanup registrations for opaque session resources. This is present only for
-   * subprocess invocations that carry the host session envelope; do not put its values in memory
-   * or tool results. See `ctx.session.registerCleanup`.
-   */
-  session: TrailblazeSessionResources;
-  /**
    * The last trail's reusable hand-off the host attached to this invocation
    * (`_meta.trailblaze.previousRun`), carried as-is; typed handlers read it, validated, as
    * `ctx.previousRun`. Present only on a trailhead invocation the host found reusable.
@@ -428,7 +421,6 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
     hostPlatform: parseHostPlatform(tb["hostPlatform"]) ?? undefined,
     memory,
     logger: logger ?? noopLogger,
-    session: sessionResourcesFor(sessionId),
     previousRun: tb["previousRun"] ?? undefined,
   };
 }

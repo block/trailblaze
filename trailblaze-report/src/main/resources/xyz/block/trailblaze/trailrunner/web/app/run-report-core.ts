@@ -29,12 +29,14 @@ import { buildMultiReportHtml, buildRunReportHtml } from './run-report-html';
 // (report/) because the driver imports it as a staged sibling; the viewer/zip surfaces reach the
 // SAME implementation through this bundle so attachment detection can't fork per surface.
 import {
-  ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, applyDerivedLanes, attachmentRefOf, buildEventStream,
+  ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, applyDerivedLanes, attachmentRefOf, buildEventStream, derivedStreamStatus,
   collectStreamAttachmentRefs, findAttachmentRefs, isSafeSessionRelativePath, rootNetworkStreamFiles,
 } from '../../../report/run-report-events';
 // Same arrangement for the tracer-span slimming: the bun driver reads trace.json from disk, the zip
 // viewer from an archive entry and the live document from the daemon, all through this one function.
 import { MAX_TRACE_BYTES, slimTracerSpans } from '../../../report/run-report-trace-spans';
+// Same for the run's warnings, read from the session's surveys.json.
+import { DERIVED_MANIFEST_PATH, MAX_DERIVED_MANIFEST_BYTES, MAX_SURVEYS_BYTES, SURVEYS_FILE, mergeRunWarnings, runWarningsFromDerivedStreams, runWarningsFromSurveys } from '../../../report/run-report-warnings';
 import { DEVICE_CLOCK_MAX_BYTES, parseDeviceClockSync } from '../../../report/device-clock-sync';
 import { extractVisibleStrings, visibleStringsShotFiles } from '../../../report/run-report-visible-strings';
 import { isSelectorAnalyzableTree } from './run-report-selectors';
@@ -50,8 +52,8 @@ const RUN_REPORT_EXPORTS = {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, sidecarScript, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, applyDerivedLanes, rootNetworkStreamFiles, parseDeviceClockSync, DEVICE_CLOCK_MAX_BYTES,
-  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, applyDerivedLanes, derivedStreamStatus, rootNetworkStreamFiles, parseDeviceClockSync, DEVICE_CLOCK_MAX_BYTES,
+  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, MAX_SURVEYS_BYTES, SURVEYS_FILE, runWarningsFromSurveys, DERIVED_MANIFEST_PATH, MAX_DERIVED_MANIFEST_BYTES, runWarningsFromDerivedStreams, mergeRunWarnings, extractVisibleStrings, visibleStringsShotFiles,
   playbackGapMs, exportGapMs, videoEndMs, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt,
   normalizedToHostClock,
 };
@@ -62,8 +64,8 @@ export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, sidecarScript, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, applyDerivedLanes, rootNetworkStreamFiles, parseDeviceClockSync, DEVICE_CLOCK_MAX_BYTES,
-  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream, applyDerivedLanes, derivedStreamStatus, rootNetworkStreamFiles, parseDeviceClockSync, DEVICE_CLOCK_MAX_BYTES,
+  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, MAX_SURVEYS_BYTES, SURVEYS_FILE, runWarningsFromSurveys, DERIVED_MANIFEST_PATH, MAX_DERIVED_MANIFEST_BYTES, runWarningsFromDerivedStreams, mergeRunWarnings, extractVisibleStrings, visibleStringsShotFiles,
   playbackGapMs, exportGapMs, videoEndMs, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt,
   normalizedToHostClock,
 };

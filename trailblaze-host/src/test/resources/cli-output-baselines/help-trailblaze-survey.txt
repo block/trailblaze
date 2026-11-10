@@ -5,8 +5,9 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze survey [-hV] [--format=<format>] [--logs-dir=<path>]
-                         [-o=<file>] [--survey=<name>]... [<session>...]
+Usage: trailblaze survey [-hV] [--warnings] [--format=<format>]
+                         [--logs-dir=<path>] [-o=<file>] [--survey=<name>]...
+                         [--update-trails=<path>]... [<session>...]
 Run surveys over finished sessions, store their findings and labels in each
 session, and print a report
 Surveys load from the workspace you run this in. Each survey's find phase reads
@@ -25,4 +26,12 @@ they are current.
   -o, --out=<file>        Also write the JSON report to this file.
       --survey=<name>     Only run the survey exported under this name
                             (repeatable).
+      --update-trails=<path>
+                          Also add the labels the selected surveys found to
+                            each run's trail, in its generatedLabels: a trail
+                            file, or a directory searched for trails by config.
+                            id (repeatable). Only adds; edits the files in
+                            place and commits nothing.
   -V, --version           Print version information and exit.
+      --warnings          Only run warning surveys (`warning: true`), whose
+                            findings mark a run that passed but needs a look.

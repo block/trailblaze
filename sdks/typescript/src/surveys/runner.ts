@@ -1,6 +1,7 @@
 // Runs a set of surveys over a set of sessions and assembles the report.
 
 import { createHash, randomUUID } from "node:crypto";
+import { describeScope, scopeOf } from "./phase.js";
 import { hasFindPhase, type SurveyDefinition } from "./survey.js";
 import { runSurvey, type SurveyError } from "./run-one.js";
 export { compactRecord, runSurvey, type SurveyError } from "./run-one.js";
@@ -16,7 +17,10 @@ export interface SessionResult {
   findings: Finding[];
   /** Surveys that threw or reported `ctx.error`. The run continues; the failure is reported, not hidden. */
   errors: SurveyError[];
-  /** Surveys skipped because the session's platform, app, or target was outside their spec. */
+  /**
+   * Surveys skipped because the session's platform, app, or target was outside their spec, and warning
+   * surveys skipped because the session has not ended: a warning judges the whole run.
+   */
   skipped: string[];
   /** The run's labels: every label whose findings include one from this session. */
   labels: Array<Pick<LabelRecord, "survey" | "type" | "name">>;
@@ -58,11 +62,15 @@ export interface SurveySummary {
   findings: number;
   /** A hash of the file that defines the survey and its local imports; findings and labels carry it too. */
   version?: string;
+  /** Set for a warning survey: each of its findings is a warning on its run. */
+  warning?: true;
   /** Set when the run included this survey only because these selected surveys list it in `dependsOn`. */
   neededBy?: string[];
   /** Sessions whose stored findings were reused rather than surveyed again. Only a survey in `neededBy` reuses. */
   reused?: number;
   labels: number;
+  /** The part of each run the survey read: `trail`, `all`, or its phases joined (`deviceSetup+trailhead`). */
+  scope: string;
 }
 
 export interface RunOptions {
@@ -136,8 +144,10 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
       sessionIds: [],
       findings: 0,
       ...(p.def.version !== undefined ? { version: p.def.version } : {}),
+      ...(p.def.spec.warning ? { warning: true as const } : {}),
       ...(p.selected ? {} : { neededBy: p.neededBy, reused: 0 }),
       labels: 0,
+      scope: describeScope(scopeOf(p.def.spec)),
     })),
     sessions: [],
     unreadable: [],
@@ -196,7 +206,7 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
     for (const p of plan) {
       const { def, id } = p;
       if (!hasFindPhase(def)) continue;
-      if (!surveyApplies(def.spec, session.summary, options.targets)) {
+      if (!surveyApplies(def.spec, session.summary, options.targets) || (def.spec.warning && session.summary.endedAtMs === undefined)) {
         result.skipped.push(id);
         continue;
       }
@@ -232,7 +242,7 @@ export async function runSurveys(options: RunOptions): Promise<SurveyReport> {
   for (const s of report.sessions) {
     s.labels = report.labels
       .filter((l) => l.runs.includes(s.session.id))
-      .map((l) => (l.type === undefined ? { survey: l.survey, name: l.name } : { survey: l.survey, type: l.type, name: l.name }));
+      .map((l) => ({ survey: l.survey, type: l.type, name: l.name }));
   }
 
   countBySurvey(report);

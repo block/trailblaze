@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.cli
 
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.runBlocking
 import picocli.CommandLine
 import picocli.CommandLine.Command
@@ -8,12 +12,14 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.config.project.findWorkspaceRoot
 import xyz.block.trailblaze.report.SkippedTrails
+import xyz.block.trailblaze.scripting.RunWarningSurveys
 import xyz.block.trailblaze.scripting.WorkspaceSurveyBundleSource
 import xyz.block.trailblaze.surveys.SurveyBundles
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
@@ -333,8 +339,9 @@ class ReportCommand : Callable<Int> {
         "surveys.md (labels, the findings behind each, and the runs they came from) and " +
         "surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated " +
         "(--surveys=journeys,jobs). Each session's findings and labels are stored in its " +
-        "surveys.json too. Surveys never run unless asked. Put a session id before this flag, or " +
-        "it is read as a survey name.",
+        "surveys.json too. Without this flag only the workspace's warning surveys run, so the " +
+        "report shows each run's warnings. Put a session id before this flag, or it is read as a " +
+        "survey name.",
     ],
   )
   var surveys: List<String>? = null
@@ -521,6 +528,9 @@ class ReportCommand : Callable<Int> {
   }
 }
 
+/** A survey report [draftSurveyReport] wrote in [dir], with the surveys CLI's [exit] code. */
+internal class SurveyReportDraft(val dir: File, val exit: Int)
+
 /**
  * Writes every derived stream the workspace's survey files declare (`trailblaze.eventStream()`) into each
  * of [sessionDirs] as `events/<name>.ndjson`, on every report, so a session carries its streams
@@ -537,10 +547,46 @@ internal fun writeDerivedStreams(sessionDirs: List<File>, configDir: File? = wor
     sessionDirs.forEach { add("--sessions"); add(it.absolutePath) }
   }
   val exit = SurveyCli.run(args, CliCallerContext.callerCwd().toAbsolutePath().toFile())
-  if (exit != TrailblazeExitCode.SUCCESS.code) {
-    Console.error("Derived streams were not all written (exit $exit); see above. The report shows the rest, and each session records why.")
-  }
+  if (exit != TrailblazeExitCode.SUCCESS.code) Console.error(derivedStreamFailureMessage(exit, sessionDirs))
   return exit
+}
+
+/**
+ * What `trailblaze report` says when writing derived streams exited [exit]. It promises a run warning
+ * on the Summary only when a session's `events/derived.json` records a stream's error, which is all the
+ * report reads warnings from: a stream file that fails to load, or a manifest that cannot be read,
+ * records none.
+ */
+internal fun derivedStreamFailureMessage(exit: Int, sessionDirs: List<File>): String {
+  val head = "Warning: derived streams were not all written (exit $exit); see above. The run's result is unchanged, " +
+    "so a passing build stays green, but the failed streams' lanes are missing from the report"
+  return if (sessionDirs.any(::recordsStreamError)) {
+    "$head. Its Summary lists each failed stream whose error a session recorded as a run warning, and the next " +
+      "report retries it. Any other error above shows no warning: fix it and run the report again."
+  } else {
+    "$head, and it shows no warning for them: fix the error above and run the report again."
+  }
+}
+
+/** As the report caps `events/derived.json` (MAX_DERIVED_MANIFEST_BYTES): past it, the report reads no warning from it. */
+private const val MAX_DERIVED_MANIFEST_BYTES = 1024L * 1024
+
+private fun recordsStreamError(sessionDir: File): Boolean = runCatching {
+  val manifest = File(sessionDir, "events/derived.json").takeIf { it.isFile && it.length() <= MAX_DERIVED_MANIFEST_BYTES } ?: return false
+  val streams = Json.parseToJsonElement(manifest.readText()).jsonObject["streams"]?.jsonObject ?: return false
+  // Any string error, even an empty one, is a failure the report lists.
+  streams.values.any { entry -> ((entry as? JsonObject)?.get("error") as? JsonPrimitive)?.isString == true }
+}.getOrDefault(false)
+
+/**
+ * Runs the caller's workspace's warning surveys over [sessionDirs] before a report is built from
+ * them, so it shows each run's warnings: every report that builds HTML from sessions calls this.
+ * Never throws: a report without warnings beats no report. [streamsReported]: [writeDerivedStreams]
+ * ran over them first and reported any stream that failed.
+ */
+internal fun writeRunWarnings(sessionDirs: List<File>, streamsReported: Boolean) {
+  runCatching { RunWarningSurveys.run(sessionDirs, workspaceConfigDir(), streamsReported) }
+    .onFailure { Console.error("Warning surveys did not run: ${it.message}. The report is built without warnings.") }
 }
 
 /**
@@ -600,33 +646,61 @@ private fun localModule(dir: File, specifier: String): File? {
 }
 
 /**
- * Runs [names] (every survey when empty) over [sessionDirs] — session directories, or a directory of them — and writes the markdown report to
- * [markdown] and the JSON one to [json], printing both paths. The interactive HTML does not render
- * survey results, so they sit beside it. Returns the surveys CLI's exit code.
+ * Runs [names] (every survey when empty) over [sessionDirs] — session directories, or a directory
+ * of them — before the HTML report is built: each session's own `surveys.json` gets their findings,
+ * which is where the report reads a run's warnings from. Their report waits in a scratch directory
+ * until [placeSurveyReport] moves it beside the HTML.
  */
-internal fun writeSurveyReport(sessionDirs: List<File>, names: List<String>, markdown: File, json: File): Int {
-  // Refused before anything is removed below: that file is the session's stored results, not an earlier report.
-  if (sessionDirs.any { File(it, "surveys.json").canonicalFile == json.canonicalFile }) {
-    Console.error("Error: ${json.path} is where a session stores its survey results; write the report somewhere else.")
-    return TrailblazeExitCode.MISUSE.code
-  }
-  // Gone first, so a run that fails early leaves no earlier run's results beside this report.
-  markdown.delete()
-  json.delete()
+internal fun draftSurveyReport(sessionDirs: List<File>, names: List<String>): SurveyReportDraft {
+  val dir = Files.createTempDirectory("trailblaze-report-surveys").toFile()
   val args = buildList {
     add("--write")
     // The streams pass before this one already recorded any failed stream on its session.
     add("--allow-stream-errors")
     add("--format"); add("markdown")
-    add("--out"); add(json.absolutePath)
+    add("--out"); add(File(dir, SURVEY_DRAFT_JSON).absolutePath)
     sessionDirs.forEach { add("--sessions"); add(it.absolutePath) }
     names.forEach { add("--survey"); add(it) }
   }
-  val exit = SurveyCli.run(args, CliCallerContext.callerCwd().toAbsolutePath().toFile(), stdout = markdown)
+  val exit = SurveyCli.run(args, CliCallerContext.callerCwd().toAbsolutePath().toFile(), stdout = File(dir, SURVEY_DRAFT_MARKDOWN))
+  return SurveyReportDraft(dir, exit)
+}
+
+/**
+ * Moves [draft] beside the HTML report as [markdown] and [json], replacing an earlier run's, prints
+ * both paths, and removes the draft's directory. Returns the surveys CLI's exit code.
+ */
+internal fun placeSurveyReport(draft: SurveyReportDraft, markdown: File, json: File): Int {
+  try {
+    markdown.delete()
+    json.delete()
+    File(draft.dir, SURVEY_DRAFT_MARKDOWN).takeIf { it.isFile }?.let { relocate(it, markdown) }
+    File(draft.dir, SURVEY_DRAFT_JSON).takeIf { it.isFile }?.let { relocate(it, json) }
+    announceSurveyReport(markdown, json, draft.exit)
+    return draft.exit
+  } catch (e: Exception) {
+    // A failure of the survey report alone: the exports after it still run.
+    Console.error("Error: could not write the survey report beside the HTML: ${e.message ?: e.javaClass.simpleName}")
+    return TrailblazeExitCode.INFRA_FAILED.code
+  } finally {
+    draft.dir.deleteRecursively()
+  }
+}
+
+private const val SURVEY_DRAFT_MARKDOWN = "surveys.md"
+private const val SURVEY_DRAFT_JSON = "surveys.json"
+
+/** True, with the error printed, when [json] is one of [sessionDirs]' stored survey results. */
+internal fun overwritesStoredSurveys(sessionDirs: List<File>, json: File): Boolean {
+  if (sessionDirs.none { File(it, "surveys.json").canonicalFile == json.canonicalFile }) return false
+  Console.error("Error: ${json.path} is where a session stores its survey results; write the report somewhere else.")
+  return true
+}
+
+private fun announceSurveyReport(markdown: File, json: File, exit: Int) {
   if (markdown.isFile && markdown.length() > 0) Console.info("Surveys: ${markdown.fileUrl()}")
   if (json.isFile) Console.info("Surveys JSON: ${json.fileUrl()}")
   if (exit != TrailblazeExitCode.SUCCESS.code) Console.error("Surveys did not all run cleanly (exit $exit); see above.")
-  return exit
 }
 
 /**
@@ -693,7 +767,9 @@ private fun percentEncodeSegment(segment: String): String = buildString {
  *   terminal instead of being swallowed. Off by default: those lines are one-per-session
  *   breadcrumbs, and the report paths are what the person asked for.
  * @param surveys When non-null (`--surveys`), the surveys to run over the report's sessions —
- *   empty for all of them. What they found is written beside the HTML; see [writeSurveyReport].
+ *   empty for all of them; their own report is written beside the HTML; see [draftSurveyReport].
+ *   The workspace's warning surveys run either way, before the HTML is built, so it shows the
+ *   warnings they find; see [RunWarningSurveys].
  * @return the exit code for the run. Every path returns rather than exiting the process — the
  *   caller ([ReportCommand.call]) owns process termination, so one force-exit covers all of them.
  */
@@ -739,71 +815,88 @@ internal fun generateSessionReport(
   // trails, or a reader who diffs them finds rows in one that the other says never existed.
   val directorySkips = if (sessionId == null) SkippedTrails.read(logsRepo.logsDir) else emptyList()
 
+  // The sessions the HTML covers, not the logs directory, whose zips and nested directories the
+  // surveys CLI would also read.
+  val surveySessionDirs = sessionIds.map { File(logsRepo.logsDir, it.value) }
+  // Refused before anything is written.
+  if (surveys != null && outputDir != null && overwritesStoredSurveys(surveySessionDirs, File(outputDir, "surveys.json"))) {
+    return TrailblazeExitCode.MISUSE.code
+  }
   // Before the HTML, which renders every `events/*.ndjson`: a derived stream then shows as its own lane.
   // On every report, not only with --surveys; a stream that fails, or anything else here, leaves the report and its exit alone.
-  runCatching { writeDerivedStreams(sessionIds.map { File(logsRepo.logsDir, it.value) }) }
+  runCatching { writeDerivedStreams(surveySessionDirs) }
     .onFailure { Console.error("Derived streams were not written: ${it.message}. The report is built without them.") }
+  // The surveys run after the streams, which they may read, and before the HTML: each stores its
+  // findings in its session's surveys.json, which is where the report reads the run's warnings from.
+  // The warning surveys run on every report, unless a bare --surveys runs them with the rest.
+  if (surveys?.isEmpty() != true) writeRunWarnings(surveySessionDirs, streamsReported = true)
+  // Their own report waits in a scratch directory until the HTML has a name to sit beside.
+  val surveyDraft = surveys?.let { names -> draftSurveyReport(surveySessionDirs, names) }
 
-  Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
+  // Until the draft is placed beside the HTML, a failure on the way there must not leave it behind.
+  val (htmlFile, jsonFile) = try {
+    Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
 
-  // The generator narrates its work on Console.log (tool-class discovery, per-session clock
-  // normalisation, timings) — one line per session, dozens in a lived-in logs directory. Those are
-  // debugging breadcrumbs; the report paths below are the output. Failures still reach the user:
-  // RunReportGenerator reports them on Console.error, which quiet mode does not suppress. `-v`
-  // restores them for the case where a report is slow or empty and the breadcrumbs are the only
-  // way to see how far the generator got.
-  val reportGenerator = quietUnlessVerbose(verbose) { app.createCliReportGenerator() }
-  // Resolved against where the HTML ends up, not where the generator first writes it: an
-  // --output-dir report is moved there below, and its links have to survive the move.
-  val imageBaseUrl = if (linkImages) {
-    linkedImageBaseUrl(
-      logsRepo.logsDir.toPath().toAbsolutePath(),
-      (outputDir ?: File(logsRepo.logsDir, "reports")).toPath().toAbsolutePath(),
-    ).also {
-      if (it == null) {
-        Console.error("Warning: --link-images needs the report and the logs on one drive; embedding the images instead.")
+    // The generator narrates its work on Console.log (tool-class discovery, per-session clock
+    // normalisation, timings) — one line per session, dozens in a lived-in logs directory. Those are
+    // debugging breadcrumbs; the report paths below are the output. Failures still reach the user:
+    // RunReportGenerator reports them on Console.error, which quiet mode does not suppress. `-v`
+    // restores them for the case where a report is slow or empty and the breadcrumbs are the only
+    // way to see how far the generator got.
+    val reportGenerator = quietUnlessVerbose(verbose) { app.createCliReportGenerator() }
+    // Resolved against where the HTML ends up, not where the generator first writes it: an
+    // --output-dir report is moved there below, and its links have to survive the move.
+    val imageBaseUrl = if (linkImages) {
+      linkedImageBaseUrl(
+        logsRepo.logsDir.toPath().toAbsolutePath(),
+        (outputDir ?: File(logsRepo.logsDir, "reports")).toPath().toAbsolutePath(),
+      ).also {
+        if (it == null) {
+          Console.error("Warning: --link-images needs the report and the logs on one drive; embedding the images instead.")
+        }
       }
+    } else {
+      null
     }
-  } else {
-    null
-  }
-  val generatedHtml = quietUnlessVerbose(verbose) {
-    reportGenerator.generateHtmlReports(
-      logsRepo,
-      sessionIds,
-      shareUrl = shareUrl,
-      fullEventPayloads = fullEventPayloads,
-      imageBaseUrl = imageBaseUrl,
-      skips = directorySkips,
-    )
-  }
-  if (generatedHtml == null) {
-    // RunReportGenerator already logged the specific cause (bun missing / subprocess failure).
-    Console.error("Failed to generate the HTML report.")
-    return TrailblazeExitCode.INFRA_FAILED.code
-  }
-  val initialJson = quietUnlessVerbose(verbose) {
-    reportGenerator.generateJsonReport(logsRepo, sessionIds, skips = directorySkips)
-  }
-  if (initialJson == null) {
-    // Partial failure: HTML succeeded. Better to ship that than fail the whole command.
-    Console.error("Warning: failed to generate JSON report — HTML produced anyway.")
-  }
+    val generatedHtml = quietUnlessVerbose(verbose) {
+      reportGenerator.generateHtmlReports(
+        logsRepo,
+        sessionIds,
+        shareUrl = shareUrl,
+        fullEventPayloads = fullEventPayloads,
+        imageBaseUrl = imageBaseUrl,
+        skips = directorySkips,
+      )
+    }
+    if (generatedHtml == null) {
+      // RunReportGenerator already logged the specific cause (bun missing / subprocess failure).
+      Console.error("Failed to generate the HTML report.")
+      surveyDraft?.dir?.deleteRecursively()
+      return TrailblazeExitCode.INFRA_FAILED.code
+    }
+    val initialJson = quietUnlessVerbose(verbose) {
+      reportGenerator.generateJsonReport(logsRepo, sessionIds, skips = directorySkips)
+    }
+    if (initialJson == null) {
+      // Partial failure: HTML succeeded. Better to ship that than fail the whole command.
+      Console.error("Warning: failed to generate JSON report — HTML produced anyway.")
+    }
 
-  // If --output-dir is set, relocate the auto-generated artifacts to canonical names there.
-  // We move (rather than copy) so the auto-named originals don't accumulate in logs/reports/.
-  val htmlFile: File
-  val jsonFile: File?
-  if (outputDir != null) {
-    outputDir.mkdirs()
-    // Still `report-interactive.html` even though it is now the only report: the docs report
-    // gallery publishes this file BY NAME into `docs/report-assets/<slug>/`, and a rename would
-    // leave the gallery silently serving its "report pending" placeholder (docs_hooks.py).
-    htmlFile = File(outputDir, "report-interactive.html").also { relocate(generatedHtml, it) }
-    jsonFile = initialJson?.let { src -> File(outputDir, "summary.json").also { relocate(src, it) } }
-  } else {
-    htmlFile = generatedHtml
-    jsonFile = initialJson
+    // If --output-dir is set, relocate the auto-generated artifacts to canonical names there.
+    // We move (rather than copy) so the auto-named originals don't accumulate in logs/reports/.
+    if (outputDir != null) {
+      outputDir.mkdirs()
+      // Still `report-interactive.html` even though it is now the only report: the docs report
+      // gallery publishes this file BY NAME into `docs/report-assets/<slug>/`, and a rename would
+      // leave the gallery silently serving its "report pending" placeholder (docs_hooks.py).
+      File(outputDir, "report-interactive.html").also { relocate(generatedHtml, it) } to
+        initialJson?.let { src -> File(outputDir, "summary.json").also { relocate(src, it) } }
+    } else {
+      generatedHtml to initialJson
+    }
+  } catch (e: Exception) {
+    surveyDraft?.dir?.deleteRecursively()
+    throw e
   }
 
   Console.info("")
@@ -811,12 +904,9 @@ internal fun generateSessionReport(
   if (jsonFile != null) Console.info("JSON: ${jsonFile.fileUrl()}")
   // A survey's failure is reported after the exports below, so it never costs the ones asked for.
   var surveyExit = TrailblazeExitCode.SUCCESS.code
-  if (surveys != null) {
-    surveyExit = writeSurveyReport(
-      // The sessions the HTML covers, not the logs directory, whose zips and nested directories the
-      // surveys CLI would also read.
-      sessionDirs = sessionIds.map { File(logsRepo.logsDir, it.value) },
-      names = surveys,
+  if (surveyDraft != null) {
+    surveyExit = placeSurveyReport(
+      surveyDraft,
       markdown = File(htmlFile.parentFile, if (outputDir != null) "surveys.md" else "${htmlFile.nameWithoutExtension}.surveys.md"),
       json = File(htmlFile.parentFile, if (outputDir != null) "surveys.json" else "${htmlFile.nameWithoutExtension}.surveys.json"),
     )

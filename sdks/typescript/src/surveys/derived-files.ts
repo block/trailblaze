@@ -17,10 +17,10 @@ export interface DerivedManifest {
   format: number;
   /**
    * Stream name → the code that wrote it, the session files it was derived from, how many rows it
-   * has, a hash of its file, its lane's title, and the streams and logs its rows came from; or,
-   * for a stream that failed when last written, why (`error`), with no rows.
+   * has, a hash of its file, its lane's title, the streams and logs its rows came from, and how
+   * long deriving it took (`ms`); or, for a stream that failed when last written, why (`error`), with no rows.
    */
-  streams: Record<string, { version?: string; inputs?: string; rows: number; sha?: string; title?: string; lane?: { fold?: string }; derivedFrom?: string[]; error?: string }>;
+  streams: Record<string, { version?: string; inputs?: string; rows: number; sha?: string; title?: string; lane?: { fold?: string }; derivedFrom?: string[]; ms?: number; error?: string }>;
   /** The file is there but could not be read as a manifest, so which files it owns is unknown. Never saved. */
   unreadable?: true;
 }

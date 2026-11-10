@@ -603,6 +603,26 @@ object AndroidHostAdbUtils {
     throw RuntimeException("Failed to start reverse port forwarding: ${e.message}", e)
   }
 
+  /**
+   * Forgets everything this JVM holds open to [deviceId] that a reboot has already torn down: the
+   * cached dadb client (its transport died with the old boot) and the device's forward entries
+   * (the host adb server drops a device's forwards when its transport goes away). Nothing is
+   * removed on the adb side — it is already gone; this only stops [adbPortForward] from trusting a
+   * cached entry and skipping the re-forward the next connect needs. Call after the device has
+   * come back on a new boot, before reconnecting to it.
+   */
+  fun forgetDeviceStateAfterReboot(deviceId: TrailblazeDeviceId) {
+    dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
+    val dropped = activeForwards.keys.filter { (serial, _) -> serial == deviceId.instanceId }
+    dropped.forEach { key -> activeForwards.remove(key) }
+    if (dropped.isNotEmpty()) {
+      Console.log(
+        "[AndroidHostAdbUtils] ${deviceId.instanceId} rebooted; forgot cached forward(s) " +
+          dropped.joinToString { "tcp:${it.second}" },
+      )
+    }
+  }
+
   private fun isPortReverseAlreadyActive(
     deviceId: TrailblazeDeviceId,
     localPort: Int,
@@ -1474,6 +1494,9 @@ object AndroidHostAdbUtils {
     )
   }
 
+  /** Every second of a force-stop wait, the stop is issued again; see [forceStopApp]. */
+  private const val FORCE_STOP_REPEAT_EVERY_POLLS = 5
+
   fun forceStopApp(
     deviceId: TrailblazeDeviceId,
     appId: String,
@@ -1490,11 +1513,19 @@ object AndroidHostAdbUtils {
       // that actually elapsed. So the transport failure is held aside and rethrown if the poll
       // never succeeded — see waitUntilAppInForeground for the same fix on the foreground poll.
       val transport = TransportFailureTracker()
+      var polls = 0
       val stopped = PollingUtils.tryUntilSuccessOrTimeout(
         maxWaitMs = 30_000,
         intervalMs = 200,
         conditionDescription = conditionDescription,
       ) {
+        // An app hosting in-process instrumentation does not stay stopped after the first stop:
+        // the platform ends that instrumentation with its own stop, and a scheduled job can then
+        // start the app again before the stopped state is read. Stopping it again once the
+        // instrumentation is gone sticks, so the stop is repeated while waiting.
+        if (++polls % FORCE_STOP_REPEAT_EVERY_POLLS == 0) {
+          transport.record { execAdbShellCommand(deviceId = deviceId, args = listOf("am", "force-stop", appId)) }
+        }
         transport.record {
           execAdbShellCommand(
             deviceId = deviceId,

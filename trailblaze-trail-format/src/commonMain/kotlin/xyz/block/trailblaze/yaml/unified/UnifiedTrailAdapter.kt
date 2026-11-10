@@ -706,36 +706,39 @@ object UnifiedTrailAdapter {
   ): Boolean = resolveDeviceDefinition(config, deviceClassifiers) != null
 
   /**
-   * Whether this device's leg must not run on-device: the closest entry in the classifier chain
-   * that SETS [TrailblazeDeviceDefinition.requiresHost] decides, and an entry that leaves it unset
-   * is skipped rather than read as false. False when no entry sets it.
+   * Everything this device's leg needs ([TrailblazeDeviceDefinition.requires]): the UNION over
+   * every entry in its classifier lineage, in lineage order (most specific first), so no narrower
+   * entry can drop a need a broader one declared. Multi-device configuration names never match a
+   * chain walk. Empty when no entry declares one.
    */
-  fun resolveRequiresHost(
+  fun resolveRequires(
     config: UnifiedTrailConfig,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
-  ): Boolean =
-    closestDeclaredRequiresHost(
+  ): Set<String> =
+    unionOfRequires(
       config.devices,
       TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier },
       config.multiDeviceConfigurationNames,
-    ) == true
+    )
 
   /**
-   * The [TrailblazeDeviceDefinition.requiresHost] of the closest entry along [resolutionChain] that
-   * sets one, or null when none does. Per field, so a narrower entry pinning only a driver does not
-   * hide a broader entry's flag.
+   * Whether this device's leg must not run on-device: its [resolveRequires] holds
+   * [TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION].
    */
-  private fun closestDeclaredRequiresHost(
+  fun requiresHostExecution(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean =
+    TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION in resolveRequires(config, deviceClassifiers)
+
+  private fun unionOfRequires(
     devices: Map<String, TrailblazeDeviceDefinition>?,
     resolutionChain: List<String>,
     configurationNames: Set<String>,
-  ): Boolean? =
-    resolveClosestMatch(
-        devices?.filterValues { it.requiresHost != null },
-        resolutionChain,
-        configurationNames,
-      )
-      ?.requiresHost
+  ): Set<String> =
+    resolutionChain
+      .filter { it !in configurationNames }
+      .flatMapTo(LinkedHashSet()) { devices?.get(it)?.requires.orEmpty() }
 
   /** Resolve the device language declared for this classifier chain, closest-wins. */
   fun resolveLocale(
@@ -1057,9 +1060,9 @@ object UnifiedTrailAdapter {
         ?: UnifiedTrailConfig()
 
     // Replace this classifier's device entry: strip it, then re-add if the recording carried a
-    // driver or locale, or the authored entry set requiresHost. That flag is authored, never
-    // recorded, so a re-record carries the exact entry's value over — true or false. An unset
-    // flag stays unset, so the device keeps inheriting a broader entry's. Collapse an emptied map
+    // driver or locale, or the authored entry declared `requires:`. That list is authored, never
+    // recorded, so a re-record carries the exact entry's value over. An unset list stays unset,
+    // so the device keeps inheriting a broader entry's. Collapse an emptied map
     // back to null so an unconfigured trail stays that
     // way. The recorded v1 `driver:` is a string; the device model is typed, so an unknown name
     // fails loud here rather than writing an unparseable pin into the file.
@@ -1113,11 +1116,11 @@ object UnifiedTrailAdapter {
               null
             }
           }
-        val authoredRequiresHost = baseConfig.devices?.get(classifier)?.requiresHost
+        val authoredRequires = baseConfig.devices?.get(classifier)?.requires
         val keptDeviceDefinition =
-          if (authoredRequiresHost != null) {
+          if (authoredRequires != null) {
             (recordedDeviceDefinition ?: TrailblazeDeviceDefinition()).copy(
-              requiresHost = authoredRequiresHost
+              requires = authoredRequires
             )
           } else {
             recordedDeviceDefinition
@@ -1250,7 +1253,8 @@ object UnifiedTrailAdapter {
    * back verbatim, every step would gain an `android-phone` copy of its `android` leg — a duplicate
    * that then drifts from the leg it copied. So each step (and the trailhead) keeps this
    * classifier's leg only where its tools differ from the leg the device would otherwise read, and
-   * the device entry is kept only where its driver, locale, or requiresHost differs.
+   * the device entry is kept only where its driver or locale differs, or it requires something its
+   * lineage does not already.
    *
    * Only when the device's driver and locale resolve the same either way: tools recorded under
    * another driver are that driver's, and folding a step into a leg recorded for a different one
@@ -1279,16 +1283,14 @@ object UnifiedTrailAdapter {
     val devices = trail.config.devices.orEmpty()
     val ownDevice = devices[classifier]
     val inheritedDevice = resolveClosestMatch(devices - classifier, ancestors, configurationNames)
-    // Null when the lineage declares nothing: dropping the entry would then hand the device to
-    // `all`
-    // or another segment, so a declared value is kept unless the lineage declares the same one.
-    val inheritedRequiresHost =
-      closestDeclaredRequiresHost(devices - classifier, ancestors, configurationNames)
+    // `requires` is a union, so the entry adds nothing only when its lineage already needs all of
+    // it; anything more would be lost with the entry.
+    val inheritedRequires = unionOfRequires(devices - classifier, ancestors, configurationNames)
     if (
       ownDevice != null &&
         (ownDevice.driver != inheritedDevice?.driver ||
           ownDevice.locale != inheritedDevice?.locale ||
-          (ownDevice.requiresHost != null && ownDevice.requiresHost != inheritedRequiresHost))
+          !inheritedRequires.containsAll(ownDevice.requires.orEmpty()))
     ) {
       return trail
     }
@@ -1298,17 +1300,39 @@ object UnifiedTrailAdapter {
       val inherited = resolveClosestMatch(recordings - classifier, ancestors, configurationNames)
       return if (own == inherited) withoutClassifier(classifier) else this
     }
-    return trail.copy(
-      // Reaching here, an own entry pins what the inherited one does, so it's redundant too.
-      config =
-        if (ownDevice == null) trail.config
-        else trail.config.copy(devices = (devices - classifier).ifEmpty { null }),
-      trailhead = if (stepWindow == null) trail.trailhead?.pruned() else trail.trailhead,
-      trail =
-        trail.trail.mapIndexed { i, step ->
-          if (stepWindow == null || i in stepWindow) step.pruned() else step
-        },
-    )
+    val pruned =
+      trail.copy(
+        // Reaching here, an own entry pins what the inherited one does, so it's redundant too.
+        config =
+          if (ownDevice == null) trail.config
+          else trail.config.copy(devices = (devices - classifier).ifEmpty { null }),
+        trailhead = if (stepWindow == null) trail.trailhead?.pruned() else trail.trailhead,
+        trail =
+          trail.trail.mapIndexed { i, step ->
+            if (stepWindow == null || i in stepWindow) step.pruned() else step
+          },
+      )
+    // The device's entry or legs may be all that lets a label's `when`/`except` name it.
+    return if (breaksAScopedLabel(trail, pruned)) trail else pruned
+  }
+
+  /**
+   * Whether a label of [before] with `when` or `except` resolves cleanly there and not in [after]
+   * ([TrailLabelDevices]). A label that still resolves, to fewer devices, doesn't count: the pruned
+   * device now replays the leg it fell back to, so the label still holds where it did.
+   */
+  private fun breaksAScopedLabel(before: UnifiedTrail, after: UnifiedTrail): Boolean {
+    val scoped =
+      (before.config.labels.orEmpty() + before.config.generatedLabels.orEmpty()).filter {
+        it.whenDevices != null || it.exceptDevices != null
+      }
+    if (scoped.isEmpty()) return false
+    val beforeDevices = TrailLabelDevices.devicesOf(before)
+    val afterDevices = TrailLabelDevices.devicesOf(after)
+    return scoped.any { label ->
+      TrailLabelDevices.resolve(label, beforeDevices).problems.isEmpty() &&
+        TrailLabelDevices.resolve(label, afterDevices).problems.isNotEmpty()
+    }
   }
 
   /**

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.test
 
+import xyz.block.trailblaze.agent.RecordedStepsOnlyRunner
 import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 import java.util.concurrent.CancellationException
 import android.app.Activity
@@ -23,16 +24,22 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.android.OnDeviceScriptedToolBundleLauncher
+import xyz.block.trailblaze.android.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidGrantPermissionsTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -202,12 +209,14 @@ class AndroidTestTrailblazeRule(
   }
 
   private fun hierarchyOnlyState(includeTree: Boolean = true): ScreenState =
-    foreignScreenState(includeScreenshot = false, screenshotScalingConfig = null, includeTree) ?: AndroidTestScreenState(
-      target = localeAwareTarget,
-      deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
-      includeScreenshot = false,
-      includeTree = includeTree,
-    )
+    ForeignWindow.retryWhileAnotherAppComesToFront {
+      foreignScreenState(includeScreenshot = false, screenshotScalingConfig = null, includeTree) ?: AndroidTestScreenState(
+        target = localeAwareTarget,
+        deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
+        includeScreenshot = false,
+        includeTree = includeTree,
+      )
+    }
 
   /**
    * Screenshot-free by design: this feeds tool dispatch, which resolves selectors against the
@@ -227,13 +236,15 @@ class AndroidTestTrailblazeRule(
   ): ScreenState =
     // While another app is in front, the app's Activity is paused behind it and its own capture
     // would describe the screen nobody can see (or wait for an Activity that will not resume).
-    foreignScreenState(includeScreenshot = true, screenshotScalingConfig, includeTree) ?: AndroidTestScreenState(
-      target = screenshotCapableTarget,
-      deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
-      includeScreenshot = true,
-      screenshotScalingConfig = screenshotScalingConfig,
-      includeTree = includeTree,
-    )
+    ForeignWindow.retryWhileAnotherAppComesToFront {
+      foreignScreenState(includeScreenshot = true, screenshotScalingConfig, includeTree) ?: AndroidTestScreenState(
+        target = screenshotCapableTarget,
+        deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
+        includeScreenshot = true,
+        screenshotScalingConfig = screenshotScalingConfig,
+        includeTree = includeTree,
+      )
+    }
 
   /**
    * The screen while another app is in front, or null while this app is. Needs no Activity of this
@@ -260,7 +271,7 @@ class AndroidTestTrailblazeRule(
       sessionProvider = { currentSession() },
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = if (captureStepSnapshots) {
-        { tool -> logStepSnapshot(tool) }
+        { tool -> if (!tool.actsOffScreen()) logStepSnapshot(tool) }
       } else {
         null
       },
@@ -351,7 +362,7 @@ class AndroidTestTrailblazeRule(
 
   /**
    * Replays [trailYaml] directly. [runFromAsset] is the path a generated shell takes. Refuses a
-   * trail whose device entry declares `requiresHost` — this runs on the device with no host behind
+   * trail whose device entry requires `android-host-execution` — this runs on the device with no host behind
    * it; host-driven runs arrive through [runRpcEnvelope] instead.
    */
   fun run(
@@ -360,7 +371,7 @@ class AndroidTestTrailblazeRule(
     trailSourceUrl: String? = null,
   ) {
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
-    trailblazeYaml.requiresHostRefusal(trailYaml, classifiers, trailFilePath)
+    trailblazeYaml.hostExecutionRefusal(trailYaml, classifiers, trailFilePath)
       ?.let { throw TrailblazeException(it) }
     val trailItems = trailblazeYaml.decodeTrail(trailYaml, deviceClassifiers = classifiers)
     runDecoded(
@@ -515,6 +526,11 @@ class AndroidTestTrailblazeRule(
     // everything from the memory swap to the bundle launch can throw, and an early throw must not
     // leave the host's per-request memory pinned on this long-lived agent for the next run to read.
     var scriptedToolRuntime: LaunchedQuickJsToolRuntime? = null
+    // Set when this request's bundles came from (or went into) the session's kept launch.
+    var reusedSessionId: SessionId? = null
+    // Cleared when the run finishes or a tool reports an error; still set when anything threw, which
+    // may leave a kept engine mid-eval, so the next request launches afresh.
+    var endedInException = true
     try {
       // External memory is the RPC handler's per-request instance and the host owns its lifecycle —
       // never clear it here (a host-seeded {{var}} would be wiped before the step that reads it).
@@ -546,7 +562,12 @@ class AndroidTestTrailblazeRule(
       // on-device accessibility rule; teardown in `finally` under `NonCancellable` for the same
       // reason it does it — a failed or cancelled trail must not leak the QuickJS native
       // allocations or the dynamic-tool registrations into the next test's repo.
-      scriptedToolRuntime = runBlocking {
+      //
+      // On the RPC path each request is one of the host's tool calls, so launching per request
+      // cost ~140 ms a step (resolving the bundle plan, then loading the engines) for steps that
+      // mostly call no scripted tool. The session's launch is kept for its later requests instead,
+      // unless the session may load bundles the host pushed, which can change between requests.
+      val launch: suspend () -> LaunchedQuickJsToolRuntime? = {
         OnDeviceScriptedToolBundleLauncher.launchAll(
           toolRepo = trailblazeToolRepo,
           target = hostAppTarget,
@@ -556,6 +577,19 @@ class AndroidTestTrailblazeRule(
           // so a scripted tool's HTTP works identically here, on-device, and host-dispatched.
           engineExtension = OkHttpFetchExtension(),
         )
+      }
+      if (externalMemory != null && !OnDeviceScriptedToolBundleLauncher.readsPushedBundles(hostAppTarget)) {
+        reusedSessionId = session.sessionId
+        runBlocking {
+          ScriptedToolBundleReuse.claimOrLaunch(
+            sessionId = session.sessionId,
+            repo = trailblazeToolRepo,
+            classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
+            launch = launch,
+          )
+        }
+      } else {
+        scriptedToolRuntime = runBlocking { launch() }
       }
       // One trail: the trailhead's teardown runs after it, whatever the outcome.
       runnerUtil.runTrailBlocking {
@@ -590,6 +624,8 @@ class AndroidTestTrailblazeRule(
             is TrailYamlItem.ConfigTrailItem -> TrailblazeToolResult.Success()
           }
           if (result is TrailblazeToolResult.Error) {
+            // A tool that reported an error left its engine in a known state.
+            endedInException = false
             throw TrailblazeException(result.errorMessage)
           }
           // Same predicate the accessibility rule's fold uses, deliberately shared rather than
@@ -601,12 +637,16 @@ class AndroidTestTrailblazeRule(
           }
         }
       }
+      endedInException = false
     } finally {
       // Before the caller ends the session, so the run's last frames land ahead of its end status.
       stepSnapshotUploads.drain()
       agent.externalMemory = null
       scriptedToolRuntime?.let {
         runBlocking { withContext(NonCancellable) { runCatching { it.shutdownAll() } } }
+      }
+      if (ScriptedToolBundleReuse.releasesAfterDispatch(sendSessionStartLog, endedInException)) {
+        reusedSessionId?.let { ScriptedToolBundleReuse.release(it) }
       }
     }
     return lastToolSuccess
@@ -665,7 +705,7 @@ class AndroidTestTrailblazeRule(
     // plain Success.
     var last: TrailblazeToolResult = TrailblazeToolResult.Success()
     tools.forEach { tool ->
-      if (captureStepSnapshots) logStepSnapshot(tool)
+      if (captureStepSnapshots && !tool.actsOffScreen()) logStepSnapshot(tool)
       val result = runTools(listOf(tool))
       if (result is TrailblazeToolResult.Error) return result
       last = result
@@ -679,6 +719,17 @@ class AndroidTestTrailblazeRule(
       elementComparator = NoOpElementComparator,
       screenStateProvider = screenStateProvider,
     ).result
+
+  /**
+   * A device command that works through adb or the package manager rather than the screen. Its
+   * pre-tool frame only repeats the previous tool's, and each costs a screenshot: most of a
+   * seeded-session setup is commands like these.
+   */
+  private fun TrailblazeTool.actsOffScreen(): Boolean =
+    this is AdbShellTrailblazeTool ||
+      this is ListInstalledAppsTrailblazeTool ||
+      this is AndroidSendBroadcastTrailblazeTool ||
+      this is AndroidGrantPermissionsTrailblazeTool
 
   private fun logStepSnapshot(tool: TrailblazeTool) {
     // Another app in front pauses this one, so its Activity is not RESUMED; that app's window is
@@ -1053,35 +1104,4 @@ internal class ActivityLocaleGate<A>(
 
     data object Failed : LocaleRequirement
   }
-}
-
-/**
- * The [TestAgentRunner] a deterministic gate gets: every entry point refuses.
- *
- * [TrailblazeRunnerUtil] reaches for this only when a step has no recording to replay, or when
- * a recorded step failed and self-heal is on (it is not, here). Both are the same authoring
- * mistake, and both are far more useful as a named failure than as an LLM improvising against a
- * merge gate.
- */
-private class RecordedStepsOnlyRunner(
-  override val screenStateProvider: () -> ScreenState,
-) : TestAgentRunner {
-
-  override fun run(prompt: PromptStep, stepStatus: PromptStepStatus): AgentTaskStatus =
-    throw TrailblazeException(
-      "Step \"${prompt.prompt}\" has no recorded tools. The in-process ANDROID_TEST driver replays " +
-        "recordings only — record this trail against a device first (`trailblaze record`), then " +
-        "commit the recorded steps."
-    )
-
-  override fun recover(
-    promptStep: PromptStep,
-    recordingResult: PromptRecordingResult.Failure,
-  ): AgentTaskStatus =
-    throw TrailblazeException(
-      "Recorded step \"${promptStep.prompt}\" failed at ${recordingResult.failedTool.name} and " +
-        "self-heal is not available on the in-process ANDROID_TEST driver."
-    )
-
-  override fun appendToSystemPrompt(context: String) = Unit
 }

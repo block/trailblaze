@@ -2075,6 +2075,7 @@ export interface compose {
   accessibilityHintText?: string | null;
   accessibilityStateDescription?: string | null;
   accessibilityProjectionOnly?: boolean;
+  isSelectable?: boolean | null;
 }
 
 export interface iosAxe {

@@ -98,6 +98,8 @@ class HostMaestroTrailblazeAgent(
     // Not needed here: this reads the tree once, and a miss returns null so the caller's Maestro
     // fallback (which carries the wait — see [TapOnByElementSelector.toMaestroCommands]) runs.
     timeoutMs: Long?,
+    // Ignored — this agent never dismisses the keyboard before a tap.
+    hideKeyboardBefore: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null

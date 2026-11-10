@@ -1086,6 +1086,68 @@ class PlaywrightToolRefResolutionTest {
     assertEquals(0, locator.count(), "A paragraph with different text must not match.")
   }
 
+  /**
+   * The element ID the snapshot hands the agent for a paragraph resolves too. The snapshot lists it
+   * as `paragraph "Ship it"`, but that name is the paragraph's text, not an accessible name.
+   */
+  @Test
+  fun `an element ID for a paragraph resolves to that paragraph`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <article><button>Fixture Reader</button><p>Hello</p></article>
+        <article><button>Fixture Reader</button><p>Ship it</p></article>
+        <article><button>Fixture Reader</button><p>Ship it</p></article>
+      </body></html>
+      """.trimIndent(),
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+    val context = buildContext(screenState)
+    val shipIts = screenState.elementIdMapping.entries
+      .filter { it.value.descriptor.startsWith("paragraph") && it.value.descriptor.contains("Ship it") }
+      .sortedBy { it.value.nthIndex }
+    assertEquals(2, shipIts.size, "Expected both Ship it paragraphs in ${screenState.elementIdMapping}")
+
+    shipIts.forEachIndexed { index, (id, _) ->
+      val (locator, error) = PlaywrightExecutableTool.validateAndResolveRef(page, id, "Ship it", context)
+      assertNull(error)
+      assertEquals(1, assertNotNull(locator).count())
+      assertTrue(locator.evaluate("(e, i) => e === document.querySelectorAll('p')[i]", index + 1) as Boolean)
+    }
+  }
+
+  /**
+   * Recording YAML writes descriptors unquoted or single-quoted, and list items print by their
+   * text like paragraphs. A role named from its content keeps the plain role+name lookup.
+   */
+  @Test
+  fun `a descriptor resolves an unnamed element by its printed text in every spelling`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html><body>
+        <p>Hello</p><p>Ship it</p>
+        <ul><li>Alpha item</li><li>Beta item</li></ul>
+        <button>Ship it</button>
+      </body></html>
+      """.trimIndent(),
+    )
+    for (descriptor in listOf("paragraph \"Ship it\"", "paragraph 'Ship it'", "paragraph Ship it")) {
+      val locator = PlaywrightAriaSnapshot.resolveRef(page, descriptor)
+      assertEquals(1, locator.count(), descriptor)
+      assertTrue(locator.evaluate("e => e === document.querySelectorAll('p')[1]") as Boolean, descriptor)
+    }
+    for (descriptor in listOf("listitem \"Alpha item\"", "listitem 'Alpha item'")) {
+      val locator = PlaywrightAriaSnapshot.resolveRef(page, descriptor)
+      assertEquals(1, locator.count(), descriptor)
+      assertEquals("Alpha item", locator.textContent(), descriptor)
+    }
+    val button = PlaywrightAriaSnapshot.resolveRef(page, "button \"Ship it\"")
+    assertEquals(1, button.count())
+    assertFalse(PlaywrightTextRuns.ENGINE in button.toString(), "A button must not use the text-run engine: $button")
+  }
+
   /** The snapshot's bare `text:` node has no role at all; its selector replays by visible text. */
   @Test
   fun `a selector recorded from bare text replays against that text`() {

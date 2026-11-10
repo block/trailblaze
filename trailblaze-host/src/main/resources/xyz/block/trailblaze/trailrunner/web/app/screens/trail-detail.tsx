@@ -146,11 +146,12 @@ function parseUnifiedTrail(yaml) {
 function parseUnifiedModel(yaml) {
   if (!window.jsyaml) return null;
   let doc;
-  try { doc = window.jsyaml.load(yaml); } catch (e) { return null; }
+  try { doc = window.TM.loadUnifiedDoc(yaml, window.jsyaml); } catch (e) { return null; }
   return window.TM.unifiedDocToMatrix(doc);
 }
 function serializeUnifiedModel(model) {
-  return window.jsyaml.dump(window.TM.matrixToUnifiedDoc(model), { lineWidth: -1, noRefs: true }).trimEnd();
+  // dumpUnifiedDoc keeps config labels one per line, the form `trailblaze check` requires.
+  return window.TM.dumpUnifiedDoc(window.TM.matrixToUnifiedDoc(model), (doc) => window.jsyaml.dump(doc, { lineWidth: -1, noRefs: true })).trimEnd();
 }
 
 // Wrap a [{ toolName: body }] list into the minimal unified trail runToolQuick decodes and executes

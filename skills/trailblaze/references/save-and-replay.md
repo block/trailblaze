@@ -29,9 +29,9 @@ look up the results of a past CI run.
 
 You don't need to start a session explicitly. The first `snapshot` or
 `tool` call against a given `(device, target)` pair creates a
-session; subsequent calls on that pair reuse it. The "Target app
-changed (X → Y) — creating new session" first-call message is exactly
-this auto-creation happening.
+session; subsequent calls on that pair reuse it. Switching `--target`
+on a device that already has a saved session starts a new one and
+prints `Target app changed (A -> B) -- creating new session.`
 
 If you want explicit control (e.g., to force a clean session start):
 
@@ -51,8 +51,9 @@ trailblaze session delete --id <id>           # delete logs + artifacts
 ```
 
 (`info`, `artifacts`, and `recording` default to the current session
-when `--id` is omitted. `delete` always requires `--id`. All four
-accept an ID prefix.)
+when `--id` is omitted. `delete` always requires an ID. All four
+accept the ID as `--id <id>` or positionally (`session info <id>`)
+and accept an ID prefix.)
 
 ## Saving a session as a `.trail.yaml`
 
@@ -65,8 +66,9 @@ trailblaze session save --id <session-id>     # save a specific session (id pref
 trailblaze session save -t "<title>"          # save with a title
 ```
 
-`session save` operates on the **current session by default** — there
-is no `--device` flag on this subcommand. It writes the recorded
+`session save` operates on the **current session by default**; pass
+`-d <device>` to save that device's session (required for a
+multi-device `session start --bind` session). It writes the recorded
 steps to a `.trail.yaml` file. **The session stays active** — you
 can keep driving the device and `session save` again later to capture
 the extended flow. Use `session stop` when you're actually done with
@@ -93,9 +95,10 @@ LLM at replay time — refs that were recorded resolve back to the
 same elements on the same screen. Fast, predictable, zero token
 cost.
 
-`run` accepts files, shell globs, or directories. Directories recurse
-to one trail per containing directory (recording preferred over NL
-when both are present):
+`run` accepts files, shell globs, or directories. Directories expand
+recursively to every named trail (`<scenario>.trail.yaml`), plus one
+pick per legacy trail (recording preferred over NL when both are
+present):
 
 ```bash
 trailblaze run trails/login.trail.yaml -d <device>
@@ -108,8 +111,10 @@ Useful `run` flags:
 - **`--self-heal`** — when a recorded step doesn't match the live
   screen anymore (UI drift), Trailblaze's built-in agent patches the
   failing step against the live screen and updates the recording on
-  success. Default is fail-loud (no patching), so flakes don't get
-  silently masked.
+  success. Overrides the persisted `trailblaze config self-heal`
+  setting for this run (`--self-heal=false` forces it off); omit the
+  flag to inherit that setting, which is off unless you turned it on,
+  so flakes don't get silently masked.
 - **`--memory KEY=VAL`** — seed runtime values into the trail's
   memory (e.g., usernames, search terms).
 - **`--secret KEY=VAL`** — seed sensitive values (e.g., passwords)
@@ -117,23 +122,28 @@ Useful `run` flags:
 - **`--tags <tag>[,<tag>,…]`** — only run trails matching the given
   tag filter.
 
-Trails declare their own metadata too: a `tags:` field at the trail
-level lets you partition the suite, and a `skip:` field (with a
-reason string) reports the trail as skipped at runtime and exits 0
-for that file's slot. Blank `skip:` is ignored. To unskip a trail,
-remove its `skip:` line.
+Trails declare their own metadata too, under `config:`. A `tags:`
+list lets you partition the suite. A `skip:` map keyed by device
+classifier (`skip: { android: "reason" }`) reports the trail as
+skipped at runtime and exits 0 for that file's slot. Blank reasons
+are ignored. To unskip a trail, remove its `skip:` entry.
 
 A crash the device log shows does not fail the run on its own: it is
 indexed as the session's `crash` stream and marked on the report's
 timeline, and the run's verdict comes from its steps.
 
-**Memory/secret resolution contract.** When a trail step references
-a `{ memory: KEY }` or `{ secret: KEY }` value that was never supplied
-on the command line, `run` fails the step with a structured error
-naming the missing key — don't paper over it, fix the invocation.
+**Memory/secret resolution contract.** A step recalls a seeded value
+as `{{KEY}}` (`${KEY}` and `{{memory.KEY}}` mean the same). A token
+whose key was never supplied does not fail the step: it stays in the
+text as a literal (`{{KEY}}` is typed or asserted as written) and a
+warning is logged once per token. A missing `--memory` / `--secret`
+therefore shows up as a wrong value on screen, so fix the invocation.
 Later `--memory K=V` overrides earlier occurrences of the same key
 (last-write-wins); extra keys not referenced by any step are silently
-ignored.
+ignored. For typed per-run parameters, the trail declares them under
+`config.args:`, you pass `--arg KEY=VAL`, and steps use `{{args.name}}`;
+a missing required arg fails before the run starts. Args are logged in
+cleartext, so keep sensitive values in `--secret`.
 
 **When `run` fails before reaching a step.** File-not-found / no-glob-match
 exits non-zero with the resolved path. Malformed YAML reports parse
@@ -167,11 +177,18 @@ between the sources is how the value gets **stored** in the first place:
   goes through the LLM-backed element locator, so these **do call the
   LLM at replay** even though what they store is real screen text.
   Don't reach for them in an LLM-disabled run.
+- **`rememberTextBySelector` / `rememberNumberBySelector`** - read the
+  same on-screen value, located by a `nodeSelector` (the selector
+  grammar `assertVisibleBySelector` uses) instead of a prompt, and
+  store it under `variable:`. **No LLM**: the capture to use in an
+  LLM-free run. The number form keeps the first number in the text, so
+  `$42.50` stores as `42.50`.
 - **`rememberWithAi`** — let the agent invent/pick a value. Also
   **calls the LLM at replay**.
 
 So for a trail that must replay with no LLM, seed the value with
-`--memory` or generate it with `inputTextRandom`.
+`--memory`, generate it with `inputTextRandom`, or capture it with a
+`...BySelector` tool.
 
 Recall a stored variable in any later step by interpolating it as
 `{{variable}}` or `${variable}` — in an `inputText`, a search field, an

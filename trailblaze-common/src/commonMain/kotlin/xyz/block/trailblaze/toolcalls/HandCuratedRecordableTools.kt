@@ -9,9 +9,6 @@ package xyz.block.trailblaze.toolcalls
  *
  * A tool lands here only when the reflection/descriptor codegen path can't model it *correctly*:
  *
- *  - `mobile_maestro` — a custom serializer maps the recorded `{ commands: [...] }` payload onto the
- *    class's single `yaml: String` constructor param, so reflection would lower it to the WRONG shape
- *    (`{ yaml: string }`) that doesn't match how it's actually recorded. Hand-typed with `commands`.
  *  - `mobile_listInstalledApps` / `mobile_listInstalledAppsDetailed` — structured result types the
  *    generator would otherwise flatten to `result: string`; hand-typed to preserve the typed result.
  *
@@ -26,7 +23,6 @@ package xyz.block.trailblaze.toolcalls
  */
 object HandCuratedRecordableTools {
   val NAMES: Set<String> = setOf(
-    "mobile_maestro",
     "mobile_listInstalledApps",
     "mobile_listInstalledAppsDetailed",
   )

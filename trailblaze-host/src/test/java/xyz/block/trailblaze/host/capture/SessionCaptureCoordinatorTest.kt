@@ -715,9 +715,39 @@ class SessionCaptureCoordinatorTest {
       stopCalls.incrementAndGet()
       return file?.let { CaptureArtifact(it, type, startTimestampMs = 1_000, endTimestampMs = 2_000) }
     }
+    val reconnects = AtomicInteger(0)
+    override fun onDeviceReconnected() {
+      reconnects.incrementAndGet()
+    }
   }
 
   private val videoOn = CaptureOptions(captureVideo = true)
+
+  @Test
+  fun `a device that rebooted resumes only the recording of that device`() {
+    val primary = RecordingStream("video")
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(primary = primary, companions = companions)
+    val id = sessionId("reboot-routing")
+    assertTrue(coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn))
+    coord.bindDevices(id, listOf(seller, buyer))
+    val buyerRecorder = companions.getValue("video-buyer")
+
+    assertTrue(coord.onDeviceReconnected(id, buyer.deviceId), "the buyer is recorded, so its recording resumes")
+    assertEquals(1, buyerRecorder.reconnects.get())
+    assertEquals(0, primary.reconnects.get(), "the seller did not reboot")
+
+    assertTrue(coord.onDeviceReconnected(id, seller.deviceId))
+    assertEquals(1, primary.reconnects.get(), "the start device's own recording resumes")
+    assertEquals(1, buyerRecorder.reconnects.get())
+
+    assertFalse(
+      coord.onDeviceReconnected(id, TrailblazeDeviceId("emulator-9999", TrailblazeDevicePlatform.ANDROID)),
+      "a device the session does not record has nothing to resume",
+    )
+    assertFalse(coord.onDeviceReconnected(sessionId("unknown"), seller.deviceId), "nor does a session that is not recording")
+    coord.stopForSession(id)
+  }
   private val seller = SessionCaptureCoordinator.BoundDevice("seller", TrailblazeDeviceId("emulator-5560", TrailblazeDevicePlatform.ANDROID))
   private val buyer = SessionCaptureCoordinator.BoundDevice("buyer", TrailblazeDeviceId("emulator-5562", TrailblazeDevicePlatform.ANDROID))
 

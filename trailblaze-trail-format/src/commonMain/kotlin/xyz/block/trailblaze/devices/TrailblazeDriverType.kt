@@ -66,10 +66,10 @@ enum class TrailblazeDriverType(
    * Whether the host agent may run the reasoning loop and dispatch this driver's tools one at a
    * time over RPC (the `preferHostAgent` path).
    *
-   * `false` for [ANDROID_TEST] as a driver contract, not a host preference: that driver exists to
-   * be a merge-blocking gate, and its on-device runner fails an unrecorded step BY NAME rather than
-   * improvising. The host-agent path builds a dynamic LLM client and delegates unrecorded and
-   * self-heal steps to it — a gate that can improvise is a gate that can pass for the wrong reason.
+   * [ANDROID_TEST] qualifies: it is a merge-blocking gate that fails an unrecorded step BY NAME
+   * rather than improvising, and the host keeps that contract by giving it a runner that refuses
+   * unrecorded and self-heal steps instead of the LLM agent. Driving it from the host is what lets
+   * host-only tools (a credential lease, a host subprocess) run in the same trail.
    */
   val hostAgentDispatchable: Boolean,
   /**
@@ -164,7 +164,7 @@ enum class TrailblazeDriverType(
     hostRpcReachable = true,
     protoWireSafe = false,
     hostNativeSimulatorDriver = false,
-    hostAgentDispatchable = false,
+    hostAgentDispatchable = true,
     usesManualScrollLoop = false,
     // Its scroll stops the moment the target is on screen, often as a sliver at the trailing edge,
     // so steps recorded on the accessibility driver after a scroll found their target below the

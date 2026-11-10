@@ -1420,7 +1420,8 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
      * `config:` keys that name or describe a trail without changing how it runs. Every other key —
      * `target`, `driver`, `devices`, `memory`, `context`, and any added later — stays in the key.
      */
-    private val TRAIL_IDENTITY_CONFIG_KEYS = setOf("id", "title", "description", "priority", "source", "metadata", "tags")
+    private val TRAIL_IDENTITY_CONFIG_KEYS =
+      setOf("id", "title", "description", "priority", "source", "metadata", "tags", "labels", "generatedLabels")
 
     /** [configLines] less each [TRAIL_IDENTITY_CONFIG_KEYS] entry and the lines nested under or listed after it. */
     private fun withoutTrailIdentity(configLines: List<String>): List<String> {

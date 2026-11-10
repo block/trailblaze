@@ -37,6 +37,13 @@ interface CaptureStream {
    * stream that can tell it stopped recording starts again here.
    */
   fun confirmRecording() {}
+
+  /**
+   * Called once the device has rebooted mid-session and the host has reconnected to it. A stream
+   * that was fed over the device's transport ended with the old boot; one that can resume picks up
+   * where it stopped so the session's recording covers what the rebooted device does next.
+   */
+  fun onDeviceReconnected() {}
 }
 
 /**

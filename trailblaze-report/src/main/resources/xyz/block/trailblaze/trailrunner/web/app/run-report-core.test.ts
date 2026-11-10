@@ -7213,6 +7213,21 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(bare).not.toContain("About this trail");
   });
 
+  test("Run details lists each derived stream's rows and time, and why one failed", () => {
+    const derivedStreams = [
+      { name: "experiment-eval", title: "Experiment Eval", rows: 16, ms: 5 },
+      { name: "flags", rows: 0, ms: 1250, error: "Flag service answered <403>" },
+      { name: "quiet", rows: 0 },
+    ];
+    const info = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, derivedStreams }] }, { tab: "info" });
+    expect(info).toContain('<div class="eyebrow">Derived streams</div>');
+    expect(info).toContain('<span class="k" title="experiment-eval">Experiment Eval</span><span class="v">16 rows in 5ms</span>');
+    expect(info).toContain('<span class="v">Failed in 1.3s: Flag service answered &lt;403&gt;</span>');
+    expect(info).toContain('<span class="k" title="quiet">quiet</span><span class="v">No rows</span>');
+    const bare = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null }] }, { tab: "info" });
+    expect(bare).not.toContain("Derived streams");
+  });
+
   test("the trail's context stays out of the run header", () => {
     const meta = { title: "Push notification", status: "passed", context: "Setting must persist." };
     const out = renderViewer({ generatedAt: "now", sessions: [{ meta, trace: slim, llm: [], shots: {}, recordingYaml: null }] });

@@ -606,8 +606,8 @@ describe("surveys and the runner", () => {
   test("a survey's row counts each session once even when it reports several findings there", async () => {
     const twice = withId(survey({ description: "Each tap" }, (session) => session.tools.filter({ name: "tapOn" }).map((t) => ({ summary: t.summary, evidence: [t] }))), "taps");
     const report = await runSurveys({ surveys: [twice], sessions: [hashed, sequential] });
-    expect(report.surveys).toEqual([{ id: "taps", description: "Each tap", sessionsMatched: 1, sessionIds: ["ci-session-42"], findings: 2, labels: 0 }]);
-    expect(renderMarkdown(report)).toContain("| taps | 1/2 | 2 | Each tap |");
+    expect(report.surveys).toEqual([{ id: "taps", description: "Each tap", sessionsMatched: 1, sessionIds: ["ci-session-42"], findings: 2, labels: 0, scope: "trail" }]);
+    expect(renderMarkdown(report)).toContain("| taps | trail | 1/2 | 2 | Each tap |");
   });
 
   test("a markdown cell escapes a backslash before it escapes a pipe, so neither can break the table", async () => {
@@ -634,7 +634,7 @@ describe("surveys and the runner", () => {
     expect(rest).toEqual([]);
     expect(finding).toEqual({ survey: "paymentJourney", session: "ci-session-42", summary: "Payment logged", evidence: [expect.objectContaining({ kind: "analytics" })], data: { journey: { variant: "card", tags: ["fast"] } } });
     const md = renderMarkdown(report);
-    expect(md).toContain("| paymentJourney | 1/2 | 1 | Payment completed and the app logged it |");
+    expect(md).toContain("| paymentJourney | trail | 1/2 | 1 | Payment completed and the app logged it |");
     expect(md).toContain('- **paymentJourney** — Payment logged `{"journey":{"variant":"card","tags":["fast"]}}`');
   });
 

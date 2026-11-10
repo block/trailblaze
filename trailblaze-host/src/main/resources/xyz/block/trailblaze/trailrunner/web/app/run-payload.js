@@ -37,6 +37,15 @@
       // so a live or Shared report carries the same `trace.json` spans a CLI-built one does.
       slimTracerSpans: o.slimTracerSpans || g.slimTracerSpans,
       MAX_TRACE_BYTES: o.MAX_TRACE_BYTES || g.MAX_TRACE_BYTES,
+      // The run's warnings reader (run-report-warnings.ts) and its size cap, by the same route.
+      runWarningsFromSurveys: o.runWarningsFromSurveys || g.runWarningsFromSurveys,
+      MAX_SURVEYS_BYTES: o.MAX_SURVEYS_BYTES || g.MAX_SURVEYS_BYTES,
+      SURVEYS_FILE: o.SURVEYS_FILE || g.SURVEYS_FILE,
+      // The failed-derived-stream reader beside it, and the merge both report paths use.
+      runWarningsFromDerivedStreams: o.runWarningsFromDerivedStreams || g.runWarningsFromDerivedStreams,
+      DERIVED_MANIFEST_PATH: o.DERIVED_MANIFEST_PATH || g.DERIVED_MANIFEST_PATH,
+      MAX_DERIVED_MANIFEST_BYTES: o.MAX_DERIVED_MANIFEST_BYTES || g.MAX_DERIVED_MANIFEST_BYTES,
+      mergeRunWarnings: o.mergeRunWarnings || g.mergeRunWarnings,
       // The capture logs' strings reader, from run-report-visible-strings.ts the same way.
       extractVisibleStrings: o.extractVisibleStrings || g.extractVisibleStrings,
       visibleStringsShotFiles: o.visibleStringsShotFiles || g.visibleStringsShotFiles,
@@ -45,6 +54,7 @@
       // The events-file pipeline the CLI and zip reports run, for derived streams (see fetchDerivedStreams).
       buildEventStream: o.buildEventStream || g.buildEventStream,
       applyDerivedLanes: o.applyDerivedLanes || g.applyDerivedLanes,
+      derivedStreamStatus: o.derivedStreamStatus || g.derivedStreamStatus,
       parseDeviceClockSync: o.parseDeviceClockSync || g.parseDeviceClockSync,
       MAX_EVENT_STREAM_BYTES: o.MAX_EVENT_STREAM_BYTES || g.MAX_EVENT_STREAM_BYTES,
       MAX_EVENT_STREAMS_TOTAL_CHARS: o.MAX_EVENT_STREAMS_TOTAL_CHARS || g.MAX_EVENT_STREAMS_TOTAL_CHARS,
@@ -171,6 +181,7 @@
       error: s.err || null,
       recordingYaml: a.recordingYaml || null,
       originalYaml: a.originalYaml || null,
+      ...(a.warnings && a.warnings.length ? { warnings: a.warnings } : {}),
       generatedAt: a.generatedAt || new Date().toLocaleString(),
     };
   }
@@ -439,6 +450,16 @@
     return { json: json, listed: names, byId: byId };
   }
 
+  // Every stream the session's `events/derived.json` lists, with its rows, time taken and error, for
+  // Run details, as the CLI report lists them. Null when there is no manifest.
+  async function fetchDerivedStreamStatus(sessionId, d) {
+    if (typeof d.derivedStreamStatus !== 'function') return null;
+    try {
+      var list = d.derivedStreamStatus(await fetchSessionText(sessionId, 'events/derived.json', d, DERIVED_MANIFEST_MAX_BYTES));
+      return list.length ? list : null;
+    } catch (e) { return null; }
+  }
+
   // Normalize the live route's generic event-stream DTO into the compact report shape. This carries
   // generic plugin event streams from any producer into the report.
   async function fetchReportEvents(sessionId, d) {
@@ -521,6 +542,31 @@
     } catch (e) { return null; }
   }
 
+  // The run's warnings, from the session's `surveys.json` off the daemon's /static tree, there once
+  // a report has run its warning surveys over the session, then each derived stream that failed in
+  // `events/derived.json`. A session with neither file 404s both, and a run-report-core too old to
+  // publish a reader leaves out that kind of warning.
+  async function fetchRunWarnings(sessionId, d) {
+    var both = await Promise.all([
+      fetchWarningFile(sessionId, d, d.SURVEYS_FILE, d.MAX_SURVEYS_BYTES, d.runWarningsFromSurveys),
+      fetchWarningFile(sessionId, d, d.DERIVED_MANIFEST_PATH, d.MAX_DERIVED_MANIFEST_BYTES, d.runWarningsFromDerivedStreams),
+    ]);
+    var surveys = both[0], streams = both[1];
+    if (typeof d.mergeRunWarnings === 'function') return d.mergeRunWarnings(surveys, streams);
+    return surveys;
+  }
+
+  async function fetchWarningFile(sessionId, d, name, maxBytes, parse) {
+    try {
+      if (typeof parse !== 'function' || !name) return null;
+      var res = await d.fetch(staticUrl(sessionId, name));
+      if (!res.ok) return null;
+      var body = await readBodyWithinLimit(res, maxBytes || undefined);
+      if (!body) return null;
+      return parse(new TextDecoder().decode(body));
+    } catch (e) { return null; }
+  }
+
   // The session's log records, for a caller that did not bring them. Fails soft to null.
   async function fetchLogs(sessionId, d) {
     try {
@@ -566,11 +612,15 @@
       fetchTraceSpans(sessionId, d),
       logsReady.then(function (l) { return visibleStringsFromLogs(l, d); }),
       logsReady.then(function (l) { return frameFilesFromLogs(l, d); }),
+      fetchRunWarnings(sessionId, d),
+      fetchDerivedStreamStatus(sessionId, d),
     ]);
     var events = (out[2] || []).concat(out[3] ? [out[3]] : []);
     return {
       recordingYaml: out[0], originalYaml: out[1], events: events.length ? events : null,
       spans: out[4] || null, visibleStrings: out[5] || null, frameFiles: out[6] || [],
+      warnings: out[7] || null,
+      derivedStreams: out[8] || null,
     };
   }
 
@@ -589,6 +639,7 @@
         cmd: a.cmd,
         recordingYaml: side.recordingYaml,
         originalYaml: side.originalYaml,
+        warnings: side.warnings,
         generatedAt: a.generatedAt,
       }),
       trace: a.trace,
@@ -596,6 +647,7 @@
       shots: shots,
       events: side.events,
       attachments: attachments,
+      derivedStreams: side.derivedStreams,
       spans: side.spans,
       visibleStrings: side.visibleStrings,
     };

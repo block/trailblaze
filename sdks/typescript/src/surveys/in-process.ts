@@ -12,6 +12,7 @@ export { isEventStream, eventStream } from "./stream.js";
 export type { DerivedRow, DerivedRowInput, RowSource, RowView, EventStreamDefinition, EventStreamSpec } from "./stream.js";
 export type { DataOf, FindingExplanation, FindingQueries, FindingSpec, LabelBatch, LabelOf, LabelResult, SurveyContext, SurveyDefinition, SurveyHandler, FindResult, SurveyResult, BatchFinding, Dependency } from "./survey.js";
 export type { SurveySession } from "./session.js";
+export { RunPhase, SurveyScope, phaseOf, scopedSession, trailStartOf } from "./phase.js";
 export { Records } from "./match.js";
 export type {
   AnalyticsQuery,

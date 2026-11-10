@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.util.Console
 
@@ -35,7 +36,7 @@ import xyz.block.trailblaze.util.Console
  *     android-tablet:
  *       driver: ANDROID_ONDEVICE_ACCESSIBILITY   # single-device entry: the KEY is the classifier
  *       locale: es                                # optional device language for this entry
- *       requiresHost: true                        # never run this device's leg on-device
+ *       requires: [android-host-execution]                # never run this device's leg on-device
  *     ios: {}                                    # declare the classifier, pin nothing
  *     web:                                       # the same, written as an empty value
  *     pos-pair:                                  # multi-device configuration (inner devices:)
@@ -59,8 +60,9 @@ import xyz.block.trailblaze.util.Console
  * - A **named device** inside a configuration says what it is via [classifier]; steps address it by
  *   its NAME (`switchDevice`), never by classifier or serial. [locale] is not accepted on these
  *   members until multi-device setup can apply it to every bound device before the run.
- * - [requiresHost] is accepted only on a top-level single-device entry: a multi-device session is
- *   always driven from the host, so it has nothing to say on a configuration or its members.
+ * - [requires] is accepted only on a top-level single-device entry: a multi-device session is
+ *   always driven from the host, and its members' needs are not planned yet, so it has nothing to
+ *   say on a configuration or its members.
  */
 @Serializable
 data class TrailblazeDeviceDefinition(
@@ -105,24 +107,36 @@ data class TrailblazeDeviceDefinition(
    */
   val locale: String? = null,
   /**
-   * This device's leg must run with Trailblaze on the HOST (the CLI or daemon driving the device
-   * over adb / the simulator), never as an on-device instrumentation test packaged into a
-   * standalone test APK. Set it on a trail that needs what only the host can do — boot or reach a
-   * second device, read host files, call host-only tools — so a runner that dispatches on-device
-   * refuses the trail instead of running it somewhere it cannot pass.
+   * What this device's leg needs from wherever it runs, as opaque strings.
    *
-   * Top-level single-device entries only. Unlike [driver] and [locale], it resolves per FIELD: a
-   * device reads the closest entry in its classifier lineage that sets it, skipping narrower
-   * entries that leave it unset. So `android: { requiresHost: true }` covers `android-phone` even
-   * when `android-phone` has its own entry pinning a driver, and only an explicit `requiresHost:
-   * false` opts a narrower device back out. Unset everywhere means false: where the trail runs is
-   * the runner's choice.
+   * The framework reserves one value, [ANDROID_HOST_EXECUTION]: the leg must run with Trailblaze on
+   * the HOST (the CLI or daemon driving the device over adb), never as an on-device instrumentation
+   * test packaged into a standalone test APK. Set it on an Android trail that needs what only the
+   * host can do (boot or reach a second device, read host files, call host-only tools), so a runner
+   * that dispatches on-device refuses the trail instead of running it somewhere it cannot pass.
+   * iOS, web and desktop drivers always run on the host, so it is never written for them; the
+   * `android-` prefix says so to anyone copying an example.
+   *
+   * Every other value belongs to the workspace (for example a capability catalog key such as
+   * `acme.printer.virtual`). The framework validates its shape and nothing more: no framework
+   * runner or planner provides or refuses it yet, so workspace tooling that reads it decides what
+   * it means.
+   *
+   * Top-level single-device entries only. Unlike [driver] and [locale], it does not resolve
+   * closest-wins: a device needs the UNION of every entry in its classifier lineage, so `android: {
+   * requires: [android-host-execution] }` covers `android-phone` even when `android-phone` has its
+   * own entry, and no narrower entry can drop a need a broader one declared.
    */
-  val requiresHost: Boolean? = null,
+  val requires: List<String>? = null,
 ) {
   /** True when this entry is a multi-device configuration (it carries an inner [devices] map). */
   val isConfiguration: Boolean
     get() = devices != null
+
+  companion object {
+    /** The one [requires] value the framework itself reads: run this leg from the host. */
+    const val ANDROID_HOST_EXECUTION = "android-host-execution"
+  }
 }
 
 /**
@@ -275,9 +289,9 @@ object TrailblazeDeviceDefinitionMapSerializer :
           "map) and cannot also declare `driver:`/`classifier:`/`target:`/`locale:` — those " +
           "belong on its named devices."
       }
-      require(definition.requiresHost == null) {
-        "config.devices configuration '$key' declares requiresHost, but a multi-device " +
-          "session always runs on the host — remove it."
+      require(definition.requires == null) {
+        "config.devices configuration '$key' declares `requires:`, but a multi-device " +
+          "session always runs on the host and its members' needs are not planned yet — remove it."
       }
       require(inner.isNotEmpty()) {
         "config.devices configuration '$key' declares an empty `devices:` map — " +
@@ -288,9 +302,10 @@ object TrailblazeDeviceDefinitionMapSerializer :
           "config.devices configuration '$key' nests another configuration under '$name' — " +
             "configurations don't nest."
         }
-        require(member.requiresHost == null) {
-          "config.devices configuration '$key' declares requiresHost on named device '$name', " +
-            "but a multi-device session always runs on the host — remove it."
+        require(member.requires == null) {
+          "config.devices configuration '$key' declares `requires:` on named device '$name', " +
+            "but a multi-device session always runs on the host and its members' needs are not " +
+            "planned yet — remove it."
         }
         require(member.locale == null) {
           "config.devices configuration '$key' declares locale on named device '$name', but " +
@@ -304,6 +319,80 @@ object TrailblazeDeviceDefinitionMapSerializer :
           "single-device entry's map key IS its classifier — remove the `classifier:` field " +
           "or rename the key."
       }
+      validateRequires(key, definition)
+    }
+  }
+
+  private fun validateRequires(key: String, definition: TrailblazeDeviceDefinition) {
+    val requires = definition.requires ?: return
+    require(requires.isNotEmpty()) {
+      "config.devices entry '$key' declares an empty `requires:` list — remove it."
+    }
+    require(requires.none { it.isBlank() }) {
+      "config.devices entry '$key' has a blank `requires:` value."
+    }
+    // Runners and planners read `requires` before a host run fills `{{VAR}}` templates, so a
+    // template there would hide a need such as android-host-execution from the routing check.
+    require(requires.none { "{{" in it }) {
+      "config.devices entry '$key' uses a `{{...}}` template in `requires:`. Its values are read " +
+        "before templates are filled, so write each one literally."
+    }
+    val duplicates = requires.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+    require(duplicates.isEmpty()) {
+      "config.devices entry '$key' lists $duplicates more than once in `requires:`."
+    }
+    // The platform comes from a pinned driver, else from the key's first segment (`ios-iphone`).
+    // A key that names no platform (`all`, `lab-a`) is left alone.
+    val driver = definition.driver
+    val platform =
+      driver?.platform
+        ?: TrailblazeDevicePlatform.entries.firstOrNull {
+          it.name.lowercase() == key.substringBefore('-')
+        }
+    require(
+      TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION !in requires ||
+        platform == null ||
+        platform == TrailblazeDevicePlatform.ANDROID
+    ) {
+      val what =
+        if (driver != null) "its driver ${driver.name}" else "a ${platform?.displayName} device"
+      "config.devices entry '$key' requires `${TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION}`, but " +
+        "$what always runs on the host — remove it."
+    }
+  }
+
+  /**
+   * `requiresHost:` on a device entry was replaced by `requires: [android-host-execution]`.
+   * Rejected by name, in strict and lenient decoding alike: a lenient decode would otherwise drop
+   * it unread and hand a host-only leg to an on-device runner.
+   */
+  private fun rejectRemovedFields(classifier: String, keys: Set<String>, member: String? = null) {
+    require(REMOVED_REQUIRES_HOST !in keys) {
+      val where =
+        if (member == null) "entry '$classifier'"
+        else "configuration '$classifier' device '$member'"
+      "config.devices $where uses `requiresHost:`, which was replaced by " +
+        "`requires: [${TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION}]`. Write that on an Android " +
+        "entry that must run from the host; delete it on iOS, web and desktop entries, which " +
+        "always do."
+    }
+  }
+
+  private const val REMOVED_REQUIRES_HOST = "requiresHost"
+
+  private fun rejectRemovedYamlFields(classifier: String, entry: YamlMap) {
+    rejectRemovedFields(classifier, entry.entries.keys.map { it.content }.toSet())
+    (entry.get<YamlNode>("devices") as? YamlMap)?.entries?.forEach { (name, member) ->
+      (member as? YamlMap)?.let { m ->
+        rejectRemovedFields(classifier, m.entries.keys.map { it.content }.toSet(), name.content)
+      }
+    }
+  }
+
+  private fun rejectRemovedJsonFields(classifier: String, entry: JsonObject) {
+    rejectRemovedFields(classifier, entry.keys)
+    (entry["devices"] as? JsonObject)?.forEach { (name, member) ->
+      (member as? JsonObject)?.let { rejectRemovedFields(classifier, it.keys, name) }
     }
   }
 
@@ -321,10 +410,12 @@ object TrailblazeDeviceDefinitionMapSerializer :
         TrailblazeDeviceDefinition(driver = parseDriver(classifier, valueNode.content))
       // Canonical object form — including a multi-device configuration, which decodes through the
       // same serializer ([TrailblazeDeviceDefinition.devices] non-null is the discriminator).
-      is YamlMap ->
+      is YamlMap -> {
+        rejectRemovedYamlFields(classifier, valueNode)
         withEntryContext(classifier) {
           decoder.yaml.decodeFromYamlNode(TrailblazeDeviceDefinition.serializer(), valueNode)
         }
+      }
       else ->
         error(
           "config.devices entry '$classifier' must be a device definition map " +
@@ -354,10 +445,12 @@ object TrailblazeDeviceDefinitionMapSerializer :
             JsonNull -> TrailblazeDeviceDefinition()
             is JsonPrimitive ->
               TrailblazeDeviceDefinition(driver = parseDriver(classifier, value.content))
-            else ->
+            else -> {
+              (value as? JsonObject)?.let { rejectRemovedJsonFields(classifier, it) }
               withEntryContext(classifier) {
                 decoder.json.decodeFromJsonElement(TrailblazeDeviceDefinition.serializer(), value)
               }
+            }
           }
       } catch (e: Exception) {
         val unknownDriver = unknownDriverIn(e) ?: throw e

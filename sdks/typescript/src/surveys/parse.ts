@@ -185,6 +185,7 @@ export function networkFromRows(
           line,
           timeMs: asNumber(rec.timestampMs),
           ...(rec.clock === "device" ? { clock: "device" as const } : {}),
+          ...trailPhaseOf(rec),
           summary: "",
         };
         byId.set(id, r);
@@ -204,6 +205,8 @@ export function networkFromRows(
         r.timeMs = r.startMs;
         if (rec.clock === "device") r.clock = "device";
         else delete r.clock;
+        const tagged = trailPhaseOf(rec).trailPhase;
+        if (tagged) r.trailPhase = tagged;
         r.requestHeaders = asRecord(rec.requestHeaders) as Record<string, string> | undefined;
         const reqBody = readBody(rec.requestBodyRef);
         r.requestBody = reqBody.text ?? r.requestBody;
@@ -226,6 +229,11 @@ export function networkFromRows(
   }
   enrichFromInAppNetworkStreams(byId, order, streams);
   return order.map((id) => finishRequest(byId.get(id)!, finished));
+}
+
+/** The part of the run Trailblaze's capture tagged a row with, when it tagged one. */
+function trailPhaseOf(rec: Record<string, unknown>): { trailPhase?: "trailhead" | "trail" | "teardown" } {
+  return rec.trailPhase === "trail" || rec.trailPhase === "trailhead" || rec.trailPhase === "teardown" ? { trailPhase: rec.trailPhase } : {};
 }
 
 /**

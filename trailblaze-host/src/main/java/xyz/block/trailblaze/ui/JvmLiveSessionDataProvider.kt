@@ -37,6 +37,15 @@ class JvmLiveSessionDataProvider(
       val driverType = deviceInfo.trailblazeDriverType
 
       if (!driverType.requiresHost && driverType.platform == TrailblazeDevicePlatform.ANDROID) {
+        // A host-driven run (ANDROID_TEST from the host agent) runs its steps in a host job that
+        // restarts the runner when it goes away, so killing the runner alone would let the next
+        // step bring it back. Cancel that job first, stamping Cancelled before it can end Failed.
+        sessionInfo.trailblazeDeviceId
+          ?.takeIf { deviceManager.getCurrentSessionIdForDevice(it) == sessionId }
+          ?.let { hostDevice ->
+            writeCancellationLog(logsRepo, sessionId)
+            deviceManager.cancelSessionForDevice(hostDevice, knownSessionId = sessionId)
+          }
         // For on-device tests, send cancel request to the device's RPC server
         withContext(Dispatchers.IO) {
           sessionInfo.trailblazeDeviceId?.let { trailblazeDeviceId ->

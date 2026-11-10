@@ -283,7 +283,7 @@ and project context to the loop, which the built-in agent can't.
 - **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and
   [Built-in Models](generated/LLM_MODELS.md). Using a model that isn't built in — no
   Trailblaze upgrade required — is [Adding a Model](adding_a_model.md).
-- **Going deep?** See [Architecture](architecture.md) and the [devlog](devlog/index.md).
+- **Going deep?** See [Architecture](architecture.md), the [Trail lifecycle](trail-lifecycle.md) and the [devlog](devlog/index.md).
 
 ## License
 

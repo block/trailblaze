@@ -38,11 +38,7 @@ export type {
   EmptyInput,
   TypedToolDefinition,
 } from "./tool.js";
-export type {
-  TrailblazeSessionCleanup,
-  TrailblazeSessionCleanupContext,
-  TrailblazeSessionResources,
-} from "./session-resources.js";
+export type { TrailblazeCleanupCalls, TrailblazeToolCall, TrailblazeToolSession } from "./session-undo.js";
 export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
 export { formatToolCalls } from "./history.js";
 export type {

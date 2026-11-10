@@ -38,36 +38,40 @@ internal const val MAX_SESSIONS_WITHOUT_A_PASS = 3
 internal const val PASSES_PER_SESSION_WITHOUT_A_COUNT = 50
 
 /**
- * `trailblaze loop`: [TrailCommand] with the trail's steps repeated inside one session. One
- * session rather than one per pass because only the session keeps the app's state between passes
- * on every driver; a fresh session can start a fresh browser. A failure ends that session, so the
- * loop recovers by starting another one, whose trailhead resets the app, for the passes left.
+ * `trailblaze loop`: [TrailCommand] run over and over, each pass the whole trail in a session of its
+ * own, its trailhead setting up from scratch, so no pass inherits what the last one left behind.
  *
  * With `--reuse-trailhead`, a trailhead whose `teardown` handed its setup on skips the full setup on
  * the next pass, and a failed pass hands nothing on, so the pass after it sets up from scratch.
- * Each pass is then a whole run of the trail in a session of its own.
+ *
+ * With `--same-session`, the trail's steps repeat inside one session instead, its trailhead run
+ * once. Only a session keeps the app's state between passes on every driver; a fresh session can
+ * start a fresh browser. A failure ends that session, so the loop recovers by starting another
+ * one, whose trailhead resets the app, for the passes left.
  */
 @Command(
   name = "loop",
   mixinStandardHelpOptions = true,
   description = [
-    "Run a trail's trailhead once, then repeat its steps in a loop.",
+    "Run a trail over and over.",
     "",
-    "One session runs the `trailhead:`, then the `trail:` steps --iterations times in a row, each " +
-      "pass starting where the previous one left the app. The steps should end where they " +
-      "began.",
+    "Each pass runs the whole trail, `trailhead:` included, in a session of its own, so it sets " +
+      "up from scratch and inherits nothing from the pass before.",
     "",
-    "A failed pass is reported, handed to --on-failure, and counted toward --iterations. The " +
-      "loop then recovers in a new session that runs the trailhead again, and continues with the " +
-      "passes left. It stops early after $MAX_SESSIONS_WITHOUT_A_PASS sessions in a row that " +
-      "complete no pass. Exits non-zero if any pass failed.",
+    "A failed pass is reported, handed to --on-failure, and counted toward --iterations, and the " +
+      "loop goes on with the next pass. It stops early after $MAX_SESSIONS_WITHOUT_A_PASS passes " +
+      "in a row fail. Exits non-zero if any pass failed.",
     "",
     "Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the " +
       "time limit, a pass still running is cancelled and is not counted as a failure.",
     "",
     "With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left " +
-      "instead of setting up again, when that trailhead supports it. Each pass then runs the " +
-      "whole trail in a session of its own.",
+      "instead of setting up again, when that trailhead supports it.",
+    "",
+    "With --same-session, one session runs the `trailhead:` once, then the `trail:` steps " +
+      "--iterations times in a row, each pass starting where the previous one left the app. The " +
+      "steps should end where they began. After a failed pass, the loop recovers in a new " +
+      "session that runs the trailhead again.",
     "",
     "Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, " +
       "for --iterations and --time-limit each. Never saves a recording: it would record every " +
@@ -116,21 +120,35 @@ class LoopCommand : TrailCommand() {
     names = ["--reuse-trailhead"],
     description = [
       "Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting " +
-        "up again. Each pass then runs the whole trail, trailhead included, in a session of its " +
-        "own. Only a trailhead that defines `teardown` hands its setup on, and only after a pass " +
-        "that passed; otherwise the next pass sets up from scratch.",
+        "up again. A pass then inherits whatever the last one left in the app or on the account. " +
+        "Only a trailhead that defines `teardown` hands its setup on, and only after a pass that " +
+        "passed; otherwise the next pass sets up from scratch.",
     ],
   )
   var reuseTrailhead: Boolean = false
+
+  @Option(
+    names = ["--same-session"],
+    description = [
+      "Run the trailhead once, then repeat the trail's steps in one session, each pass starting " +
+        "where the previous one left the app. Faster, for a trail whose steps end where they " +
+        "began. A failed pass ends the session, and a new one runs the trailhead again.",
+    ],
+  )
+  var sameSession: Boolean = false
+
+  /** One pass per session, trailhead and all: every loop but `--same-session`. */
+  private val passPerSession: Boolean get() = !sameSession
 
   /**
    * Refused for the pass after a failed one, so it sets up from scratch on every device it binds,
    * whatever setup is still waiting there from before the failure and whatever the daemon's
    * `TRAILBLAZE_TRAILHEAD_REUSE` says. That pass hands nothing on either, since a run with reuse off
    * records no landing to check a reuse against, so the pass after it sets up from scratch too.
-   * Without the flag, left to the daemon.
+   * Without the flag, refused for every pass and every recovery session: false rather than null,
+   * so a daemon started with `TRAILBLAZE_TRAILHEAD_REUSE` can't turn it on behind the loop's back.
    */
-  override val trailheadReuse: Boolean? get() = if (reuseTrailhead) !lastPassFailed else null
+  override val trailheadReuse: Boolean get() = reuseTrailhead && !lastPassFailed
 
   private var lastPassFailed = false
 
@@ -200,11 +218,11 @@ class LoopCommand : TrailCommand() {
     val remaining = passCap - passesUsed
     sessionPasses = when {
       // In process nothing can cut a session, so one pass per session keeps the overrun to a pass.
-      reuseTrailhead || (timeLimit != null && !runsCancellable()) -> 1
+      passPerSession || (timeLimit != null && !runsCancellable()) -> 1
       iterations == null -> minOf(remaining, PASSES_PER_SESSION_WITHOUT_A_COUNT)
       else -> remaining
     }
-    if (reuseTrailhead) return yamlContent
+    if (passPerSession) return yamlContent
     return repeatSteps(yamlContent, sessionPasses)
   }
 
@@ -220,8 +238,8 @@ class LoopCommand : TrailCommand() {
         .onFailure { Console.error("A loop listener failed to start: ${it.message}") }
         .getOrNull()
     }.also { listeners = it }
-    // With --reuse-trailhead a session is one pass, reported when the session ends.
-    if (active.isEmpty() || (stepsPerPass ?: 0) == 0 || reuseTrailhead) return
+    // Unless --same-session, a session is one pass, reported when the session ends.
+    if (active.isEmpty() || (stepsPerPass ?: 0) == 0 || passPerSession) return
     // Stopped by clearing [watcher], not by the interrupt alone: a listener can swallow that.
     thread(start = false, isDaemon = true, name = "loop-pass-watcher") {
       try {
@@ -362,7 +380,7 @@ class LoopCommand : TrailCommand() {
       otherFailures++
       return finish()
     }
-    if (reuseTrailhead) return runNextPass(run)
+    if (passPerSession) return runNextPass(run)
     val queued = sessionPasses
     val steps = stepsPerPass
     if (run.passed || steps == null || steps == 0) {
@@ -413,7 +431,7 @@ class LoopCommand : TrailCommand() {
     return true
   }
 
-  /** `--reuse-trailhead`: [run] was one pass, trailhead and all. */
+  /** Every loop but `--same-session`: [run] was one pass, trailhead and all. */
   private fun runNextPass(run: FinishedRun): Boolean {
     val progress = progressOf(run)
     if (!run.passed && progress.stopped) return stopForCancel(run, progress)
@@ -442,7 +460,7 @@ class LoopCommand : TrailCommand() {
       return finish()
     }
     stopIfTimeUp()?.let { return it }
-    if (!run.passed) Console.info("Recovering: a failed pass hands no setup on, so the next pass sets up from scratch.")
+    if (!run.passed && reuseTrailhead) Console.info("Recovering: a failed pass hands no setup on, so the next pass sets up from scratch.")
     return true
   }
 
@@ -575,6 +593,7 @@ class LoopCommand : TrailCommand() {
       timeLimit != null && parseTimeLimit(timeLimit) == null ->
         "--time-limit must be a positive duration in hours, minutes and seconds, such as 8h, 90m or 1h30m (got $timeLimit)"
       file == null || file.isDirectory -> "loop takes exactly one trail file"
+      reuseTrailhead && sameSession -> "--reuse-trailhead hands a setup from one session to the next, so it can't run with --same-session"
       saveRecording == true -> "loop never saves a recording"
       noLogging -> "loop counts passes from session logs, so it needs logging"
       snapshotBaseline != null || !envReader(TrailblazeHostYamlRunner.SNAPSHOT_BASELINE_ENV_VAR).isNullOrBlank() ->

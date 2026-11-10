@@ -1059,6 +1059,17 @@ describe('lane arrangement', () => {
     expect(derivedFromText(lane('counts'))).toBe('Derived from this session\'s events');
     expect(derivedFromText(lane('app.views'))).toBeNull();
   });
+
+  test('a derived lane says how long deriving it took, when the session recorded it', () => {
+    const rows = [{ t: 1300, label: 'Cart', raw: [{}] }];
+    const lanes = build({ trace: TRACE }, [
+      { name: 'fast', shown: true, derivedFrom: ['device.log'], deriveMs: 34, events: [], rows },
+      { name: 'slow', shown: true, derivedFrom: [], deriveMs: 4250, events: [], rows },
+    ]).lanes;
+    const lane = (id: string) => lanes.find((l) => l.id === id)!;
+    expect(derivedFromText(lane('fast'))).toBe('Derived from device.log in 34ms');
+    expect(derivedFromText(lane('slow'))).toBe('Derived from this session\'s events in 4.3s');
+  });
 });
 
 describe('find', () => {

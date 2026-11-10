@@ -47,7 +47,7 @@ abstract class LaunchedAppTrailblazeTest : AndroidTestTrailblazeTest() {
 
   final override fun createTarget(): AndroidTestTarget =
     RuleBackedAndroidTestTarget(
-      activityProvider = { AppUnderTestLauncher.awaitResumedActivity() },
+      activityProvider = { AppUnderTestLauncher.awaitResumedActivity(yieldToAnotherApp = true) },
       composeTestRule = composeRule,
     )
 }

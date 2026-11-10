@@ -31,6 +31,8 @@ export interface StoredSurveys {
 export interface StoredSurvey {
   /** Absent for a survey built in code, whose entry is then never current. */
   version?: string;
+  /** Set for a warning survey: each of its findings is a warning on this run. */
+  warning?: true;
   generatedAt: string;
   /** What the session's files were when it was surveyed: see [sessionInputs]. */
   inputs?: string;
@@ -253,6 +255,7 @@ function merged(report: SurveyReport, s: SessionResult): string {
       })),
     };
     if (row.version !== undefined) entry.version = row.version;
+    if (row.warning) entry.warning = true;
     if (s.skipped.includes(row.id)) entry.skipped = true;
     // A stream that failed left its readers short of rows, so none of this session's surveys is current.
     const errors = s.errors.filter((e) => e.survey === row.id || e.survey.startsWith("stream:")).map((e) => e.message);

@@ -119,15 +119,14 @@ class SampleAppToolsDemoTest {
     val bundleJs = bundleFile.readText()
     // Profile assertion — `@trailblaze/scripting` must bind to the SLIM in-process entry, not the
     // full ~1.2 MB MCP SDK. The slim profile inlines the typed-authoring core (tool-core + memory +
-    // the synthesized registration wrapper), which lands around ~9 KB for these two tools — far
-    // below the full SDK. The hard signal is the absence of `@modelcontextprotocol`; the size cap
-    // (32 KB — ~37× below the full SDK, ~3.5× headroom over today's bundle) is the coarse backstop
-    // that catches an accidental repoint at the full profile.
+    // the synthesized registration wrapper), about 32 KB for these two tools. The hard signal is
+    // the absence of `@modelcontextprotocol`; the size cap (48 KB, ~25× below the full SDK) is the
+    // coarse backstop that catches an accidental repoint at the full profile.
     assertTrue("bundle should NOT inline the MCP SDK — slim alias didn't bind") {
       !bundleJs.contains("@modelcontextprotocol")
     }
     assertTrue("bundle suspiciously large (${bundleJs.length} bytes) — alias may not have bound") {
-      bundleJs.length < 32_000
+      bundleJs.length < 48_000
     }
 
     val host =

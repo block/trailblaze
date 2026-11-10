@@ -7,7 +7,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
  * Holds one session's tool repo so every dispatch in that session resolves tools against the same
  * instance.
  *
- * Needed by [ScriptedToolBundleReuse]: a reused QuickJS launch registered its scripted tools INTO a
+ * Needed by [xyz.block.trailblaze.android.ScriptedToolBundleReuse]: a reused QuickJS launch registered its scripted tools INTO a
  * repo, so reusing the launch while building a fresh repo per dispatch would leave every scripted
  * tool unresolvable ("Unknown tool" at dispatch). The launch and the repo are cached together or
  * not at all.

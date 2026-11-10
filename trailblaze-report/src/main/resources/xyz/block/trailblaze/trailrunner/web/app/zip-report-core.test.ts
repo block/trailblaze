@@ -22,7 +22,8 @@ const encoder = new TextEncoder();
 
 // Minimal spec-conformant ZIP writer (deflate or stored, no zip64, no data descriptors) so the
 // reader is exercised against real archive bytes rather than mocked structures.
-function buildZip(files: { name: string; data?: Uint8Array; text?: string; stored?: boolean }[]): Uint8Array {
+// `declaredSize` and `localOffset` let a test write the lies a hostile archive can tell.
+function buildZip(files: { name: string; data?: Uint8Array; text?: string; stored?: boolean; declaredSize?: number; localOffset?: number }[]): Uint8Array {
   const chunks: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
@@ -39,7 +40,7 @@ function buildZip(files: { name: string; data?: Uint8Array; text?: string; store
     lv.setUint16(4, 20, true);
     lv.setUint16(10, method, true);
     lv.setUint32(18, payload.length, true);
-    lv.setUint32(22, data.length, true);
+    lv.setUint32(22, f.declaredSize ?? data.length, true);
     lv.setUint16(26, nameBytes.length, true);
     local.set(nameBytes, 30);
 
@@ -50,9 +51,9 @@ function buildZip(files: { name: string; data?: Uint8Array; text?: string; store
     cv.setUint16(6, 20, true);
     cv.setUint16(10, method, true);
     cv.setUint32(20, payload.length, true);
-    cv.setUint32(24, data.length, true);
+    cv.setUint32(24, f.declaredSize ?? data.length, true);
     cv.setUint16(28, nameBytes.length, true);
-    cv.setUint32(42, offset, true);
+    cv.setUint32(42, f.localOffset ?? offset, true);
     cen.set(nameBytes, 46);
 
     chunks.push(local, payload);
@@ -285,6 +286,53 @@ describe("a session read straight off disk is put on one clock before it is orde
     // derived from survives as provenance.
     expect(session.logs[1].clock).toBe("host");
     expect(session.logs[1].hostReceivedAt).toBe("2026-06-30T20:05:01.000Z");
+  });
+
+  test("a report built from an archive shows the run's warnings from its surveys.json", async () => {
+    const dir = SESSION_ID + "/";
+    const logs = [hostLog("2026-06-30T20:02:00.000Z"), hostLog("2026-06-30T20:06:00.000Z")];
+    const surveys = { format: 1, surveys: { crashes: { warning: true, findings: [{ summary: "App crashed", evidence: [] }] } } };
+    const zip = buildZip([
+      ...logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })),
+      { name: dir + "surveys.json", text: JSON.stringify(surveys) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].meta.warnings).toEqual([{ survey: "crashes", summary: "App crashed" }]);
+
+    const plain = buildZip(logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })));
+    expect((await Zip.buildSessionInputsFromZipBytes(plain, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" })).sessions[0].meta.warnings).toBeUndefined();
+  });
+
+  test("a report built from an archive warns about each derived stream that failed to derive", async () => {
+    const dir = SESSION_ID + "/";
+    const logs = [hostLog("2026-06-30T20:02:00.000Z"), hostLog("2026-06-30T20:06:00.000Z")];
+    const zip = buildZip([
+      ...logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })),
+      { name: dir + "events/derived.json", text: JSON.stringify({ format: 1, streams: { feature: { rows: 0, error: "Unable to connect" } } }) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].meta.warnings).toEqual([
+      { survey: "derived stream feature", summary: "The feature stream failed, so its lane is missing from this report: Unable to connect" },
+    ]);
+  });
+
+  test("an archive's surveys.json that lies about its size, or where it starts, costs only the warnings", async () => {
+    const dir = SESSION_ID + "/";
+    const logs = [hostLog("2026-06-30T20:02:00.000Z"), hostLog("2026-06-30T20:06:00.000Z")];
+    const logFiles = logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) }));
+    // Valid survey results that inflate past the cap, from an entry that declares a few bytes.
+    const padded = JSON.stringify({ format: 1, surveys: { crashes: { warning: true, findings: [{ summary: "App crashed" }] } } }) + " ".repeat(2 * 1024 * 1024);
+    const bomb = buildZip([...logFiles, { name: dir + "surveys.json", text: padded, declaredSize: 64 }]);
+    for (const inflater of [inflateRaw, undefined]) {
+      const built = await Zip.buildSessionInputsFromZipBytes(bomb, { render: REPORT_DERIVE, inflateRaw: inflater, generatedAt: "T" });
+      expect(built.sessions[0].meta.warnings).toBeUndefined();
+      expect(built.sessions).toHaveLength(1);
+    }
+
+    const offside = buildZip([...logFiles, { name: dir + "surveys.json", text: "{}", localOffset: 0x7ffffff0 }]);
+    const built = await Zip.buildSessionInputsFromZipBytes(offside, { render: REPORT_DERIVE, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].meta.warnings).toBeUndefined();
+    expect(built.sessions).toHaveLength(1);
   });
 
   test("a whole report built from the archive measures the run on that one clock", async () => {
@@ -768,6 +816,7 @@ describe("session events and the attachments they reference", () => {
       ["screens", "Screens", true],
       ["speech", undefined, undefined],
     ]);
+    expect(built.sessions[0].derivedStreams).toEqual([{ name: "screens", title: "Screens", rows: 1 }]);
   });
 
   test("reads the session-root network capture as a stream beside a plugin's capture", async () => {

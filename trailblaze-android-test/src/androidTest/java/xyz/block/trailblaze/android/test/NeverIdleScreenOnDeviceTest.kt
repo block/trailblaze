@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.android.test
 
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -24,6 +25,7 @@ import org.junit.Rule
 import org.junit.Test
 import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollector
 import xyz.block.trailblaze.android.test.tools.AndroidTestAssertVisibleTool
+import xyz.block.trailblaze.android.test.tools.AndroidTestTapTool
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -175,6 +177,54 @@ class NeverIdleScreenOnDeviceTest {
     assertIs<TrailblazeToolResult.Success>(result, "the Compose button is on screen throughout, got: $result")
   }
 
+  /**
+   * A tap lands on a button that a handler-less node is drawn over, while the screen never settles.
+   *
+   * Over a covered node the tap goes through the node's own click action rather than a touch, and
+   * the rule's action waits for idle first, so on its own it could only time out here. Any button
+   * under such a node, on a screen that never settles, behaves this way.
+   */
+  @Test
+  fun aTapLandsOnACoveredButtonOnAScreenThatNeverSettles() {
+    fixture.coverComposeButtonNow()
+    awaitComposeTexts { MixedUiFixtureActivity.COMPOSE_COVER_TAG in composeTags() }
+    val agent = agentFor(target)
+    val result = agent.runTrailblazeTools(
+      tools = listOf(
+        AndroidTestTapTool(
+          TrailblazeNodeSelector(compose = DriverNodeMatch.Compose(testTag = MixedUiFixtureActivity.COMPOSE_BUTTON_TAG)),
+        ),
+      ),
+      traceId = null,
+      screenState = null,
+      elementComparator = NoOpElementComparator,
+      screenStateProvider = agent.screenStateProvider,
+    ).result
+    assertIs<TrailblazeToolResult.Success>(result, "the covered button still takes its click, got: $result")
+    awaitComposeTexts { MixedUiFixtureActivity.COMPOSE_STATUS_CLICKED in composeTexts() }
+  }
+
+  /** Polls the unsynchronized tree until [condition] holds; idle never comes, so nothing else can. */
+  private fun awaitComposeTexts(condition: () -> Boolean) {
+    val deadline = SystemClock.uptimeMillis() + AWAIT_MS
+    while (!condition()) {
+      assertTrue(SystemClock.uptimeMillis() < deadline, "the screen never showed what was expected: ${composeTexts()}")
+      SystemClock.sleep(100)
+    }
+  }
+
+  private fun composeTexts(): List<String> =
+    target.composeRoots()
+      .flatMap { it.selfAndDescendants() }
+      .mapNotNull { it.config.getOrNull(SemanticsProperties.Text) }
+      .flatten()
+      .map { it.text }
+
+  private fun composeTags(): List<String> =
+    target.composeRoots()
+      .flatMap { it.selfAndDescendants() }
+      .mapNotNull { it.config.getOrNull(SemanticsProperties.TestTag) }
+
   private fun agentFor(target: AndroidTestTarget): AndroidTestTrailblazeAgent {
     val metrics = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics
     return AndroidTestTrailblazeAgent(
@@ -200,4 +250,8 @@ class NeverIdleScreenOnDeviceTest {
   /** This node and every descendant, so a test can talk about the whole tree it got back. */
   private fun SemanticsNode.selfAndDescendants(): List<SemanticsNode> =
     listOf(this) + children.flatMap { it.selfAndDescendants() }
+
+  private companion object {
+    const val AWAIT_MS = 15_000L
+  }
 }

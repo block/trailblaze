@@ -141,6 +141,8 @@ export interface StreamLane {
   shown?: boolean;
   /** Set only on a derived stream's lane: the streams and logs it was derived from (possibly none recorded). */
   derivedFrom?: string[];
+  /** Set only on a derived stream's lane, when recorded: how long deriving it took, in ms. */
+  deriveMs?: number;
   /** Notes bucketed by step band, in time order. */
   bands: StreamNote[][];
 }
@@ -207,10 +209,12 @@ export interface StreamsModel {
 
 export const TOOLS_LANE = 'tools';
 export const LLM_LANE = 'llm';
-/** What a derived lane says it was made from, for its header and cards; null for a captured stream's lane. */
-export function derivedFromText(lane: Pick<StreamLane, 'derivedFrom'>): string | null {
+/** What a derived lane says it was made from, and how long that took, for its header and cards; null for a captured stream's lane. */
+export function derivedFromText(lane: Pick<StreamLane, 'derivedFrom' | 'deriveMs'>): string | null {
   if (!lane.derivedFrom) return null;
-  return lane.derivedFrom.length > 0 ? `Derived from ${lane.derivedFrom.join(', ')}` : 'Derived from this session\'s events';
+  const from = lane.derivedFrom.length > 0 ? `Derived from ${lane.derivedFrom.join(', ')}` : 'Derived from this session\'s events';
+  if (lane.deriveMs === undefined) return from;
+  return `${from} in ${formatMs(lane.deriveMs)}`;
 }
 
 /** Lanes shown until the reader picks; every other stream waits in the "+" menu. */
@@ -1717,7 +1721,7 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
     }
   }
 
-  const streams = new Map<string, { name: string; total: number; notes: StreamNote[]; fold: FoldPolicy; declaredFold?: boolean; shown?: boolean; derivedFrom?: string[] }>();
+  const streams = new Map<string, { name: string; total: number; notes: StreamNote[]; fold: FoldPolicy; declaredFold?: boolean; shown?: boolean; derivedFrom?: string[]; deriveMs?: number }>();
   if (tools.length > 0) streams.set(TOOLS_LANE, { name: 'Tools', total: tools.length, notes: tools, fold: 'any' });
   if (llm.length > 0) streams.set(LLM_LANE, { name: 'LLM', total: llm.length, notes: llm, fold: 'any' });
   const rawStreams = ((input.events ?? []) as unknown[]).filter(isRecord);
@@ -1769,7 +1773,8 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
     } else {
       const fold = declared ?? built?.fold ?? 'any';
       const derivedFrom = Array.isArray(stream.derivedFrom) ? stream.derivedFrom.filter((source): source is string => typeof source === 'string') : undefined;
-      streams.set(identity.id, { name: identity.name, total: built?.total ?? notes.length, notes, fold, ...(declared ? { declaredFold: true } : {}), ...(stream.shown === true ? { shown: true } : {}), ...(derivedFrom ? { derivedFrom } : {}) });
+      const deriveMs = typeof stream.deriveMs === 'number' && Number.isFinite(stream.deriveMs) ? stream.deriveMs : undefined;
+      streams.set(identity.id, { name: identity.name, total: built?.total ?? notes.length, notes, fold, ...(declared ? { declaredFold: true } : {}), ...(stream.shown === true ? { shown: true } : {}), ...(derivedFrom ? { derivedFrom } : {}), ...(deriveMs !== undefined ? { deriveMs } : {}) });
     }
   }
 
@@ -1879,7 +1884,7 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
     const bands: StreamNote[][] = steps.map(() => []);
     const sorted = stream.notes.slice().sort((a, b) => a.t - b.t);
     for (const note of steps.length > 0 ? foldBursts(sorted, stream.fold) : []) bands[bandOf(note.t)].push(note);
-    return { id, name: stream.name, total: stream.total, ...(stream.shown ? { shown: true } : {}), ...(stream.derivedFrom ? { derivedFrom: stream.derivedFrom } : {}), bands };
+    return { id, name: stream.name, total: stream.total, ...(stream.shown ? { shown: true } : {}), ...(stream.derivedFrom ? { derivedFrom: stream.derivedFrom } : {}), ...(stream.deriveMs !== undefined ? { deriveMs: stream.deriveMs } : {}), bands };
   });
 
   return {

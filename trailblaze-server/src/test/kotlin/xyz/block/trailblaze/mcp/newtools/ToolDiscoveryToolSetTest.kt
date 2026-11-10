@@ -29,6 +29,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -758,14 +759,11 @@ class ToolDiscoveryToolSetTest {
   fun `a custom-serialized tool is described by the arguments it actually decodes`() = runTest {
     // `mobile_maestro` holds a single `yaml` string in Kotlin but its serializer reads and writes
     // `commands: [...]`. Reflection over the constructor describes the field, so help printed a
-    // trail step keyed on `yaml` — which the tool's own deserializer rejects. No seam: the real
-    // tool, and it is registry-only (`surfaceToLlm = false`), so this lookup is the only surface
-    // that describes it at all.
-    val toolSet = ToolDiscoveryToolSet(
-      sessionContext = null,
-      allTargetAppsProvider = { emptySet() },
-      currentTargetProvider = { null },
-      currentDriverTypeProvider = { null },
+    // trail step keyed on `yaml` — which the tool's own deserializer rejects. The real class and
+    // serializer, handed to the toolset directly: the tool is framework-internal (no public
+    // descriptor), so the registry no longer offers it by name.
+    val toolSet = createToolSet(
+      knownToolClasses = mapOf("mobile_maestro" to MaestroTrailblazeTool::class),
     )
 
     val obj = json.parseToJsonElement(toolSet.toolbox(name = "mobile_maestro")).jsonObject

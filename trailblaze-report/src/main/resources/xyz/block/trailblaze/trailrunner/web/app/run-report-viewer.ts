@@ -24,6 +24,7 @@ import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTime
 import { adjacentFrameTime, clipFrameSource, FRAME_TIME_SLACK_SEC, installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
 import { formatShotClipLength, formatShotClipTime, nextShotClipSpeed, SHOT_CLIP_MIN_SEC, SHOT_CLIP_SPEED, shotClipCovers, shotClipMediaSecAt, shotClipRunSecAt, shotClipSegment, type ShotClipSegment } from './run-report-shot-clip';
 import { formatUsd, trailSourceDetails } from './report-format';
+import { formatMs } from './run-report-summary-model';
 import { mountSummary, summaryAvailable } from './run-report-summary';
 import { mountTheater, theaterAvailable } from './run-report-theater';
 import type { ReportTabHost, ReportTabMount } from './run-report-tab-host';
@@ -4763,6 +4764,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     </div>`);
   };
 
+  // Every stream derived from this session: its rows and how long it took, or why it failed. The
+  // lanes show only the streams that found rows, so this is where a failed or empty one shows.
+  const derivedStreamsSection = (list) => {
+    if (!Array.isArray(list) || !list.length) return '';
+    const took = (s) => (typeof s.ms === 'number' ? ` in ${formatMs(s.ms)}` : '');
+    const rows = list.map((s) => {
+      const what = s.error ? `Failed${took(s)}: ${s.error}` : `${s.rows ? `${s.rows} row${s.rows === 1 ? '' : 's'}` : 'No rows'}${took(s)}`;
+      return `<div class="r"><span class="k" title="${esc(s.name)}">${esc(s.title || s.name)}</span><span class="v">${esc(what)}</span></div>`;
+    }).join('');
+    return `<section class="infosection"><div class="eyebrow">Derived streams</div><div class="rows">${rows}</div></section>`;
+  };
+
   const renderInfo = () => {
     const m = D.meta;
     const source = trailSourceDetails(m.trailSourceUrl);
@@ -4778,6 +4791,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ${about}
       ${m.cmd ? `<section class="infosection"><div class="eyebrow">Rerun this in the CLI</div><div class="cmd"><pre class="mono" id="cmd">${esc(m.cmd)}</pre><button class="btn" id="copycmd">Copy</button></div></section>` : ''}
       <section class="infosection"><div class="rows">${sourceRow}${rows}</div></section>
+      ${derivedStreamsSection(D.derivedStreams)}
     </div>`);
   };
 

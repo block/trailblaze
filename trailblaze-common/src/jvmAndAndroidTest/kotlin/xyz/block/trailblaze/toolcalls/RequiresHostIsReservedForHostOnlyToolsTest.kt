@@ -24,9 +24,10 @@ import kotlin.test.fail
  *
  * ## Why an allowlist and not a ban
  *
- * The flag is load-bearing where it is set, and the four tools that carry it genuinely cannot run
+ * The flag is load-bearing where it is set, and the five tools that carry it genuinely cannot run
  * anywhere but a host machine: `exec` and `runCommand` fork a subprocess, `switchDevice` needs a
- * second bound device, `assertWaypoint` reads a registry only `TrailblazeHostYamlRunner` populates.
+ * second bound device, `assertWaypoint` reads a registry only `TrailblazeHostYamlRunner` populates,
+ * `android_reconnectSession` relaunches the on-device runner it would otherwise run in.
  * Deleting it from those would delete a true fact — and their generated contract pages are where a
  * reader looks it up.
  *
@@ -48,7 +49,7 @@ import kotlin.test.fail
  * only the second must not reach for the first:
  * - `sleep`, the downstream login and seed helpers: marker only. Dispatch in-process, run fine
  *   on-device.
- * - the four here: BOTH. The flag for the machine requirement, the marker for the dispatch.
+ * - the five here: BOTH. The flag for the machine requirement, the marker for the dispatch.
  *
  * They do overlap in one place, which is why the marker is not a substitute: every host dispatch fork
  * (`HostOnDeviceRpcTrailblazeAgent`, `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) branches on
@@ -63,7 +64,7 @@ import kotlin.test.fail
  * 2. **`DelegatingTrailblazeTool` routes differently.** `TrailblazeMcpBridgeImpl` matches
  *    `tool is DelegatingTrailblazeTool && requiresHostInstance()` → `HOST_EXPAND` *before* the
  *    `HOST_LOCAL` branch, so a delegating tool's route depends on the flag in a way a non-delegating
- *    one's does not. None of the four is delegating.
+ *    one's does not. None of the five is delegating.
  *
  * ## Why source-level rather than registry-level
  *
@@ -529,12 +530,15 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
      * - `switchDevice` — hands the session to a second bound device, which only a host-orchestrated
      *   session can hold.
      * - `assertWaypoint` — resolves against a registry only `TrailblazeHostYamlRunner` populates.
+     * - `android_reconnectSession` — relaunches the on-device runner after a reboot killed it; the
+     *   runner cannot reconnect to itself.
      *
      * Adding an entry is a claim that an on-device session cannot run the tool AT ALL, not that the
      * tool should skip the device driver. State the reason here in one line; if you can't, the tool
      * wants `HostLocalExecutableTrailblazeTool` instead.
      */
     private val HOST_ONLY_BY_DESIGN = setOf(
+      "android_reconnectSession",
       "assertWaypoint",
       "exec",
       "runCommand",

@@ -48,6 +48,26 @@ data class TapOnPointTrailblazeTool(
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    recordSelectorUpgrade(toolExecutionContext)
+
+    val result = super.execute(toolExecutionContext)
+    if (result.isSuccess()) {
+      val action = when {
+        longPress -> "Long pressed"
+        doubleTap -> "Double-tapped"
+        else -> "Tapped"
+      }
+      return TrailblazeToolResult.Success(message = "$action at ($x, $y)")
+    }
+    return result
+  }
+
+  /**
+   * Rewrites the RECORDED step as a selector tap when ([x], [y]) resolves to a uniquely
+   * identifiable element, and returns whether it did. Public so a driver that carries out the
+   * touch itself, rather than through [execute], records the same step.
+   */
+  fun recordSelectorUpgrade(toolExecutionContext: TrailblazeToolExecutionContext): Boolean {
     // Record-time silent upgrade: if we can resolve (x, y) to a uniquely-identifiable element
     // in the live TrailblazeNode tree, rewrite the *recorded* step as a Maestro-style
     // `tapOn: { selector, relativePoint: "x%,y%" }` (or omit relativePoint for a center tap).
@@ -108,17 +128,7 @@ data class TapOnPointTrailblazeTool(
       }
     }
     rawCoordinateTapWarning(upgraded, x, y)?.let { Console.log(it) }
-
-    val result = super.execute(toolExecutionContext)
-    if (result.isSuccess()) {
-      val action = when {
-        longPress -> "Long pressed"
-        doubleTap -> "Double-tapped"
-        else -> "Tapped"
-      }
-      return TrailblazeToolResult.Success(message = "$action at ($x, $y)")
-    }
-    return result
+    return upgraded
   }
 
   companion object {

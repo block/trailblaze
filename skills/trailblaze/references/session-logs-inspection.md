@@ -3,8 +3,10 @@
 A session log is the **complete forensic record** of one Trailblaze trail run: every LLM
 call (request + response + screenshot + view hierarchy), every tool the agent invoked,
 every screen state captured, every step's outcome. The same on-disk layout is produced
-locally by `./trailblaze` and by any CI system that uploads the `logs/` directory as a
-`logs_*.zip` artifact — extract that zip back into `./logs/` and everything below applies.
+locally by `trailblaze` and by any CI system that uploads the `logs/` directory as a
+`logs_*.zip` artifact - extract that zip back into the configured logs directory
+(`<git root>/logs` in a checkout, `~/.trailblaze/logs` for an installed CLI) and everything
+below applies.
 
 This reference is the **inspection layer** — it tells you what's in the files, how to read
 them, and the common debugging patterns. It works the same whether the session ran on your
@@ -25,7 +27,7 @@ After extraction, every session is its own directory:
 
 ```
 logs/
-└── 2026_05_08_05_56_08_my_trail_name_4815162342/
+└── my_trail_name_1a2b3c4d/           # session id: <trail>_<8 hex>
     ├── 001_TrailblazeSessionStatusChangeLog.json
     ├── 002_ObjectiveStartLog.json
     ├── 003_TrailblazeLlmRequestLog.json
@@ -33,14 +35,21 @@ logs/
     ├── 005_TrailblazeToolLog.json
     ├── …
     ├── *.webp                        # device screenshots per step
-    ├── *.mp4                         # screen recording (when enabled)
-    ├── *.log                         # raw device / process log
+    ├── video.webm                    # screen recording (video.mp4 without a VP9 encoder)
+    ├── device.log                    # Android logcat, iOS log, or web console
+    ├── network.ndjson                # captured network traffic (when capture is on)
+    ├── events/*.ndjson               # event streams (per-browser network, app plugins)
+    ├── trace.json                    # host and device trace spans
+    ├── capture_metadata.json         # which capture artifacts the session holds
     └── recording.trail.yaml          # auto-generated trail YAML (if session completed)
 ```
 
-Once extracted under `./logs/`, the Trailblaze CLI sees these sessions as if they ran
-locally — `./trailblaze session list`, `./trailblaze session info --id <session_id>` and
-`./trailblaze session view --id <session_id>` all work against the extracted directory.
+JUnit and on-device runs use timestamped ids instead, such as
+`2026_05_08_05_56_08_my_trail_name_4815`.
+
+Once extracted into the logs directory, the Trailblaze CLI sees these sessions as if they ran
+locally - `trailblaze session list`, `trailblaze session info --id <session_id>` and
+`trailblaze report --id <session_id>` all work against the extracted directory.
 
 ## Key invariants (read these before writing scripts)
 
@@ -48,14 +57,19 @@ locally — `./trailblaze session list`, `./trailblaze session info --id <sessio
    zips/extractions reorder ties (same-millisecond log entries). **Always sort by the
    `timestamp` field inside each JSON, not by filename.** The numeric prefix is a
    convenience for skim-reading, not a contract.
-2. **Every JSON file is a single concrete `TrailblazeLog` instance** — derived from the
+2. **Every numbered event-log file (`<n>_<LogType>.json`) is a single concrete `TrailblazeLog`
+   instance** — derived from the
    sealed interface at
    `trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/logs/client/TrailblazeLog.kt`.
-   The `type` field discriminates which concrete shape it is. If new log types appear
-   that aren't listed below, that sealed interface is the source of truth.
-3. **`session_id` is unique by timestamp.** Multiple log zips (from different shards or
-   devices) can be extracted into the same `./logs/` directory without collision — each
-   produces its own session subdirectory.
+   The `class` field (fully qualified, e.g.
+   `xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveStartLog`) discriminates which
+   concrete shape it is. If new log types appear that aren't listed below, that sealed
+   interface is the source of truth. The unnumbered JSON beside them (`capture_metadata.json`,
+   `trace.json`) has its own shape, so glob `[0-9]*_*.json` rather than `*.json`.
+3. **`session_id` is unique per invocation.** A CLI or daemon run pins it to the sanitized
+   trail name plus 8 random hex characters (`SessionId.pinnedFor`), so multiple log zips
+   (from different shards or devices) can be extracted into the same `./logs/` directory
+   without collision — each produces its own session subdirectory.
 4. **Some recording-replay failures bail before any AgentDriverLog is captured.** When
    `aiEnabled: false`, a session can fail at the very first selector lookup with only
    `MaestroCommandLog.json` + `TrailblazeToolLog.json` in its directory — no view
@@ -64,25 +78,27 @@ locally — `./trailblaze session list`, `./trailblaze session info --id <sessio
 
 ## The TrailblazeLog type catalog
 
-Every JSON has at minimum: `session: SessionId`, `timestamp: Instant`, `type` discriminator.
+Every numbered event-log file has at minimum: `session: SessionId`, `timestamp: Instant`, `class` discriminator.
 
 ### Session lifecycle
 | Log type | What it carries |
 |---|---|
-| `TrailblazeSessionStatusChangeLog` | Session start/end transitions; final `outcome` (PASSED/FAILED/ERROR/TIMEOUT). |
+| `TrailblazeSessionStatusChangeLog` | Session start/end transitions in `sessionStatus`. The final one has `class` `...SessionStatus.Ended.<Succeeded\|Failed\|Cancelled\|SucceededWithSelfHeal\|FailedWithSelfHeal\|TimeoutReached\|MaxCallsLimitReached>`. |
 | `TrailblazeAgentTaskStatusChangeLog` | Per-agent-task status transitions with duration. |
 
 ### Step / objective tracking
 | Log type | What it carries |
 |---|---|
-| `ObjectiveStartLog` | Step begins. `promptStep` has the natural-language prompt. |
-| `ObjectiveCompleteLog` | Step ends. `objectiveResult` has pass/fail + reason. |
+| `ObjectiveStartLog` | Step begins. `promptStep` has the natural-language prompt (`step` or `verify`). |
+| `ObjectiveCompleteLog` | Step ends. The `class` of `objectiveResult` is the outcome (`ObjectiveComplete`, `ObjectiveFailed`, `MaxCallsLimitReached`). |
 | `SelfHealInvokedLog` | Self-heal activated to recover from a recording mismatch. |
 
 ### LLM & reasoning
 | Log type | What it carries |
 |---|---|
 | `TrailblazeLlmRequestLog` | **Most useful for debugging.** Full conversation turn: view hierarchy, system + user instructions, tool options, LLM response, actions taken, screenshot ref, model, cost, token usage. |
+| `TrailblazeToolCatalogLog` | The tool descriptors offered to the LLM, written once per `toolCatalogId`. Requests point at it through their own `toolCatalogId`, so read it as a dictionary. |
+| `TrailblazeDecisionRequestLog` | One decision-engine request: typed questions answered with probabilities (`request`, `response`, `outcome`), linked to the surrounding step by `traceId`. |
 | `TrailblazeProgressLog` | Progress + reflection events (subtask progress, exception handling). |
 
 ### Tool execution
@@ -94,8 +110,9 @@ Every JSON has at minimum: `session: SessionId`, `timestamp: Instant`, `type` di
 ### Driver / device actions
 | Log type | What it carries |
 |---|---|
-| `AgentDriverLog` | Low-level driver action with **view hierarchy** + **screenshot** + action details (tap, swipe, input). The class strings inside this log are how driver attribution (instrumentation vs accessibility) is decided. |
+| `AgentDriverLog` | Low-level driver action with **view hierarchy** + **screenshot** + action details (tap, swipe, input). Its `class` value ends in `MaestroDriverLog`, a legacy serial name. The class strings inside this log are how driver attribution (instrumentation vs accessibility) is decided. |
 | `MaestroCommandLog` | Legacy Maestro driver commands. |
+| `AccessibilityActionLog` | Deprecated accessibility action record; new logs use `AgentDriverLog`. |
 | `TrailblazeSnapshotLog` | Standalone screen snapshot with view hierarchy + screenshot. |
 
 ### MCP agent (multi-agent mode)
@@ -121,13 +138,19 @@ completes = sorted(session_dir.glob('*_ObjectiveCompleteLog.json'),
                    key=lambda p: json.loads(p.read_text())['timestamp'])
 for c in completes:
     d = json.loads(c.read_text())
-    result = (d.get('objectiveResult') or {}).get('status', '?')
-    prompt = (d.get('promptStep') or {}).get('promptText', '?')
+    result = (d.get('objectiveResult') or {}).get('class', '?').rsplit('.', 1)[-1]
+    step = d.get('promptStep') or {}
+    prompt = step.get('step') or step.get('verify') or '?'
     print(f"  [{result}] {prompt[:80]}")
 ```
 
-The first non-PASSED `ObjectiveCompleteLog` is your failing step. Its `objectiveResult`
-contains the framework-side failure reason.
+Only the **last** `ObjectiveCompleteLog`, ignoring setup and teardown steps, can be the step that
+failed the run, and only when its result is `ObjectiveFailed` or `MaxCallsLimitReached`. An earlier
+failure may be a recording attempt that self-heal then recovered, so a failed line followed by a
+passing retry of the same prompt is not the failure. A session can also fail after its last step
+passed; confirm against the final `TrailblazeSessionStatusChangeLog` (`Ended.Failed`,
+`FailedWithSelfHeal`, ...). For `ObjectiveFailed`, `objectiveResult.llmExplanation` holds the
+framework-side failure reason.
 
 ### Read the LLM transcript around the failing step
 
@@ -142,11 +165,12 @@ llms = sorted(session_dir.glob('*_TrailblazeLlmRequestLog.json'),
 for l in llms:
     d = json.loads(l.read_text())
     if start_ts <= d['timestamp'] <= end_ts:
-        # `d` contains: viewHierarchy, instructions, llmResponse, actionsTaken, screenshot, model, usage
+        # `d` contains: viewHierarchy, instructions, llmMessages, llmResponse (a list), actions,
+        # screenshotFile, trailblazeLlmModel, llmRequestUsageAndCost
         print(f"--- step turn @ {d['timestamp']} ---")
         print(d['instructions'][:500])
-        print("LLM response:", d['llmResponse'][:500])
-        print("Actions:", d.get('actionsTaken'))
+        print("LLM response:", json.dumps(d['llmResponse'])[:500])
+        print("Actions:", d.get('actions'))
 ```
 
 ### Driver attribution (which driver actually ran?)
@@ -179,12 +203,12 @@ else:                   driver = 'MIXED'           # unusual, worth a closer loo
 ### Screen state at failure (heuristic)
 
 The chronologically last `*_AgentDriverLog.json` is usually the screen state at the moment
-the session bailed. Grep for landmark strings:
+the session bailed. Grep for landmark strings (swap in your own app's):
 
 | Marker substring | Hint |
 |---|---|
-| `Enter passcode` | App passcode entry screen — launch didn't fully complete sign-in. |
-| `Choose an account` | Account picker — login state mismatch. |
+| `Enter your PIN` | PIN or passcode entry screen - launch didn't fully complete sign-in. |
+| `Select an account` | Account picker - login state mismatch. |
 | `"text":"Sign In"` / `"text":"Log in"` | Unauth login screen. |
 | `permission` + `Allow` | Runtime permission dialog blocking. |
 
@@ -198,7 +222,7 @@ tools = sorted(session_dir.glob('*_TrailblazeToolLog.json'),
 for t in tools:
     d = json.loads(t.read_text())
     print(f"  {d['timestamp']}  {d.get('toolName','?'):28} "
-          f"{'OK' if d.get('success') else 'FAIL'}  {(d.get('exceptionMessage') or '')[:80]}")
+          f"{'OK' if d.get('successful') else 'FAIL'}  {(d.get('exceptionMessage') or '')[:80]}")
 ```
 
 This makes it obvious whether the agent tried 7 alternative selectors before giving up vs.
@@ -230,8 +254,8 @@ xyz.block.trailblaze.exception.TrailblazeException: Failed to run recording for 
 
 | Need | Best path |
 |---|---|
-| Skim the session, look at screenshots | `./trailblaze session view --id <id>` (HTML report) |
-| Get a JSON-shaped overview of pass/fail | `./trailblaze session info --id <id>` |
+| Skim the session, look at screenshots | `trailblaze report --id <id>` (HTML report; `trailblaze viewer` writes the standalone viewer page) |
+| Get a JSON-shaped overview of pass/fail | `trailblaze session info --id <id>` |
 | Find the failing step | Sort `ObjectiveCompleteLog.json` by timestamp (Python snippet above) |
 | Read LLM reasoning at a specific step | Open the matching `TrailblazeLlmRequestLog.json` |
 | Look at the screen at failure | Open the latest `*.webp` in the session dir |
@@ -254,5 +278,5 @@ reference accordingly.
 
 ## Related references
 
-- `references/drive-device.md` / `references/save-and-replay.md` — run a trail locally to
-  produce a fresh session log for the patterns above.
+- [`drive-device.md`](drive-device.md) / [`save-and-replay.md`](save-and-replay.md) - run a trail
+  locally to produce a fresh session log for the patterns above.

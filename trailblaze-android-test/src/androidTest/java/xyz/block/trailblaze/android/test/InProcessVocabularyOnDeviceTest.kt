@@ -41,6 +41,7 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /**
@@ -100,6 +101,23 @@ class InProcessVocabularyOnDeviceTest {
       message.contains("Optional 'tapOn'"),
       "The skip should be reported, not silent, got: $message",
     )
+  }
+
+  /**
+   * A recorded `tapOnPoint` touches the screen at its coordinates, as on every other driver. The
+   * button's own click handler running is the proof that the touch reached it.
+   */
+  @Test
+  fun aPointTapLandsOnWhatIsDrawnThere() {
+    val origin = IntArray(2)
+    var size = 0 to 0
+    scenario.onActivity { activity ->
+      val button = activity.findViewById<android.view.View>(MixedUiFixtureActivity.VIEW_BUTTON_ID)
+      button.getLocationOnScreen(origin)
+      size = button.width to button.height
+    }
+    run(TapOnPointTrailblazeTool(x = origin[0] + size.first / 2, y = origin[1] + size.second / 2))
+    run(AndroidTestAssertVisibleTool(viewText(MixedUiFixtureActivity.VIEW_STATUS_CLICKED)))
   }
 
   /** The same step without `optional` is still fatal — that is what makes the flag mean anything. */
@@ -252,6 +270,48 @@ class InProcessVocabularyOnDeviceTest {
 
     run(AndroidTestAssertVisibleTool(viewText("typed-by-selector")))
     run(AndroidTestAssertNotVisibleTool(composeText("typed-by-selector")))
+  }
+
+  /**
+   * A masked field reads as its mask while empty, so appending to what it reports offers it the
+   * mask plus the input, which it refuses. The typing still has to land, as it does on the
+   * accessibility driver, which reads the field back and types the keys when the edit did not take.
+   */
+  @Test
+  fun inputTextFillsAMaskedFieldThatRefusesTheAppendedEdit() {
+    run(InputTextTrailblazeTool(text = "03152013", selector = composeTag(MixedUiFixtureActivity.MASKED_DATE_TAG)))
+
+    run(AndroidTestAssertVisibleTool(composeText("^${MixedUiFixtureActivity.MASKED_DATE_STATUS_PREFIX}03152013$")))
+  }
+
+  /**
+   * A field that keeps only part of a pasted value still holds what it held before, and the keys
+   * land after it, as a user's would. Emptying it first lost the prefilled text: "defgh" typed
+   * into "abc" left "defgh", where a user's keys leave "abcde".
+   */
+  @Test
+  fun inputTextKeepsWhatAFieldHeldWhenItTakesOnlyPartOfTheValue() {
+    run(InputTextTrailblazeTool(text = "defgh", selector = composeTag(MixedUiFixtureActivity.CLIPPED_TAG)))
+
+    run(AndroidTestAssertVisibleTool(composeText("^${MixedUiFixtureActivity.CLIPPED_STATUS_PREFIX}abcde$")))
+  }
+
+  /**
+   * A recording names a described text field by that description as text: the platform publishes
+   * it on a node of its own, apart from the field's (empty) text.
+   */
+  @Test
+  fun inputTextFindsAFieldByTheDescriptionARecordingNamesItBy() {
+    run(
+      InputTextTrailblazeTool(
+        text = "alex",
+        selector = TrailblazeNodeSelector(
+          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = MixedUiFixtureActivity.SEARCH_DESCRIPTION),
+        ),
+      ),
+    )
+
+    run(AndroidTestAssertVisibleTool(composeText("^${MixedUiFixtureActivity.SEARCH_STATUS_PREFIX}alex$")))
   }
 
   /**

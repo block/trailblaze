@@ -27,6 +27,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.android.AndroidSessionReconnector
 import xyz.block.trailblaze.host.android.InProcessInstrumentationCleanup
 import xyz.block.trailblaze.host.android.InProcessTrailheadReset
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
@@ -62,6 +63,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -229,6 +231,30 @@ class DesktopYamlRunner(
      * Capture started under the raw id would record into a directory nothing ends.
      */
     internal fun asCreated(id: SessionId): SessionId = SessionId.sanitized(id.value)
+
+    /** Whether a run whose session was [ended] still owns a device whose current session is [current]. */
+    internal fun stillOwnsDevice(current: SessionId?, ended: SessionId): Boolean = current == null || current == ended
+
+    /**
+     * Why an in-process run cannot start on its start device, or null when it can. The host picks
+     * an in-process start device's harness, and clears that app's data, from the run's target, and
+     * the harness runs inside the app it instruments. A start device whose own `target:` is another
+     * app would be instrumented as the wrong one.
+     */
+    internal fun inProcessStartDeviceTargetRefusal(
+      driverType: TrailblazeDriverType,
+      configurationName: String?,
+      startDeviceName: String,
+      startDeviceTarget: TrailblazeHostAppTarget?,
+      runTargetApp: TrailblazeHostAppTarget,
+    ): String? {
+      if (driverType != TrailblazeDriverType.ANDROID_TEST) return null
+      if (startDeviceTarget == null || startDeviceTarget.id == runTargetApp.id) return null
+      return "Configuration '$configurationName' runs start device '$startDeviceName' on target " +
+        "'${startDeviceTarget.id}', but an in-process (ANDROID_TEST) run instruments the run's target " +
+        "'${runTargetApp.id}' on its start device. Make '${startDeviceTarget.id}' the run's target, or " +
+        "drop the start device's own `target:`."
+    }
 
     /** The session MCP reserved for a run that ends it though the caller asked not to (a browser-launched
      *  configuration). Left on the device when setup fails before it starts, it gets the retry refused. */
@@ -1444,6 +1470,9 @@ class DesktopYamlRunner(
               return@launch
             }
           }
+          // From the home screen, so an app in front at the first UI step is one this run opened.
+          runInterruptible(Dispatchers.IO) { InProcessTrailheadReset.goHome(trailblazeDeviceId) }
+          currentCoroutineContext().ensureActive()
           // Tells an in-process REINSTALL whether this start is on cleared data; it cannot see that.
           additionalInstrumentationArgs = additionalInstrumentationArgs +
             (InProcessDataClearedArg.KEY to appIdsToClear.isNotEmpty().toString())
@@ -1674,12 +1703,8 @@ class DesktopYamlRunner(
           // growing history) on the host instead of the device — useful when device memory
           // pressure is a concern.
           //
-          // Drivers that declare `hostAgentDispatchable = false` (ANDROID_TEST) never land here:
-          // this branch builds a dynamic LLM client and delegates unrecorded and self-heal steps
-          // to it, and that driver exists to be a merge-blocking gate whose on-device runner fails
-          // an unrecorded step BY NAME rather than improvising. They fall through to the
-          // deterministic on-device envelope branch below, which is the only way they should ever
-          // execute.
+          // ANDROID_TEST lands here too, but never improvises: the host gives it a runner that
+          // fails an unrecorded or self-heal step by name, as its on-device runner does.
           //
           // This is the only branch wired for multi-device companions — see the gate above, which
           // reads the same resolved path. A multi-device session launched on an iOS simulator
@@ -2128,6 +2153,17 @@ class DesktopYamlRunner(
   )
 
   /**
+   * An Android device [runHostAgentWithOnDeviceRpc] has connected: the connect's status, the RPC
+   * client the session drives it through, and the reconnector that re-runs that same connect on
+   * that same client after the device reboots mid-trail.
+   */
+  private data class ConnectedAndroidDevice(
+    val status: DeviceConnectionStatus,
+    val rpcClient: OnDeviceRpcClient,
+    val sessionReconnector: AndroidSessionReconnector,
+  )
+
+  /**
    * Runs the agent on the host, dispatching each tool to its device: an Android device's over its
    * on-device RPC driver, an iOS simulator's host-side. Connects the launch device and, for a
    * multi-device configuration, every companion first.
@@ -2181,7 +2217,8 @@ class DesktopYamlRunner(
         driverType: TrailblazeDriverType,
         instrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
         deviceRunTarget: TrailblazeHostAppTarget,
-      ): Pair<DeviceConnectionStatus, OnDeviceRpcClient> {
+        instrumentationArgs: Map<String, String> = additionalInstrumentationArgs,
+      ): ConnectedAndroidDevice {
         val rpcClient = OnDeviceRpcClient(
           trailblazeDeviceId = deviceId,
           sendProgressMessage = onProgressMessage,
@@ -2192,23 +2229,37 @@ class DesktopYamlRunner(
           wireTransportMode = AndroidWireTransport.modeFor(driverType),
         )
         val needsAccessibility = AndroidAccessibilityServiceDrivers.includes(driverType)
-        val (status, _) = try {
-          connectAndEnsureReady(
-            onDeviceRpc = rpcClient,
-            trailblazeDeviceId = deviceId,
-            trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
-            additionalInstrumentationArgs = additionalInstrumentationArgs,
-            onProgressMessage = onProgressMessage,
-            enableAccessibility = needsAccessibility,
-            requireAndroidAccessibilityService = needsAccessibility,
-            runTargetApp = deviceRunTarget,
-          )
+        // One connect, used for the initial warm-up and again verbatim after a mid-trail reboot:
+        // the rebooted device has no runner process (or an accessibility-restarted one with no
+        // instrumentation behind it), which the reuse probe already classifies as "start fresh", so
+        // the same call relaunches it with the same ports, args and accessibility setup.
+        suspend fun connect(): DeviceConnectionStatus = connectAndEnsureReady(
+          onDeviceRpc = rpcClient,
+          trailblazeDeviceId = deviceId,
+          trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
+          additionalInstrumentationArgs = instrumentationArgs,
+          onProgressMessage = onProgressMessage,
+          enableAccessibility = needsAccessibility,
+          requireAndroidAccessibilityService = needsAccessibility,
+          runTargetApp = deviceRunTarget,
+        ).status
+        val status = try {
+          connect()
         } catch (t: Throwable) {
           // On no cleanup list until this returns, so a failed or cancelled warm-up closes it here.
           runCatching { rpcClient.close() }
           throw t
         }
-        return status to rpcClient
+        return ConnectedAndroidDevice(
+          status = status,
+          rpcClient = rpcClient,
+          sessionReconnector = AndroidSessionReconnector(
+            onProgressMessage = onProgressMessage,
+            reconnectDevice = { connect() },
+            // The recording's device streams (logcat) ended with the old boot; resume them.
+            onReconnected = { sid -> trailblazeDeviceManager.sessionCaptureCoordinator.onDeviceReconnected(sid, deviceId) },
+          ),
+        )
       }
 
       suspend fun connectIos(
@@ -2234,6 +2285,34 @@ class DesktopYamlRunner(
       // Set once the session is running, after which its own end stops the recording.
       var sessionStarted = false
       try {
+        // Multi-device: a unified trail may declare a `config.devices:` configuration entry (an
+        // entry with an inner `devices:` map of named devices). Resolve it to concrete devices —
+        // the launch device IS the first declared name — and connect every remaining named device.
+        val resolvedConfiguration = resolveMultiDeviceConfiguration(
+          runYamlRequest = runYamlRequest,
+          primaryDeviceId = launchDeviceId,
+        )
+        // Each device runs its own `target:` when the configuration declares one, else the session
+        // target. Resolved BEFORE any device connects so an unknown target id fails the run
+        // before it boots devices for a session that could never have been correct.
+        val memberTargets = resolvedConfiguration?.let { resolved ->
+          MultiDeviceConfigurationResolver.resolveMemberTargets(
+            configurationName = resolved.configurationName,
+            memberTargetIds = resolved.memberTargetIds,
+            sessionTarget = targetTestApp,
+            findTargetById = findTargetById,
+          )
+        }
+        val launchTarget = resolvedConfiguration?.let { memberTargets?.get(it.startDeviceName) } ?: targetTestApp
+        val launchName = resolvedConfiguration?.startDeviceName ?: launchDeviceId.instanceId
+        inProcessStartDeviceTargetRefusal(
+          driverType = launchDriver,
+          configurationName = resolvedConfiguration?.configurationName,
+          startDeviceName = launchName,
+          startDeviceTarget = launchTarget,
+          runTargetApp = runTargetApp,
+        )?.let { throw TrailblazeException(it) }
+
         val androidLaunch = trailblazeOnDeviceInstrumentationTarget?.let { instrumentationTarget ->
           val (connected, startedEarly) = connectWhileRecordingStarts(
             pinnedSessionId = pinnedSessionId,
@@ -2248,32 +2327,31 @@ class DesktopYamlRunner(
           connected
         }
 
-        // Multi-device: a unified trail may declare a `config.devices:` configuration entry (an
-        // entry with an inner `devices:` map of named devices). Resolve it to concrete devices —
-        // the launch device IS the first declared name — and connect every remaining named device.
-        val resolvedConfiguration = resolveMultiDeviceConfiguration(
-          runYamlRequest = runYamlRequest,
-          primaryDeviceId = launchDeviceId,
-        )
-        // Each device runs its own `target:` when the configuration declares one, else the session
-        // target. Resolved BEFORE any companion connects so an unknown target id fails the run
-        // before it boots devices for a session that could never have been correct.
-        val memberTargets = resolvedConfiguration?.let { resolved ->
-          MultiDeviceConfigurationResolver.resolveMemberTargets(
-            configurationName = resolved.configurationName,
-            memberTargetIds = resolved.memberTargetIds,
-            sessionTarget = targetTestApp,
-            findTargetById = findTargetById,
-          )
-        }
-        val launchTarget = resolvedConfiguration?.let { memberTargets?.get(it.startDeviceName) } ?: targetTestApp
-        val launchName = resolvedConfiguration?.startDeviceName ?: launchDeviceId.instanceId
         val launchDevice: TrailblazeHostYamlRunner.DeviceConnection = when {
           androidLaunch != null -> TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(
             trailblazeDeviceId = launchDeviceId,
-            rpcClient = androidLaunch.second,
+            rpcClient = androidLaunch.rpcClient,
             driverType = launchDriver,
             targetTestApp = launchTarget,
+            // The in-process runner lives inside the app, so it ends whenever the app's process
+            // does. Starting it again is the same connect that started it.
+            restartRunner = if (launchDriver == TrailblazeDriverType.ANDROID_TEST) {
+              {
+                connectAndEnsureReady(
+                  onDeviceRpc = androidLaunch.rpcClient,
+                  trailblazeDeviceId = launchDeviceId,
+                  trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget!!,
+                  additionalInstrumentationArgs = additionalInstrumentationArgs,
+                  onProgressMessage = onProgressMessage,
+                  enableAccessibility = false,
+                  requireAndroidAccessibilityService = false,
+                  runTargetApp = runTargetApp,
+                )
+              }
+            } else {
+              null
+            },
+            sessionReconnector = androidLaunch.sessionReconnector,
           )
           launchDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB ->
             TrailblazeHostYamlRunner.DeviceConnection.WebBrowser(
@@ -2292,7 +2370,7 @@ class DesktopYamlRunner(
             targetTestApp = launchTarget,
           )
         }
-        val launchStatus = androidLaunch?.first
+        val launchStatus = androidLaunch?.status
           ?: DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(trailblazeDeviceId = launchDeviceId)
 
         val multiDeviceSession = resolvedConfiguration?.let { resolved ->
@@ -2341,30 +2419,62 @@ class DesktopYamlRunner(
                   targetTestApp = companionTarget,
                 )
                 else -> {
-                  val (_, companionRpc) = connectAndroid(
+                  // This device's own target decides which instrumentation runner warms up on it —
+                  // a companion running a different app than the launch device needs that app's
+                  // runner, not the launch device's.
+                  val companionInstrumentationTarget = resolveCompanionInstrumentationTarget(
+                    configurationName = resolved.configurationName,
+                    companionName = name,
+                    companionTarget = companionTarget,
+                    driverType = companionDriver,
+                    runTargetApp = runTargetApp,
+                  )
+                  // This companion's own target, for the same reason its instrumentation target is
+                  // resolved from it: the harnesses to clear are the ones belonging to the app
+                  // THIS device runs, not the launch device's.
+                  val companionRunTarget = companionTarget ?: runTargetApp
+                  // Only the launch device's data is cleared before an in-process trailhead, so a
+                  // companion never inherits its "cleared" answer: an in-process companion is told
+                  // its data was not cleared, and a REINSTALL launch on it refuses instead of
+                  // running on the previous run's data.
+                  val companionArgs = (additionalInstrumentationArgs - InProcessDataClearedArg.KEY) +
+                    if (companionDriver == TrailblazeDriverType.ANDROID_TEST) {
+                      mapOf(InProcessDataClearedArg.KEY to false.toString())
+                    } else {
+                      emptyMap()
+                    }
+                  val companion = connectAndroid(
                     deviceId = companionDeviceId,
                     driverType = companionDriver,
-                    // This device's own target decides which instrumentation runner warms up on it —
-                    // a companion running a different app than the launch device needs that app's
-                    // runner, not the launch device's.
-                    instrumentationTarget = resolveCompanionInstrumentationTarget(
-                      configurationName = resolved.configurationName,
-                      companionName = name,
-                      companionTarget = companionTarget,
-                      driverType = companionDriver,
-                      runTargetApp = runTargetApp,
-                    ),
-                    // This companion's own target, for the same reason its instrumentation target is
-                    // resolved from it: the harnesses to clear are the ones belonging to the app
-                    // THIS device runs, not the launch device's.
-                    deviceRunTarget = companionTarget ?: runTargetApp,
+                    instrumentationTarget = companionInstrumentationTarget,
+                    deviceRunTarget = companionRunTarget,
+                    instrumentationArgs = companionArgs,
                   )
-                  companionRpcClients += companionRpc
+                  companionRpcClients += companion.rpcClient
                   TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc(
                     trailblazeDeviceId = companionDeviceId,
-                    rpcClient = companionRpc,
+                    rpcClient = companion.rpcClient,
                     driverType = companionDriver,
                     targetTestApp = companionTarget,
+                    // An in-process companion's runner ends with its app's process too, as the
+                    // launch device's does, and starts again the same way.
+                    restartRunner = if (companionDriver == TrailblazeDriverType.ANDROID_TEST) {
+                      {
+                        connectAndEnsureReady(
+                          onDeviceRpc = companion.rpcClient,
+                          trailblazeDeviceId = companionDeviceId,
+                          trailblazeOnDeviceInstrumentationTarget = companionInstrumentationTarget,
+                          additionalInstrumentationArgs = companionArgs,
+                          onProgressMessage = onProgressMessage,
+                          enableAccessibility = false,
+                          requireAndroidAccessibilityService = false,
+                          runTargetApp = companionRunTarget,
+                        )
+                      }
+                    } else {
+                      null
+                    },
+                    sessionReconnector = companion.sessionReconnector,
                   )
                 }
               }
@@ -2423,15 +2533,22 @@ class DesktopYamlRunner(
               noLogging = noLogging,
             )
           } finally {
+            val androidDevices = (listOf(launchDevice) + multiDeviceSession?.companions?.values.orEmpty())
+              .filterIsInstance<TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc>()
             armIfWedged(
               hostAgentSessionId,
               // Android devices only — arming relaunches an on-device server, which a browser or
               // simulator doesn't have.
-              (listOf(launchDevice) + multiDeviceSession?.companions?.values.orEmpty())
-                .filterIsInstance<TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc>()
-                .map { it.trailblazeDeviceId },
+              androidDevices.map { it.trailblazeDeviceId },
               onProgressMessage,
             )
+            val endedSession = hostAgentSessionId
+            if (runYamlRequest.config.sendSessionEndLog && endedSession != null) {
+              endInProcessDeviceSessions(
+                endedSession,
+                androidDevices.filter { it.driverType == TrailblazeDriverType.ANDROID_TEST },
+              )
+            }
           }
         }
       } finally {
@@ -2496,6 +2613,38 @@ class DesktopYamlRunner(
     devices.forEach { device ->
       runCatching { (device as? MaestroConnectedDevice)?.getMaestroDriver()?.close() }.onFailure { t ->
         Console.log("[DesktopYamlRunner] Failed to release an iOS simulator: ${t.message}")
+      }
+    }
+  }
+
+  /**
+   * Ends this run's session on each in-process device, so what the device keeps for it — loaded
+   * scripted-tool bundles, a persona lease — is released now rather than when its instrumentation
+   * next restarts. Every host-driven step leaves the device session open for the next step, so
+   * nothing else tells the device the session is over. Best effort and bounded by the drain
+   * request's own timeout; runs even when the run was cancelled.
+   *
+   * The drain ends every session the device holds, so it is sent only while [sessionId] still owns
+   * the device: a run that already took the device over keeps what it loaded.
+   */
+  private suspend fun endInProcessDeviceSessions(
+    sessionId: SessionId,
+    devices: List<TrailblazeHostYamlRunner.DeviceConnection.AndroidRpc>,
+  ) {
+    withContext(NonCancellable) {
+      devices.forEach { device ->
+        if (!stillOwnsDevice(trailblazeDeviceManager.getCurrentSessionIdForDevice(device.trailblazeDeviceId), sessionId)) {
+          Console.log(
+            "[DesktopYamlRunner] Not ending the in-process session on ${device.trailblazeDeviceId.instanceId}: " +
+              "another run holds the device now.",
+          )
+          return@forEach
+        }
+        val result = runCatching { device.rpcClient.rpcCall(DrainSessionRequest(reason = "host_session_end")) }
+        val failure = result.exceptionOrNull()?.message ?: (result.getOrNull() as? RpcResult.Failure)?.message
+        if (failure != null) {
+          Console.log("[DesktopYamlRunner] Ending the in-process session on ${device.trailblazeDeviceId.instanceId} failed: $failure")
+        }
       }
     }
   }

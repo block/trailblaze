@@ -175,9 +175,10 @@ truncated artifact is still written with a warning.
                                every survey the workspace carries runs; or name
                                them, comma-separated (--surveys=journeys,jobs).
                                Each session's findings and labels are stored in
-                               its surveys.json too. Surveys never run unless
-                               asked. Put a session id before this flag, or it
-                               is read as a survey name.
+                               its surveys.json too. Without this flag only the
+                               workspace's warning surveys run, so the report
+                               shows each run's warnings. Put a session id
+                               before this flag, or it is read as a survey name.
   -v, --verbose              Show the generator's own progress logs — workspace
                                config loading, tool-class discovery,
                                per-session clock normalisation, and step

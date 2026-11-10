@@ -1313,6 +1313,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     if (!noReport && allNewSessionIds.isNotEmpty()) {
       try {
         val logsRepo = app.deviceManager.logsRepo
+        // Before the HTML, as `trailblaze report` does, so this report shows the runs' warnings too. No
+        // streams pass runs here, so a stream that fails is this pass's to report.
+        writeRunWarnings(allNewSessionIds.map { File(logsRepo.logsDir, it.value) }, streamsReported = false)
         val reportGenerator = app.createCliReportGenerator()
         reportGenerator.printSummary(logsRepo, allNewSessionIds)
         reportGenerator.generateHtmlReports(
@@ -2710,7 +2713,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       unified,
       deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
     )
-    UnifiedRecordingWriter.renderStandalone(recordedItems, classifier)
+    UnifiedRecordingWriter.renderStandalone(recordedItems, classifier, overwriting = targetFile)
       .onSuccess {
         UnifiedRecordingWriter.writeFileAtomically(targetFile, it)
         Console.info("Recording saved to: ${targetFile.absolutePath}")
@@ -2963,7 +2966,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    *    authoring for the device, or a hybrid trail whose broken step had its recording removed.
    *
    * Everything else — in particular a clean replay of an existing recording, with or without
-   * `--self-heal` enabled — leaves the file byte-identical.
+   * `--self-heal` enabled — leaves the file byte-identical. So does a replay of a recording that
+   * still has a raw `mobile_maestro` step, whatever healed ([replaysRawMaestro]).
    *
    * "Nothing to replay" follows the executor's own resolution, so it never adds a copy of a leg the
    * run already used:
@@ -2985,9 +2989,38 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     selfHealed: Boolean,
   ): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
+    if (replaysRawMaestro(trailFile, deviceClassifiers, selectedDeviceConfiguration)) return false
     if (selfHealed) return true
     if (useRecordedSteps == false) return true
     return !deviceAlreadyRecorded(trailFile, deviceClassifiers, selectedDeviceConfiguration)
+  }
+
+  /**
+   * Whether this run replayed a raw `mobile_maestro` step from the recording it would overwrite.
+   * Such a step replays but is never recorded, so saving the run back would drop it from the trail
+   * and the next replay would skip that action.
+   *
+   * `--no-use-recorded-steps` has the AI re-drive every `trail:` step, recording typed tools in
+   * place of a raw one, so only the trailhead still counts: it always replays its recording. A
+   * per-device sibling is checked whole either way, since its raw step may sit in the trailhead.
+   */
+  private fun replaysRawMaestro(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ): Boolean = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
+    RecordingSaveTarget.CLASSIFIER_SIBLING ->
+      computeRecordingTargetFile(trailFile, deviceClassifiers)?.takeIf { it.isFile }
+        ?.let { sibling -> runCatching { RAW_MAESTRO_STEP.containsMatchIn(sibling.readText()) }.getOrDefault(false) }
+        ?: false
+    RecordingSaveTarget.UNIFIED_MERGE ->
+      RAW_MAESTRO_TOOL_NAME in
+        UnifiedRecordingWriter.replayedToolNamesForDevice(
+          trailFile,
+          deviceClassifiers,
+          selectedDeviceConfiguration,
+          trailheadOnly = useRecordedSteps == false,
+        )
   }
 
   /** The "this device already has a recording to replay" half of [shouldSaveRecording]. */
@@ -3031,6 +3064,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       RecordingSaveTarget.CLASSIFIER_SIBLING -> computeRecordingTargetFile(trailFile, deviceClassifiers)
       RecordingSaveTarget.UNIFIED_MERGE -> UnifiedRecordingWriter.unifiedRecordingTarget(trailFile)
     } ?: return
+    if (replaysRawMaestro(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
+      Console.info(rawMaestroRecordingMessage(unchangedFile, reRecordedSteps = useRecordedSteps == false))
+      return
+    }
     Console.info(skippedRecordingMessage(unchangedFile))
   }
 
@@ -3474,6 +3511,20 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       "Trail file unchanged: this run replayed its recording and no step needed self-healing " +
         "(${trailFile.absolutePath}). To re-record every step, run with --no-use-recorded-steps."
 
+    internal fun rawMaestroRecordingMessage(trailFile: File, reRecordedSteps: Boolean): String =
+      "Trail file unchanged: its recording for this device still has a raw $RAW_MAESTRO_TOOL_NAME " +
+        "step, which saving would drop (${trailFile.absolutePath}). " +
+        if (reRecordedSteps) {
+          "The trailhead always replays its recording, so replace that step with typed tools."
+        } else {
+          "Replace it with typed tools, or run with --no-use-recorded-steps to re-record every step."
+        }
+
+    private const val RAW_MAESTRO_TOOL_NAME = UnifiedRecordingWriter.RAW_MAESTRO_TOOL_NAME
+
+    /** A `mobile_maestro:` tool key in a recording's YAML (block or list-item form). */
+    private val RAW_MAESTRO_STEP = Regex("""(?m)^\s*(?:-\s+)?["']?mobile_maestro["']?\s*:""")
+
     internal fun daemonVersionLine(status: CliStatusResponse?, port: Int): String =
       "Daemon version: ${status?.version ?: if (status == null) "unknown (status unavailable)" else "unknown (not reported by daemon)"} (port $port)"
 
@@ -3590,7 +3641,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         "run this trail without comparing its snapshots to any baseline"
     }
 
-    /** Refuses delegating `loop --reuse-trailhead` to a daemon that would discard its reuse answer. */
+    /** Refuses delegating a `loop` to a daemon that would discard its trailhead reuse answer. */
     internal fun trailheadReuseRejection(
       requestsTrailheadReuse: Boolean,
       daemonCapabilities: () -> Set<String>?,
@@ -3598,8 +3649,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       if (!requestsTrailheadReuse) return null
       val capabilities = daemonCapabilities() ?: return null
       if (CliDaemonCapabilities.TRAILHEAD_REUSE in capabilities) return null
-      return "the running daemon predates --reuse-trailhead, so it would ignore it: passes would " +
-        "never reuse a setup, or reuse one from before a failed pass"
+      return "the running daemon predates trailhead reuse, so it would ignore whether loop asked for " +
+        "it: passes would reuse a setup, or not, by the daemon's own setting"
     }
 
     /** Refuses silent delegation to a daemon that would discard `--device-classifier`. */

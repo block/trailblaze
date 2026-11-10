@@ -21,10 +21,11 @@ import { basename, join, sep } from "path";
 import { gzipSync } from "zlib";
 import {
   ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES,
-  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs, DERIVED_STREAMS_FILE, DERIVED_STREAMS_MAX_BYTES, applyDerivedLanes, rootNetworkStreamFiles,
+  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs, DERIVED_STREAMS_FILE, DERIVED_STREAMS_MAX_BYTES, applyDerivedLanes, derivedStreamStatus, rootNetworkStreamFiles,
   isSafeSessionRelativePath, resolveFormatterModule,
 } from "./run-report-events";
 import { MAX_TRACE_BYTES, parseTraceFileText } from "./run-report-trace-spans";
+import { DERIVED_MANIFEST_PATH, MAX_DERIVED_MANIFEST_BYTES, MAX_SURVEYS_BYTES, SURVEYS_FILE, mergeRunWarnings, runWarningsFromDerivedStreams, runWarningsFromSurveys } from "./run-report-warnings";
 import { DEVICE_CLOCK_FILE_NAME, DEVICE_CLOCK_MAX_BYTES, type DeviceClockSync, parseDeviceClockSync } from "./device-clock-sync";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
@@ -433,6 +434,31 @@ export function readTraceFile(sessionDir: string): TracerSpan[] | null {
   }
 }
 
+/**
+ * The run's warnings: what its warning surveys found (`surveys.json`), then each derived stream that
+ * failed (`events/derived.json`); see run-report-warnings.ts. An absent, oversized or unparseable file
+ * adds none. Exported for tests.
+ */
+export function readRunWarnings(sessionDir: string): RunWarning[] | null {
+  return mergeRunWarnings(
+    readCapped(join(sessionDir, SURVEYS_FILE), MAX_SURVEYS_BYTES, runWarningsFromSurveys),
+    readCapped(join(sessionDir, DERIVED_MANIFEST_PATH), MAX_DERIVED_MANIFEST_BYTES, runWarningsFromDerivedStreams),
+  );
+}
+
+function readCapped(path: string, maxBytes: number, parse: (text: string) => RunWarning[] | null): RunWarning[] | null {
+  try {
+    if (!existsSync(path)) return null;
+    if (statSync(path).size > maxBytes) {
+      console.error(`warnings: skipping ${path} (over the ${maxBytes}-byte cap)`);
+      return null;
+    }
+    return parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 // Generic session events (`<sessionDir>/events/<name>.ndjson`) — the producer-agnostic
 // artifact `xyz.block.trailblaze.events.SessionEvents` writes: any producer drops NDJSON streams
 // here and they surface without report-side per-producer code. The line-level decode, the optional
@@ -473,6 +499,15 @@ export function readDeviceClockSync(sessionDir: string): DeviceClockSync | null 
   }
 }
 
+/** The session's `events/derived.json`, or null when it is absent, too big, or unreadable. */
+function readDerivedManifest(sessionDir: string): string | null {
+  try {
+    const path = join(sessionDir, "events", DERIVED_STREAMS_FILE);
+    if (existsSync(path) && statSync(path).isFile() && statSync(path).size <= DERIVED_STREAMS_MAX_BYTES) return readFileSync(path, "utf8");
+  } catch { /* none */ }
+  return null;
+}
+
 /** Exported for tests. */
 export function readEvents(
   sessionDir: string,
@@ -482,12 +517,8 @@ export function readEvents(
   try {
     const dir = join(sessionDir, "events");
     const clockSync = readDeviceClockSync(sessionDir);
-    let derived: string | null = null;
-    try {
-      // Lane titles only: a manifest that cannot be read costs them, never the captured streams.
-      const derivedPath = join(dir, DERIVED_STREAMS_FILE);
-      if (existsSync(derivedPath) && statSync(derivedPath).isFile() && statSync(derivedPath).size <= DERIVED_STREAMS_MAX_BYTES) derived = readFileSync(derivedPath, "utf8");
-    } catch { /* no derived lanes */ }
+    // Lane titles only: a manifest that cannot be read costs them, never the captured streams.
+    const derived = readDerivedManifest(sessionDir);
     const streams: EventStream[] = [];
     let totalChars = 0;
     // False once the total budget is spent, so later streams are skipped too.
@@ -965,8 +996,9 @@ async function main(): Promise<void> {
       lifted,
       trace.filter((t) => t.viewHierarchy != null).length,
     );
+    const warnings = readRunWarnings(s.sessionDir);
     return {
-      meta: s.meta || {},
+      meta: warnings ? { ...(s.meta || {}), warnings } : s.meta || {},
       trace,
       llmLogs,
       shots,
@@ -983,6 +1015,7 @@ async function main(): Promise<void> {
       spansGz,
       visibleStrings,
       attachments,
+      derivedStreams: derivedStreamStatus(readDerivedManifest(s.sessionDir)),
       llmMessages,
       llmMessagesGz,
       hierarchies,

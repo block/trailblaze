@@ -56,6 +56,14 @@ data class InputTextTrailblazeTool(
    */
   @param:LLMDescription("Empty the field before typing, replacing what it holds. Default false.")
   val clearFirst: Boolean = false,
+  /**
+   * Whether the [selector] tap dismisses a visible soft keyboard first, as
+   * [TapOnByElementSelector.hideKeyboardBefore] describes. Default `true`. Set `false` to move
+   * from one field to the next with the keyboard up, on a form that scrolls its focused field back
+   * into view when the keyboard closes. Without a [selector] there is no tap, and this does nothing.
+   */
+  @param:LLMDescription("With a selector, close the soft keyboard before tapping the field. Default true.")
+  val hideKeyboardBefore: Boolean = true,
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
@@ -63,8 +71,11 @@ data class InputTextTrailblazeTool(
     // before execute() runs, so `text` arrives resolved here.
     if (selector != null) {
       // Tap first, as the tapOnElementBySelector step this replaces did.
-      val tapResult = TapOnByElementSelector(reason = reasoning, nodeSelector = selector)
-        .execute(toolExecutionContext)
+      val tapResult = TapOnByElementSelector(
+        reason = reasoning,
+        nodeSelector = selector,
+        hideKeyboardBefore = hideKeyboardBefore,
+      ).execute(toolExecutionContext)
       if (!tapResult.isSuccess()) return tapResult
       // A driver that can focus the field directly types there; the rest type into what the tap focused.
       toolExecutionContext.maestroTrailblazeAgent

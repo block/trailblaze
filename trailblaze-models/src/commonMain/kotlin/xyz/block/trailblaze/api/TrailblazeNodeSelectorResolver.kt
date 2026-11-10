@@ -490,7 +490,8 @@ object TrailblazeNodeSelectorResolver {
    *   (`hasClickAction`/`hasScrollAction`/`hasSetTextAction`) — the same sources Compose's
    *   own accessibility delegate projects those a11y booleans from.
    * - Checkability maps to [DriverNodeDetail.Compose.toggleableState]: non-null means
-   *   checkable, and `"On"` means checked.
+   *   checkable, and `"On"` means checked. A selectable node that is not a tab is checkable too,
+   *   checked when selected, as the delegate publishes it.
    * - The a11y tree is MERGED and this tree is UNMERGED, so a text selector that matches a
    *   merged container on the a11y tree matches the descendant Text node here. That is the
    *   intended outcome: interactions already ascend from a matched node to its action
@@ -503,6 +504,10 @@ object TrailblazeNodeSelectorResolver {
    *
    * - `hintTextRegex` matches [DriverNodeDetail.Compose.accessibilityHintText], the text field's
    *   label or placeholder, and declines where the collector projected none.
+   *
+   * - `textRegex` also matches a text field's content description. The delegate publishes it on
+   *   a child node of its own rather than on the field, so a recording names the field by it as
+   *   text even while the field's own text is empty.
    *
    * - `stateDescriptionRegex` matches [DriverNodeDetail.Compose.accessibilityStateDescription], the
    *   delegate's "Selected"/"Not selected" or "On"/"Off", falling back to the app's own
@@ -546,8 +551,12 @@ object TrailblazeNodeSelectorResolver {
     match.hintTextRegex?.let { pattern ->
       if (!requirePattern(pattern, detail.accessibilityHintText ?: return false)) return false
     }
-    // Compose resolveText: editableText > text > contentDescription.
-    if (!requirePattern(match.textRegex, detail.resolveText())) return false
+    // Compose resolveText: editableText > text > contentDescription. A text field's description
+    // never loses to its (often empty) text there: the delegate publishes it on a child node of its own.
+    match.textRegex?.let { pattern ->
+      val fieldDescription = detail.contentDescription.takeIf { detail.editableText != null }
+      if (!requirePattern(pattern, detail.resolveText()) && !requirePattern(pattern, fieldDescription)) return false
+    }
     if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
     // The delegate's text where the collector projected it; a tree without the projection still
     // answers with the app's own description, as it did before the projection existed.
@@ -557,8 +566,15 @@ object TrailblazeNodeSelectorResolver {
     if (!requirePattern(match.paneTitleRegex, detail.paneTitle)) return false
     if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
     if (!requireEqual(match.isClickable, detail.hasClickAction)) return false
-    if (!requireEqual(match.isCheckable, detail.toggleableState != null)) return false
-    match.isChecked?.let { if ((detail.toggleableState == "On") != it) return false }
+    // The delegate also publishes a selectable node that is not a tab as checkable, checked when
+    // selected (a bottom-navigation item). A tree captured before `isSelectable` was recorded falls
+    // back to the projected state description, which a custom description hides.
+    val selectable = detail.role != "Tab" &&
+      (detail.isSelectable ?: (detail.isSelected || detail.accessibilityStateDescription == "Not selected"))
+    val checkable = detail.toggleableState != null || selectable
+    val checked = if (detail.toggleableState != null) detail.toggleableState == "On" else selectable && detail.isSelected
+    if (!requireEqual(match.isCheckable, checkable)) return false
+    match.isChecked?.let { if (checked != it) return false }
     if (!requireEqual(match.isSelected, detail.isSelected)) return false
     if (!requireEqual(match.isFocused, detail.isFocused)) return false
     if (!requireEqual(match.isEditable, detail.hasSetTextAction)) return false

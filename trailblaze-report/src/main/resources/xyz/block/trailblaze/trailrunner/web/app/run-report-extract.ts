@@ -1906,6 +1906,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       videoClip: s.videoClip || null,
       videoClips: s.videoClips && s.videoClips.length ? s.videoClips : null,
       attachments: s.attachments || null,
+      derivedStreams: s.derivedStreams && s.derivedStreams.length ? s.derivedStreams : null,
     };
   });
 }

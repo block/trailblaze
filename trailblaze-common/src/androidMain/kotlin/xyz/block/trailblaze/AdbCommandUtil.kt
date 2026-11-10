@@ -10,6 +10,7 @@ import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
+import xyz.block.trailblaze.device.AndroidAppDataClearHook
 import xyz.block.trailblaze.device.AndroidForegroundParser
 import xyz.block.trailblaze.device.AndroidShellBounds
 import xyz.block.trailblaze.device.BoundedReadTimeoutException
@@ -243,7 +244,7 @@ object AdbCommandUtil {
     validateClearAppDataAppId(targetAppPackageName)
     // `pm clear`'s stdout token is the only outcome signal this transport has — UiAutomation's
     // executeShellCommand carries no exit status. See `verifyPmClearSucceeded`.
-    return verifyPmClearSucceeded(
+    val outcome = verifyPmClearSucceeded(
       appId = targetAppPackageName,
       output = execShellCommand("pm clear $targetAppPackageName"),
       // Through the shell, NOT [listInstalledApps]: that reads `PackageManager` from our own
@@ -253,6 +254,8 @@ object AdbCommandUtil {
       // filtering does not apply to.
       pmListPackagesOutput = { execShellCommand(PM_LIST_PACKAGES_ARGV.joinToString(" ")) },
     )
+    if (outcome == PmClearOutcome.CLEARED) AndroidAppDataClearHook.notifyCleared(targetAppPackageName)
+    return outcome
   }
 
   fun listInstalledApps(): List<String> = withInstrumentation {

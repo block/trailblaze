@@ -115,7 +115,7 @@ class AndroidLogcatCapture(
    * line it wrote so the session is recorded in full; a line logged in that same millisecond can
    * appear twice. A stop that lands meanwhile wins, and the reopened stream is closed.
    */
-  private fun reopenIfEnded(file: File, deviceId: String, force: Boolean = false) {
+  private fun reopenIfEnded(file: File, deviceId: String, force: Boolean = false, during: String = "while capture started") {
     val ended = synchronized(handleLock) {
       if (stopped || (!force && streamHandle?.isRunning == true)) return
       streamHandle.also { streamHandle = null }
@@ -126,16 +126,62 @@ class AndroidLogcatCapture(
       force -> "did not deliver the session-start marker"
       else -> "ended"
     }
-    Console.log("[logcat] stream on $deviceId $why while capture started; reopening it")
+    Console.log("[logcat] stream on $deviceId $why $during; reopening it")
+    reopen(file, deviceId, since = lastEpochMs(file) ?: logcatSinceMs)
+  }
+
+  /**
+   * After a reboot the stream died with the old boot. Resumed over the new one from the start of
+   * its buffer, not from the last line written: logd starts empty at boot, so there is nothing
+   * stale to drop, and the lines a device logs before it syncs its clock would fall before a `-T`
+   * cut.
+   *
+   * A session can also reconnect on the same boot (the runner was restarted or its data cleared).
+   * logd still holds everything already captured, so replaying it would duplicate the file;
+   * instead the stream is left alone if it is still running, or reopened from its last line.
+   */
+  override fun onDeviceReconnected() {
+    val file = outputFile ?: return
+    val id = deviceId ?: return
+    val bootNow = readBootId(id)
+    if (!bootChanged(bootIdAtStart, bootNow)) {
+      reopenIfEnded(file, id, during = "across a same-boot reconnect")
+      return
+    }
+    val ended = synchronized(handleLock) {
+      if (stopped) return
+      streamHandle.also { streamHandle = null }
+    }
+    ended?.let { runCatching { it.close() } }
+    Console.log("[logcat] $id rebooted; resuming the stream from the new boot")
+    // Adopt the new boot only once its stream is open: if the reopen fails, the next reconnect
+    // must still see a changed boot and replay the buffer rather than resume from the old boot's
+    // last timestamp, which would drop the lines logged before the clock synced.
+    if (reopen(file, id, since = null)) bootIdAtStart = bootNow
+  }
+
+  /** The kernel's per-boot id, or null when the device did not answer in time. */
+  private fun readBootId(deviceId: String): String? = runCatching {
+    AndroidHostAdbUtils.execAdbShellCommandOnOwnConnection(
+      deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+      args = listOf("cat", "/proc/sys/kernel/random/boot_id"),
+      timeoutMs = BOOT_ID_TIMEOUT_MS,
+      quiet = true,
+    )
+  }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+
+  /** Whether a new stream is open and kept; false when opening failed or the capture stopped. */
+  private fun reopen(file: File, deviceId: String, since: Long?): Boolean {
     val reopened = try {
       if (endsMidLine(file)) file.appendText("\n")
-      openStream(file, deviceId, since = lastEpochMs(file) ?: logcatSinceMs, append = true)
+      openStream(file, deviceId, since = since, append = true)
     } catch (e: Exception) {
       Console.log("Failed to reopen logcat capture: ${e.message}")
-      return
+      return false
     }
     val kept = synchronized(handleLock) { (!stopped).also { if (it) streamHandle = reopened } }
     if (!kept) runCatching { reopened.close() }
+    return kept
   }
 
   private fun openStream(file: File, deviceId: String, since: Long?, append: Boolean) =
@@ -159,6 +205,10 @@ class AndroidLogcatCapture(
   private var logcatSinceMs: Long? = null
   private var deviceId: String? = null
 
+  /** The boot the stream is recording, so [onDeviceReconnected] can tell a reboot from a runner restart. */
+  @Volatile
+  private var bootIdAtStart: String? = null
+
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     this.deviceId = deviceId
     appProcessName = appId
@@ -166,6 +216,7 @@ class AndroidLogcatCapture(
     outputFile = File(sessionDir, filename)
     lengthAtMark = 0
     sessionStartMarker = null
+    bootIdAtStart = readBootId(deviceId)
     // `-T` is a device-clock time; a host-clock fallback could cut the session's own lines.
     val deviceNowMs = DeviceClock.deviceNowMs(deviceId)
     startTimestampMs = deviceNowMs ?: System.currentTimeMillis()
@@ -214,6 +265,14 @@ class AndroidLogcatCapture(
   }
 
   internal companion object {
+    /**
+     * Whether the device booted between two boot-id reads. Unknown on either side counts as
+     * changed: a reconnect is called for after a reboot, and replaying a buffer that was already
+     * captured costs duplicate lines, whereas skipping the replay after a real reboot loses them.
+     */
+    internal fun bootChanged(atStart: String?, now: String?): Boolean =
+      atStart == null || now == null || atStart != now
+
     /** `logcat -T` reads a bare number as a line count; the fraction makes it a time. */
     fun sinceArgument(epochMs: Long): String = "%d.%03d".format(Locale.ROOT, epochMs / 1000, epochMs % 1000)
 
@@ -253,6 +312,7 @@ class AndroidLogcatCapture(
     private const val SESSION_START_MARKER = "trailblaze-session-start"
     private const val MARK_TIMEOUT_MS = 3_000L
     private const val CLEAR_TIMEOUT_MS = 5_000L
+    private const val BOOT_ID_TIMEOUT_MS = 3_000L
 
     /**
      * The byte offset of the start of the first line at or after [from] in [file] that contains

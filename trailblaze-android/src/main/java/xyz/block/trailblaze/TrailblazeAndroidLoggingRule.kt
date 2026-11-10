@@ -57,7 +57,6 @@ class TrailblazeAndroidLoggingRule(
   },
   writeTraceToDisk = { sessionId: SessionId, json: String ->
     try {
-      // Currently disabled due to exception on some API levels
       withInstrumentation {
         FileReadWriteUtil.writeToDownloadsFile(
           context = context,

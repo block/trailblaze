@@ -117,6 +117,84 @@ target's when its trail named the target *or* it drove one of the target's app i
 run without a target are still placed. Use `appIds` when a survey is specific to one build,
 such as a debug-only bundle.
 
+### Trail or trailhead
+
+A survey run after the session reads only what the trail's own steps did. What ran to set the run
+up, such as signing in or a first catalog sync, is not something the trail tested, so a survey does
+not report it. Set `scope` to read another part of the run, with the `SurveyScope` constants:
+
+| `scope` | Reads |
+|---|---|
+| `SurveyScope.Trail` (default) | the trail's own steps |
+| `SurveyScope.DeviceSetup` | the run's device setup (`trailblaze run --device-setup`), before any trailhead |
+| `SurveyScope.Trailhead` | the setup its trailhead steps did |
+| `SurveyScope.Teardown` | what ran after the trail ended |
+| a list, `[RunPhase.DeviceSetup, RunPhase.Trailhead]` | every part it names |
+| `SurveyScope.All` | the whole run, for a survey that measures setup (launch time) or diagnoses any failure. A [warning](#warnings) survey's default |
+
+The survey never splits the run itself. Before it calls a survey's handler (or matches its
+`finding`), the runner hands it a session holding only the parts its `scope` names: `session.network`,
+`session.tools`, `session.stream("…")` and the rest already leave out the others. Running is
+unchanged: `trailblaze survey <session>` applies each survey's own scope, and its output says which
+part each survey read (`SURVEYS   signsIn (trail), everySignIn (all)`, and a Reads column in the
+Markdown report).
+
+Three surveys about signing in, each reading a different part:
+
+```ts
+import { SurveyScope, phaseOf, trailblaze } from "@trailblaze/scripting/surveys";
+
+const LOGIN = /\/v1\/auth\/login$/;
+
+// Default scope: did the trail itself sign in, as one of its steps?
+export const signsIn = trailblaze.survey({
+  finding: { summary: "Signed in", network: { method: "POST", path: LOGIN, status: "ok" } },
+});
+
+// Only the setup: how long the trailhead's sign-in took.
+export const setupSignIn = trailblaze.survey({ scope: SurveyScope.Trailhead }, (session) => {
+  const login = session.network.find({ method: "POST", path: LOGIN });
+  return login && { summary: `The trailhead signed in, in ${login.durationMs} ms`, evidence: [login], data: { durationMs: login.durationMs } };
+});
+
+// The whole run, each sign-in labelled with the part it happened in.
+export const everySignIn = trailblaze.survey({ scope: SurveyScope.All }, (session) =>
+  session.network.filter({ method: "POST", path: LOGIN }).map((login) => ({
+    summary: `Signed in during the ${phaseOf(session, login) ?? "run"}`,
+    evidence: [login],
+    data: { phase: phaseOf(session, login) },
+  })),
+);
+```
+
+| The run | `signsIn` | `setupSignIn` | `everySignIn` |
+|---|---|---|---|
+| The trailhead signs in, the trail takes a payment | nothing | "The trailhead signed in, in 300 ms" | "Signed in during the trailhead" |
+| The same, and the trail signs in again as a step | "Signed in" | "The trailhead signed in, in 300 ms" | both, "trailhead" and "trail" |
+
+`phaseOf(session, record)` returns a `RunPhase` (`"deviceSetup"`, `"trailhead"`, `"trail"`,
+`"teardown"`) or `undefined` (the run can't be split), and `trailStartOf(session)` the time the
+trail began. A survey reading several parts uses them to weigh one against another.
+
+The trail starts at the trailhead stream's `trailStart` row. A session without one uses the
+trailhead objective's successful completion, then the first request network capture tagged
+`trailPhase: "trail"`, and a trail with no trailhead starts when its device setup finished. A run
+that failed inside its device setup or trailhead has no trail part. A run with no setup at all, or
+with no marker, can't be split, so every scope reads all of it.
+
+Each record is placed by when it began: a request sent during sign-in is the trailhead's however
+late its response came. A request network capture tagged keeps its tag. The device setup is
+everything before its objective completed. A trailhead step that runs mid-trail, as a multi-device
+trail signs in its second device, is the trailhead's too, and once the trailhead stream's
+`trailEnd` row lands, what follows is teardown. A record the device's clock stamped is moved onto
+the host's by the offset the session's logs measured. A record with no time, or a device-stamped
+one in a session that measured no offset, stays in every scope.
+
+Scope narrows the record lists (`tools`, `objectives`, `network`, `analytics`, `events`,
+`stream()`, `screenText`, `deviceLog`, `trace`, `trailblazeLogs`) and a derived stream's
+`of(session)`. It does not narrow files (`readText`, `readJson`) or `summary`. Mid-trail, a
+survey reads from the `since` its caller passes, and `scope` does not apply.
+
 ### Surveys in a trailmap
 
 A target's surveys can ship inside its trailmap, in a `surveys/` directory beside `tools/`:
@@ -165,8 +243,8 @@ names in `screenshotHosts`, so a report never links somewhere unexpected.
 
 A survey has up to two phases. `find` runs once per session and returns findings; `label` runs
 once over the whole batch, after every survey's find phase, and turns findings into labels:
-`{ type?, name, reasoning?, data?, findings }`. `type` is any string you choose (`journey`, `job`,
-`risk`); `findings` is required and names the findings that prove the label, the way a finding
+`{ type, name, reasoning?, data?, findings }`. `type` is a slug you choose (`journey`, `job`,
+`risk`: lowercase letters, digits, `-` and `.`), and several surveys may share one; `findings` is required and names the findings that prove the label, the way a finding
 names its records. A label's runs are the sessions of those findings, so every label traces back to
 the runs and records behind it.
 
@@ -243,7 +321,114 @@ afterwards), or when another machine stored them: each entry is sealed with a ke
 `$TRAILBLAZE_HOME/survey-results.key`, so results inside a session downloaded from elsewhere are
 surveyed again rather than trusted.
 
-There is no per-type vocabulary yet: any `type` string is accepted.
+There is no per-type vocabulary yet: any `type` slug is accepted.
+
+### Labels on a trail
+
+A trail file holds two label lists in its `config:` block, next to `tags:`. `labels` is curated: a
+person writes each entry, and no tool changes it. `generatedLabels` is written only by the survey
+command, from what runs showed, and names the survey rule behind each entry:
+
+```yaml
+config:
+  labels:
+    - { type: job, name: payments.take-payment }
+  generatedLabels:
+    - { type: journey, name: checkout, survey: journeys/checkout, reasoning: Reached the checkout-complete checkpoint. }
+```
+
+Each entry is `type`, `name`, optional `when` and `except`, an optional `reasoning`, and `survey` on
+generated entries only. `trailblaze check` fails a trail whose labels break those rules, and a
+`generatedLabels` block that is not one line per entry, fields in that order, sorted by type, then
+name, then survey; it prints the block as it should read.
+
+#### Labels that hold on some devices
+
+A label holds on every device the trail runs on. When it holds on only some, name them with `when`,
+take some out with `except`, or both:
+
+```yaml
+config:
+  devices:
+    android-phone: {}
+    android-tablet: {}
+    ios-iphone: {}
+    ios-ipad: {}
+    lab-a: {}
+    lab-a-rack: {}
+    lab-ab: {}
+    lab-pair:
+      devices:
+        seller: { classifier: lab-a }
+        buyer: { classifier: lab-b }
+  labels:
+    - { type: feature, name: second-screen, when: [lab-pair] }
+    - { type: feature, name: card-reader, when: [ios], except: [ios-ipad] }
+    - { type: feature, name: test-card, except: [rack], reasoning: Rack devices use a physical card. }
+```
+
+A trail's devices are its `config.devices` keys, each member of a multi-device configuration
+(`lab-pair.seller`, `lab-pair.buyer`), and any other classifier keying a recording. A value picks a
+device when the value's words appear side by side, as whole words, in the device's key. Words are
+the parts between hyphens, and a configuration member's key is both the configuration's name and
+its member's `classifier:`.
+
+| Value | Picks | Doesn't pick |
+|---|---|---|
+| `ios` | `ios-iphone`, `ios-ipad` | `android-phone` |
+| `lab-a` | `lab-a`, `lab-a-rack`, `lab-pair.seller` | `lab-ab` (a word never matches part of another) |
+| `rack` | `lab-a-rack` | |
+| `lab-pair` | `lab-pair.seller`, `lab-pair.buyer` | |
+| `lab-pair.buyer` | `lab-pair.buyer` | `lab-pair.seller` |
+| `tablet` | `android-tablet` | `ios-ipad` (values match what keys spell) |
+
+`when` picks devices; without it, every device is picked. `except` then takes devices out.
+`trailblaze check` fails a value that picks none of the trail's devices, an empty list, an `except`
+value that takes out none of the devices `when` picks, and a label whose `when` and `except` leave
+no device. A trail that declares no devices, through
+`config.devices` or recordings, has nothing to scope a label to. A device the trail reaches only
+through a parent key (an `android-tablet` run of an `android:` trail) can't be named until it has a
+`config.devices` entry of its own, and that entry then replaces the parent's for that device, so
+copy over any `driver` or `locale` the parent sets. Tools that don't read `when` and
+`except` treat the label as holding on the whole trail. Replaying a trail keeps both lists. Set
+`TRAILBLAZE_DISABLE_TRAIL_LABEL_GATE=1` to skip the check.
+
+## Warnings
+
+A **warning** is a finding that says "this run passed, but look at it": a crash, an ANR, a request
+that returned a server error. It never changes the run's verdict. A survey becomes a warning survey
+with `warning: true`, and then every finding it returns is a warning on its run. A warning judges the
+whole run, so a warning survey also sets `requiresFinishedSession: true` and has a find phase. It
+reads the whole run too, device setup and trailhead included, since a crash or failed request while
+setting up can be what went wrong later; set `scope` to narrow it:
+
+```ts
+export const serverErrors = trailblaze.survey({
+  warning: true,
+  requiresFinishedSession: true,
+  description: "Requests that returned a server error",
+  // The find phase: one finding, so one warning, per failed request.
+  find: (session) =>
+    session.network.filter((r) => (r.status ?? 0) >= 500).map((r) => ({
+      summary: `${r.method} ${r.host}${r.path} returned ${r.status}`,
+      evidence: [r],
+    })),
+});
+```
+
+A warning survey reads every stream any survey reads, including the device log, so a team can warn
+on what its own logs show. What counts is the team's call:
+put the survey in the trailmap, and leave out what it should not warn on (an endpoint that returns
+404 by design, a trail that crashes the app on purpose).
+
+`trailblaze report`, and the report `trailblaze run` builds after its trails, run the workspace's
+warning surveys over the sessions they report on, before building the report, and stores their findings in each session's `surveys.json`, each entry marked
+`warning: true`; the report shows them beside each run's verdict. They run when the report is
+built rather than when the run ends, so a run with no host watching it, such as an Android
+instrumentation run on a device farm, gets its warnings the same way once its session is on disk. A
+workspace with no warning survey costs nothing, and a warning survey that fails is logged: neither
+changes a verdict. Running them needs `bun`. `trailblaze survey --warnings` runs only the warning
+surveys, and `trailblaze survey` runs them with the rest.
 
 ## Running a survey mid-trail
 
@@ -427,6 +612,25 @@ a derived row a session's files hold, so a chain gives the same rows wherever it
 depends on itself, however far round, fails naming the loop. A stream that throws while surveys run
 is reported as the session's error `stream:<name>`, with no rows, and the session's surveys still run.
 
+A stream declares the part of the run it derives from with the same `scope` a survey takes
+([Trail or trailhead](#trail-or-trailhead)). Unset, it reads `SurveyScope.All`: one stream serves
+surveys of every scope, so it keeps setup unless it says otherwise. A stream that only means
+something while the trail runs says so:
+
+```ts
+export const failedRequests = trailblaze.eventStream({
+  name: "failed-requests",
+  scope: SurveyScope.Trail,
+  derive: (session) =>
+    session.network.all().filter((r) => (r.status ?? 0) >= 400).map((r) => ({ timeMs: r.startMs, data: { path: r.path, status: r.status }, from: r })),
+});
+```
+
+Scoping places a record by its time, so `deviceLog` lines, which carry none, stay in every scope.
+
+Its `derive` sees only that part, the streams in its `dependsOn` included. Every reader gets the
+same rows, the report's lane too, and a survey's own `scope` narrows them further.
+
 Stream names are unique across the workspace, every trailmap's `surveys/` and the shared one
 alike. `trailblaze check` refuses a name declared twice, naming both places, and a `name` that is
 not a plain string, so the clash is caught before any survey runs; the survey loader refuses it too.
@@ -456,7 +660,7 @@ feed neither `analytics`, `network` nor the summary, and writing one leaves stor
 already a captured stream's is refused rather than written over it, and a name may not end in
 `.json`. The streams Trailblaze captures itself (`crash`, `memory`, `network`, `trailhead`, and their
 `.<device>` forms) are refused when the stream is declared, since some are written only as a run shuts down. So is a name the report would show on one of their lanes, where its rows would replace the captured ones: one with a `network` segment (`checkout.network`), or one holding `visible-strings` or `capture-notices`. Tool calls and Trailblaze logs already read on the host clock, as the report places their steps, so a row copying their time needs nothing more. A row derived only from device-clock events is marked so, and the report moves it onto the
-host timeline beside them, on the clock of the device that captured its first device-clock `from` record, so in a multi-device session list the record `timeMs` came from first. A row whose `from` mixes clocks says whose clock its `timeMs` is with `clock: "device"` or `"host"`. A stream that fails does not fail the report: the report is built without its rows, says so, and exits as it otherwise would, and the session's `events/derived.json` records why under that stream's `error`, so whoever opens the session later can tell a stream that failed from one with no rows. A report whose survey files cannot be loaded removes every derived stream, rather than show rows from code it could not check. Two reports writing one session take turns, and the session keeps the last one's streams. Which streams a report writes depends only on the survey files, not on `--survey`, so two reports differ only when they load different survey files; then one can show the other's lanes. A session that has not ended gets no derived streams: its capture may still be writing. A stream has no scope of its
+host timeline beside them, on the clock of the device that captured its first device-clock `from` record, so in a multi-device session list the record `timeMs` came from first. A row whose `from` mixes clocks says whose clock its `timeMs` is with `clock: "device"` or `"host"`. A stream that fails does not fail the report: the report is built without its rows, says so, and exits as it otherwise would, and the session's `events/derived.json` records why under that stream's `error`, so whoever opens the session later can tell a stream that failed from one with no rows. A report whose survey files cannot be loaded removes every derived stream, rather than show rows from code it could not check. Two reports writing one session take turns, and the session keeps the last one's streams. Which streams a report writes depends only on the survey files, not on `--survey`, so two reports differ only when they load different survey files; then one can show the other's lanes. A session that has not ended gets no derived streams: its capture may still be writing. A stream names no targets of its
 own: a session it means nothing for gets no rows from `derive`, and so no file and no lane. A stream
 no survey file declares any more is removed from every session on the next report. Mid-trail the session holds only
 its event streams, so a stream a mid-trail survey reads must derive from `network`, `analytics` or

@@ -74,11 +74,11 @@ class TrailblazeYaml internal constructor(
 
   fun decodeUnifiedTrailConfig(yaml: String) = codec.decodeUnifiedTrailConfig(yaml)
 
-  fun requiresHostRefusal(
+  fun hostExecutionRefusal(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
     trailName: String?,
-  ) = codec.requiresHostRefusal(yaml, deviceClassifiers, trailName)
+  ) = codec.hostExecutionRefusal(yaml, deviceClassifiers, trailName)
 
   fun decodeTrailDocument(yaml: String) = codec.decodeTrailDocument(yaml)
 

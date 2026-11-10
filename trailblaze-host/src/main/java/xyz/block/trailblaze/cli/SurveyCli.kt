@@ -8,6 +8,8 @@ import xyz.block.trailblaze.util.runJsonOutput
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
 
 /**
  * Runs the TypeScript surveys CLI (`sdks/typescript/src/surveys/cli.ts`) under bun, for
@@ -58,10 +60,13 @@ internal object SurveyCli {
 
   /**
    * Runs the surveys CLI with [args] from [cwd], which decides the workspace whose surveys load.
-   * Stderr is the caller's; stdout is too unless [stdout] names a file to write it to. Returns a
-   * [TrailblazeExitCode]: see [exitCodeOf], or [TrailblazeExitCode.INFRA_FAILED] when it could not start.
+   * Stderr is the caller's; stdout is too unless [stdout] names a file to write it to. With a
+   * [timeout], a CLI still running then is stopped. Returns a [TrailblazeExitCode]: see [exitCodeOf],
+   * or [TrailblazeExitCode.INFRA_FAILED] when it could not start, was stopped, or this thread was
+   * interrupted (which stops it too).
    */
-  fun run(args: List<String>, cwd: File, stdout: File? = null): Int {
+  fun run(args: List<String>, cwd: File, stdout: File? = null, timeout: Duration? = null): Int {
+    var process: Process? = null
     return try {
       // Inside the try: writing the launcher can fail too (a full disk, an unwritable cache).
       val argv = entryArgv() ?: return TrailblazeExitCode.INFRA_FAILED.code
@@ -70,10 +75,24 @@ internal object SurveyCli {
         .redirectInput(ProcessBuilder.Redirect.INHERIT)
         .redirectError(ProcessBuilder.Redirect.INHERIT)
       if (stdout == null) builder.redirectOutput(ProcessBuilder.Redirect.INHERIT) else builder.redirectOutput(stdout)
-      exitCodeOf(builder.start().waitFor())
+      val started = builder.start().also { process = it }
+      when {
+        timeout == null -> exitCodeOf(started.waitFor())
+        started.waitFor(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS) -> exitCodeOf(started.exitValue())
+        else -> {
+          Console.error("Error: the surveys CLI was still running after $timeout, so it was stopped.")
+          TrailblazeExitCode.INFRA_FAILED.code
+        }
+      }
     } catch (e: Exception) {
-      Console.error("Error: could not start the surveys CLI: ${e.message ?: e.javaClass.simpleName}")
+      Console.error("Error: could not run the surveys CLI: ${e.message ?: e.javaClass.simpleName}")
       TrailblazeExitCode.INFRA_FAILED.code
+    } finally {
+      // Timed out or interrupted: nothing waits for it any more, so nothing it started may outlive it.
+      process?.takeIf { it.isAlive }?.let { p ->
+        p.descendants().forEach { it.destroyForcibly() }
+        p.destroyForcibly()
+      }
     }
   }
 

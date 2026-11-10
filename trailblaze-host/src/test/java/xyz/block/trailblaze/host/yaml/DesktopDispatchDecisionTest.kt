@@ -59,10 +59,10 @@ class DesktopDispatchDecisionTest {
         "ANDROID_ONDEVICE_ACCESSIBILITY/preferHostAgent=false" to onDevice,
         "ANDROID_ONDEVICE_ACCESSIBILITY/preferHostAgent=true" to hostRpc,
 
-        // ANDROID_TEST: always on-device. `preferHostAgent` cannot pull the merge gate onto a path
-        // that would hand an unrecorded step to an LLM.
+        // ANDROID_TEST: on-device by default, host agent when opted in. The host refuses an
+        // unrecorded step on it as the device does, so the merge gate never hands one to an LLM.
         "ANDROID_TEST/preferHostAgent=false" to onDevice,
-        "ANDROID_TEST/preferHostAgent=true" to onDevice,
+        "ANDROID_TEST/preferHostAgent=true" to hostRpc,
 
         // Host-resident drivers: the in-process host agent. `preferHostAgent` is inert — the agent
         // already runs on the host.
@@ -98,7 +98,7 @@ class DesktopDispatchDecisionTest {
    * worked). Derived from [decide] rather than restated, so a capability change moves both.
    */
   @Test
-  fun `only the Android on-device driver, the iOS simulator drivers and the browser can run multi-device trails`() {
+  fun `only the Android on-device drivers, the iOS simulator drivers and the browser can run multi-device trails`() {
     val multiDeviceCapable = runnableDrivers.filter { driver ->
       listOf(false, true).any { preferHostAgent ->
         DesktopDispatchDecision.supportsMultiDevice(decide(driver, preferHostAgent, "pos-pair"))
@@ -108,6 +108,7 @@ class DesktopDispatchDecisionTest {
     assertThat(multiDeviceCapable).isEqualTo(
       setOf(
         TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.ANDROID_TEST,
         TrailblazeDriverType.IOS_HOST,
         TrailblazeDriverType.IOS_AXE,
         TrailblazeDriverType.PLAYWRIGHT_NATIVE,
@@ -139,10 +140,10 @@ class DesktopDispatchDecisionTest {
 
     assertThat(
       DesktopDispatchDecision.multiDeviceRemedy(
-        decide(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true),
+        decide(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = false),
         TrailblazeDriverType.ANDROID_TEST,
       ),
-    ).contains("never dispatches multi-device")
+    ).contains("Enable `preferHostAgent`")
 
     assertThat(
       DesktopDispatchDecision.multiDeviceRemedy(
@@ -209,8 +210,9 @@ class DesktopDispatchDecisionTest {
 
     assertThat(notice(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = false)!!)
       .contains("Enable `preferHostAgent`")
-    assertThat(notice(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)!!)
-      .contains("trailblaze.trailheadReuse")
+    assertThat(notice(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = false)!!)
+      .contains("Enable `preferHostAgent`")
+    assertThat(notice(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)).isNull()
     assertThat(notice(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isNull()
     assertThat(notice(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isNull()
   }
@@ -222,8 +224,9 @@ class DesktopDispatchDecisionTest {
 
     assertThat(refusal(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = false)!!)
       .contains("Enable `preferHostAgent`")
-    assertThat(refusal(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)!!)
-      .contains("instrumentation argument")
+    assertThat(refusal(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = false)!!)
+      .contains("Enable `preferHostAgent`")
+    assertThat(refusal(TrailblazeDriverType.ANDROID_TEST, preferHostAgent = true)).isNull()
     assertThat(refusal(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isNull()
     assertThat(refusal(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isNull()
     assertThat(refusal(TrailblazeDriverType.PLAYWRIGHT_NATIVE, preferHostAgent = false)).isNull()

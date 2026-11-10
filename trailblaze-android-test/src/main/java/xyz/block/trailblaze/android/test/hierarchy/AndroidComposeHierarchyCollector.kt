@@ -186,7 +186,7 @@ object AndroidComposeHierarchyCollector {
         DriverNodeDetail.Compose(
           testTag = config.getOrNull(SemanticsProperties.TestTag),
           role = config.getOrNull(SemanticsProperties.Role)?.toString(),
-          text = config.getOrNull(SemanticsProperties.Text)?.joinToString(", ") { it.text },
+          text = config.getOrNull(SemanticsProperties.Text)?.joinToString(", ") { it.text } ?: linkTextOf(node),
           editableText = config.getOrNull(SemanticsProperties.EditableText)?.text,
           contentDescription =
             config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString(", "),
@@ -200,6 +200,7 @@ object AndroidComposeHierarchyCollector {
           isEnabled = !config.contains(SemanticsProperties.Disabled),
           isFocused = config.getOrNull(SemanticsProperties.Focused) ?: false,
           isSelected = config.getOrNull(SemanticsProperties.Selected) ?: false,
+          isSelectable = config.contains(SemanticsProperties.Selected),
           isPassword = config.getOrNull(SemanticsProperties.Password) != null,
           collectionItemRowIndex = collectionItem?.first,
           collectionItemColumnIndex = collectionItem?.second,
@@ -330,8 +331,32 @@ object AndroidComposeHierarchyCollector {
       roleClassNameOf(role)?.let { className = it }
     }
     if (config.contains(SemanticsActions.SetText)) className = "android.widget.EditText"
-    if (config.contains(SemanticsProperties.Text)) className = "android.widget.TextView"
+    if (config.contains(SemanticsProperties.Text) || linkTextOf(node) != null) className = "android.widget.TextView"
     return className
+  }
+
+  /**
+   * The text the accessibility delegate publishes for an in-text link: the linked words of the
+   * text it sits in.
+   *
+   * A `LinkAnnotation` composes as a clickable child of its text holding no text of its own, and
+   * the delegate names that child as a `TextView` reading its link's range. Recordings tap a link
+   * by those words ("terms of service" inside "Read the terms of service."), which no node
+   * here carried. Link children are paired with the text's links in order, the order they compose
+   * in. Guarded because `getLinkAnnotations` arrived in Compose 1.7 and the app brings its own.
+   */
+  private fun linkTextOf(node: SemanticsNode): String? {
+    val config = node.config
+    if (config.contains(SemanticsProperties.Text) || !config.contains(SemanticsActions.OnClick)) return null
+    val parent = node.parent ?: return null
+    val text = parent.config.getOrNull(SemanticsProperties.Text)?.singleOrNull() ?: return null
+    val links = runCatching { text.getLinkAnnotations(0, text.length) }.getOrNull().orEmpty()
+    if (links.isEmpty()) return null
+    val index = parent.children
+      .filter { it.config.contains(SemanticsActions.OnClick) && !it.config.contains(SemanticsProperties.Text) }
+      .indexOfFirst { it.id == node.id }
+    val range = links.getOrNull(index) ?: return null
+    return text.text.substring(range.start, range.end)
   }
 
   private fun roleClassNameOf(role: Role): String? = when (role) {
@@ -344,20 +369,22 @@ object AndroidComposeHierarchyCollector {
   }
 
   /**
-   * The hint the accessibility delegate publishes for a text field: the `Text` its merged config
-   * carries, which is the label or placeholder its decoration box draws as children. Read from the
-   * unmerged children because that is the tree this collector walks; the walk stops at a child
-   * that merges its own descendants, since the delegate would not fold that one in either.
+   * The hint the accessibility delegate publishes for a text field: the FIRST `Text` its merged
+   * config carries, which is the label (or placeholder) its decoration box draws first. Only the
+   * first: a field drawing a label and a placeholder at once publishes the label alone, so joining
+   * them names a field no recording does. Read from the unmerged children because that is the
+   * tree this collector walks; the walk stops at a child that merges its own descendants, since
+   * the delegate would not fold that one in either.
    */
   private fun accessibilityHintTextOf(node: SemanticsNode): String? {
     if (!node.config.contains(SemanticsActions.SetText)) return null
-    val texts = mutableListOf<String>()
-    fun collect(n: SemanticsNode) {
-      n.config.getOrNull(SemanticsProperties.Text)?.forEach { texts += it.text }
-      n.children.filterNot { it.config.isMergingSemanticsOfDescendants }.forEach(::collect)
-    }
-    node.children.filterNot { it.config.isMergingSemanticsOfDescendants }.forEach(::collect)
-    return texts.joinToString(", ").ifEmpty { null }
+    fun firstText(n: SemanticsNode): String? =
+      n.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()?.text
+        ?: n.children.filterNot { it.config.isMergingSemanticsOfDescendants }.firstNotNullOfOrNull(::firstText)
+    return node.children
+      .filterNot { it.config.isMergingSemanticsOfDescendants }
+      .firstNotNullOfOrNull(::firstText)
+      ?.ifEmpty { null }
   }
 
   /**

@@ -456,7 +456,7 @@ class StepToolSetDirectToolsTest {
   }
 
   @Test
-  fun `direct Maestro without an inner log keeps its outer action`() = runTest {
+  fun `direct Maestro is not recordable`() = runTest {
     val sessionId = SessionId("maestro-no-inner-session")
     val emittedLogs = mutableListOf<TrailblazeLog>()
     val toolSet = StepToolSet(
@@ -479,7 +479,8 @@ class StepToolSetDirectToolsTest {
 
     val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
-    assertEquals(listOf("mobile_maestro"), recording?.tools?.map { it.name })
+    // `mobile_maestro` is framework-internal: it runs, but a recording never carries it.
+    assertEquals(null, recording?.tools?.map { it.name })
   }
 
   @Test

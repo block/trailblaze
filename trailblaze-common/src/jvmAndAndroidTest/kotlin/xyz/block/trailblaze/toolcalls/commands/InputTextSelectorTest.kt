@@ -71,6 +71,9 @@ class InputTextSelectorTest {
   ) {
     val actions: MutableList<Any> = mutableListOf()
 
+    /** Each native tap's `hideKeyboardBefore`, in order. */
+    val hideKeyboardBeforeTaps: MutableList<Boolean> = mutableListOf()
+
     override suspend fun executeMaestroCommands(
       commands: List<Command>,
       traceId: TraceId?,
@@ -84,10 +87,12 @@ class InputTextSelectorTest {
       longPress: Boolean,
       tapRoute: TapRouteOverride?,
       timeoutMs: Long?,
+      hideKeyboardBefore: Boolean,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       if (!usesAccessibilityDriver) return null
       actions.add(nodeSelector)
+      hideKeyboardBeforeTaps.add(hideKeyboardBefore)
       return tapResult
     }
 
@@ -146,6 +151,18 @@ class InputTextSelectorTest {
     )
     assertThat(agent.actions.first()).isEqualTo(cardNumber)
     assertThat((agent.actions[1] as InputTextCommand).text).isEqualTo("4111")
+  }
+
+  @Test
+  fun `the field tap dismisses the keyboard first unless the step opts out`() = runBlocking {
+    val agent = RecordingAgent(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, usesAccessibilityDriver = true)
+
+    InputTextTrailblazeTool(text = "4111", selector = cardNumber).execute(contextFor(agent))
+    InputTextTrailblazeTool(text = "200", selector = cardNumber, hideKeyboardBefore = false)
+      .execute(contextFor(agent))
+
+    // Recorded trails omit the field, so they keep the dismissal; `false` reaches the driver's tap.
+    assertThat(agent.hideKeyboardBeforeTaps).containsExactly(true, false)
   }
 
   @Test

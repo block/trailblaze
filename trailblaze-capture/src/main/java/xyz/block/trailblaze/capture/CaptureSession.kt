@@ -98,6 +98,20 @@ class CaptureSession internal constructor(
     streams.filterIsInstance<AppScopedCaptureStream>().forEach { it.markSessionStart() }
   }
 
+  /**
+   * Tells every stream the device rebooted and the host is connected to it again. Failures are
+   * logged, never propagated: a capture must not fail the step that survived the reboot.
+   */
+  fun onDeviceReconnected() {
+    for (stream in streams) {
+      try {
+        stream.onDeviceReconnected()
+      } catch (e: Exception) {
+        Console.log("Failed to resume ${stream.type} capture after reboot: ${e.message}")
+      }
+    }
+  }
+
   fun stopAll(writeMetadata: Boolean = true): List<CaptureArtifact> {
     // In parallel, as at start: each stream's stop is its own finalize (the video muxer flushing,
     // a log reader draining), and the session waits for the slowest one rather than their sum.

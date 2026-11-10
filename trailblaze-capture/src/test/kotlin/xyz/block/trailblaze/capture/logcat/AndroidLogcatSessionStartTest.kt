@@ -73,4 +73,19 @@ class AndroidLogcatSessionStartTest {
     writer.join()
     assertFalse(AndroidLogcatCapture.awaitMarker(log, from = 0, marker = "trailblaze-session-start-xyz", timeoutMs = 100))
   }
+
+  @Test
+  fun `a reconnect replays the logcat buffer only when the boot changed, or when that cannot be told`() {
+    // Real boot ids are UUIDs; stand-ins keep the sensitive-terms scan quiet.
+    val before = "boot-id-before"
+    val after = "boot-id-after"
+
+    // Same boot: the buffer was already captured, replaying it would duplicate the file.
+    assertFalse(AndroidLogcatCapture.bootChanged(atStart = before, now = before))
+    assertTrue(AndroidLogcatCapture.bootChanged(atStart = before, now = after))
+    // Either read missing: a missed replay loses the new boot's lines, so assume a reboot.
+    assertTrue(AndroidLogcatCapture.bootChanged(atStart = null, now = after))
+    assertTrue(AndroidLogcatCapture.bootChanged(atStart = before, now = null))
+    assertTrue(AndroidLogcatCapture.bootChanged(atStart = null, now = null))
+  }
 }

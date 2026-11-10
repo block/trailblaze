@@ -27,6 +27,40 @@ class BundleStoreTest {
   }
 
   @Test
+  fun `a re-recorded variant keeps the labels of the file it replaces`() {
+    val bundle = tmp.newFolder("bundle")
+    val variant = File(bundle, "ios.trail.yaml").apply {
+      writeText("config:\n  labels:\n    - { type: job, name: payments.refund }\ntrail:\n  - step: Old step\n")
+    }
+    val recorded = "config:\n  context: Fresh\ntrail:\n  - step: New step\n"
+
+    assertEquals(variant, BundleStore.writeVariant(bundle, "ios", recorded))
+    val written = variant.readText()
+    assertTrue("- { type: job, name: payments.refund }" in written, written)
+    assertTrue("New step" in written && "Old step" !in written, written)
+  }
+
+  @Test
+  fun `a variant whose labels cannot be read is not replaced`() {
+    val bundle = tmp.newFolder("bundle")
+    val original = "config:\n  labels:\n    - { name: checkout }\ntrail:\n  - step: Old step\n"
+    val variant = File(bundle, "ios.trail.yaml").apply { writeText(original) }
+
+    assertEquals(null, BundleStore.writeVariant(bundle, "ios", "config:\n  context: Fresh\ntrail:\n  - step: New step\n"))
+    assertEquals(original, variant.readText())
+  }
+
+  @Test
+  fun `a recording that cannot hold the variant's labels does not replace it`() {
+    val bundle = tmp.newFolder("bundle")
+    val original = "config:\n  labels:\n    - { type: job, name: payments.refund }\ntrail:\n  - step: Old step\n"
+    val variant = File(bundle, "ios.trail.yaml").apply { writeText(original) }
+
+    assertEquals(null, BundleStore.writeVariant(bundle, "ios", "config:\n  context: {{CWD}}/x\ntrail:\n  - step: New\n"))
+    assertEquals(original, variant.readText())
+  }
+
+  @Test
   fun `explicit create refuses to replace a recording`() {
     val bundle = tmp.newFolder("bundle")
     File(bundle, "ios.trail.yaml").writeText("old")
