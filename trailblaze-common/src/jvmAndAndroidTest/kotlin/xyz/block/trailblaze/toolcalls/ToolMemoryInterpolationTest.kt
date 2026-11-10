@@ -72,6 +72,22 @@ class ToolMemoryInterpolationTest {
     assertThat(scrubSensitiveValues("true null", memory)).isEqualTo("true null")
   }
 
+  @Test
+  fun `literal secrets include live sensitive keys and retained sensitive args`() {
+    val memory = AgentMemory()
+    memory.rememberSensitive("token", "FAKE_TEST_ONLY_LIVE")
+    memory.rememberSensitive("source", "FAKE_TEST_ONLY_ARG")
+    memory.remember("user", "sam")
+    memory.seedArgs(mapOf("pin" to JsonPrimitive("FAKE_TEST_ONLY_ARG")))
+    memory.delete("source")
+
+    val secrets = sensitiveLiteralValues(memory)
+
+    assertThat(secrets.contains("FAKE_TEST_ONLY_LIVE")).isEqualTo(true)
+    assertThat(secrets.contains("FAKE_TEST_ONLY_ARG")).isEqualTo(true)
+    assertThat(secrets.contains("sam")).isEqualTo(false)
+  }
+
   private val memory = AgentMemory().apply {
     remember("user", "sam")
     remember("domain", "example.com")

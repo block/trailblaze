@@ -39,7 +39,6 @@ import type {
   TrailblazeTarget,
   TrailblazeLogger,
 } from "./context.js";
-import type { TrailblazeSessionResources } from "./session-resources.js";
 
 // Type-only imports above are erased at compile time, leaving this module with ZERO
 // runtime dependencies on the rest of the SDK source. Two reasons:
@@ -62,19 +61,6 @@ const mockNoopLogger: TrailblazeLogger = {
   info: () => {},
   warn: () => {},
   error: () => {},
-};
-
-// Test contexts do not own a live subprocess lifecycle, so their cleanup registrations are
-// intentionally inert. This keeps `testing.ts` dependency-free while letting a tool test typecheck
-// against the production `ctx.session` surface; lifecycle behavior itself is covered by
-// `session-resources.test.ts` through the real process-local registry.
-const mockSessionResources: TrailblazeSessionResources = {
-  registerCleanup(cleanup) {
-    if (typeof cleanup !== "function") {
-      throw new TypeError("ctx.session.registerCleanup(cleanup): cleanup must be a function.");
-    }
-    return () => {};
-  },
 };
 
 /**
@@ -594,6 +580,5 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     target: opts.target,
     memory: createMockMemory(opts.memory),
     logger: mockNoopLogger,
-    session: mockSessionResources,
   };
 }

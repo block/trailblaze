@@ -965,6 +965,14 @@ internal fun secretLogForms(secrets: Collection<String>): List<String> =
  * and registrations are reference-counted so a nested or concurrent dispatch dropping its own
  * secret never un-masks one that is still in flight.
  */
+/**
+ * Runs [block] with every value in [secrets] masked out of device shell-command logs, for a caller
+ * outside this module that holds secrets a tool does not declare itself (sensitive memory values a
+ * host-side dispatch resolved into its arguments). See [DeviceCommandLogSecrets].
+ */
+fun <T> withDeviceCommandSecretsRedacted(secrets: Collection<String>, block: () -> T): T =
+  DeviceCommandLogSecrets.withSecretsRedacted(secrets.toList(), block)
+
 internal object DeviceCommandLogSecrets {
   private val active = LinkedHashMap<String, Int>()
 

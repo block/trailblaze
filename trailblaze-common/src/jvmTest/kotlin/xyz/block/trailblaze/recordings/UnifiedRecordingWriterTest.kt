@@ -18,6 +18,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailLabel
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
@@ -485,6 +486,153 @@ class UnifiedRecordingWriterTest {
 
     val decoded = createTrailblazeYaml().decodeUnifiedTrail(yaml)
     assertEquals(listOf("tapCart"), decoded.trail.single().recordings["ios"]?.map { it.name })
+  }
+
+  @Test
+  fun `renderStandalone keeps the labels of the sibling it overwrites, and nothing else`() {
+    val sibling = tempFolder.newFile("android.trail.yaml").apply {
+      writeText(
+        """
+        |config:
+        |  context: Stale context the recording replaces
+        |  labels:
+        |    - { type: job, name: payments.take-payment }
+        |  generatedLabels:
+        |    - { type: journey, name: checkout, survey: journeys/checkout }
+        |trail:
+        |  - step: Old step
+        |
+        """.trimMargin(),
+      )
+    }
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(
+        recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
+        "android",
+        overwriting = sibling,
+      )
+      .getOrThrow()
+
+    val config = createTrailblazeYaml().decodeUnifiedTrail(yaml).config
+    assertEquals(listOf(TrailLabel(type = "job", name = "payments.take-payment")), config.labels)
+    assertEquals(
+      listOf(TrailLabel(type = "journey", name = "checkout", survey = "journeys/checkout")),
+      config.generatedLabels,
+    )
+    assertEquals(null, config.context)
+  }
+
+  @Test
+  fun `renderStandalone reads the labels of a sibling that uses a template`() {
+    val sibling = tempFolder.newFile("ios.trail.yaml").apply {
+      writeText(
+        "config:\n  context: {{CWD}}/fixtures\n  labels:\n" +
+          "    - { type: job, name: payments.refund, reasoning: \"Uses {{CWD}} and {{API_TOKEN}}.\" }\n" +
+          "trail:\n  - step: Old step\n",
+      )
+    }
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(recordingItems(driver = "IOS_HOST", toolName = "tapCart"), "ios", overwriting = sibling)
+      .getOrThrow()
+
+    // Templates are kept as written, never expanded into a path or an environment variable's value.
+    assertEquals(
+      listOf(TrailLabel(type = "job", name = "payments.refund", reasoning = "Uses {{CWD}} and {{API_TOKEN}}.")),
+      createTrailblazeYaml().decodeUnifiedTrail(yaml).config.labels,
+    )
+  }
+
+  @Test
+  fun `renderStandalone keeps labels when a typed field elsewhere holds a template`() {
+    val sibling = tempFolder.newFile("android.trail.yaml").apply {
+      writeText(
+        "config:\n  labels:\n    - { type: job, name: payments.refund }\n" +
+          "trail:\n  - step: Old step\n    maxRetries: '{{RETRIES}}'\n",
+      )
+    }
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(
+        recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
+        "android",
+        overwriting = sibling,
+      )
+      .getOrThrow()
+
+    assertEquals(
+      listOf(TrailLabel(type = "job", name = "payments.refund")),
+      createTrailblazeYaml().decodeUnifiedTrail(yaml).config.labels,
+    )
+  }
+
+  @Test
+  fun `renderStandalone keeps labels written under a quoted key`() {
+    val sibling = tempFolder.newFile("ios.trail.yaml").apply {
+      writeText("config:\n  \"labels\": [{ type: job, name: payments.refund }]\ntrail:\n  - step: Old step\n")
+    }
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(recordingItems(driver = "IOS_HOST", toolName = "tapCart"), "ios", overwriting = sibling)
+      .getOrThrow()
+
+    assertEquals(
+      listOf(TrailLabel(type = "job", name = "payments.refund")),
+      createTrailblazeYaml().decodeUnifiedTrail(yaml).config.labels,
+    )
+  }
+
+  @Test
+  fun `renderStandalone refuses to overwrite a sibling whose labels it cannot read`() {
+    val original = "config:\n  labels:\n    - { name: checkout }\ntrail:\n  - step: Old step\n"
+    val sibling = tempFolder.newFile("android.trail.yaml").apply { writeText(original) }
+    val failure = UnifiedRecordingWriter
+      .renderStandalone(
+        recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
+        "android",
+        overwriting = sibling,
+      )
+      .exceptionOrNull()
+
+    assertTrue(failure?.message.orEmpty().contains("saving would delete them"), failure?.message)
+    assertEquals(original, sibling.readText())
+  }
+
+  @Test
+  fun `renderStandalone refuses to drop the device a scoped label picks`() {
+    val original =
+      "config:\n  devices:\n    android: {}\n    android-tablet: {}\n  labels:\n" +
+        "    - { type: capability, name: hardware.stylus, when: [tablet] }\ntrail:\n  - step: Old step\n"
+    val sibling = tempFolder.newFile("android.trail.yaml").apply { writeText(original) }
+    val failure = UnifiedRecordingWriter
+      .renderStandalone(
+        recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
+        "android",
+        overwriting = sibling,
+      )
+      .exceptionOrNull()
+
+    assertTrue(failure?.message.orEmpty().contains("`capability:hardware.stylus`"), failure?.message)
+    assertEquals(original, sibling.readText())
+  }
+
+  @Test
+  fun `renderStandalone keeps a scoped label that still picks the recorded device`() {
+    val sibling = tempFolder.newFile("android.trail.yaml").apply {
+      writeText(
+        "config:\n  devices:\n    android: {}\n    android-tablet: {}\n  labels:\n" +
+          "    - { type: capability, name: hardware.nfc, when: [android] }\ntrail:\n  - step: Old step\n",
+      )
+    }
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(
+        recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
+        "android",
+        overwriting = sibling,
+      )
+      .getOrThrow()
+
+    assertEquals(
+      listOf(TrailLabel(type = "capability", name = "hardware.nfc", whenDevices = listOf("android"))),
+      createTrailblazeYaml().decodeUnifiedTrail(yaml).config.labels,
+    )
   }
 
   @Test

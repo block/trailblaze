@@ -6,6 +6,7 @@
 // id. Nothing is registered globally; a survey is a plain, inspectable value.
 
 import type { AnalyticsQuery, DeviceLogQuery, EventQuery, NetworkQuery, ObjectiveQuery, ScreenTextQuery, ToolQuery } from "./match.js";
+import { scopeError } from "./phase.js";
 import type { SurveySession } from "./session.js";
 import type { Finding, SurveyFinding, Label, LabelInput, SessionRecord, SessionSummary, SurveySpec } from "./types.js";
 
@@ -315,6 +316,16 @@ function checkLabelPhase(spec: SurveySpec<any, any, any>): void {
   }
 }
 
+function checkWarning(spec: SurveySpec<any, any, any>, hasFind: boolean): void {
+  if (spec.warning === undefined) return;
+  if (typeof spec.warning !== "boolean") throw new Error(`survey()${named(spec)}: warning must be true or false`);
+  if (!spec.warning) return;
+  if (spec.requiresFinishedSession !== true) {
+    throw new Error(`survey()${named(spec)}: a warning judges the whole run, so a warning survey sets requiresFinishedSession: true`);
+  }
+  if (!hasFind) throw new Error(`survey()${named(spec)}: a warning survey needs a find phase: its findings are the warnings`);
+}
+
 /** The surveys [def] lists in `dependsOn`, by the name it reads each under. */
 export function dependenciesOf(def: SurveyDefinition): Array<[name: string, survey: SurveyDefinition]> {
   return Object.entries((def.spec.dependsOn ?? {}) as Record<string, SurveyDefinition>);
@@ -341,9 +352,12 @@ export function survey<
   if (find !== undefined && (find === null || (typeof find !== "function" && typeof find !== "object"))) {
     throw new Error(`survey()${named(spec)}: find must be a function of the session, or a declarative finding`);
   }
+  const badScope = spec.scope === undefined ? undefined : scopeError(spec.scope);
+  if (badScope) throw new Error(`survey()${named(spec)}: ${badScope}`);
   // Read first, so a spec setting both keys fails here even with a handler, not later mid-trail.
   const finding = findingOf(spec);
   checkLabelPhase(spec);
+  checkWarning(spec, find !== undefined || handler !== undefined || finding !== undefined);
   const fn = handler ?? (typeof find === "function" ? find : undefined);
   if (fn !== undefined) return define(spec, fn as unknown as SurveyHandler);
   if (finding) return declarative(define(spec, findingHandler(spec, finding)));

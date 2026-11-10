@@ -67,13 +67,14 @@ async function patchVariantRecording(fetchFile, id, name, promptIndex, newToolsA
   const raw = await fetchFile(id, name);
   if (raw == null) return { error: 'Could not read ' + name };
   let doc;
-  try { doc = window.jsyaml.load(raw); }
+  // TM keeps config labels as written and writes them one per line, as the CLI does.
+  try { doc = window.TM.loadUnifiedDoc(raw, window.jsyaml); }
   catch (e) { return { error: 'Could not parse ' + name }; }
   const r = window.TrailYamlBuild.applyRecordingEdit(doc, promptIndex, newToolsArray, stepInfo, variantClassifier(doc, name));
   if (r.error) return { error: r.error };
   if (r.noop) return { noop: true };
   let yaml;
-  try { yaml = window.jsyaml.dump(r.value, { lineWidth: -1, noRefs: true }).trimEnd(); }
+  try { yaml = window.TM.dumpUnifiedDoc(r.value, (d) => window.jsyaml.dump(d, { lineWidth: -1, noRefs: true })).trimEnd(); }
   catch (e) { return { error: 'Could not serialize the edit.' }; }
   return { yaml };
 }

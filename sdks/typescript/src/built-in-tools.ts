@@ -20,9 +20,9 @@
 //  - **Non-recordable author utilities** (`isRecordable = false`, never in a recording): the
 //    selector query tools `findSelectorMatches` / `waitUntilNotVisible` (rich `MatchDescriptor[][]`
 //    / `boolean` results), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
-//    `android_adbShell`, `android_sendBroadcast`, `android_writeFileToDownloads`.
-//  - **Recordable tools the generator can't fully model** — `mobile_maestro` (free-form Maestro
-//    commands the descriptor lowering can't express) and `mobile_listInstalledApps` /
+//    `android_adbShell`, `android_sendBroadcast`, `android_writeFileToDownloads`,
+//    `android_reconnectSession`.
+//  - **Recordable tools the generator can't fully model** — `mobile_listInstalledApps` /
 //    `mobile_listInstalledAppsDetailed` (structured result types). These are listed in
 //    `HandCuratedRecordableTools.NAMES` so the generator skips them;
 //    `BuiltInToolsBindingDriftTest` asserts the two sets stay disjoint.
@@ -203,33 +203,6 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Execute raw Maestro commands directly — the escape hatch the Kotlin agent reaches via
-     * `runMaestroCommands(...)`. Each entry in `commands` is one Maestro command map in the
-     * documented YAML/JSON flow shape (e.g. `{ tapOn: { text: "Verify" } }`,
-     * `{ inputText: "123456" }`, `{ extendedWaitUntil: { notVisible: "Loading", timeout: 45000 } }`,
-     * `{ assertVisible: { text: "0%", optional: true } }`). Prefer the specific typed tools when one
-     * exists; this is for faithful 1:1 ports of Kotlin steps that built Maestro orchestra commands by
-     * hand (e.g. app launch / sign-in flows).
-     *
-     * Recordable, but hand-curated here (listed in `HandCuratedRecordableTools.NAMES`):
-     * the free-form `commands` list can't be lowered by the Koog descriptor path, so the generated
-     * recordable surface can't model it.
-     *
-     * Source: `MaestroTrailblazeTool.kt` (`mobile_maestro`). The Kotlin tool's custom serializer maps
-     * the `{ commands: [...] }` payload onto a Maestro commands-list YAML before execution.
-     *
-     * Mobile-only escape hatch: web is Playwright-native (`web_*`), so this is gated to
-     * android + ios. Author-only (`surfaceToLlm: false`) — the LLM uses the semantic tools.
-     */
-    mobile_maestro: {
-      args: {
-        /** Ordered list of Maestro command maps to run, in `MaestroYamlParser` flow shape. */
-        commands: Array<Record<string, unknown>>;
-      };
-      result: string;
-    };
-
-    /**
      * Run a process on the **host** JVM via argv (no shell). Host-only (`requiresHost = true`) — for
      * **tool authors**, not the LLM (`surfaceToLlm = false`). The escape hatch for composing host
      * CLIs from a scripted tool: iOS `xcrun simctl …` (pair with `ctx.device.instanceId` for the
@@ -335,6 +308,22 @@ declare module "@trailblaze/scripting" {
         /** Intent extras. `value` is the literal `am broadcast` text; `type` defaults to `string`. */
         extras?: Array<{ key: string; value: string; type?: string }>;
       };
+      result: string;
+    };
+
+    /**
+     * Reconnect the host session to an Android device that has rebooted, so the trail's later
+     * steps keep running against it. Relaunches the on-device runner and resumes the recording's
+     * logcat/video on the new boot.
+     *
+     * The caller owns the reboot: trigger or detect it (via `exec adb`, since the on-device tools
+     * are down until the device is back), wait for `sys.boot_completed=1`, then call this once.
+     * Host-only (`trailblaze run`); Android-only.
+     *
+     * Source: `AndroidReconnectSessionTrailblazeTool.kt` (`android_reconnectSession`).
+     */
+    android_reconnectSession: {
+      args: Record<string, never>;
       result: string;
     };
 

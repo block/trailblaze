@@ -273,7 +273,7 @@ class MaestroNestedToolCompositionTest {
   }
 
   @Test
-  fun `recorded launches retain authored memory references and exclude resolved credentials`() = runBlocking {
+  fun `launch logs retain authored memory references and exclude resolved credentials`() = runBlocking {
     for (reference in listOf("{{oauth2Token}}", "\${oauth2Token}", "{{ oauth2Token }}", "\${ oauth2Token }", "{{session-token}}", "prefix-{{oauth2Token}}")) {
       val captured = mutableListOf<TrailblazeLog>()
       val agent = FixtureAgent(logger = TrailblazeLogger(
@@ -292,7 +292,7 @@ class MaestroNestedToolCompositionTest {
       val delivered = agent.executedCommands.filterIsInstance<LaunchAppCommand>().single()
       kotlin.test.assertContains(delivered.launchArguments?.get("credential").toString(), "fixture-session-secret")
       val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
-      assertThat(log.isRecordable).isEqualTo(true)
+      assertThat(log.isRecordable).isEqualTo(false)
       if (reference.startsWith("prefix-")) {
         kotlin.test.assertFalse(log.rawTrailblazeTool.toString().contains(reference))
         kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "<redacted>")
@@ -305,7 +305,7 @@ class MaestroNestedToolCompositionTest {
   }
 
   @Test
-  fun `reference shaped resolved credential is masked but its authored reference remains recordable`() = runBlocking {
+  fun `reference shaped resolved credential is masked but its authored reference stays in the log`() = runBlocking {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = FixtureAgent(logger = TrailblazeLogger(
       logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
@@ -318,7 +318,7 @@ class MaestroNestedToolCompositionTest {
     agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
 
     val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
-    assertThat(log.isRecordable).isEqualTo(true)
+    assertThat(log.isRecordable).isEqualTo(false)
     kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{oauth2Token}}")
     kotlin.test.assertFalse(log.toString().contains("prefix-{{literal}}-suffix"))
   }
@@ -384,7 +384,7 @@ class MaestroNestedToolCompositionTest {
   }
 
   @Test
-  fun `numeric launch argument is masked after dispatch while its reference remains recordable`() = runBlocking {
+  fun `numeric launch argument is masked after dispatch while its reference stays in the log`() = runBlocking {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = FixtureAgent(logger = TrailblazeLogger(
       logEmitter = LogEmitter { captured += it }, screenStateLogger = ScreenStateLogger { "" },
@@ -397,7 +397,7 @@ class MaestroNestedToolCompositionTest {
     agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
 
     val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
-    assertThat(log.isRecordable).isEqualTo(true)
+    assertThat(log.isRecordable).isEqualTo(false)
     kotlin.test.assertContains(log.rawTrailblazeTool.toString(), "{{args.pin}}")
     kotlin.test.assertFalse(log.toString().contains("47391"))
   }
@@ -474,7 +474,7 @@ class MaestroNestedToolCompositionTest {
     agent.runTrailblazeTools(tools = listOf(launch), elementComparator = noOpComparator)
 
     val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
-    assertThat(log.isRecordable).isEqualTo(true)
+    assertThat(log.isRecordable).isEqualTo(false)
     kotlin.test.assertFalse(log.toString().contains("fixture-session-secret"))
   }
 

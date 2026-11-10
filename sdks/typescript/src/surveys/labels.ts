@@ -201,16 +201,21 @@ function normalize(result: unknown): LabelInput<object>[] {
   return Array.isArray(result) ? [...(result as LabelInput<object>[])] : [result as LabelInput<object>];
 }
 
+/** A label type, the same rule the trail file's label lint applies. */
+const LABEL_TYPE = /^[a-z0-9][a-z0-9.-]*$/;
+
 /**
- * Throws unless `l` is a label a report can carry: a name, and at least one finding proving it,
+ * Throws unless `l` is a label a report can carry: a type and a name, and at least one finding proving it,
  * each one of the findings this label phase was given ([cited]).
  */
 function validated(l: LabelInput<object>, survey: string, cited: ReadonlySet<Finding>): LabelInput<object> {
   if (typeof l?.name !== "string" || l.name.trim() === "") {
     throw new Error(`survey ${survey} returned a label without a name`);
   }
-  if (l.type !== undefined && typeof l.type !== "string") {
-    throw new Error(`survey ${survey} returned label ${l.name} whose type is not a string`);
+  if (typeof l.type !== "string" || !LABEL_TYPE.test(l.type)) {
+    throw new Error(
+      `survey ${survey} returned label ${l.name} without a valid type; a type is lowercase letters, digits, \`-\` and \`.\`, starting with a letter or digit`,
+    );
   }
   // As a finding is pinned to the records that prove it, a label is pinned to its findings.
   if (!Array.isArray(l.findings) || l.findings.length === 0) {
@@ -228,7 +233,7 @@ function validated(l: LabelInput<object>, survey: string, cited: ReadonlySet<Fin
 function merge(labels: LabelInput<object>[], survey: string, version: string | undefined, runIndex: Map<string, number>): Label[] {
   const byKey = new Map<string, { label: LabelInput<object>; findings: Finding<object>[] }>();
   for (const l of labels) {
-    const key = `${l.type ?? ""}\u0000${l.name}`;
+    const key = `${l.type}\u0000${l.name}`;
     const entry = byKey.get(key);
     if (!entry) byKey.set(key, { label: l, findings: [...new Set(l.findings)] });
     else for (const f of l.findings) if (!entry.findings.includes(f)) entry.findings.push(f);
@@ -243,9 +248,8 @@ function merge(labels: LabelInput<object>[], survey: string, version: string | u
 
 function recordOf(l: Label, indexOf: ReadonlyMap<Finding, number>): LabelRecord {
   const findings = l.findings.map((f) => ({ survey: f.survey, session: f.session, index: indexOf.get(f as Finding)!, summary: f.summary }));
-  const out: LabelRecord = { survey: l.survey, name: l.name, runs: l.runs, findings };
+  const out: LabelRecord = { survey: l.survey, type: l.type, name: l.name, runs: l.runs, findings };
   if (l.version !== undefined) out.version = l.version;
-  if (l.type !== undefined) out.type = l.type;
   if (l.reasoning !== undefined) out.reasoning = l.reasoning;
   if (l.data !== undefined) out.data = l.data;
   return out;

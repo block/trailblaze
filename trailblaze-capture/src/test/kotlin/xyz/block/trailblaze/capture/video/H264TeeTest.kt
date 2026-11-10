@@ -547,6 +547,127 @@ class H264TeeTest {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Device reboot — a reader that gave up is restarted once the device is back
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A producer that streams [first], ends, and whose respawns fail [failedRespawns] times (the
+   * device is rebooting and nothing can stream it) before the next spawn streams [second]. The
+   * reader gives up on the first failed respawn, which is what a reconnect must undo.
+   */
+  private class RebootingProducer(
+    private val first: ByteArray,
+    private val second: ByteArray,
+  ) : H264Tee.ProducerFactory {
+    val spawns = AtomicInteger(0)
+    val respawns = AtomicInteger(0)
+    val reconnectedDevices = mutableListOf<String>()
+
+    override fun spawn(deviceId: TrailblazeDeviceId, videoSize: String, bitRate: String, unlimited: Boolean): H264Tee.ProducerHandle {
+      val bytes = if (spawns.getAndIncrement() == 0) first else second
+      return object : H264Tee.ProducerHandle {
+        override val input: InputStream = ByteArrayInputStream(bytes)
+        override fun close() {}
+      }
+    }
+
+    override fun respawn(deviceId: TrailblazeDeviceId, videoSize: String, bitRate: String, unlimited: Boolean): H264Tee.ProducerHandle {
+      respawns.incrementAndGet()
+      throw IllegalStateException("${deviceId.instanceId} has no screenrecord, and scrcpy is not streaming it")
+    }
+
+    override fun onDeviceReconnected(deviceId: TrailblazeDeviceId) {
+      reconnectedDevices += deviceId.instanceId
+    }
+  }
+
+  @Test
+  fun `a reader that gave up while the device rebooted is restarted when the device is back`() {
+    val first = byteArrayOf(1, 2, 3, 4)
+    val second = byteArrayOf(5, 6, 7, 8)
+    val producer = RebootingProducer(first, second)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = producer,
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
+    )
+    val consumer = tee.attach(ringBufferBytes = 64 * 1024)
+    val firstChunk = readBytesUntilRestart(consumer, timeoutMs = 2_000L)
+    // The reader signaled the restart, then its respawn failed and it stopped.
+    val deadline = System.currentTimeMillis() + 5_000L
+    while (producer.respawns.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+    while (tee.isFeeding && System.currentTimeMillis() < deadline) Thread.sleep(10)
+    assertEquals(1, producer.respawns.get())
+    assertFalse(tee.isFeeding, "nothing streams the device while it is down")
+
+    tee.onDeviceReconnected()
+
+    val secondChunk = readBytesUntilEmpty(consumer, expected = second.size, timeoutMs = 2_000L)
+    assertTrue(firstChunk.contentEquals(first))
+    assertTrue(secondChunk.contentEquals(second), "the consumer receives the new boot's stream after the restart signal")
+    assertEquals(listOf(deviceId.instanceId), producer.reconnectedDevices, "the factory is told so it forgets the reboot's failures")
+    assertEquals(2, producer.spawns.get(), "the restart is a fresh spawn, which may try scrcpy again")
+    consumer.detach()
+  }
+
+  @Test
+  fun `a reconnect does not disturb a stream that is still running`() {
+    val pipeOut = PipedOutputStream()
+    val pipeIn = PipedInputStream(pipeOut, 64)
+    val spawns = AtomicInteger(0)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = H264Tee.ProducerFactory { _, _, _, _ ->
+        spawns.incrementAndGet()
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = pipeIn
+          override fun close() = runCatching { pipeIn.close() }.let { Unit }
+        }
+      },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
+    )
+    val consumer = tee.attach(ringBufferBytes = 64 * 1024)
+
+    tee.onDeviceReconnected()
+
+    val bytes = byteArrayOf(9, 8, 7)
+    pipeOut.write(bytes)
+    pipeOut.flush()
+    val chunk = readBytesUntilEmpty(consumer, expected = bytes.size, timeoutMs = 2_000L)
+    assertTrue(chunk.contentEquals(bytes), "the running producer keeps feeding the consumer")
+    assertEquals(1, spawns.get(), "a live reader is not replaced")
+    consumer.detach()
+    runCatching { pipeOut.close() }
+  }
+
+  @Test
+  fun `a reconnect with no consumers attached starts nothing`() {
+    val spawns = AtomicInteger(0)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = H264Tee.ProducerFactory { _, _, _, _ ->
+        spawns.incrementAndGet()
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = ByteArrayInputStream(byteArrayOf(1))
+          override fun close() {}
+        }
+      },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
+      restartOnUnexpectedExit = false,
+    )
+
+    tee.onDeviceReconnected()
+
+    assertEquals(0, spawns.get())
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Lifecycle — ref-counted start/stop
   // ──────────────────────────────────────────────────────────────────────────
 

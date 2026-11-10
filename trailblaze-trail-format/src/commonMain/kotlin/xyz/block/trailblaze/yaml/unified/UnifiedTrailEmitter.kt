@@ -56,11 +56,7 @@ internal class UnifiedTrailEmitter(
     val isSteplessMetadataDoc = trail.trailhead == null && trail.trail.isEmpty()
     if (trail.config != UnifiedTrailConfig() || isSteplessMetadataDoc) {
       sb.append("config:\n")
-      val configYaml = yamlInstance.encodeToString(UnifiedTrailConfig.serializer(), trail.config)
-      // A fully-default config serializes to `{}` (or blank on some KAML configs); force an
-      // explicit
-      // `{}` so the config-only doc is never an empty section.
-      appendIndented(sb, configYaml.ifBlank { "{}" }, indent = INDENT_2)
+      appendIndented(sb, configYaml(trail.config), indent = INDENT_2)
       wroteSection = true
     }
 
@@ -84,6 +80,47 @@ internal class UnifiedTrailEmitter(
     }
     if (!sb.endsWith('\n')) sb.append('\n')
     return sb.toString()
+  }
+
+  /**
+   * The `config:` body. KAML writes everything except the two label lists; those are written by
+   * [TrailLabels.renderBlock], one label per line, and placed right after `tags:` (or, without
+   * tags, before the first key KAML writes after it) so a trail's labels sit next to its tags.
+   *
+   * A fully-default config serializes to `{}` (or blank on some KAML configs); an explicit `{}`
+   * keeps a config-only doc from having an empty section.
+   */
+  private fun configYaml(config: UnifiedTrailConfig): String {
+    val labelBlocks = buildString {
+      config.labels?.let { append(TrailLabels.renderBlock(TrailLabels.CURATED_KEY, it)) }
+      config.generatedLabels?.let { append(TrailLabels.renderBlock(TrailLabels.GENERATED_KEY, it)) }
+    }
+    val rest =
+      yamlInstance
+        .encodeToString(
+          UnifiedTrailConfig.serializer(),
+          config.copy(labels = null, generatedLabels = null),
+        )
+        .trimEnd('\n')
+    if (labelBlocks.isEmpty()) return rest.ifBlank { "{}" }
+    if (rest.isBlank() || rest == "{}") return labelBlocks
+    // Split KAML's output into one chunk per top-level key; continuation lines (indented, or a
+    // block sequence's `- ` items, which KAML writes at the key's own indent) stay with their key.
+    val chunks = mutableListOf<Pair<String, MutableList<String>>>()
+    for (line in rest.split('\n')) {
+      val key = TOP_LEVEL_KEY.find(line)?.groupValues?.get(1)
+      if (key != null || chunks.isEmpty()) chunks += (key.orEmpty() to mutableListOf(line))
+      else chunks.last().second += line
+    }
+    val insertAt =
+      chunks.indexOfFirst { (key, _) -> key in KEYS_AFTER_LABELS }.takeIf { it >= 0 } ?: chunks.size
+    return buildString {
+      chunks.forEachIndexed { index, (_, lines) ->
+        if (index == insertAt) append(labelBlocks)
+        lines.forEach { append(it).append('\n') }
+      }
+      if (insertAt == chunks.size) append(labelBlocks)
+    }
   }
 
   /**
@@ -238,6 +275,12 @@ internal class UnifiedTrailEmitter(
   }
 
   companion object {
+    /** A top-level `key:` line of KAML's config output. */
+    private val TOP_LEVEL_KEY = Regex("^([A-Za-z_][A-Za-z0-9_]*):")
+
+    /** The [UnifiedTrailConfig] keys KAML writes after `tags`, before which the label lists go. */
+    private val KEYS_AFTER_LABELS = setOf("context", "memory", "metadata", "title", "args")
+
     private const val INDENT_2 = "  "
     private const val INDENT_4 = "    "
     private const val INDENT_6 = "      "

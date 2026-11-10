@@ -77,7 +77,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `tool` | Run a Trailblaze tool by name (e.g., tap, type) |
 | `toolbox` | Browse available tools by target app and platform |
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
-| `loop` | Run a trail's trailhead once, then repeat its steps in a loop. |
+| `loop` | Run a trail over and over. |
 | `usages` | Find every trail that directly invokes a tool (IDE "Find Usages" for tools). |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings. |
@@ -350,7 +350,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 
 ### `trailblaze loop`
 
-Run a trail's trailhead once, then repeat its steps in a loop.  One session runs the `trailhead:`, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began.  A failed pass is reported, handed to --on-failure, and counted toward --iterations. The loop then recovers in a new session that runs the trailhead again, and continues with the passes left. It stops early after 3 sessions in a row that complete no pass. Exits non-zero if any pass failed.  Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the time limit, a pass still running is cancelled and is not counted as a failure.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it. Each pass then runs the whole trail in a session of its own.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations and --time-limit each. Never saves a recording: it would record every pass into the trail.
+Run a trail over and over.  Each pass runs the whole trail, `trailhead:` included, in a session of its own, so it sets up from scratch and inherits nothing from the pass before.  A failed pass is reported, handed to --on-failure, and counted toward --iterations, and the loop goes on with the next pass. It stops early after 3 passes in a row fail. Exits non-zero if any pass failed.  Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the time limit, a pass still running is cancelled and is not counted as a failure.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it.  With --same-session, one session runs the `trailhead:` once, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began. After a failed pass, the loop recovers in a new session that runs the trailhead again.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations and --time-limit each. Never saves a recording: it would record every pass into the trail.
 
 **Synopsis:**
 
@@ -408,7 +408,8 @@ trailblaze loop [OPTIONS] [<<trailFile>>]
 | `-n`, `--iterations` | How many passes to run, failed ones included. Optional with --time-limit. | - |
 | `--time-limit` | How long to loop, as hours, minutes and seconds: 8h, 90m, 1h30m, 45s. At the limit, a pass still running is cancelled and not counted as a failure. A run that is not delegated to a daemon (--no-daemon) can't be cancelled, so its pass finishes first. Optional with --iterations. | - |
 | `--on-failure` | Run this shell command for each failed pass, with the failed session's log directory appended as its last argument. It runs alongside the loop, one at a time: the loop waits for it before starting the next one, and before exiting. | - |
-| `--reuse-trailhead` | Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting up again. Each pass then runs the whole trail, trailhead included, in a session of its own. Only a trailhead that defines `teardown` hands its setup on, and only after a pass that passed; otherwise the next pass sets up from scratch. | - |
+| `--reuse-trailhead` | Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting up again. A pass then inherits whatever the last one left in the app or on the account. Only a trailhead that defines `teardown` hands its setup on, and only after a pass that passed; otherwise the next pass sets up from scratch. | - |
+| `--same-session` | Run the trailhead once, then repeat the trail's steps in one session, each pass starting where the previous one left the app. Faster, for a trail whose steps end where they began. A failed pass ends the session, and a new one runs the trailhead again. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -727,7 +728,7 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--link-images` | Link screenshots and session recordings from the session directories instead of embedding them, which keeps the report small and fast to build for large runs. The links are relative to where the report is written, so it renders only beside the logs directory it came from: open it in place, or host the logs directory with its layout intact (the report and every session directory, at the same relative paths). | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
 | `-v`, `--verbose` | Show the generator's own progress logs — workspace config loading, tool-class discovery, per-session clock normalisation, and step timings. Suppressed by default so the report paths are the output; turn this on when a report is slow or empty and you need to see which session the generator was working on. | - |
-| `--surveys` | Also run surveys over the report's sessions, and write what they found beside the report: surveys.md (labels, the findings behind each, and the runs they came from) and surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated (--surveys=journeys,jobs). Each session's findings and labels are stored in its surveys.json too. Surveys never run unless asked. Put a session id before this flag, or it is read as a survey name. | - |
+| `--surveys` | Also run surveys over the report's sessions, and write what they found beside the report: surveys.md (labels, the findings behind each, and the runs they came from) and surveys.json. Bare, every survey the workspace carries runs; or name them, comma-separated (--surveys=journeys,jobs). Each session's findings and labels are stored in its surveys.json too. Without this flag only the workspace's warning surveys run, so the report shows each run's warnings. Put a session id before this flag, or it is read as a survey name. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -829,8 +830,10 @@ trailblaze survey [OPTIONS] [<<session>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--survey` | Only run the survey exported under this name (repeatable). | - |
+| `--warnings` | Only run warning surveys (`warning: true`), whose findings mark a run that passed but needs a look. | - |
 | `--format` | What to print: markdown (default), summary, json, or none. | - |
 | `-o`, `--out` | Also write the JSON report to this file. | - |
+| `--update-trails` | Also add the labels the selected surveys found to each run's trail, in its generatedLabels: a trail file, or a directory searched for trails by config.id (repeatable). Only adds; edits the files in place and commits nothing. | - |
 | `--logs-dir` | Directory session ids resolve in. Defaults to the configured logs directory. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |

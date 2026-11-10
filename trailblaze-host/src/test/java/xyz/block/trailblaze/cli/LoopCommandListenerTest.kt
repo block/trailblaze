@@ -85,6 +85,7 @@ class LoopCommandListenerTest {
   private fun loop(extension: LoopExtension?, iterations: Int = 5, pollMillis: Long = 3_600_000L): LoopCommand =
     LoopCommand().also { loop ->
       loop.iterations = iterations
+      loop.sameSession = true
       loop.trailFiles = listOf(trailFile)
       loop.passPollMillis = pollMillis
       // A real run registers the extension as a mixin, which is where the loop finds it.
@@ -147,8 +148,8 @@ class LoopCommandListenerTest {
   }
 
   @Test
-  fun `with --reuse-trailhead a listener hears each pass, one session each, a failed one included`() {
-    val loop = loop(Recorder(), iterations = 2).apply { reuseTrailhead = true }
+  fun `by default a listener hears each pass, one session each, a failed one included`() {
+    val loop = loop(Recorder(), iterations = 2).apply { sameSession = false }
     val failed = session(trailhead to Ok(0, 100), open to Ok(200, 300), check to Fail(310, 450, "The menu is closed"))
     val passed = session(trailhead to Ok(1_000, 1_100), open to Ok(1_200, 1_300), check to Ok(1_310, 1_400))
 

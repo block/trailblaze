@@ -30,7 +30,7 @@ import type {
 import { createSessionEvents, type SessionEvents } from "./session-events.js";
 import { createSessionSurveys, type TrailblazeSurveys } from "./session-surveys.js";
 import { createToolHistory, type ToolHistory } from "./history.js";
-import type { TrailblazeSessionResources } from "./session-resources.js";
+import { guardedDuringCleanupBuild, toolSessionForContext, type TrailblazeToolSession } from "./session-undo.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
 import {
   attachTrailheadReportToResult,
@@ -106,10 +106,10 @@ export interface ToolContext {
    */
   target?: TrailblazeTarget;
   /**
-   * Opaque process-local session resources. Available on host subprocess tools; use it to
-   * register release callbacks for handles that must never enter `ctx.memory` or a tool result.
+   * The session this call belongs to. `addCleanup((tools) => tools.<tool>(args))` runs that tool call when
+   * the trail ends, in every runtime, to undo a device change.
    */
-  session?: TrailblazeSessionResources;
+  session?: TrailblazeToolSession;
   /**
    * The last trail's hand-off. Non-null only in a trailhead's own handler, when the last run of
    * the same trailhead on this device said its setup is reusable (see `trailhead.teardown`).
@@ -459,12 +459,12 @@ export function defineTypedTool<TInput, TResult>(
     const events = createSessionEvents(client.host);
     const device = normalizeDevice(legacyCtx?.device);
     const toolContext: ToolContext = {
-      tools: client.tools,
+      tools: guardedDuringCleanupBuild(client.tools),
       host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
       memory,
       device,
       target: legacyCtx?.target,
-      session: legacyCtx?.session,
+      session: toolSessionForContext(legacyCtx, client.tools),
       previousRun: trailhead.previousRun,
       events,
       surveys: createSessionSurveys(client.host, events, {
@@ -518,12 +518,12 @@ export function defineTypedTool<TInput, TResult>(
       const events = createSessionEvents(client.host);
       const device = normalizeDevice(legacyCtx?.device);
       const toolContext: ToolContext = {
-        tools: client.tools,
+        tools: guardedDuringCleanupBuild(client.tools),
         host: hostWithPlatform(client.host, parseHostPlatform(legacyCtx?.hostPlatform)),
         memory,
         device,
         target: legacyCtx?.target,
-        session: legacyCtx?.session,
+        session: toolSessionForContext(legacyCtx, client.tools),
         previousRun: null,
         events,
         surveys: createSessionSurveys(client.host, events, {

@@ -56,6 +56,7 @@ class AndroidAccessibilityClickTrailblazeToolTest {
       longPress: Boolean,
       tapRoute: TapRouteOverride?,
       timeoutMs: Long?,
+      hideKeyboardBefore: Boolean,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       taps += Tap(longPress, tapRoute, timeoutMs)

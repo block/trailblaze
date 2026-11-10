@@ -897,7 +897,6 @@ class TrailblazeMcpServer(
             deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType, sessionClassifiers),
             config = TrailblazeConfig.DEFAULT,
             sessionId = launchSessionId,
-            resourceSessionId = daemonToolSessionId(sessionId, deviceId),
             sessionLogDir = sessionDir,
             toolRepo = toolRepo,
             baseUrl = JsScriptingCallbackBaseUrl.get(),

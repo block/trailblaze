@@ -62,6 +62,26 @@ class AnotherAppInFrontOnDeviceTest {
     scenario.close()
   }
 
+  /**
+   * A selector polled the moment a trail starts another app, before its window is in front: the
+   * first read finds no other app, and by the time the app's own screen is read its Activity is
+   * paused behind the new one. Read with the target a running trail has, whose Activity is
+   * whichever one is resumed, this waited out the two-minute launch timeout and failed.
+   */
+  @Test
+  fun aSelectorFindsAnotherAppsWindowThatWasStillOpeningWhenThePollBegan() {
+    agent = agentFor(
+      RuleBackedAndroidTestTarget(
+        activityProvider = { AppUnderTestLauncher.awaitResumedActivity(yieldToAnotherApp = true) },
+        composeTestRule = composeRule,
+      ),
+    )
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
+    run(AndroidTestAssertVisibleTool(SETTINGS_CATEGORY, timeoutMs = FRONT_WINDOW_TIMEOUT_MS))
+  }
+
   @Test
   fun aSelectorFindsAndTapsAnotherAppsWindowThenTheAppTakesOverAgain() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -69,12 +89,7 @@ class AnotherAppInFrontOnDeviceTest {
     val front = awaitFrontPackage { it != null }
     assertTrue(front != null, "Settings never came to the front")
 
-    // Settings' home lists its categories; which ones, and their wording, varies by release.
-    val category = TrailblazeNodeSelector(
-      androidAccessibility = DriverNodeMatch.AndroidAccessibility(
-        textRegex = "(?i).*(network|internet|connections|wi.?fi).*",
-      ),
-    )
+    val category = SETTINGS_CATEGORY
     run(AndroidTestAssertVisibleTool(category))
     val tapped = run(AndroidTestTapTool(category))
     assertTrue(tapped.contains("another app's window"), "The tap should land through the other app's window, got: $tapped")
@@ -136,6 +151,12 @@ class AnotherAppInFrontOnDeviceTest {
   }
 
   private companion object {
+    // Settings' home lists its categories; which ones, and their wording, varies by release.
+    val SETTINGS_CATEGORY = TrailblazeNodeSelector(
+      androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+        textRegex = "(?i).*(network|internet|connections|wi.?fi).*",
+      ),
+    )
     const val FRONT_WINDOW_TIMEOUT_MS = 10_000L
     const val BACK_PRESSES_TO_LEAVE_SETTINGS = 4
   }

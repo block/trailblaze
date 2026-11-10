@@ -142,6 +142,12 @@ load whichever matches the task at hand.
    and the building blocks (`openApp`, clear data, stop, grant
    permissions) it is made of.
 
+   → **Load [`references/multi-device-trails.md`](references/multi-device-trails.md)**
+   when one trail drives more than one device (a seller and a buyer
+   display, a phone and a tablet). Covers named configurations,
+   `switchDevice` handover, recording with `--bind`, and how to prove
+   the handover happened.
+
 3. **Compose your own agent surface.** Give your agent first-class
    commands like `login` or `addToCart`, named waypoints for your
    screens, and trailmaps from other teams. Curate exactly what your

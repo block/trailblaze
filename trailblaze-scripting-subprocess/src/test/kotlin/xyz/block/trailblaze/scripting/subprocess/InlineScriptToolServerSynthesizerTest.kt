@@ -285,10 +285,7 @@ class InlineScriptToolServerSynthesizerTest {
       try {
         runCatching {
           val listed = session.client.listTools(ListToolsRequest()).tools
-          assertThat(listed.map { it.name }).containsExactlyInAnyOrder(
-            "greetUserInline",
-            SessionResourceFinalizerProtocol.TOOL_NAME,
-          )
+          assertThat(listed.map { it.name }).containsExactlyInAnyOrder("greetUserInline")
           val schema = listed.single { it.name == "greetUserInline" }.inputSchema
           assertThat(schema.toString()).contains("type")
           assertThat(schema.toString()).contains("greeting")
@@ -398,16 +395,13 @@ class InlineScriptToolServerSynthesizerTest {
         assertThat(advertised).containsExactlyInAnyOrder(
           "firstInlineTool",
           "secondInlineTool",
-          SessionResourceFinalizerProtocol.TOOL_NAME,
         )
 
         // Call both tools through the same subprocess to confirm each named export routes
         // through to the corresponding registered handler. If the synthesizer's per-tool
         // dispatcher leaked across the two registrations (e.g. shared a `handler` reference
         // that got overwritten in the loop), one of these would return the other's text.
-        val responses = advertised.filterNot {
-          it == SessionResourceFinalizerProtocol.TOOL_NAME
-        }.map { toolName ->
+        val responses = advertised.map { toolName ->
           val response = session.client.callTool(
             CallToolRequest(
               params = CallToolRequestParams(
@@ -1183,10 +1177,7 @@ class InlineScriptToolServerSynthesizerTest {
       }
       try {
         val listed = session.client.listTools(ListToolsRequest()).tools
-        assertThat(listed.map { it.name }).containsExactlyInAnyOrder(
-          "runIfLike",
-          SessionResourceFinalizerProtocol.TOOL_NAME,
-        )
+        assertThat(listed.map { it.name }).containsExactlyInAnyOrder("runIfLike")
         assertThat(listed.single { it.name == "runIfLike" }.inputSchema.toString()).contains("condition")
       } finally {
         session.shutdown()

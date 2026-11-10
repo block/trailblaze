@@ -17,8 +17,12 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.AndroidForceStopTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidGrantPermissionsTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ClearAppDataTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -26,6 +30,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
@@ -102,7 +108,7 @@ class AndroidTestTrailblazeAgent(
 
   val screenStateProvider: () -> ScreenState =
     screenStateProviderOverride ?: {
-      ForeignWindow.screenStateIfInFront(emptyList(), includeScreenshot = true) ?: AndroidTestScreenState(target)
+      ForeignWindow.screenState(emptyList(), includeScreenshot = true) { AndroidTestScreenState(target) }
     }
 
   override fun buildExecutionContext(
@@ -175,7 +181,8 @@ class AndroidTestTrailblazeAgent(
     tool: AndroidTestExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    AppUnderTestLauncher.markTouched()
+    AppUnderTestLauncher.launchIfDeferred()
+    if (tool.mayMoveTheScreen()) AppUnderTestLauncher.markTouched()
     AppUnderTestLauncher.markUsed()
     return executeMeasured(tool, context, DISPATCH_SPAN_NATIVE) { resolved ->
       resolved.executeWithAndroidTest(target, context)
@@ -186,7 +193,8 @@ class AndroidTestTrailblazeAgent(
     tool: ExecutableTrailblazeTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    if (tool !is LaunchAppTrailblazeTool) AppUnderTestLauncher.markTouched()
+    if (tool.needsTheApp()) AppUnderTestLauncher.launchIfDeferred()
+    if (tool.mayMoveTheScreen()) AppUnderTestLauncher.markTouched()
     return refuseIfSelfDestructive(tool)
       ?: executeCanonicalTool(tool, context)
       ?: refuseIfMaestroBound(tool)
@@ -195,6 +203,37 @@ class AndroidTestTrailblazeAgent(
         // instrumented package here.
         refuseIfSelfDestructive(resolved) ?: resolved.execute(context)
       }
+  }
+
+  /**
+   * Whether [this] needs the app running in front. Device commands that go through adb or the
+   * package manager do not, and `launchApp` launches it itself; so a setup made of them runs
+   * before the app's first, deferred launch (see [AppUnderTestLauncher.launchOnFirstUse]).
+   */
+  private fun ExecutableTrailblazeTool.needsTheApp(): Boolean = when (this) {
+    is LaunchAppTrailblazeTool,
+    is AdbShellTrailblazeTool,
+    is ListInstalledAppsTrailblazeTool,
+    is AndroidSendBroadcastTrailblazeTool,
+    is AndroidGrantPermissionsTrailblazeTool,
+    is AndroidForceStopTrailblazeTool,
+    is ClearAppDataTrailblazeTool,
+    -> false
+    else -> true
+  }
+
+  /**
+   * Whether [this] may have moved the app off the screen its cold launch left it on. A read or a
+   * permission grant sends the app no input, so a trailhead's launch right after one would only
+   * repeat the cold start the runner just paid for. A broadcast does count: its receiver can sign
+   * in or navigate without restarting the process, and a restart launch after it must then run.
+   */
+  private fun ExecutableTrailblazeTool.mayMoveTheScreen(): Boolean = when (this) {
+    is LaunchAppTrailblazeTool,
+    is ReadOnlyTrailblazeTool,
+    is AndroidGrantPermissionsTrailblazeTool,
+    -> false
+    else -> !isVerificationToolInstance()
   }
 
   /**

@@ -115,6 +115,20 @@ data class UnifiedTrailConfig(
    */
   @kotlinx.serialization.Serializable(with = xyz.block.trailblaze.yaml.TrailArgMapSerializer::class)
   val args: Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>? = null,
+  /**
+   * Curated labels: what a person says this trail covers (`{ type: job, name: … }`). No tool adds,
+   * changes or removes these. See [TrailLabel].
+   *
+   * Declared last to keep earlier positional accessors stable; the emitter writes both label lists
+   * right after [tags] regardless.
+   */
+  val labels: List<TrailLabel>? = null,
+  /**
+   * Labels the survey command wrote from what this trail's runs showed. Each names the survey rule
+   * that produced it. Written only by that command, in [TrailLabels.CANONICAL_ORDER]; `trailblaze
+   * check` fails a hand-edited block. See [TrailLabel].
+   */
+  val generatedLabels: List<TrailLabel>? = null,
 ) {
   /**
    * Names of the multi-device CONFIGURATION entries in [devices] (entries carrying an inner

@@ -19,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
+import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailblazeDispatchers
 
@@ -180,6 +181,9 @@ class OkHttpFetchExtension(
         "invalid or unsupported URL '${request.url}' — only http/https URLs are supported",
       )
     val method = request.method.uppercase()
+    if (request.redirect !in REDIRECT_MODES) {
+      return errorJson("unsupported redirect mode '${request.redirect}' — use \"follow\", \"manual\" or \"error\"")
+    }
     if (!allowlist.isAllowed(httpUrl.host)) {
       // Only reachable when a restrictive allow-list was opted into. Same shape as the success line,
       // BLOCKED in the status slot.
@@ -191,12 +195,24 @@ class OkHttpFetchExtension(
       )
     }
     // Device-local HTTPS is the self-signed case; everything else keeps full validation.
-    val callClient =
+    val baseClient =
       if (httpUrl.isHttps && isDeviceLocalHost(httpUrl.host)) tlsRelaxedClient else httpClient
+    // "manual" and "error" stop at the first 3xx. Like Bun and Node (not a browser's opaque
+    // redirect), "manual" returns that response with its status and `Location` header.
+    val callClient =
+      if (request.redirect == "follow") {
+        baseClient
+      } else {
+        baseClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+      }
     return try {
       withContext(TrailblazeDispatchers.IO) {
         val startedMs = System.currentTimeMillis()
         callClient.newCall(buildRequest(httpUrl, request)).execute().use { response ->
+          if (request.redirect == "error" && response.code in REDIRECT_STATUSES) {
+            Console.log("[OkHttpFetchExtension] $method ${response.code} ${logSafeUrl(httpUrl)} — redirect refused (redirect: \"error\")")
+            return@withContext errorJson("redirect from ${logSafeUrl(httpUrl)} refused (redirect: \"error\")")
+          }
           val bodyText = response.body.string()
           // Per-request breadcrumb: `METHOD status url (ms)`, e.g.
           // `POST 200 https://host.com/path (123ms)`. See [logSafeUrl] for why the query string is
@@ -208,6 +224,9 @@ class OkHttpFetchExtension(
               status = response.code,
               statusText = response.message,
               url = response.request.url.toString(),
+              // `priorResponse` is also set by OkHttp's other follow-ups (a 408 retry, an auth challenge).
+              redirected = generateSequence(response.priorResponse) { it.priorResponse }
+                .any { it.code in REDIRECT_STATUSES },
               headers = response.headers.map { (name, value) -> listOf(name, value) },
               bodyText = bodyText,
             ),
@@ -289,7 +308,7 @@ class OkHttpFetchExtension(
   private fun errorJson(message: String): String =
     JSON.encodeToString(FetchErrorPayload.serializer(), FetchErrorPayload(message))
 
-  /** Wire shape the JS shim sends to [FETCH_BINDING_NAME]: `{ url, method, headers, body }`. */
+  /** Wire shape the JS shim sends to [FETCH_BINDING_NAME]: `{ url, method, headers, body, redirect }`. */
   @Serializable
   private data class FetchRequestPayload(
     val url: String,
@@ -297,6 +316,8 @@ class OkHttpFetchExtension(
     /** Header pairs as `[name, value]` — preserves duplicates/order the JS side collected. */
     val headers: List<List<String>> = emptyList(),
     val body: String? = null,
+    /** WHATWG `RequestInit.redirect`: `"follow"` (default), `"manual"` or `"error"`. */
+    val redirect: String = "follow",
   )
 
   /** Wire shape returned on success; the shim builds the `Response` object from it. */
@@ -305,6 +326,8 @@ class OkHttpFetchExtension(
     val status: Int,
     val statusText: String,
     val url: String,
+    /** Whether any redirect was followed to reach [url]. */
+    val redirected: Boolean = false,
     val headers: List<List<String>>,
     val bodyText: String,
   )
@@ -339,6 +362,11 @@ class OkHttpFetchExtension(
      */
     private val DEVICE_LOCAL_HOSTS: Set<String> =
       setOf("localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1") + EMULATOR_HOST_ALIASES
+
+    private val REDIRECT_MODES: Set<String> = setOf("follow", "manual", "error")
+
+    /** WHATWG fetch's redirect statuses. OkHttp's `isRedirect` also counts 300, which fetch doesn't. */
+    private val REDIRECT_STATUSES: Set<Int> = setOf(301, 302, 303, 307, 308)
 
     private val METHODS_REQUIRING_BODY: Set<String> =
       setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
@@ -441,8 +469,11 @@ class OkHttpFetchExtension(
             method: init.method ? String(init.method) : 'GET',
             headers: normalizeHeaders(init.headers),
             body: (init.body === undefined || init.body === null) ? null : String(init.body),
+            redirect: init.redirect === undefined ? 'follow' : String(init.redirect),
           });
 
+          // ASCII only, so emoji survive the crossing; QuickJsToolHost installs this before extensions.
+          requestJson = globalThis.${QuickJsToolHost.ASCII_JSON_FN}(requestJson);
           var responseJson = await globalThis.__trailblazeFetch(requestJson);
           var raw = JSON.parse(responseJson);
           if (raw && raw.__fetchError) {
@@ -456,7 +487,7 @@ class OkHttpFetchExtension(
             statusText: raw.statusText || '',
             ok: status >= 200 && status < 300,
             url: raw.url || url,
-            redirected: false,
+            redirected: raw.redirected === true,
             type: 'basic',
             headers: makeHeaders(raw.headers || []),
             text: function () { return Promise.resolve(bodyText); },

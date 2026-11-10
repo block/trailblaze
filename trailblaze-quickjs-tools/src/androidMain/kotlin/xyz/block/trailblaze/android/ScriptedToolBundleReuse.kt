@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.android.accessibility
+package xyz.block.trailblaze.android
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -24,7 +24,9 @@ import xyz.block.trailblaze.util.Console
  * classifiers changed (an override added or removed) would inherit the old gate's answer. When a
  * claim misses, the caller launches normally, which is exactly today's behaviour.
  *
- * On unless the session may load host-pushed bundles; see [ReplayCaptureOptions.REUSE_TOOL_BUNDLES_SYSPROP].
+ * Used by both on-device rules: the accessibility rule (on unless the session may load host-pushed
+ * bundles, with a sysprop kill switch in its `ReplayCaptureOptions`) and the in-process rule (on
+ * unless the session may load host-pushed bundles).
  */
 object ScriptedToolBundleReuse {
 
@@ -124,7 +126,7 @@ object ScriptedToolBundleReuse {
    * shut down rather than dropped. Pure so the leak this closes is testable without a QuickJS
    * engine: the same runtime being re-retained is a no-op, anything else is a replacement.
    */
-  internal fun replacesPreviousLaunch(previous: Any?, incoming: Any?): Boolean =
+  fun replacesPreviousLaunch(previous: Any?, incoming: Any?): Boolean =
     previous != null && previous !== incoming
 
   /**
@@ -158,7 +160,7 @@ object ScriptedToolBundleReuse {
    *   error back from a tool. Its engine may be left mid-eval, so the next dispatch relaunches
    *   instead of inheriting that state.
    */
-  internal fun releasesAfterDispatch(ownsSessionEnd: Boolean, endedInException: Boolean): Boolean =
+  fun releasesAfterDispatch(ownsSessionEnd: Boolean, endedInException: Boolean): Boolean =
     ownsSessionEnd || endedInException
 
   /**

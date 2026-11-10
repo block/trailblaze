@@ -77,7 +77,7 @@ object ReplayCaptureOptions {
    * sample app and 248 ms on Square, whose catalog carries far more bundles; removing the teardown
    * as well is worth a further ~45 ms on Square.
    *
-   * The reuse is keyed on (session, tool repo instance) — see [ScriptedToolBundleReuse] — so a
+   * The reuse is keyed on (session, tool repo instance) — see [xyz.block.trailblaze.android.ScriptedToolBundleReuse] — so a
    * dispatch that builds its own repo simply misses the cache and launches as before.
    *
    * On by default, with or without turbo: a `trailblaze tool` call from the CLI is one dispatch

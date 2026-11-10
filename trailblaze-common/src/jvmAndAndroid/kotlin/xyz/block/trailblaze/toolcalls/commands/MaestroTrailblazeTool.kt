@@ -41,7 +41,10 @@ import xyz.block.trailblaze.util.Console
  * (https://docs.maestro.dev/reference/commands-available) rather than guaranteeing byte-for-byte
  * preservation of the original text.
  *
- * Authored trail YAML:
+ * **Framework-internal.** Drivers use this as the wire between host and device for raw Maestro
+ * commands. It is not part of the public tool surface: it is not recordable, has no TypeScript
+ * binding, and trails and scripted tools must use typed tools instead. Replaying an old recording
+ * that still names it keeps working. Wire shape:
  * ```yaml
  * - tools:
  *     - mobile_maestro:
@@ -55,7 +58,7 @@ import xyz.block.trailblaze.util.Console
  * ```
  */
 @Serializable(with = MaestroTrailblazeToolSerializer::class)
-@TrailblazeToolClass(name = "mobile_maestro", surfaceToLlm = false, isRecordable = true)
+@TrailblazeToolClass(name = "mobile_maestro", surfaceToLlm = false, isRecordable = false)
 @LLMDescription("Execute raw Maestro YAML commands directly. Prefer using specific Trailblaze tools instead.")
 data class MaestroTrailblazeTool(
   /** Full Maestro commands-list YAML (list items prefixed with `- `). */

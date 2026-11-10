@@ -117,9 +117,9 @@ class RecordedTrailsRepoJvm(
       }
 
       // Reached only for a single-device session — a configuration always merged above.
-      val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix)
-        .getOrElse { return Result.failure(it) }
       val recordingFile = File(trailDir, siblingFileName)
+      val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix, overwriting = recordingFile)
+        .getOrElse { return Result.failure(it) }
       recordingFile.parentFile?.mkdirs()
       recordingFile.writeText(rendered)
       Console.log("Recording saved to: ${recordingFile.absolutePath}")

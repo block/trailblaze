@@ -291,6 +291,15 @@ internal class AndroidScreenProducerFactory(
     unlimited: Boolean,
   ): H264Tee.ProducerHandle = pick(deviceId, videoSize, bitRate, unlimited, retryScrcpy = false)
 
+  /**
+   * A scrcpy failure while the device was rebooting says nothing about scrcpy on that device, so a
+   * reconnect lifts the retry window: the next spawn tries scrcpy again, and a respawn (which
+   * never retries scrcpy on its own) does too.
+   */
+  override fun onDeviceReconnected(deviceId: TrailblazeDeviceId) {
+    scrcpyFailedAt.remove(deviceId.instanceId)
+  }
+
   private fun pick(
     deviceId: TrailblazeDeviceId,
     videoSize: String,

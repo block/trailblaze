@@ -72,6 +72,7 @@ import xyz.block.trailblaze.events.SessionEventsWaitPump
 import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SessionCleanups
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -266,6 +267,122 @@ class TeardownTest {
 
   private fun nextSession(id: String) {
     session = TrailblazeSession(sessionId = SessionId(id), startTime = Clock.System.now())
+  }
+
+  private val order = mutableListOf<String>()
+
+  /** Registers an undo for the session, as `ctx.session.addCleanup` would; dispatched as step [name]. */
+  private fun undo(name: String, fails: Boolean = false) {
+    stepTools[name] = {
+      order += name
+      if (fails) TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "$name failed") else TrailblazeToolResult.Success()
+    }
+    SessionCleanups.add(
+      session.sessionId,
+      SessionCleanups.Cleanup("inputText", JsonObject(mapOf("text" to JsonPrimitive(name))), InputTextTrailblazeTool(text = name)) {
+        error("a trail runs its undos through the runner")
+      },
+    )
+  }
+
+  @AfterTest
+  fun drainCleanups() {
+    SessionCleanups.drain(session.sessionId)
+  }
+
+  @Test
+  fun `undos run newest first after a passing trail, before the trailhead's teardown`() {
+    FakeTrailhead(teardown = { _, _ -> order += "teardown"; result(reusable = true, reason = "clean") })
+      .also { trailheads["signIn"] = it }
+    stepTools["tap"] = { undo("restoreRadios"); undo("restoreLocation"); TrailblazeToolResult.Success() }
+
+    runTrail(runnerUtil(), "tap")
+
+    assertEquals(listOf("restoreLocation", "restoreRadios", "teardown"), order)
+    assertTrue(SessionCleanups.drain(session.sessionId).isEmpty())
+  }
+
+  @Test
+  fun `undos run after a failed trail without a trailhead, and a failed undo keeps the trail's error`() {
+    stepTools["tap"] = {
+      undo("restoreRadios")
+      undo("restoreLocation", fails = true)
+      TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "tap failed")
+    }
+
+    val error = assertFailsWith<TrailblazeException> { runTrailWithoutTrailhead(runnerUtil(), "tap") }
+
+    assertTrue(error.message.orEmpty().contains("tap failed"), error.message)
+    // A failed undo doesn't stop the ones after it.
+    assertEquals(listOf("restoreLocation", "restoreRadios"), order)
+  }
+
+  @Test
+  fun `a failed trail's failure screenshot is taken before its undos change the screen`() {
+    val logs = mutableListOf<TrailblazeLog>()
+    val logger = TrailblazeLogger(LogEmitter(logs::add), ScreenStateLogger { "screen.png" })
+    var screen = "failed screen"
+    stepTools["tap"] = {
+      undo("restoreRadios")
+      stepTools["restoreRadios"] = { screen = "radios restored"; TrailblazeToolResult.Success() }
+      TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "tap failed")
+    }
+
+    assertFailsWith<TrailblazeException> {
+      runTrailWithoutTrailhead(runnerUtil(logger = logger, screen = { LabeledScreen(screen) }), "tap")
+    }
+
+    val shots = logs.filterIsInstance<TrailblazeLog.TrailblazeSnapshotLog>()
+      .filter { it.displayName == TrailblazeLogger.FAILURE_SNAPSHOT_NAME }
+    assertEquals(listOf("failed screen"), shots.map { it.viewHierarchy.className })
+    assertEquals("radios restored", screen)
+  }
+
+  @Test
+  fun `undos run inside a teardown objective, so no recording picks them up`() {
+    val logs = mutableListOf<TrailblazeLog>()
+    val logger = TrailblazeLogger(LogEmitter(logs::add), ScreenStateLogger { "screen.png" })
+    stepTools["tap"] = { undo("restoreRadios"); TrailblazeToolResult.Success() }
+
+    runTrailWithoutTrailhead(runnerUtil(logger = logger), "tap")
+
+    val objective = logs.filterIsInstance<TrailblazeLog.ObjectiveStartLog>()
+      .map { it.promptStep }
+      .single { it.prompt == SessionCleanups.OBJECTIVE_STEP } as DirectionStep
+    assertTrue(objective.isTeardown)
+    assertEquals(false, objective.recordable)
+    assertEquals(listOf("restoreRadios"), order)
+  }
+
+  @Test
+  fun `undos run after a cancelled trail`() = runBlocking<Unit> {
+    FakeTrailhead().also { trailheads["signIn"] = it }
+    val util = runnerUtil()
+    val setUp = CompletableDeferred<Unit>()
+
+    val trail = launch(Dispatchers.Default) {
+      util.runTrail {
+        util.runPrompt(listOf(trailheadStep("signIn")), useRecordedSteps = true, selfHeal = false)
+        undo("restoreRadios")
+        setUp.complete(Unit)
+        awaitCancellation()
+      }
+    }
+    setUp.await()
+    trail.cancelAndJoin()
+
+    assertEquals(listOf("restoreRadios"), order)
+  }
+
+  @Test
+  fun `a trail with no undos dispatches nothing extra`() {
+    val dispatched = mutableListOf<String>()
+    stepTools["tap"] = { dispatched += "tap"; TrailblazeToolResult.Success() }
+
+    runTrailWithoutTrailhead(runnerUtil(), "tap")
+
+    assertEquals(listOf("tap"), dispatched)
+    assertEquals(emptyList(), order)
   }
 
   @Test

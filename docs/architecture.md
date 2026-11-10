@@ -329,6 +329,8 @@ bootstrap rather than an assertion, so it can never be a `verify:`. Trailheads a
 authored as their own tool type (`*.trailhead.yaml`) — one deterministic tool that reaches
 a known starting state from any point — see
 [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-trailheadyaml).
+What runs after the trail (undos, the trailhead's teardown, reuse) is in
+[Trail lifecycle](trail-lifecycle.md).
 
 ## Execution Modes
 

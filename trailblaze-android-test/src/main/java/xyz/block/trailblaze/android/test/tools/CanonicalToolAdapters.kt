@@ -2,6 +2,7 @@ package xyz.block.trailblaze.android.test.tools
 
 import xyz.block.trailblaze.android.test.AndroidTestInstrumentation
 import xyz.block.trailblaze.trailhead.InProcessDataClearedArg
+import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollector
 import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 import xyz.block.trailblaze.android.test.perf
 import android.app.Activity
@@ -32,6 +33,7 @@ import maestro.SwipeDirection
 import xyz.block.trailblaze.android.test.AndroidTestTarget
 import xyz.block.trailblaze.android.test.AppUnderTestLauncher
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.maestro.TrailblazeScrollStartPosition
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -51,8 +53,12 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool
 import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
+import xyz.block.trailblaze.android.tools.AndroidAccessibilityClickTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitUntilNotVisibleTrailblazeTool
@@ -93,6 +99,15 @@ internal object CanonicalToolAdapters {
         ?: return@CanonicalDispatch malformed("tapOnElementBySelector has no nodeSelector", tool)
       AndroidTestTapTool(nodeSelector = selector, longPress = tool.longPress, timeoutMs = tool.timeoutMs)
         .executeWithAndroidTest(target, context)
+    }
+
+    is TapOnTrailblazeTool -> CanonicalDispatch { target, context ->
+      AndroidTestTapWithinTool(
+        nodeSelector = tool.selector,
+        relativePoint = tool.relativePoint,
+        longPress = tool.longPress,
+        doubleTap = tool.doubleTap,
+      ).executeWithAndroidTest(target, context)
     }
 
     is LaunchAppTrailblazeTool -> CanonicalDispatch { _, _ -> launchAppUnderTest(tool) }
@@ -146,6 +161,24 @@ internal object CanonicalToolAdapters {
     }
 
     is PressKeyTrailblazeTool -> CanonicalDispatch { target, _ -> pressKey(target, tool.keyCode) }
+
+    // A raw point tap means "touch the screen here", whatever window is on top: a tooltip's
+    // full-screen scrim, a popup, or another app. So it goes through the system's input pipeline,
+    // as `adb input tap` does on the other drivers, not into a Compose root or View this process
+    // picks. The app's own settle follows only when the app is still in front.
+    is TapOnPointTrailblazeTool -> CanonicalDispatch { target, context ->
+      // The recorded step becomes a selector tap when the point resolves to one element, as on
+      // every other driver; only the touch itself is this driver's.
+      tool.recordSelectorUpgrade(context)
+      ForeignWindow.tap(tool.x, tool.y, longPress = tool.longPress, doubleTap = tool.doubleTap)
+      if (ForeignWindow.frontPackage() == null) target.waitForIdle()
+      val action = when {
+        tool.longPress -> "Long pressed"
+        tool.doubleTap -> "Double-tapped"
+        else -> "Tapped"
+      }
+      TrailblazeToolResult.Success(message = "$action at (${tool.x}, ${tool.y})")
+    }
 
     is HideKeyboardTrailblazeTool -> CanonicalDispatch { target, _ ->
       hideKeyboard(target)
@@ -213,25 +246,24 @@ internal object CanonicalToolAdapters {
         return@CanonicalDispatch unsupported("swipeOnElementText", tool)
       }
       when (tool.direction) {
-        // Finger up = reveal content below = scroll forward, on the same "largest scrollable"
-        // heuristic the driver's own scroll tool uses.
-        SwipeDirection.UP ->
-          if (AndroidScrollActions.scrollForward(target)) {
-            TrailblazeToolResult.Success(message = "Swiped UP (scrolled the largest container forward).")
-          } else {
-            malformed(
-              "swipe UP found nothing that can scroll. ${AndroidScrollActions.describeCandidates(target)}",
-              tool,
-            )
-          }
-        // Finger down = reveal content above = scroll back. A list already at its top does not
-        // move, as under a real swipe, so that is success rather than a failure.
-        SwipeDirection.DOWN ->
-          if (AndroidScrollActions.scrollBackward(target)) {
-            TrailblazeToolResult.Success(message = "Swiped DOWN (scrolled the largest container back).")
-          } else {
-            TrailblazeToolResult.Success(message = "Swiped DOWN: nothing on screen could scroll back.")
-          }
+        // A finger drag from the screen's centre to 10% (UP) or 90% (DOWN) of its height, as the
+        // accessibility driver these recordings come from strokes it, and without a fling: its
+        // gesture strokes carry none, so a list travels exactly the drag. A whole-page scroll
+        // travels further and carries the element the next step taps out of view.
+        SwipeDirection.UP, SwipeDirection.DOWN -> {
+          val (width, height) = ForeignWindow.screenSize()
+          val endFraction = if (tool.direction == SwipeDirection.UP) 0.1 else 0.9
+          ForeignWindow.swipe(
+            startX = width / 2,
+            startY = height / 2,
+            endX = width / 2,
+            endY = (height * endFraction).toInt(),
+            durationMs = DEFAULT_SWIPE_MS,
+            fling = false,
+          )
+          if (ForeignWindow.frontPackage() == null) target.waitForIdle()
+          TrailblazeToolResult.Success(message = "Swiped ${tool.direction}.")
+        }
         SwipeDirection.LEFT, SwipeDirection.RIGHT -> {
           val towardsLeft = tool.direction == SwipeDirection.LEFT
           AndroidScrollActions.swipeHorizontally(target, towardsLeft)
@@ -239,6 +271,34 @@ internal object CanonicalToolAdapters {
         }
         else -> unsupported("direction=${tool.direction}", tool)
       }
+    }
+
+    // A row measured to ignore a normal tap takes the accessibility click action, sent to the node
+    // in the accessibility tree the step was recorded on, as the accessibility driver sends it.
+    // That holds in the app's own window too: a Compose tap in-process is a touch, which is just
+    // what such a row absorbs. In another app's window (a system document picker) it is the only
+    // way in.
+    is AndroidAccessibilityClickTrailblazeTool -> CanonicalDispatch { target, context ->
+      accessibilityClick(target, tool, context)
+    }
+
+    // A recorded drag between two screen points, given as percentages of the display: a finger
+    // on the glass, as Maestro's swipe is, so it goes through the system's input pipeline. No fling,
+    // matching the accessibility driver's gesture strokes the recording was validated on.
+    is SwipeWithRelativeCoordinatesTool -> CanonicalDispatch { target, _ ->
+      if (tool.swipeOnElementText != null) {
+        return@CanonicalDispatch unsupported("swipeOnElementText", tool)
+      }
+      val (width, height) = ForeignWindow.screenSize()
+      val start = relativeScreenPoint(tool.startRelative, width, height)
+        ?: return@CanonicalDispatch malformed("unparseable startRelative=\"${tool.startRelative}\"", tool)
+      val end = relativeScreenPoint(tool.endRelative, width, height)
+        ?: return@CanonicalDispatch malformed("unparseable endRelative=\"${tool.endRelative}\"", tool)
+      ForeignWindow.swipe(
+        start.first, start.second, end.first, end.second, tool.durationMs ?: DEFAULT_SWIPE_MS, fling = false,
+      )
+      if (ForeignWindow.frontPackage() == null) target.waitForIdle()
+      TrailblazeToolResult.Success(message = "Swiped from ${tool.startRelative} to ${tool.endRelative}.")
     }
 
     // Raw Maestro command lists — the shape scripted launch tools fall back to on
@@ -360,22 +420,121 @@ internal object CanonicalToolAdapters {
   }
 
   /**
+   * Clicks [tool]'s node with `ACTION_CLICK`, polling the accessibility tree until it matches and
+   * takes the action or the timeout passes. The node is the one the accessibility driver picks: a
+   * placed match, visible ones first, so a dialog's control wins over one hidden behind it, and
+   * never from a partial read an index would miscount. A node that refuses the action fails the
+   * step rather than getting a tap, as the tool promises.
+   */
+  private suspend fun accessibilityClick(
+    target: AndroidTestTarget,
+    tool: AndroidAccessibilityClickTrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val templateContext = context.resolvedTarget?.let { resolved ->
+      TargetTemplateContext(appId = context.appId, appIds = resolved.appIds)
+    }
+    val deadline = SystemClock.uptimeMillis() + (tool.timeoutMs ?: ACCESSIBILITY_CLICK_TIMEOUT_MS)
+    while (true) {
+      val inForeignWindow = ForeignWindow.frontPackage() != null
+      // The app's own idle wait, as every other selector lookup takes, so a control that appears
+      // after a pending delay or transition gets the time to. Another app's window is not this
+      // app's to wait on.
+      if (!inForeignWindow) target.waitForIdle()
+      val a11y = InProcessAccessibilityTree.capture(uncached = true)
+      val match = a11y?.let { placedA11yMatchesIn(it, tool.nodeSelector, templateContext) }?.firstOrNull()
+      val info = match?.let { a11y.infoFor(it) }
+      val where = if (inForeignWindow) " in another app's window" else ""
+      if (info != null && ForeignWindow.accessibilityClick(info)) {
+        if (!inForeignWindow) target.waitForIdle()
+        return TrailblazeToolResult.Success(
+          message = "Clicked ${tool.nodeSelector.description()} with the accessibility click action$where.",
+        )
+      }
+      if (SystemClock.uptimeMillis() >= deadline) {
+        return TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "android_accessibilityClick: ${tool.nodeSelector.description()} " +
+            (if (info == null) "matched nothing" else "refused the click action") + "$where.",
+          command = tool,
+        )
+      }
+      SystemClock.sleep(ACCESSIBILITY_CLICK_POLL_MS)
+    }
+  }
+
+  /**
+   * Whether every letter and digit of [typed] appears in this field text in order, so formatting
+   * the field adds ("4013 4912", "03/15/2013", "$12") does not count against it.
+   */
+  private fun String.showsInOrder(typed: String): Boolean {
+    var at = 0
+    for (c in typed.filter(Char::isLetterOrDigit)) {
+      at = indexOf(c, at, ignoreCase = true).takeIf { it >= 0 }?.plus(1) ?: return false
+    }
+    return true
+  }
+
+  /** What a focused Compose field kept of a value set into it. */
+  private enum class EditOutcome { TOOK_IT, TOOK_PART, REFUSED }
+
+  /**
    * Appends [text] to the focused Compose text input or, failing that, the focused EditText, in one
    * edit. A Compose input inserts at its end (see [AndroidComposeActions.appendText]); otherwise it is
    * the accessibility driver's `ACTION_SET_TEXT` of existing + [text], which is what its recordings
    * replay with. Key events cost about a millisecond a character to inject and go
    * through the IME, which reshapes some of them (autocorrect, capitalisation).
    *
-   * False when neither is focused, or the EditText kept its text, so the caller falls back to key
-   * events.
+   * False when neither is focused, the EditText kept its text, or the Compose field did not take
+   * the edit, so the caller falls back to key events. The last is the accessibility driver's
+   * readback: a masked field reports its mask as its text ("MM/DD/YYYY"), so the appended value is
+   * the mask plus the input, which the field's own filter refuses — and a date of birth was left
+   * blank with the step passed.
    */
   private suspend fun appendToFocusedField(target: AndroidTestTarget, text: String): Boolean {
     val focusedCompose = focusedComposeTextInput(target)
     if (focusedCompose != null) {
-      if (AndroidComposeActions.appendText(target, focusedCompose.id, text)) return true
       val existing = focusedCompose.config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty()
-      AndroidComposeActions.replaceText(target, focusedCompose.id, existing + text)
-      return true
+      // What the field holds before any mask or formatting is drawn over it: a masked field shows
+      // "MM/DD/YYYY" while it holds nothing.
+      val held = focusedCompose.config.getOrNull(SemanticsProperties.InputText)?.text ?: existing
+      // Both edits report only that they were dispatched, so the field is read back after each. The
+      // edit already waited for the screen to settle, so the read-back skips the idle wait, which a
+      // screen that never goes idle would make each typed step sit through again.
+      //
+      // A field can also take only part of a value. A masked date field given "03152013" at the end
+      // of "MM/DD/YYYY" keeps "03" alone; a card-number field refuses a whole number failing its
+      // checksum. Typed one key at a time, both take what a user's keys would, which is what
+      // recordings expect, so a half-filled field is put back as it was and the keys follow.
+      //
+      // The value is checked against the raw text when the field reports it, since what it shows
+      // can hide the input entirely: a password field shows only dots.
+      suspend fun outcome(): EditOutcome {
+        val afterConfig = AndroidComposeActions.findSemanticsNode(composeRootsWithoutIdleWait(target), focusedCompose.id)
+          ?.config
+        val raw = afterConfig?.getOrNull(SemanticsProperties.InputText)?.text
+        val after = raw ?: afterConfig?.getOrNull(SemanticsProperties.EditableText)?.text
+        val before = if (raw != null) held else existing
+        return when {
+          // A field gone after the keys took the screen with it: a passcode screen moves on as soon
+          // as its last digit lands, so the input was accepted.
+          text.isEmpty() || after == null -> EditOutcome.TOOK_IT
+          after != before && after.showsInOrder(text) -> EditOutcome.TOOK_IT
+          after != before -> {
+            AndroidComposeActions.replaceText(target, focusedCompose.id, held)
+            EditOutcome.TOOK_PART
+          }
+          else -> EditOutcome.REFUSED
+        }
+      }
+      if (AndroidComposeActions.appendText(target, focusedCompose.id, text)) {
+        when (outcome()) {
+          EditOutcome.TOOK_IT -> return true
+          EditOutcome.TOOK_PART -> return false
+          EditOutcome.REFUSED -> Unit
+        }
+      }
+      AndroidComposeActions.replaceText(target, focusedCompose.id, held + text)
+      return outcome() == EditOutcome.TOOK_IT
     }
     val activity = target.currentActivity()
     return onMainThread {
@@ -386,6 +545,12 @@ internal object CanonicalToolAdapters {
       // A masked field's TextWatcher can undo a bulk edit while it takes keys one at a time.
       text.isEmpty() || field.text.toString() != existing
     }
+  }
+
+  /** Every window's Compose roots, read on the UI thread without waiting for the app to go idle. */
+  private fun composeRootsWithoutIdleWait(target: AndroidTestTarget): List<SemanticsNode> {
+    val activity = target.currentActivity()
+    return AndroidHybridHierarchyCollector.windowRoots(activity).flatMap { target.composeRootsIn(it) }
   }
 
   /**
@@ -604,9 +769,9 @@ internal object CanonicalToolAdapters {
    *   cold start; the host force-stops the app before every trail, so a trailhead's launch is.
    * - `REINSTALL` needs the app's data cleared. The host runs `pm clear` before starting the
    *   instrumentation when a trailhead's launch asks for it, and says whether it did
-   *   ([InProcessDataClearedArg]); [FRESH_DATA_MARKER], written by every launch, and
-   *   [AppUnderTestLauncher.usedSinceProcessStart] tell a REINSTALL on that cleared data from one
-   *   after the app was launched or driven. A REINSTALL
+   *   ([InProcessDataClearedArg]); [AppUnderTestLauncher.freshDataMarker], written by every
+   *   launch and by the first UI tool, and [AppUnderTestLauncher.usedSinceProcessStart] tell a
+   *   REINSTALL on that cleared data from one after the app was launched or driven. A REINSTALL
    *   on data that was not cleared refuses by name rather than launching on old data.
    */
   private fun launchAppUnderTest(tool: LaunchAppTrailblazeTool): TrailblazeToolResult {
@@ -620,7 +785,7 @@ internal object CanonicalToolAdapters {
       )
     }
     val mode = tool.launchMode
-    val marker = java.io.File(targetContext.noBackupFilesDir, FRESH_DATA_MARKER)
+    val marker = AppUnderTestLauncher.freshDataMarker()
     if (mode == LaunchAppTrailblazeTool.LaunchMode.REINSTALL) {
       // Absent when no host started this run; a farm starts every test on a fresh install.
       val hostCleared = AndroidTestInstrumentation.stringArg(InProcessDataClearedArg.KEY)?.toBooleanStrictOrNull()
@@ -643,8 +808,7 @@ internal object CanonicalToolAdapters {
       }
     }
     // Every mode, so a REINSTALL after a RESUME or FORCE_RESTART launch sees the data was used.
-    marker.parentFile?.mkdirs()
-    marker.createNewFile()
+    AppUnderTestLauncher.markDataUsed()
     // The instrumentation already cold-launched the app at its entry point when this process
     // started, after the host's force-stop (and `pm clear` for REINSTALL). Until something else
     // runs, a restart or reinstall launch would only pay that cold start a second time.
@@ -665,12 +829,6 @@ internal object CanonicalToolAdapters {
         },
     )
   }
-
-  /**
-   * Written to the app's own no-backup dir on its first launch. `pm clear` deletes it, so its
-   * absence proves the data was cleared since the app was last launched.
-   */
-  private const val FRESH_DATA_MARKER = ".trailblaze-in-process-launched"
 
   /**
    * BACK waits for idle first, then is injected without synchronizing, so it is delivered exactly
@@ -730,6 +888,17 @@ internal object CanonicalToolAdapters {
     PressKeyCode.BACKSPACE -> KeyEvent.KEYCODE_DEL
     PressKeyCode.TAB -> KeyEvent.KEYCODE_TAB
     PressKeyCode.ESCAPE -> KeyEvent.KEYCODE_ESCAPE
+  }
+
+  /** Maestro's swipe duration when a recording names none. */
+  private const val DEFAULT_SWIPE_MS = 400L
+  private const val ACCESSIBILITY_CLICK_TIMEOUT_MS = 10_000L
+  private const val ACCESSIBILITY_CLICK_POLL_MS = 200L
+
+  /** `"50%,90%"` as a pixel point on a [width] x [height] display, or null when it does not parse. */
+  private fun relativeScreenPoint(relative: String, width: Int, height: Int): Pair<Int, Int>? {
+    val (x, y) = TapOnTrailblazeTool.parseRelativePoint(relative) ?: return null
+    return (width * x / 100).toInt().coerceIn(0, width - 1) to (height * y / 100).toInt().coerceIn(0, height - 1)
   }
 
   private fun malformed(reason: String, tool: TrailblazeTool): TrailblazeToolResult =

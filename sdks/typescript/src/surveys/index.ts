@@ -38,6 +38,8 @@ export { runSurveyCli } from "./cli-main.js";
 export { FinishedSessionRequiredError, LiveSessionReader, runNamedLiveSurvey, runLiveSurvey } from "./live.js";
 export type { LiveSurveyOptions, LiveSurveyResult, LiveEventSource, LiveRecord, LiveRead, LiveSessionOptions, LiveSurveyOutcome } from "./live.js";
 export { SurveySession, isSessionDirectory, parseIsoMs } from "./session.js";
+// Which part of a run a record is in (device setup, trailhead, trail, teardown), and a survey's view of its parts.
+export { RunPhase, SurveyScope, phaseOf, scopedSession, trailStartOf } from "./phase.js";
 export type { LogQuery } from "./session.js";
 export { Records } from "./match.js";
 export type { LogRecords, Predicate, TrailblazeLogOf, TrailblazeLogType } from "./match.js";

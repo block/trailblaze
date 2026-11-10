@@ -799,31 +799,39 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
-  fun `requiresHost resolves per field through the classifier lineage`() {
+  fun `requires is the union over the classifier lineage`() {
     val config =
       UnifiedTrailConfig(
         id = "x",
         target = "y",
         devices =
           linkedMapOf(
-            "android" to TrailblazeDeviceDefinition(requiresHost = true),
-            // A narrower entry that leaves the flag unset still inherits it; only an explicit false
-            // opts a device back out.
+            "all" to TrailblazeDeviceDefinition(requires = listOf("workspace.everywhere")),
+            "android" to TrailblazeDeviceDefinition(requires = listOf("android-host-execution")),
+            // A narrower entry that pins only a driver still inherits the broader needs, and one
+            // that lists its own adds to them: nothing narrower can drop a need.
             "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
-            "android-tablet" to TrailblazeDeviceDefinition(requiresHost = false),
+            "android-tablet" to TrailblazeDeviceDefinition(requires = listOf("play-services")),
             "ios" to devicePin("IOS_HOST"),
           ),
       )
 
+    fun requires(vararg segments: String) =
+      UnifiedTrailAdapter.resolveRequires(config, segments.map { classifier(it) })
+
     fun requiresHost(vararg segments: String) =
-      UnifiedTrailAdapter.resolveRequiresHost(config, segments.map { classifier(it) })
+      UnifiedTrailAdapter.requiresHostExecution(config, segments.map { classifier(it) })
 
     assertTrue(
       requiresHost("android", "phone"),
-      "a driver-only entry does not hide the android flag",
+      "a driver-only entry does not hide the android need",
     )
     assertTrue(requiresHost("android", "foldable"), "an undeclared android device inherits it")
-    assertFalse(requiresHost("android", "tablet"))
+    assertEquals(
+      setOf("play-services", "android-host-execution", "workspace.everywhere"),
+      requires("android", "tablet"),
+    )
+    assertEquals(setOf("workspace.everywhere"), requires("ios"))
     assertFalse(requiresHost("ios"))
     assertFalse(requiresHost("web"), "an undeclared device never requires the host")
   }

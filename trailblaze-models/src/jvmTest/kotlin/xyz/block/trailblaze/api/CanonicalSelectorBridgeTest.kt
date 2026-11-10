@@ -84,6 +84,40 @@ class CanonicalSelectorBridgeTest {
     assertEquals(ids["library"], result.node.nodeId)
   }
 
+  /**
+   * The accessibility tree publishes a text field's description on a node of its own, apart from
+   * the field's empty text, so a recording names the field by its description as text.
+   */
+  @Test
+  fun `text selector resolves an empty Compose field by its description`() {
+    val field = node(
+      DriverNodeDetail.Compose(editableText = "", contentDescription = "Search for people", hasSetTextAction = true),
+    )
+    val label = node(DriverNodeDetail.Compose(text = "Search for people"), bounds = TrailblazeNode.Bounds(0, 400, 1080, 500))
+    val root = node(
+      DriverNodeDetail.AndroidView(className = "android.widget.FrameLayout"),
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920),
+      children = listOf(field),
+    )
+
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(textRegex = "Search for people")),
+    )
+
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(field.nodeId, result.node.nodeId)
+    // Only a field's description reads as text; a plain node's text still wins over its own.
+    val described = node(DriverNodeDetail.Compose(text = "Send", contentDescription = "Search for people"))
+    val plainRoot = root.copy(children = listOf(described, label))
+    val plain = TrailblazeNodeSelectorResolver.resolve(
+      plainRoot,
+      a11ySelector(DriverNodeMatch.AndroidAccessibility(textRegex = "Search for people")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(plain)
+    assertEquals(label.nodeId, plain.node.nodeId)
+  }
+
   @Test
   fun `text selector resolves a Compose node without naming the backend`() {
     val (root, ids) = hybridTree()
@@ -373,6 +407,83 @@ class CanonicalSelectorBridgeTest {
     )
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
     assertEquals(on.nodeId, result.node.nodeId)
+  }
+
+  /**
+   * Compose's accessibility delegate publishes a selectable node that is not a tab as checkable,
+   * checked when selected: a bottom-navigation item reads `checked` on the accessibility tree, and
+   * recordings name the open one that way. A tab publishes `selected` instead.
+   */
+  @Test
+  fun `isChecked maps to a selected Compose node that is not a tab`() {
+    nextId = 1L
+    fun item(selected: Boolean, label: String, role: String? = null) = node(
+      DriverNodeDetail.Compose(
+        role = role,
+        isSelected = selected,
+        accessibilityStateDescription = if (selected) "Selected" else "Not selected",
+        hasClickAction = true,
+      ),
+      children = listOf(node(DriverNodeDetail.Compose(role = "Image", contentDescription = label))),
+    )
+    val open = item(selected = true, label = "Neighborhoods")
+    val closed = item(selected = false, label = "Home")
+    val tab = item(selected = true, label = "Explore", role = "Tab")
+    val root = node(
+      DriverNodeDetail.AndroidView(className = "android.widget.FrameLayout"),
+      children = listOf(open, closed, tab),
+    )
+    fun checked(checked: Boolean) = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(isChecked = checked),
+        containsChild = TrailblazeNodeSelector(
+          androidAccessibility = DriverNodeMatch.AndroidAccessibility(contentDescriptionRegex = ".+"),
+        ),
+      ),
+    )
+
+    val selected = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(checked(true))
+    assertEquals(open.nodeId, selected.node.nodeId, "the selected item reads checked; the selected tab does not")
+    // Unchecked is everything else, the tab included, as `AccessibilityNodeInfo.isChecked` reads.
+    val unselected = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(checked(false))
+    assertEquals(setOf(closed.nodeId, tab.nodeId), unselected.nodes.map { it.nodeId }.toSet())
+  }
+
+  /**
+   * Whether a node is selectable comes from the semantics, not its state description: an app's own
+   * description replaces the delegate's "Not selected", and any node can be described that way.
+   */
+  @Test
+  fun `isCheckable follows whether a Compose node is selectable, whatever its state description`() {
+    nextId = 1L
+    fun item(label: String, selectable: Boolean, description: String) = node(
+      DriverNodeDetail.Compose(
+        isSelected = false,
+        isSelectable = selectable,
+        accessibilityStateDescription = description,
+        hasClickAction = true,
+      ),
+      children = listOf(node(DriverNodeDetail.Compose(role = "Image", contentDescription = label))),
+    )
+    val customDescribed = item("Home", selectable = true, description = "Tap to open Home")
+    val describedButNotSelectable = item("Help", selectable = false, description = "Not selected")
+    val root = node(
+      DriverNodeDetail.AndroidView(className = "android.widget.FrameLayout"),
+      children = listOf(customDescribed, describedButNotSelectable),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(isCheckable = true),
+        containsChild = TrailblazeNodeSelector(
+          androidAccessibility = DriverNodeMatch.AndroidAccessibility(contentDescriptionRegex = ".+"),
+        ),
+      ),
+    )
+
+    val match = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(customDescribed.nodeId, match.node.nodeId)
   }
 
   @Test

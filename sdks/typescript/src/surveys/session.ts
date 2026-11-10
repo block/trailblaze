@@ -201,8 +201,11 @@ function loadLogs(dir: string): LogRecord[] {
     const tb = hostTimes.get(b) ?? Number.POSITIVE_INFINITY;
     return ta - tb || a.name.localeCompare(b.name);
   });
+  // With nothing anchoring the device's clock, a device-stamped time stays on it (`hostTimesOf`).
+  const anchored = sessionWideOffsetOf(parsed.map((p) => p.log)) !== null;
   return parsed.map((p, index) => {
     const type = shortClass(p.log.class);
+    const onDevice = !anchored && (p.log as { clock?: unknown }).clock === "device";
     return {
       kind: "log",
       type,
@@ -210,6 +213,7 @@ function loadLogs(dir: string): LogRecord[] {
       log: p.log,
       file: p.name,
       timeMs: hostTimes.get(p),
+      ...(onDevice ? { clock: "device" as const } : {}),
       summary: describeLog(type, p.log),
     };
   });
@@ -263,6 +267,7 @@ function toolCallsFrom(logs: LogRecord[]): ToolCall[] {
       log,
       file: rec.file,
       timeMs: rec.timeMs,
+      ...(rec.clock ? { clock: rec.clock } : {}),
       summary: `${log.toolName}(${summarizeArgs(shown)}) ${log.successful ? "succeeded" : "failed"}`,
       detail: { name: log.toolName, args: shown, successful: log.successful, durationMs: log.durationMs },
     });
@@ -296,6 +301,7 @@ function objectivesFrom(logs: LogRecord[]): Objective[] {
         startMs: rec.timeMs,
         file: rec.file,
         timeMs: rec.timeMs,
+        ...(rec.clock ? { clock: rec.clock } : {}),
         summary: `step ${step}: ${prompt}`,
         detail: { step, prompt, status: "unknown" },
       });

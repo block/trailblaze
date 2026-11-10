@@ -56,6 +56,8 @@ interface RunMeta {
   skipReason?: string;
   /** True for *WithSelfHeal statuses — renders the separate self-heal marker badge. */
   selfHeal?: boolean;
+  /** What the run's warning surveys found, for triage. A warning never changes [status]. */
+  warnings?: RunWarning[];
   generatedAt?: string;
   /** CI build that produced the run, when the report was generated in CI. */
   buildUrl?: string;
@@ -589,6 +591,8 @@ interface EventStream {
    * `events/derived.json` records them. Empty when the session's manifest predates recording them.
    */
   derivedFrom?: string[];
+  /** Set only on a derived stream: how long its code took to derive it, in ms, as `events/derived.json` records it. */
+  deriveMs?: number;
 }
 
 /**
@@ -715,6 +719,14 @@ interface VisibleStringsScreen {
   strings: VisibleStringEntry[];
 }
 
+/** One finding of a warning survey (`warning: true`) on this run: see run-report-warnings.ts. */
+interface RunWarning {
+  /** The warning survey's id. */
+  survey: string;
+  /** The finding, as plain text. */
+  summary: string;
+}
+
 /**
  * One span out of the session's `trace.json` — what `TrailblazeTracer` recorded in the host
  * process (the agent loop, each tool it dispatched, every HTTP call) and, when a device uploaded its
@@ -811,6 +823,19 @@ interface SessionPayload {
    * stripped from exported documents, same as `videoClip`.
    */
   attachments?: Record<string, string> | null;
+  /** Every stream `events/derived.json` lists, for Run details: rows, time taken, and why one failed. */
+  derivedStreams?: DerivedStreamStatus[] | null;
+}
+
+/** One derived stream as the session's `events/derived.json` last recorded it. */
+interface DerivedStreamStatus {
+  name: string;
+  title?: string;
+  rows: number;
+  /** How long its code took to derive it, in ms; absent when the manifest predates recording it. */
+  ms?: number;
+  /** Why it failed when last written; it then has no rows. */
+  error?: string;
 }
 
 /** One run as callers hand it to buildMultiReportHtml, before the slim/normalize pass. */
@@ -854,6 +879,8 @@ interface SessionInput {
   videoClips?: VideoClip[] | null;
   /** See SessionPayload.attachments. */
   attachments?: Record<string, string> | null;
+  /** See SessionPayload.derivedStreams. */
+  derivedStreams?: DerivedStreamStatus[] | null;
 }
 
 /**

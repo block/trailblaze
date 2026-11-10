@@ -412,3 +412,98 @@ describe("E2E: real trails/ tree", () => {
     console.log(`[trail-model E2E] exercised ${unifiedCount} unified files of ${yamlFiles.length} total`);
   });
 });
+
+describe("config labels", () => {
+  const dump = (doc: any) => Bun.YAML.stringify(doc, null, 2);
+
+  test("a save writes each label on one line, in the form trailblaze check requires", () => {
+    const doc = {
+      config: {
+        id: "x",
+        tags: ["smoke"],
+        labels: [{ type: "job", name: "payments.take-payment" }],
+        generatedLabels: [
+          { type: "journey", name: "checkout", survey: "journeys/checkout", reasoning: "Reached the checkpoint." },
+        ],
+        context: "Card entry",
+      },
+      trail: [{ step: "Open the app" }],
+    };
+    const text = TM.dumpUnifiedDoc(doc, dump);
+    expect(text).toContain(
+      "  labels:\n    - { type: job, name: payments.take-payment }\n" +
+        "  generatedLabels:\n    - { type: journey, name: checkout, survey: journeys/checkout, reasoning: Reached the checkpoint. }\n" +
+        "  context: Card entry",
+    );
+    expect(Bun.YAML.parse(text)).toEqual(doc);
+  });
+
+  test("an empty list stays an empty list", () => {
+    const doc = { config: { id: "x", labels: [] }, trail: [{ step: "Open" }] };
+    const text = TM.dumpUnifiedDoc(doc, dump);
+    expect(text).toContain("  labels: []");
+    expect(Bun.YAML.parse(text)).toEqual(doc);
+  });
+
+  // The same cases TrailLabelYamlTest asserts of the Kotlin emitter: the two must quote identically.
+  test("quotes exactly what the CLI's emitter quotes", () => {
+    const quoted = ["001", "2026-11-03", "1e3", "0x1F", ".5", "+1", ".inf", ".NaN", "3ds", "Null", "yes"];
+    quoted.forEach((n) => expect(TM.renderLabelEntry({ type: "t", name: n })).toBe(`{ type: t, name: "${n}" }`));
+    const plain = ["checkout", "v1.2", "payments.take-payment", "a/b", "card 2", "_private", ".hidden"];
+    plain.forEach((n) => expect(TM.renderLabelEntry({ type: "t", name: n })).toBe(`{ type: t, name: ${n} }`));
+    expect(TM.renderLabelEntry({ type: "t", name: "Declined: no\u0001\"x\"" })).toBe('{ type: t, name: "Declined: no\\u0001\\"x\\"" }');
+  });
+
+  test("a list holding a typed value (a Date, a number) is left to the dumper, not stringified", () => {
+    const doc = { config: { id: "x", labels: [{ type: "job", name: 1 }] }, trail: [{ step: "Open" }] };
+    expect(TM.dumpUnifiedDoc(doc, dump)).toBe(dump(doc));
+  });
+
+  test("a flow-style dumper falls back to its own output, never a placeholder", () => {
+    const flow = (d: any) => Bun.YAML.stringify(d);
+    const doc = { config: { id: "x", labels: [{ type: "job", name: "x" }] }, trail: [{ step: "Open" }] };
+    expect(TM.dumpUnifiedDoc(doc, flow)).toBe(flow(doc));
+  });
+
+  test("label fields come from the untyped load, so 001 and dates stay the strings written", () => {
+    const typed = { config: { id: 7, labels: [{ type: "job", name: 1 }], generatedLabels: [{ type: "d", name: new Date(0), survey: "s" }] } };
+    const raw = { config: { id: "7", labels: [{ type: "job", name: "001" }], generatedLabels: [{ type: "d", name: "2026-11-03", survey: "s" }] } };
+    const merged = TM.withSourceLabels(typed, raw);
+    expect(merged.config.labels).toEqual([{ type: "job", name: "001" }]);
+    expect(merged.config.generatedLabels).toEqual([{ type: "d", name: "2026-11-03", survey: "s" }]);
+    expect(merged.config.id).toBe(7);
+    const fakeJsyaml = { FAILSAFE_SCHEMA: {}, load: (_: string, o?: any) => (o ? raw : typed) };
+    expect(TM.loadUnifiedDoc("ignored", fakeJsyaml).config.labels).toEqual([{ type: "job", name: "001" }]);
+  });
+
+  test("an explicit null stays null; the untyped load's \"null\" spelling is not taken", () => {
+    const typed = { config: { labels: [{ type: "job", name: "checkout", survey: null, reasoning: null }] } };
+    const raw = { config: { labels: [{ type: "job", name: "checkout", survey: "null", reasoning: "~" }] } };
+    expect(TM.withSourceLabels(typed, raw)).toBe(typed);
+  });
+
+  test("when and except are written as one-line lists, after name, and read back", () => {
+    const label = { type: "feature", name: "second-screen", when: ["lab-pair", "no"], except: ["lab-pair.buyer"], reasoning: "Pair only." };
+    expect(TM.renderLabelEntry(label)).toBe(
+      '{ type: feature, name: second-screen, when: [lab-pair, "no"], except: [lab-pair.buyer], reasoning: Pair only. }',
+    );
+    const doc = { config: { id: "x", labels: [label] }, trail: [{ step: "Open" }] };
+    expect(Bun.YAML.parse(TM.dumpUnifiedDoc(doc, dump))).toEqual(doc);
+  });
+
+  test("a label with a field this editor doesn't know is left to the dumper, so the field is kept", () => {
+    const doc = { config: { id: "x", labels: [{ type: "job", name: "x", future: "kept" }] }, trail: [{ step: "Open" }] };
+    expect(TM.dumpUnifiedDoc(doc, dump)).toBe(dump(doc));
+  });
+
+  test("device lists come from the untyped load, so a typed item stays the string written", () => {
+    const typed = { config: { labels: [{ type: "t", name: "n", when: [2026, "ios"] }] } };
+    const raw = { config: { labels: [{ type: "t", name: "n", when: ["2026", "ios"] }] } };
+    expect(TM.withSourceLabels(typed, raw).config.labels).toEqual([{ type: "t", name: "n", when: ["2026", "ios"] }]);
+  });
+
+  test("labels of an unexpected shape are left to the dumper", () => {
+    const doc = { config: { id: "x", labels: ["bare-string"] }, trail: [{ step: "Open" }] };
+    expect(TM.dumpUnifiedDoc(doc, dump)).toBe(dump(doc));
+  });
+});

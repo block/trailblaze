@@ -65,7 +65,8 @@ object TrailblazeSerializationInitializer {
             // to share an id with a bundled one. `bundledConfigResourceSource()` is
             // `ClasspathConfigResourceSource` on JVM and the AssetManager-backed platform
             // source on Android — both no-workspace-overlay.
-            ToolYamlLoader.discoverAndLoadAll(bundledConfigResourceSource()) + imperativeTools
+            ToolYamlLoader.discoverAndLoadAll(bundledConfigResourceSource()) +
+              frameworkInternalTools() + imperativeTools
           } catch (e: Exception) {
             Console.error(
               "YAML tool discovery failed: ${e.message}. " +
@@ -73,7 +74,7 @@ object TrailblazeSerializationInitializer {
                 "fall through to OtherTrailblazeTool for every tool call.\n" +
                 e.stackTraceToString(),
             )
-            imperativeTools
+            frameworkInternalTools() + imperativeTools
           }
         if (tools.isEmpty()) {
           Console.error(
@@ -97,4 +98,24 @@ object TrailblazeSerializationInitializer {
       }
     }
   }
+
+  /**
+   * Tool classes that must decode by name (the host-to-device RPC wire carries them as
+   * `- <name>:` YAML) but are not part of the public tool surface, so they have no
+   * `*.tool.yaml` descriptor in any trailmap catalog. Resolved reflectively because the classes
+   * live in `trailblaze-common`; absent from the classpath means the tool simply isn't decodable.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun frameworkInternalTools(): Map<ToolName, KClass<out TrailblazeTool>> =
+    FRAMEWORK_INTERNAL_TOOL_FQCNS.mapNotNull { (name, fqcn) ->
+      try {
+        ToolName(name) to (Class.forName(fqcn).kotlin as KClass<out TrailblazeTool>)
+      } catch (e: ClassNotFoundException) {
+        null
+      }
+    }.toMap()
+
+  /** Tool name to class, for [frameworkInternalTools]. */
+  private val FRAMEWORK_INTERNAL_TOOL_FQCNS =
+    mapOf("mobile_maestro" to "xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool")
 }

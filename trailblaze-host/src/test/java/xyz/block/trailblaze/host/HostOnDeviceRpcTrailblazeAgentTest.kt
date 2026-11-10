@@ -13,12 +13,15 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.messageContains
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import maestro.orchestra.ElementSelector
+import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.After
 import org.junit.Before
@@ -29,7 +32,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.host.devices.HostDeviceProfile
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -137,6 +142,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     reWarmTimeoutMs: Long = 50L,
     reWarmPollIntervalMs: Long = 1L,
     onScreenStateObserved: (GetScreenStateResponse) -> Unit = {},
+    restartRunnerAfterAppExit: (suspend () -> Unit)? = null,
+    appProcessId: (String) -> String? = { "123" },
   ): HostOnDeviceRpcTrailblazeAgent {
     return HostOnDeviceRpcTrailblazeAgent(
       rpcClient = rpcClient,
@@ -166,6 +173,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       reWarmTimeoutMs = reWarmTimeoutMs,
       reWarmPollIntervalMs = reWarmPollIntervalMs,
       onScreenStateObserved = onScreenStateObserved,
+      restartRunnerAfterAppExit = restartRunnerAfterAppExit,
+      appProcessId = appProcessId,
     )
   }
 
@@ -304,6 +313,30 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
     assertThat(mockServer.requestLog["/rpc/GetScreenStateRequest"].orEmpty()).hasSize(1)
+  }
+
+  @Test
+  fun `a cancelled trail ends its in-flight call to the device instead of waiting it out`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      Thread.sleep(6_000)
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    val trail = Job()
+    val commands =
+      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val started = System.nanoTime()
+    Thread { Thread.sleep(300); trail.cancel() }.start()
+
+    val thrown = runCatching {
+      DispatchCancellation.withTrailJob(trail) {
+        runBlocking {
+          createAgent().runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        }
+      }
+    }.exceptionOrNull()
+
+    assertThat(thrown).isNotNull().isInstanceOf(CancellationException::class)
+    assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(4_000L)
   }
 
   /**
@@ -1279,6 +1312,33 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(message).contains("Unsupported tool type for RPC execution")
   }
 
+  @Test
+  fun `an in-process agent sends a recorded tool only the device knows to the device as authored`() {
+    // `androidTest_tap` is implemented in the test APK, so the host's repo never resolves it.
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    val agent = createAgent(trailblazeToolRepo = null, restartRunnerAfterAppExit = {})
+    val deviceOnlyTool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+      toolName = "androidTest_tap",
+      raw = kotlinx.serialization.json.buildJsonObject { put("text", kotlinx.serialization.json.JsonPrimitive("Increment")) },
+    )
+
+    val executeToolMethod = agent.javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+    val result = executeToolMethod.invoke(agent, deviceOnlyTool, minimalExecutionContext(agent), mutableListOf<Any>())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val sentYaml = Json.parseToJsonElement(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single())
+      .jsonObject["yaml"]!!.jsonPrimitive.content
+    assertThat(sentYaml).contains("androidTest_tap")
+    assertThat(sentYaml).contains("Increment")
+  }
+
   /**
    * Builds a minimal [TrailblazeToolExecutionContext] for direct `executeTool` invocation —
    * mirrors the context shape the production runner threads through, just enough to satisfy
@@ -1402,6 +1462,209 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(toolLogs).hasSize(1)
     assertThat(toolLogs[0].toolName).isEqualTo("fake_host_local_tool")
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
+  }
+
+  // ── In-process runner stopped by a host-side tool ────────────────────────────────────────
+
+  /**
+   * Runs a host-side tool, then an RPC step, on an in-process agent whose app has [pidBefore] before
+   * the tool and [pidAfter] after it; returns the step's result.
+   */
+  private fun hostToolThenRpcStep(
+    pidBefore: String,
+    pidAfter: String,
+    events: MutableList<String>,
+  ): TrailblazeToolResult {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      events += "step sent"
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    val pidReads = AtomicInteger(0)
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = { events += "runner restarted" },
+      appProcessId = { pkg ->
+        events += "pid of $pkg"
+        if (pidReads.getAndIncrement() == 0) pidBefore else pidAfter
+      },
+    )
+    runBlocking {
+      agent.runTrailblazeTools(tools = listOf(FakeHostLocalTool(AtomicBoolean())), elementComparator = NoopElementComparator)
+    }
+    return runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+  }
+
+  private val tapCommand = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+
+  @Test
+  fun `a step after a host-side tool stopped the app restarts the runner first and is still sent`() {
+    val events = mutableListOf<String>()
+
+    val result = hostToolThenRpcStep(pidBefore = "123", pidAfter = "", events = events)
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(events).isEqualTo(
+      listOf("pid of com.example.app", "pid of com.example.app", "runner restarted", "step sent"),
+    )
+  }
+
+  @Test
+  fun `a step after a host-side tool relaunched the app restarts the runner first`() {
+    val events = mutableListOf<String>()
+
+    hostToolThenRpcStep(pidBefore = "123", pidAfter = "456", events = events)
+
+    assertThat(events).isEqualTo(
+      listOf("pid of com.example.app", "pid of com.example.app", "runner restarted", "step sent"),
+    )
+  }
+
+  @Test
+  fun `a step after a host-side tool that left the app alone goes straight to the runner`() {
+    val events = mutableListOf<String>()
+
+    hostToolThenRpcStep(pidBefore = "123", pidAfter = "123", events = events)
+
+    assertThat(events).isEqualTo(listOf("pid of com.example.app", "pid of com.example.app", "step sent"))
+  }
+
+  @Test
+  fun `a step with no host-side tool before it does not check the app`() {
+    val events = mutableListOf<String>()
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      events += "step sent"
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = { events += "runner restarted" },
+      appProcessId = { events += "pid read"; "" },
+    )
+
+    runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+
+    assertThat(events).isEqualTo(listOf("step sent"))
+  }
+
+  @Test
+  fun `after a broadcast ends the app, adb-only tools skip the runner and the next step restarts it`() {
+    val events = mutableListOf<String>()
+    mockServer.dropMidCall("/rpc/RunYamlRequest")
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      events += "step sent"
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = { events += "runner restarted" },
+      appProcessId = { "" },
+    )
+    val traceId = { TraceId.generate(TraceId.Companion.TraceOrigin.TOOL) }
+
+    val relaunch = runBlocking {
+      agent.runTrailblazeTools(
+        tools = listOf(seedBroadcast),
+        elementComparator = NoopElementComparator,
+      )
+    }.result
+    runBlocking {
+      agent.runTrailblazeTools(
+        tools = listOf(AdbShellTrailblazeTool(command = listOf("true"))),
+        elementComparator = NoopElementComparator,
+      )
+    }
+    events += "adb tool done"
+    runBlocking { agent.runMaestroCommands(tapCommand, traceId()) }
+
+    assertThat(relaunch).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
+    assertThat(events).isEqualTo(listOf("adb tool done", "runner restarted", "step sent"))
+  }
+
+  private val seedBroadcast = AndroidSendBroadcastTrailblazeTool(
+    action = "com.example.SEED",
+    componentPackage = "com.example.app",
+    componentClass = "com.example.SeedReceiver",
+  )
+
+  @Test
+  fun `a launch that ends the app's process fails as a crash, since an in-process launch keeps it`() {
+    mockServer.dropMidCall("/rpc/RunYamlRequest")
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = {},
+      appProcessId = { "" },
+    )
+
+    val result = runBlocking {
+      agent.runMaestroCommands(
+        listOf(LaunchAppCommand(appId = "com.example.app")),
+        TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+      )
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(1)
+  }
+
+  @Test
+  fun `a tap that ends the app's process fails as a crash instead of passing`() {
+    mockServer.dropMidCall("/rpc/RunYamlRequest")
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = {},
+      appProcessId = { "" },
+    )
+
+    val result = runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(1)
+  }
+
+  @Test
+  fun `a call that loses its connection while the runner still answers is sent again, not called done`() {
+    val events = mutableListOf<String>()
+    mockServer.dropMidCall("/rpc/RunYamlRequest")
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      events += "step sent"
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+    mockServer.answersPing = true
+    // The re-warm before the resend waits for a screen read.
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.OK to """{"viewHierarchy": {}, "screenshotBase64": null, "deviceWidth": 1080, "deviceHeight": 1920}"""
+    }
+    val agent = createAgent(
+      appId = "com.example.app",
+      restartRunnerAfterAppExit = { events += "runner restarted" },
+      appProcessId = { "123" },
+    )
+
+    val result = runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
+    assertThat(events).isEqualTo(listOf("step sent"))
+  }
+
+  @Test
+  fun `a stopped trail's screen read does not bring the in-process runner back`() {
+    // Stop kills the runner, so the stopped run's last screen read loses its connection and finds
+    // nothing answering. Restarting it then would relaunch the app the user just stopped.
+    mockServer.dropMidCall("/rpc/GetScreenStateRequest", times = 2)
+    mockServer.answersPing = false
+    val restarts = AtomicInteger(0)
+    val agent = createAgent(appId = "com.example.app", restartRunnerAfterAppExit = { restarts.incrementAndGet() })
+    val stoppedTrail = Job().apply { cancel() }
+
+    val outcome = runCatching { DispatchCancellation.withTrailJob(stoppedTrail) { agent.screenStateProvider() } }
+
+    assertThat(outcome.exceptionOrNull()).isNotNull().isInstanceOf(CancellationException::class)
+    // A final screenshot taken outside the trail's own scope, which is not cancelled itself.
+    val finalCapture = runBlocking(DispatchCancellation.element(stoppedTrail)) { runCatching { agent.captureScreenState() } }
+    assertThat(finalCapture.exceptionOrNull()).isNotNull().isInstanceOf(CancellationException::class)
+    assertThat(restarts.get()).isEqualTo(0)
   }
 
   // ── On-device double-log fix (#3818) ──────────────────────────────────────────────────────

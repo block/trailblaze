@@ -125,9 +125,11 @@ config:
 
 Use a language-and-region tag when the language variant matters (`fr-CA`, `es-MX`). The setting is supported on Android 10 (API 29) and newer, including on-device instrumentation runs with no host attached; on older Android emulators whose root shell can apply the `persist.sys.locale` fallback; and on iOS Simulators. An on-device run selects a locale-qualified `devices:` entry (such as `android-phone-es`) when it is given that key as the `trailblaze.deviceClassifier` instrumentation argument, and applies that device's locale from `trailblaze.deviceLocale` when the entry declares none. A requested locale that cannot be applied fails the run instead of silently using the device's previous language; the `en-US` default is best effort, so a device that cannot be switched (an older Android image, a physical phone the host has no command for) runs in its current language. The target app restarts only when the language actually changes, and an iOS Simulator's SpringBoard restarts with it (a language change adds about three seconds to the next launch). As with other device-global setup, don't run trails requesting different languages concurrently on the same device; the last setup wins. Named members inside a multi-device configuration reject `locale` until setup can apply it to every bound device.
 
-### Host-only devices
+### What a device needs: `requires`
 
-Set `requiresHost: true` on a top-level, single-device `config.devices` entry when that device's leg must run with Trailblaze on the host (the CLI or daemon driving the device), never as an on-device instrumentation test bundled into a standalone test APK. Use it for a trail that needs something only the host can provide, such as a host-only tool or host files:
+`requires` on a top-level, single-device `config.devices` entry lists what that device's leg needs from wherever it runs.
+
+The framework reads one value, `android-host-execution`: the leg must run with Trailblaze on the host (the CLI or daemon driving the device), never as an on-device instrumentation test bundled into a standalone test APK. Use it on an Android trail that needs something only the host can provide, such as a host-only tool or host files. iOS, web and desktop drivers always run on the host, so never write it for them: an entry whose driver or key (`ios-iphone`, `web`) names one of them rejects it.
 
 ```yaml
 config:
@@ -135,11 +137,15 @@ config:
   target: storefront
   devices:
     android-phone:
-      requiresHost: true
+      requires: [android-host-execution]
     ios: {}
 ```
 
-It resolves through the classifier lineage field by field: the closest entry that sets it wins, so `android: { requiresHost: true }` covers `android-phone` even when `android-phone` has its own entry pinning a driver. Set `requiresHost: false` on a narrower entry to opt that device back out. A standalone test APK refuses a trail whose entry for its device sets it, and a CI pipeline that sends tests to on-device runners can use the flag to keep those trails on the host. Multi-device configurations always run on the host, so they and their named devices reject the field.
+Any other value belongs to your workspace (for example a capability key such as `acme.printer.virtual`). The framework checks its shape and nothing more: no framework runner or planner provides or refuses it yet, so your own tooling decides what it means. Settings with a field of their own, such as `locale` and `driver`, stay in those fields.
+
+A device needs the union of every entry in its classifier lineage, so `android: { requires: [android-host-execution] }` covers `android-phone` even when `android-phone` has its own entry, and no narrower entry can drop a need. A standalone test APK refuses a trail whose device requires `android-host-execution`, and a CI pipeline that sends tests to on-device runners uses it to keep those trails on the host. Multi-device configurations always run on the host, so they and their named devices reject the field.
+
+`requires: [android-host-execution]` replaced the `requiresHost: true` device field, which now fails to parse with a message naming its replacement. A tool's own `requiresHost` is a different setting and is unchanged.
 
 ### The workspace-anchor rule
 

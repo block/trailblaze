@@ -371,6 +371,17 @@ describe("writing derived streams into a session", () => {
     expect([streams.screens.derivedFrom, streams["cart-visits"].derivedFrom, streams["screen-count"].derivedFrom]).toEqual([["app.views"], ["screens"], ["screens"]]);
   });
 
+  test("records how long each stream took to derive, so the report can show a slow one", () => {
+    const dir = fresh("timed");
+    const broken = eventStream({ name: "flags", derive: () => { throw new Error("boom"); } });
+    writeDerivedStreams(dir, [versioned, withEventStreamVersion(broken, "v1")]);
+    const streams = JSON.parse(readFileSync(join(dir, DERIVED_MANIFEST), "utf8")).streams;
+    for (const entry of [streams.screens, streams.flags]) {
+      expect(Number.isInteger(entry.ms)).toBe(true);
+      expect(entry.ms).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   test("a stream written before its sources were recorded is written again", () => {
     const dir = fresh("sources-old");
     writeDerivedStreams(dir, [versioned]);
@@ -500,6 +511,45 @@ describe("writing derived streams into a session", () => {
     expect(entry.error.endsWith("…")).toBe(true);
     // Not current, so the next write tries again.
     expect(writeDerivedStreams(dir, [broken]).errors).toHaveLength(1);
+  });
+
+  test("each stream is timed by its own code, even when a stream that reads it derives it first", () => {
+    const dir = fresh("timed-by-own-code");
+    const wait = (ms: number) => { const end = performance.now() + ms; while (performance.now() < end) { /* the slow one */ } };
+    const slow = withEventStreamVersion(eventStream({ name: "slow", derive: () => { wait(40); return [{ timeMs: T0, data: {} }]; } }), "v1");
+    const reader = withEventStreamVersion(eventStream({ name: "reader", dependsOn: [slow], derive: (session) => slow.of(session).map((r) => ({ timeMs: r.timeMs, data: {} })) }), "v1");
+    writeDerivedStreams(dir, [reader, slow]);
+    const streams = JSON.parse(readFileSync(join(dir, DERIVED_MANIFEST), "utf8")).streams;
+    expect(streams.slow.ms).toBeGreaterThanOrEqual(35);
+    expect(streams.reader.ms).toBeLessThan(35);
+  });
+
+  test("a stream derives where there is no performance clock, as in QuickJS mid-trail", () => {
+    const dir = fresh("no-performance");
+    const clock = Object.getOwnPropertyDescriptor(globalThis, "performance")!;
+    Object.defineProperty(globalThis, "performance", { value: undefined, configurable: true, writable: true });
+    try {
+      const rows = withEventStreamVersion(eventStream({ name: "rows", derive: () => [{ timeMs: T0, data: {} }] }), "v1");
+      expect(writeDerivedStreams(dir, [rows]).errors).toEqual([]);
+      expect(JSON.parse(readFileSync(join(dir, DERIVED_MANIFEST), "utf8")).streams.rows.ms).toBeGreaterThanOrEqual(0);
+    } finally {
+      Object.defineProperty(globalThis, "performance", clock);
+    }
+  });
+
+  test("a stream that throws with no message is still recorded as failed", () => {
+    const dir = fresh("failed-silently");
+    const silent = withEventStreamVersion(eventStream({ name: "silent", derive: () => { throw new Error(); } }), "v1");
+    writeDerivedStreams(dir, [silent]);
+    expect(JSON.parse(readFileSync(join(dir, DERIVED_MANIFEST), "utf8")).streams.silent.error).toBe("failed without a message");
+  });
+
+  test("a stream that failed keeps its title, so the report names it as it would a written one", () => {
+    const dir = fresh("failed-titled");
+    const broken = withEventStreamVersion(eventStream({ name: "flags", title: "Feature flags", derive: () => { throw new Error("down"); } }), "v1");
+    writeDerivedStreams(dir, [broken]);
+    const entry = JSON.parse(readFileSync(join(dir, DERIVED_MANIFEST), "utf8")).streams.flags;
+    expect([entry.title, entry.error]).toEqual(["Feature flags", "down"]);
   });
 
   test("writes only into the sessions the filter accepts", () => {
@@ -690,7 +740,7 @@ describe("chaining streams into a survey", () => {
 
   /** Finds each cart visit, and is run only because `visitLabels` depends on it, so its stored findings can be reused. */
   const visits = withId(survey({ find: (session) => session.stream<{ at: string }>("cart-visits").map((e) => ({ summary: `Reached ${e.data.at}`, evidence: [e] })) }), "visits", "v1");
-  const visitLabels = withId(survey({ dependsOn: { visits }, label: ({ dependsOn }) => dependsOn.visits.findings.map((f) => ({ name: f.summary, findings: [f] })) }), "visitLabels", "v1");
+  const visitLabels = withId(survey({ dependsOn: { visits }, label: ({ dependsOn }) => dependsOn.visits.findings.map((f) => ({ type: "visit", name: f.summary, findings: [f] })) }), "visitLabels", "v1");
   const runVisits = (dir: string, streams: EventStreamDefinition[]) => runSurveys({ surveys: [visitLabels], available: [visits, visitLabels], sessions: [dir], streams });
   const reusedVisits = (report: Awaited<ReturnType<typeof runSurveys>>) => report.surveys.find((s) => s.id === "visits")!.reused;
 

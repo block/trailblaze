@@ -633,20 +633,23 @@ open class TrailFormatYaml(
 
   /**
    * Why a standalone on-device runner must refuse [yaml], or null when it may run it. Refused when
-   * [yaml] is a unified trail whose `config.devices` resolves
-   * [xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition.requiresHost] for this device: a
-   * trail bundled into a test APK runs with no host behind it. Host-driven runs never ask.
+   * [yaml] is a unified trail whose `config.devices` requires
+   * [xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition.ANDROID_HOST_EXECUTION] for this
+   * device: a trail bundled into a test APK runs with no host behind it. Host-driven runs never
+   * ask.
    */
-  fun requiresHostRefusal(
+  fun hostExecutionRefusal(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
     trailName: String?,
   ): String? {
     if (!TrailRecordings.isUnifiedTrailContent(yaml)) return null
-    if (!UnifiedTrailAdapter.resolveRequiresHost(decodeUnifiedTrailConfig(yaml), deviceClassifiers))
+    if (
+      !UnifiedTrailAdapter.requiresHostExecution(decodeUnifiedTrailConfig(yaml), deviceClassifiers)
+    )
       return null
-    return "${trailName ?: "This trail"} declares `requiresHost` for this device, so it cannot run " +
-      "as an on-device instrumentation test. Run it with Trailblaze on the host instead."
+    return "${trailName ?: "This trail"} requires `android-host-execution` for this device, so it cannot " +
+      "run as an on-device instrumentation test. Run it with Trailblaze on the host instead."
   }
 
   /**

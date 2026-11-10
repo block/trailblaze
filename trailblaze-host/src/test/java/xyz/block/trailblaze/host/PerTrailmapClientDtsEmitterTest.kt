@@ -567,7 +567,7 @@ class PerTrailmapClientDtsEmitterTest {
       toolEntryBlock(rendered, "tapOn").contains("selector: TrailblazeNodeSelector;")
     }
     // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
-    assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {
+    assertFalse("mobile_maestro is no longer part of the TypeScript surface: $rendered") {
       rendered.contains("mobile_maestro:")
     }
     assertFalse("mobile_listInstalledApps must be left to built-in-tools.ts: $rendered") {

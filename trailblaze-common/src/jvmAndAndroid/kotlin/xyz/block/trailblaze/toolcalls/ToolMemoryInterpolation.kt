@@ -181,6 +181,16 @@ private fun maskMatches(text: String, replacements: Map<String, String>): String
 }
 
 /**
+ * Every literal secret [memory] holds: the values of its sensitive keys, and the values sensitive
+ * `args.` captured (scalars inside an object arg included), which stay secret after the memory key
+ * they came from is deleted. For masking text a tool did not build, such as a transport's command log.
+ */
+fun sensitiveLiteralValues(memory: AgentMemory): List<String> =
+  (memory.sensitiveKeys.mapNotNull { memory.variables[it] } + sensitiveArgTexts(memory).map { it.second })
+    .filter { it.isNotEmpty() }
+    .distinct()
+
+/**
  * Each sensitive arg's value as text, for value matching. Null and boolean args are skipped: they
  * can't hold a secret, and masking every `true` in a payload would only hide diagnostics. Sensitive
  * object args also retain scalar values reachable through supported dotted args paths.

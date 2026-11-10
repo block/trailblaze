@@ -124,6 +124,8 @@ class IosDriverTrailblazeAgent(
     // Ignored — the iOS driver has only one dispatch path, so there is no route to pin.
     tapRoute: TapRouteOverride?,
     timeoutMs: Long?,
+    // Ignored — the iOS driver never dismisses the keyboard before a tap.
+    hideKeyboardBefore: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
     actions = listOf(

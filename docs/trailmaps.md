@@ -303,6 +303,8 @@ atom; the trail's setup is the orchestration.
 A TypeScript trailhead can define `teardown`. Trailblaze calls it once after the trail,
 whatever happened: passed, failed, cancelled, or the trailhead itself threw. It cleans up what
 the run left behind and says whether the next trail can reuse this setup.
+It runs after the trail's `ctx.session.addCleanup` undos; [Trail lifecycle](trail-lifecycle.md)
+shows the whole order.
 
 ```ts
 export const myapp_launchAppSignedIn = trailblaze.trailhead<{ email: string }>(

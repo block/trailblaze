@@ -24,6 +24,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
+import xyz.block.trailblaze.host.android.AndroidSessionReconnector
 import xyz.block.trailblaze.host.golden.SnapshotBaselineSource
 import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
@@ -33,6 +34,7 @@ import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.MultiDeviceTargetBinding
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
@@ -46,6 +48,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
+import xyz.block.trailblaze.agent.RecordedStepsOnlyRunner
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
@@ -583,7 +586,14 @@ object TrailblazeHostYamlRunner {
     )
 
     val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
-    val llmClient = dynamicLlmClient.createLlmClient()
+    // ANDROID_TEST replays recordings only (see the runner below), so it builds no authenticated
+    // client: a recorded run must not fail on a provider whose credentials it never needs. A step
+    // that would reach inference fails fast on the no-op client instead.
+    val llmClient = if (driverType == TrailblazeDriverType.ANDROID_TEST) {
+      NoOpLlmClient()
+    } else {
+      dynamicLlmClient.createLlmClient()
+    }
 
     // Same composer the on-device rules and the daemon use, so this target advertises the same
     // tools here as it does on device. Reads the target's `excluded_tools:` itself.
@@ -697,6 +707,8 @@ object TrailblazeHostYamlRunner {
             onScreenStateObserved = { response ->
               probe.profile.updateAndGet { it.withMeasuredSizeFrom(response) }
             },
+            restartRunnerAfterAppExit = device.restartRunner,
+            sessionReconnector = device.sessionReconnector,
           )
           BoundSessionAgent(
             agent = rpcAgent,
@@ -937,23 +949,29 @@ object TrailblazeHostYamlRunner {
 
     // The `preferHostAgent` host-driven path: the loop runs on the host and dispatches tools to the
     // device over RPC. Recordings replay via the runner-util; only unrecorded steps reach the agent.
-    val runner: TestAgentRunner = KoogTestAgentRunner(
-      agent = routingAgent,
-      toolRepo = toolRepo,
-      screenStateProvider = activeScreenStateProvider,
-      elementComparator = elementComparator,
-      llmClient = llmClient,
-      trailblazeLlmModel = trailblazeLlmModel,
-      logger = loggingRule.logger,
-      sessionProvider = { loggingRule.session ?: error("Session not available") },
-      maxLlmCalls = runYamlRequest.maxLlmCalls,
-      systemPromptTemplate = TrailblazeSystemPrompt.compose(),
-      alwaysShownTools = MultiDeviceTargetBinding.alwaysShownTools(
-        boundTargets,
-        companionDriverTypes + driverType,
-      ),
-    ).apply {
-      perStepSystemPromptContextProvider = multiDevicePromptContextProvider
+    // ANDROID_TEST is a merge-blocking gate that replays recordings only, wherever it runs: an
+    // unrecorded step or a self-heal fails by name here exactly as it does on the device.
+    val runner: TestAgentRunner = if (driverType == TrailblazeDriverType.ANDROID_TEST) {
+      RecordedStepsOnlyRunner(activeScreenStateProvider)
+    } else {
+      KoogTestAgentRunner(
+        agent = routingAgent,
+        toolRepo = toolRepo,
+        screenStateProvider = activeScreenStateProvider,
+        elementComparator = elementComparator,
+        llmClient = llmClient,
+        trailblazeLlmModel = trailblazeLlmModel,
+        logger = loggingRule.logger,
+        sessionProvider = { loggingRule.session ?: error("Session not available") },
+        maxLlmCalls = runYamlRequest.maxLlmCalls,
+        systemPromptTemplate = TrailblazeSystemPrompt.compose(),
+        alwaysShownTools = MultiDeviceTargetBinding.alwaysShownTools(
+          boundTargets,
+          companionDriverTypes + driverType,
+        ),
+      ).apply {
+        perStepSystemPromptContextProvider = multiDevicePromptContextProvider
+      }
     }
 
     // Per-tool screen capture for driver migration. Read from env var since the host runner
@@ -1314,6 +1332,14 @@ object TrailblazeHostYamlRunner {
       val rpcClient: OnDeviceRpcClient,
       override val driverType: TrailblazeDriverType,
       override val targetTestApp: TrailblazeHostAppTarget? = null,
+      /** Starts the on-device runner again; see [HostOnDeviceRpcTrailblazeAgent]'s `restartRunnerAfterAppExit`. */
+      val restartRunner: (suspend () -> Unit)? = null,
+      /**
+       * Re-runs the caller's connect flow on [rpcClient] after the device reboots, for the
+       * `android_reconnectSession` step. Null when the caller offers no such path; the step then
+       * fails with a clear message rather than relaunching a runner it could never bind.
+       */
+      val sessionReconnector: AndroidSessionReconnector? = null,
     ) : DeviceConnection
 
     /**

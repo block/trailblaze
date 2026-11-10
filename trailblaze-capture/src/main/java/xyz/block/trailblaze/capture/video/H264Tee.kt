@@ -176,6 +176,29 @@ class H264Tee internal constructor(
     return consumer
   }
 
+  /**
+   * The device is reachable again after a reboot. While it was down every respawn failed, and
+   * the reader gave up once nothing could stream the device at all (scrcpy failed and there is no
+   * `screenrecord`); without this the recording would stay dead for the rest of the session. The
+   * producer factory forgets the failures the reboot caused, and a reader that gave up is started
+   * again while consumers are still attached. A reader still retrying is left alone: its next
+   * respawn sees the cleared failures too.
+   */
+  fun onDeviceReconnected() {
+    producerFactory.onDeviceReconnected(deviceId)
+    synchronized(refCountLock) {
+      if (refCount == 0 || readerThread?.isAlive == true) return
+      // The reader signaled a restart before its last respawn attempt, so consumers already have
+      // the new generation waiting; the next producer's stream head lands in it.
+      Console.log("[H264Tee] ${deviceId.instanceId} is back after a reboot; restarting its screen stream")
+      try {
+        startProducer()
+      } catch (e: Exception) {
+        Console.log("[H264Tee] restart after reboot failed: ${e.message}; recording stays stopped")
+      }
+    }
+  }
+
   internal fun detach(consumer: Consumer) {
     consumers.remove(consumer.id)
     consumer.markDetached()
@@ -622,6 +645,12 @@ class H264Tee internal constructor(
     /** Starts the next producer when one exits while consumers are still reading. */
     fun respawn(deviceId: TrailblazeDeviceId, videoSize: String, bitRate: String, unlimited: Boolean): ProducerHandle =
       spawn(deviceId, videoSize, bitRate, unlimited)
+
+    /**
+     * The device is reachable again after a reboot. A factory that remembers a source failing on
+     * the device forgets it here: the failure was the reboot's, not the source's.
+     */
+    fun onDeviceReconnected(deviceId: TrailblazeDeviceId) {}
   }
 
   companion object {

@@ -137,6 +137,12 @@ declare global {
     /** null when `doc` isn't the unified `config`/`trail` mapping shape. */
     unifiedDocToMatrix(doc: unknown): TMStepMatrix | null;
     matrixToUnifiedDoc(model: TMStepMatrix): Record<string, unknown>;
+    /** [dump] the doc, writing `config.labels` / `config.generatedLabels` one line per label, as the CLI does. */
+    dumpUnifiedDoc(doc: Record<string, unknown>, dump: (doc: Record<string, unknown>) => string): string;
+    renderLabelEntry(label: Record<string, unknown>): string;
+    /** `jsyaml.load`, with config label fields kept as the strings written (no number or date typing). */
+    loadUnifiedDoc(yaml: string, jsyaml: any): any;
+    withSourceLabels(doc: any, raw: any): any;
   }
   const TM: TMApi;
 

@@ -6,11 +6,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.capture.memory.AdbMemoryProbe
-import xyz.block.trailblaze.capture.memory.AppMemoryLimits
-import xyz.block.trailblaze.capture.memory.AppMemorySample
-import xyz.block.trailblaze.capture.memory.DumpsysMeminfoParser
 import xyz.block.trailblaze.capture.memory.MemoryProbe
 import xyz.block.trailblaze.capture.memory.MemorySnapshot
+import xyz.block.trailblaze.capture.memory.OnDeviceMemorySnapshot
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetMemoryInfoRequest
@@ -201,72 +199,10 @@ class OnDeviceRpcMemoryProbe(
     /** Consecutive unreachable attempts after which the runner is not asked again by this probe. */
     const val MAX_UNREACHABLE_ATTEMPTS: Int = 3
 
-    /**
-     * The shape a dump-free reading fills in: every dump-only figure absent, so the only numbers
-     * the caller sees are the ones it copies in from `Runtime`.
-     */
-    private val HEAP_ONLY_SAMPLE = AppMemorySample(
-      totalPssKb = null,
-      totalRssKb = null,
-      totalSwapPssKb = null,
-      javaHeapKb = null,
-      nativeHeapKb = null,
-      codeKb = null,
-      stackKb = null,
-      graphicsKb = null,
-      privateOtherKb = null,
-      systemKb = null,
-      views = null,
-      viewRootImpls = null,
-      appContexts = null,
-      activities = null,
-    )
-
     /** The status code inside an HTTP failure's message, which carries it as plain text. */
     private val HTTP_STATUS = Regex("HTTP (\\d{3})")
 
-    /**
-     * The runner's reply as the capture's snapshot. The dump goes through the same parser as the
-     * adb path; when the runner shares the app's process, its `Runtime` figures replace the dump's
-     * heap size/free (they are the app's own numbers, read after a real `System.gc()`), and
-     * `Runtime.maxMemory()` is the heap limit.
-     *
-     * Those `Runtime` figures do not need the dump. They are the whole of what the report graphs, so
-     * a reading whose dump never arrived — the shell budget expiring is enough — still yields a
-     * sample carrying the heap, rather than a hole in the series next to a device row that read
-     * fine. Only the PSS breakdown is lost with the dump, and nothing reads it today.
-     */
-    fun toSnapshot(response: GetMemoryInfoResponse): MemorySnapshot {
-      val parsed = response.dumpsysMeminfo?.let(DumpsysMeminfoParser::parseAppSample)
-      val runtimeHeap = response.inProcess && response.runtimeTotalKb != null && response.runtimeFreeKb != null
-      val app = when {
-        runtimeHeap -> (parsed ?: HEAP_ONLY_SAMPLE)
-          .copy(javaHeapSizeKb = response.runtimeTotalKb, javaHeapFreeKb = response.runtimeFreeKb)
-        else -> parsed
-      }
-      val limits = if (app != null) {
-        AppMemoryLimits(
-          heapGrowthLimitKb = response.memoryClassMb?.let { it * 1024L },
-          heapMaxKb = response.largeMemoryClassMb?.let { it * 1024L },
-          largeHeap = response.largeHeap,
-          runtimeMaxKb = response.runtimeMaxKb,
-        ).takeIf { it.heapLimitKb != null }
-      } else {
-        null
-      }
-      return MemorySnapshot(
-        timeMs = 0,
-        appId = response.appId,
-        // The runner resolved the pid itself, so it is the liveness answer; a dump that did not
-        // parse must not null it, or a healthy app reads as `process_died`. Same reasoning as the
-        // adb probe.
-        pid = response.pid,
-        app = app,
-        device = response.procMeminfo?.let(DumpsysMeminfoParser::parseDeviceSample),
-        limits = limits,
-        gcForced = if (response.pid != null) response.gcForced else null,
-        source = MemoryProbe.SOURCE_ONDEVICE,
-      )
-    }
+    /** The runner's reply as the capture's snapshot; see [OnDeviceMemorySnapshot.from]. */
+    fun toSnapshot(response: GetMemoryInfoResponse): MemorySnapshot = OnDeviceMemorySnapshot.from(response)
   }
 }

@@ -273,6 +273,27 @@ object PlaywrightAriaSnapshot {
     return byName.or(unnamed.and(PlaywrightTextRuns.content(page, source, flags, recorded)))
   }
 
+  /**
+   * [role] named exactly [name], or an unnamed [role] the snapshot printed with [name] as its text.
+   *
+   * A role named from its content (button, link, heading, ...) only goes unnamed when it has no
+   * text, so the snapshot never prints one by its text. Those skip the text-run engine, which
+   * costs several times a plain role+name lookup on large pages.
+   */
+  private fun byRoleOrPrintedText(page: Page, role: String, ariaRole: AriaRole, name: String): Locator {
+    val byName = page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
+    if (ariaRole in NAME_FROM_CONTENT_ROLES) return byName
+    return byPrintedText(page, role, ariaRole, jsRegexLiteral(name), 0, name, byName, textRunIndex = null)
+  }
+
+  /** ARIA roles whose accessible name comes from their content (WAI-ARIA 1.2, "name from: contents"). */
+  private val NAME_FROM_CONTENT_ROLES = setOf(
+    AriaRole.BUTTON, AriaRole.CELL, AriaRole.CHECKBOX, AriaRole.COLUMNHEADER, AriaRole.GRIDCELL,
+    AriaRole.HEADING, AriaRole.LINK, AriaRole.MENUITEM, AriaRole.MENUITEMCHECKBOX,
+    AriaRole.MENUITEMRADIO, AriaRole.OPTION, AriaRole.RADIO, AriaRole.ROW, AriaRole.ROWHEADER,
+    AriaRole.SWITCH, AriaRole.TAB, AriaRole.TOOLTIP, AriaRole.TREEITEM,
+  )
+
   /** [value] as a pattern matching it literally, in syntax a JavaScript `RegExp` also reads. */
   private fun jsRegexLiteral(value: String): String =
     value.replace(JS_REGEX_METACHARACTER) { "\\" + it.value }
@@ -338,13 +359,11 @@ object PlaywrightAriaSnapshot {
   private fun resolveByRoleName(page: Page, descriptor: String): Locator {
     val sanitized = descriptor.trim().replace(TRAILING_ATTRS_PATTERN, "")
 
-    // Quoted role+name: textbox "Email or phone number"
+    // Quoted role+name: textbox "Email or phone number". The snapshot lists an unnamed element
+    // by its text the same way (`paragraph "Ship it"`), so those match on that text too.
     ROLE_NAME_PATTERN.matchEntire(sanitized)?.let { match ->
       val (role, name) = match.destructured
-      return page.getByRole(
-        ariaRoleFromString(role),
-        Page.GetByRoleOptions().setName(name).setExact(true),
-      )
+      return byRoleOrPrintedText(page, role, ariaRoleFromString(role), name)
     }
 
     // Role-only: navigation, banner
@@ -362,7 +381,7 @@ object PlaywrightAriaSnapshot {
       val ariaRole = try { AriaRole.valueOf(role.uppercase()) } catch (_: IllegalArgumentException) { null }
       if (ariaRole != null) {
         val name = rawName.removeSurrounding("'")
-        val locator = page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
+        val locator = byRoleOrPrintedText(page, role, ariaRole, name)
         if (locator.count() > 0) return locator
       }
     }

@@ -193,7 +193,6 @@ class McpSubprocessRuntimeLauncherTest {
       repo = emptyRepo(),
       registeredNames = emptyList(),
       ioReservation = reservation,
-      resourceSessionId = SessionId("launcher_test_stubborn_process"),
     )
 
     // The tally is process-wide and every case in this JVM shares it, so a failed assertion below
@@ -231,7 +230,6 @@ class McpSubprocessRuntimeLauncherTest {
       repo = emptyRepo(),
       registeredNames = emptyList(),
       ioReservation = reservation,
-      resourceSessionId = SessionId("launcher_test_async_reclaim"),
     )
 
     try {
@@ -267,7 +265,6 @@ class McpSubprocessRuntimeLauncherTest {
       repo = emptyRepo(),
       registeredNames = emptyList(),
       ioReservation = reservation,
-      resourceSessionId = SessionId("launcher_test_overlapping_teardown"),
     )
 
     try {

@@ -24,6 +24,7 @@
 // Nothing here reads files, so a survey bundle that runs mid-trail can import it (`in-process.ts`).
 
 import { matchEvent, Records } from "./match.js";
+import { SurveyScope, scopeError, scopeFilterOf, scopedSession, unscopedOf } from "./phase.js";
 import type { SurveySession } from "./session.js";
 import type { SessionRecord, StreamEvent } from "./types.js";
 
@@ -113,7 +114,7 @@ export interface EventStreamSpec<T> {
   lane?: { fold?: "any" | "label" | "none" };
   /**
    * The rows of one session. Pure: the same session gives the same rows. A session the stream means
-   * nothing for gets no rows, which also decides where the report shows it: a stream has no scope
+   * nothing for gets no rows, which also decides where the report shows it: a stream names no targets
    * of its own, so `of()` and the report can never disagree on which sessions it covers. Mid-trail the session holds
    * only what is captured so far in its event streams (`network`, `analytics`, `events`), so a stream
    * a mid-trail survey reads must derive from those alone.
@@ -125,6 +126,13 @@ export interface EventStreamSpec<T> {
    * a derived row a session's files hold: a chain of streams gives the same rows wherever it runs.
    */
   dependsOn?: ReadonlyArray<EventStreamDefinition<any>>;
+  /**
+   * Which part of the run `derive` reads, as a survey's `scope` does: `SurveyScope.Trail`,
+   * `DeviceSetup`, `Trailhead`, `Teardown`, a list of `RunPhase`s, or `All`. Unset, it reads `All`:
+   * a stream is shared by surveys of every scope, so it keeps setup unless it says otherwise. Every
+   * reader, and the report's lane, gets the same rows; a survey's own scope narrows them further.
+   */
+  scope?: SurveyScope;
 }
 
 export interface EventStreamDefinition<T = unknown> {
@@ -139,6 +147,20 @@ export interface EventStreamDefinition<T = unknown> {
 
 /** Row lists by session, per spec: a stream read by several surveys of one session derives once. */
 const memo = new WeakMap<EventStreamSpec<any>, WeakMap<object, DerivedRow<any>[]>>();
+
+/** A clock in ms. QuickJS, which runs surveys mid-trail, has no `performance`. */
+export const nowMs = (): number => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
+
+/** How long each spec's own `derive` ran per session, not counting the streams it read: see [deriveMsOf]. */
+const deriveTimes = new WeakMap<EventStreamSpec<any>, WeakMap<object, number>>();
+
+/**
+ * How long [def]'s own `derive` took over [session] when it last ran, in ms, not counting the derived
+ * streams it read: those are timed as their own. Undefined when it has not run over [session].
+ */
+export function deriveMsOf(def: EventStreamDefinition, session: SurveySession): number | undefined {
+  return deriveTimes.get(def.spec)?.get(baseOf(unscopedOf(session)));
+}
 
 function list<T>(v: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> {
   if (v === undefined) return [];
@@ -222,30 +244,44 @@ function viewWith(session: SurveySession, fresh: ReadonlyMap<string, ReadonlyArr
 const deriving: EventStreamSpec<any>[] = [];
 
 function define<T>(spec: EventStreamSpec<T>, version?: string): EventStreamDefinition<T> {
+  const derivedOnce = (base: SurveySession): DerivedRow<T>[] => {
+    let bySession = memo.get(spec);
+    if (!bySession) memo.set(spec, (bySession = new WeakMap()));
+    let rows = bySession.get(base);
+    if (rows) return rows;
+    if (deriving.includes(spec)) {
+      const loop = [...deriving.slice(deriving.indexOf(spec)), spec].map((s) => s.name).join(" → ");
+      throw new Error(`stream "${spec.name}" depends on itself: ${loop}`);
+    }
+    deriving.push(spec);
+    try {
+      const inputs = new Map((spec.dependsOn ?? []).map((d) => [d.name, d.of(base)] as const));
+      const started = nowMs();
+      try {
+        const view = viewWith(base, inputs, false);
+        rows = deriveRows(spec, spec.scope === undefined ? view : scopedSession(view, spec.scope));
+      } finally {
+        let times = deriveTimes.get(spec);
+        if (!times) deriveTimes.set(spec, (times = new WeakMap()));
+        times.set(base, nowMs() - started);
+      }
+    } finally {
+      deriving.pop();
+    }
+    bySession.set(base, rows);
+    return rows;
+  };
   return Object.freeze({
     [BRAND]: true as const,
     spec,
     name: spec.name,
     version,
     of(session: SurveySession): DerivedRow<T>[] {
-      const base = baseOf(session);
-      let bySession = memo.get(spec);
-      if (!bySession) memo.set(spec, (bySession = new WeakMap()));
-      let rows = bySession.get(base);
-      if (rows) return rows;
-      if (deriving.includes(spec)) {
-        const loop = [...deriving.slice(deriving.indexOf(spec)), spec].map((s) => s.name).join(" → ");
-        throw new Error(`stream "${spec.name}" depends on itself: ${loop}`);
-      }
-      deriving.push(spec);
-      try {
-        const inputs = new Map((spec.dependsOn ?? []).map((d) => [d.name, d.of(base)] as const));
-        rows = deriveRows(spec, viewWith(base, inputs, false));
-      } finally {
-        deriving.pop();
-      }
-      bySession.set(base, rows);
-      return rows;
+      // Rows are derived once from the whole run, never from a scoped view's narrowed inputs; the
+      // view reads only its part of them.
+      const rows = derivedOnce(baseOf(unscopedOf(session)));
+      const keep = scopeFilterOf(session);
+      return keep ? rows.filter(keep) : rows;
     },
   });
 }
@@ -328,6 +364,8 @@ export function eventStream<T = Record<string, unknown>>(spec: EventStreamSpec<T
   if (spec.dependsOn !== undefined && (!Array.isArray(spec.dependsOn) || !spec.dependsOn.every(isEventStream))) {
     throw new Error(`stream "${spec.name}": dependsOn must list streams made with eventStream()`);
   }
+  const badScope = spec.scope === undefined ? undefined : scopeError(spec.scope);
+  if (badScope) throw new Error(`stream "${spec.name}": ${badScope}`);
   return define(spec);
 }
 

@@ -108,11 +108,14 @@ main.tabmountmain:has(> .tabmount[data-tabmount="summary"]) { padding: 0; overfl
 .streamsmenuhint { margin: 0.25rem 0 0; padding: 0.5rem 0.5rem 0.25rem; border-top: 1px solid var(--line); color: var(--sub); font-size: 12px; }
 
 /* Diagnosis -------------------------------------------------------------- */
-.streamsdiag { display: flex; flex: 0 0 auto; flex-direction: column; max-height: 40vh; overflow-y: auto; border-bottom: 1px solid var(--line); background: var(--bg2); }
+/* Warnings and diagnosis share one cap, so open details never squeeze the grid to nothing. */
+.streamsrunnotes { display: flex; flex: 0 0 auto; flex-direction: column; max-height: 40vh; overflow-y: auto; }
+.streamsdiag { display: flex; flex: 0 0 auto; flex-direction: column; border-bottom: 1px solid var(--line); background: var(--bg2); }
 .streamsdiagrow { padding: 0.375rem var(--page-x); }
 .streamsdiagrow + .streamsdiagrow { border-top: 1px solid var(--line); }
 .streamsdiagline { display: flex; gap: 0.5rem; align-items: baseline; font-size: 13px; line-height: 1.25rem; }
 .streamsdiagkind { flex: none; padding: 0 0.375rem; border-radius: 999px; background: var(--danger-surface); color: var(--danger-text); font-size: 11px; font-weight: 500; line-height: 1rem; letter-spacing: 0.02em; text-transform: uppercase; }
+.streamsdiagkind[data-streams-tone="warn"] { background: var(--warning-surface); color: var(--warning-text); }
 .streamsdiagtext { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .streamsdiagtext > :not(:last-child) { margin-right: 0.25rem; }
 .streamsdiagsummary { color: var(--txt); font-weight: 500; }

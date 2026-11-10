@@ -36,14 +36,15 @@ export function renderMarkdown(report: SurveyReport, options: { evidence?: boole
   lines.push(`## Surveys`);
   lines.push("");
   const labelled = report.labels.length > 0 || report.labelErrors.length > 0;
-  lines.push(labelled ? `| Survey | Sessions | Findings | Labels | Description |` : `| Survey | Sessions | Findings | Description |`);
-  lines.push(labelled ? `|---|---:|---:|---:|---|` : `|---|---:|---:|---|`);
+  lines.push(labelled ? `| Survey | Reads | Sessions | Findings | Labels | Description |` : `| Survey | Reads | Sessions | Findings | Description |`);
+  lines.push(labelled ? `|---|---|---:|---:|---:|---|` : `|---|---|---:|---:|---|`);
   const surveys = [...report.surveys].sort((a, b) => b.sessionsMatched - a.sessionsMatched || a.id.localeCompare(b.id));
   for (const s of surveys) {
     // A survey the run included only for another's `dependsOn` says so, and how much it reused.
     const why = s.neededBy ? ` (for ${s.neededBy.join(", ")}; stored findings reused in ${s.reused ?? 0})` : "";
     const description = cell(`${s.description ?? ""}${why}`.trim());
-    lines.push(labelled ? `| ${cell(s.id)} | ${s.sessionsMatched}/${total} | ${s.findings} | ${s.labels} | ${description} |` : `| ${cell(s.id)} | ${s.sessionsMatched}/${total} | ${s.findings} | ${description} |`);
+    const reads = cell(s.scope);
+    lines.push(labelled ? `| ${cell(s.id)} | ${reads} | ${s.sessionsMatched}/${total} | ${s.findings} | ${s.labels} | ${description} |` : `| ${cell(s.id)} | ${reads} | ${s.sessionsMatched}/${total} | ${s.findings} | ${description} |`);
   }
   lines.push("");
   if (labelled) lines.push(...renderLabels(report));
@@ -59,9 +60,9 @@ export function renderMarkdown(report: SurveyReport, options: { evidence?: boole
   return lines.join("\n");
 }
 
-/** What one label is called: its type, when it has one, then its name. */
+/** What one label is called: its type, then its name. */
 export function labelName(l: Pick<LabelRecord, "type" | "name">): string {
-  return l.type ? `${l.type}: ${l.name}` : l.name;
+  return `${l.type}: ${l.name}`;
 }
 
 /** Labels, then under each the findings behind it grouped by the run they were found in. */
@@ -122,8 +123,9 @@ function renderSession(s: SessionResult, showEvidence: boolean): string[] {
   return lines;
 }
 
-/** One line per session: id, outcome, and the surveys that found something. */
+/** The part of each run every survey read, then one line per session: id, outcome, and the surveys that found something. */
 export function renderSummaryLines(report: SurveyReport): string[] {
+  const reads = report.surveys.length > 0 ? [`SURVEYS   ${report.surveys.map((s) => `${s.id} (${s.scope})`).join(", ")}`] : [];
   const sessions = report.sessions.map((s) => {
     const found = [...new Set(s.findings.map((f) => f.survey))];
     const errors = s.errors.length > 0 ? ` (${s.errors.length} survey error${s.errors.length === 1 ? "" : "s"})` : "";
@@ -131,5 +133,5 @@ export function renderSummaryLines(report: SurveyReport): string[] {
     return `${s.session.outcome.padEnd(9)} ${s.session.id}  →  ${found.length > 0 ? found.join(", ") : "-"}${labels}${errors}`;
   });
   // A label phase belongs to no one session, so its failure gets a line of its own.
-  return [...sessions, ...report.labelErrors.map((e) => `LABELS    ${e.survey}  →  ${e.message}`)];
+  return [...reads, ...sessions, ...report.labelErrors.map((e) => `LABELS    ${e.survey}  →  ${e.message}`)];
 }

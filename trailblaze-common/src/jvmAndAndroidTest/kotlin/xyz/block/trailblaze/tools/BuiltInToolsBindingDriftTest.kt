@@ -229,7 +229,7 @@ class BuiltInToolsBindingDriftTest {
           appendLine()
           append(
             "Remove these from built-in-tools.ts (the generated surface owns them). If the generator " +
-              "genuinely can't model one (a serializer-transformed shape like mobile_maestro, or a " +
+              "genuinely can't model one (a serializer-transformed shape, or a " +
               "rich result type worth preserving), add it to the single shared allowlist " +
               "HandCuratedRecordableTools.NAMES (both the emitter and this test read it).",
           )

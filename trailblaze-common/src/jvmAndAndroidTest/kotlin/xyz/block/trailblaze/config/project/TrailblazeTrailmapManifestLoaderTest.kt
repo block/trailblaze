@@ -623,6 +623,7 @@ class TrailblazeTrailmapManifestLoaderTest {
           "android_forceStop",
           "android_grantAppOpsPermission",
           "android_grantPermissions",
+          "android_reconnectSession",
           "android_sendBroadcast",
           "android_systemUiDemoMode",
           "android_writeBytesToFile",

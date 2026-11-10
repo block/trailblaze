@@ -7,8 +7,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.scripting.RunWarningSurveys
 
 /**
  * `trailblaze survey` and `trailblaze report --surveys` over fixture sessions in a fixture
@@ -86,16 +88,18 @@ class SurveyCommandTest {
     val markdown = File(root, "surveys.md")
     val json = File(root, "surveys.json")
 
-    val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
-      writeSurveyReport(listOf(checkout, refund), names = emptyList(), markdown = markdown, json = json)
+    val draft = CliCallerContext.withCallerCwd(workspace.toPath()) {
+      draftSurveyReport(listOf(checkout, refund), names = emptyList())
     }
+    assertTrue(File(refund, "surveys.json").isFile, "each session stores its findings before the HTML is built")
+    val exit = placeSurveyReport(draft, markdown = markdown, json = json)
 
     assertEquals(0, exit)
     val text = markdown.readText()
     assertTrue("### job: take-payment\n\nFrom **jobs**, 2 runs." in text, text)
     assertTrue("- run-refund — Refund a sale\n  - **journeys** — Completed take-payment" in text, text)
     assertTrue(json.isFile)
-    assertTrue(File(refund, "surveys.json").isFile)
+    assertTrue(!draft.dir.exists(), "the scratch directory is removed")
   }
 
   @Test
@@ -106,9 +110,10 @@ class SurveyCommandTest {
     val markdown = File(root, "surveys.md").apply { writeText("# from an earlier run") }
     val json = File(root, "surveys.json").apply { writeText("{\"from\": \"an earlier run\"}") }
 
-    val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
-      writeSurveyReport(listOf(checkout), names = listOf("nosuchsurvey"), markdown = markdown, json = json)
+    val draft = CliCallerContext.withCallerCwd(workspace.toPath()) {
+      draftSurveyReport(listOf(checkout), names = listOf("nosuchsurvey"))
     }
+    val exit = placeSurveyReport(draft, markdown = markdown, json = json)
 
     assertEquals(TrailblazeExitCode.MISUSE.code, exit)
     assertTrue(!json.exists(), "the earlier run's surveys.json is gone")
@@ -116,18 +121,26 @@ class SurveyCommandTest {
   }
 
   @Test
-  fun `report --surveys refuses to write over a session's stored results, and leaves them`() {
-    assumeBun()
-    writeWorkspace()
+  fun `report --surveys refuses an output directory where a session stores its results`() {
     val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
-    val stored = File(checkout, "surveys.json").apply { writeText("{\"format\": 1, \"surveys\": {}}") }
 
-    val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
-      writeSurveyReport(listOf(checkout), names = emptyList(), markdown = File(checkout, "surveys.md"), json = stored)
-    }
+    assertTrue(overwritesStoredSurveys(listOf(checkout), File(checkout, "surveys.json")))
+    assertTrue(!overwritesStoredSurveys(listOf(checkout), File(root, "surveys.json")))
+  }
 
-    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
-    assertEquals("{\"format\": 1, \"surveys\": {}}", stored.readText())
+  @Test
+  fun `a survey report drafted before the HTML moves beside it, replacing an earlier one`() {
+    val dir = File(root, "draft").apply { mkdirs() }
+    File(dir, "surveys.md").writeText("# this run")
+    File(dir, "surveys.json").writeText("{\"this\": \"run\"}")
+    val markdown = File(root, "report.surveys.md").apply { writeText("# an earlier run") }
+    val json = File(root, "report.surveys.json")
+
+    assertEquals(0, placeSurveyReport(SurveyReportDraft(dir, exit = 0), markdown = markdown, json = json))
+
+    assertEquals("# this run", markdown.readText())
+    assertEquals("{\"this\": \"run\"}", json.readText())
+    assertTrue(!dir.exists(), "the scratch directory is removed")
   }
 
   @Test
@@ -161,7 +174,7 @@ class SurveyCommandTest {
     assertEquals(
       TrailblazeExitCode.SUCCESS.code,
       CliCallerContext.withCallerCwd(workspace.toPath()) {
-        writeSurveyReport(listOf(checkout), names = emptyList(), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
+        placeSurveyReport(draftSurveyReport(listOf(checkout), names = emptyList()), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
       },
       "a stream that fails does not fail the surveys that ran",
     )
@@ -172,6 +185,30 @@ class SurveyCommandTest {
       CliCallerContext.withCallerCwd(workspace.toPath()) { writeDerivedStreams(listOf(empty)) },
       "a path with no sessions in it is a mistake, not a success",
     )
+  }
+
+  @Test
+  fun `the report promises a Summary warning only when a session records a failed stream`() {
+    val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val unrecorded = derivedStreamFailureMessage(1, listOf(checkout))
+    assertTrue("shows no warning" in unrecorded, unrecorded)
+
+    File(checkout, "events").mkdirs()
+    File(checkout, "events/derived.json").writeText("{\"format\": 1, \"streams\": {\"flags\": {\"rows\": 0, \"error\": \"down\"}}}")
+    val recorded = derivedStreamFailureMessage(1, listOf(checkout))
+    assertTrue("lists each failed stream whose error a session recorded as a run warning" in recorded, recorded)
+
+    File(checkout, "events/derived.json").writeText("{\"format\": 1, \"streams\": {\"flags\": {\"rows\": 0, \"error\": \"\"}}}")
+    assertTrue("lists each failed stream whose error a session recorded as a run warning" in derivedStreamFailureMessage(1, listOf(checkout)), "an empty error is still a failure")
+
+    File(checkout, "events/derived.json").writeText("{not json")
+    assertTrue("shows no warning" in derivedStreamFailureMessage(1, listOf(checkout)))
+
+    // Past the report's cap it reads no warning from the manifest, so none is promised, and the file is not read.
+    File(checkout, "events/derived.json").writeText(
+      "{\"format\": 1, \"streams\": {\"flags\": {\"rows\": 0, \"error\": \"down\"}}, \"pad\": \"" + "x".repeat(1024 * 1024) + "\"}",
+    )
+    assertTrue("shows no warning" in derivedStreamFailureMessage(1, listOf(checkout)), "an oversized manifest promises no warning")
   }
 
   @Test
@@ -224,10 +261,92 @@ class SurveyCommandTest {
     val checkout = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
 
     val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
-      writeSurveyReport(listOf(checkout), names = emptyList(), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
+      placeSurveyReport(draftSurveyReport(listOf(checkout), names = emptyList()), markdown = File(root, "surveys.md"), json = File(root, "surveys.json"))
     }
 
     assertEquals(TrailblazeExitCode.SUCCESS.code, exit)
+  }
+
+  @Test
+  fun `survey --update-trails adds the selected survey's labels to the trails that earned them`() {
+    assumeBun()
+    writeWorkspace()
+    writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    writeSession("run-browse", "Browse items", listOf("browse"))
+    val trails = File(workspace, "trails").apply { mkdirs() }
+    val checkout = File(trails, "checkout.trail.yaml").apply { writeText(trailFile("trail-run-checkout")) }
+    val browse = File(trails, "browse.trail.yaml").apply { writeText(trailFile("trail-run-browse")) }
+    val out = File(root, "report.json")
+
+    fun survey() = CliCallerContext.withCallerCwd(workspace.toPath()) {
+      commandLine().execute(
+        "survey", "--logs-dir", logsDir.path, "--survey", "jobs", "--format", "none",
+        "-o", out.path, "--update-trails", "trails", "run-checkout", "run-browse",
+      )
+    }
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, survey())
+    // Only `jobs` was asked for; `journeys` ran to feed it and writes nothing.
+    assertEquals(
+      trailFile("trail-run-checkout", "  generatedLabels:\n    - { type: job, name: take-payment, survey: jobs }\n"),
+      checkout.readText(),
+    )
+    assertEquals(trailFile("trail-run-browse"), browse.readText(), "no label cites a browse run")
+    assertTrue("\"labels\"" in out.readText(), "the report is still saved where -o says")
+
+    val before = checkout.readText()
+    assertEquals(TrailblazeExitCode.SUCCESS.code, survey())
+    assertEquals(before, checkout.readText(), "a second run adds nothing")
+  }
+
+  @Test
+  fun `survey --update-trails refuses an -o that is a session's stored results before storing anything`() {
+    writeWorkspace()
+    val session = writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val trail = File(workspace, "checkout.trail.yaml").apply { writeText(trailFile("trail-run-checkout")) }
+    val stored = File(session, "surveys.json").apply { writeText("{\"format\": 1, \"surveys\": {}}") }
+
+    // Named by id, and reached through the logs directory: both are the session's own results.
+    for (sessionArg in listOf("run-checkout", logsDir.path)) {
+      val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
+        commandLine().execute(
+          "survey", "--logs-dir", logsDir.path, "--survey", "journeys", "--format", "none",
+          "-o", stored.path, "--update-trails", trail.path, sessionArg,
+        )
+      }
+      assertEquals(TrailblazeExitCode.MISUSE.code, exit, sessionArg)
+    }
+    assertEquals("{\"format\": 1, \"surveys\": {}}", stored.readText())
+    assertEquals(trailFile("trail-run-checkout"), trail.readText())
+  }
+
+  @Test
+  fun `survey --update-trails with a flag the surveys CLI rejects writes no labels and no report`() {
+    assumeBun()
+    writeWorkspace()
+    writeSession("run-checkout", "Checkout with a card", listOf("take-payment"))
+    val trail = File(workspace, "checkout.trail.yaml").apply { writeText(trailFile("trail-run-checkout")) }
+    val out = File(root, "report.json")
+
+    // The surveys CLI writes its report before it rejects an unknown --format.
+    val exit = CliCallerContext.withCallerCwd(workspace.toPath()) {
+      commandLine().execute(
+        "survey", "--logs-dir", logsDir.path, "--survey", "journeys", "--format", "jsn",
+        "-o", out.path, "--update-trails", trail.path, "run-checkout",
+      )
+    }
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
+    assertEquals(trailFile("trail-run-checkout"), trail.readText())
+    assertTrue(!out.exists())
+  }
+
+  @Test
+  fun `survey --update-trails naming a missing path is misuse`() {
+    val exit = CliCallerContext.withCallerCwd(workspace.apply { mkdirs() }.toPath()) {
+      commandLine().execute("survey", "--logs-dir", logsDir.path, "--update-trails", "nowhere")
+    }
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
   }
 
   @Test
@@ -239,6 +358,54 @@ class SurveyCommandTest {
     assertNull(surveysOf("--id", "x"))
     assertEquals(emptyList(), surveysOf("--id", "x", "--surveys"), "bare means every survey")
     assertEquals(listOf("journeys", "jobs"), surveysOf("--id", "x", "--surveys=journeys,jobs"))
+  }
+
+  @Test
+  fun `warning surveys before a report load the caller's workspace and store what they find`() {
+    assumeBun()
+    val config = writeWarningWorkspace(
+      "export const refunds = trailblaze.survey({ warning: true, requiresFinishedSession: true, " +
+        "find: (session) => session.analytics.filter({ name: \"Journey Complete\" })" +
+        ".map((e) => ({ summary: \"Warning for \" + String(e.properties.journey), evidence: [e] })) });",
+    )
+    val session = writeSession("run-warned", "Refund a sale", listOf("refund"))
+
+    assertEquals(
+      listOf("refunds"),
+      CliCallerContext.withCallerCwd(config.parentFile.toPath()) { RunWarningSurveys.run(listOf(session), config) },
+    )
+
+    val stored = File(session, "surveys.json").readText()
+    assertTrue("\"warning\": true" in stored && "Warning for refund" in stored, stored)
+  }
+
+  @Test
+  fun `a survey that never finishes is stopped at the timeout`() {
+    assumeBun()
+    val config = writeWarningWorkspace(
+      "export const stuck = trailblaze.survey({ warning: true, requiresFinishedSession: true, " +
+        "find: () => new Promise(() => { setInterval(() => {}, 1000); }) });",
+    )
+    val session = writeSession("run-stuck", "Stuck", emptyList())
+    val started = System.nanoTime()
+
+    val exit = SurveyCli.run(
+      listOf("--warnings", "--quiet", "--format", "none", "--sessions", session.path),
+      cwd = config.parentFile,
+      timeout = 5.seconds,
+    )
+
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, exit)
+    assertTrue(System.nanoTime() - started < 60.seconds.inWholeNanoseconds, "the run was not held past the timeout")
+  }
+
+  /** A workspace whose one survey file holds [survey], returning its config dir. */
+  private fun writeWarningWorkspace(survey: String): File {
+    val config = File(root, "warnings-workspace/trailblaze-config").apply { mkdirs() }
+    File(config, "trailblaze.yaml").writeText("trailmaps: []\n")
+    File(config, "surveys").mkdirs()
+    File(config, "surveys/warnings.survey.ts").writeText("import { trailblaze } from \"@trailblaze/scripting/surveys\";\n$survey\n")
+    return config
   }
 
   private fun assumeBun() = assumeTrue(
@@ -286,6 +453,9 @@ class SurveyCommandTest {
       """.trimIndent() + "\n",
     )
   }
+
+  private fun trailFile(id: String, labels: String = "") =
+    "config:\n  id: $id\n  target: example\n$labels  context: Example\ntrail:\n  - step: Open the app\n    recordable: false\n"
 
   /** A finished run whose analytics stream logged one `Journey Complete` per journey given. */
   private fun writeSession(id: String, title: String, journeys: List<String>): File {

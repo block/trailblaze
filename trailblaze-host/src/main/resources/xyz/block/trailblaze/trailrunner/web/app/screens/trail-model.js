@@ -300,7 +300,159 @@
     });
   }
 
+  // ── config labels ──
+  // `config.labels` and `config.generatedLabels` are written one flow mapping per line, fields in the
+  // order type/name/when/except/survey/reasoning — the form the CLI's emitter writes (TrailLabels.renderBlock in
+  // trailblaze-trail-format) and `trailblaze check` requires of generatedLabels. js-yaml would expand
+  // each entry into a block mapping, so a save from the editor would fail the check. Keep the quoting
+  // rule here identical to TrailLabels.flowScalar.
+  var LABEL_KEYS = ['labels', 'generatedLabels'];
+  var LABEL_FIELDS = ['type', 'name', 'when', 'except', 'survey', 'reasoning'];
+  // Fields holding a list of strings (the devices a label holds on), written `[a, b]`.
+  var LABEL_LIST_FIELDS = ['when', 'except'];
+  var PLAIN_SAFE = /^[A-Za-z0-9_./()+](?:[A-Za-z0-9 _./@()+'-]*[A-Za-z0-9_./@()+'-])?$/;
+  var RESERVED_PLAIN = ['null', '~', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n'];
+  var NUMBER_LIKE = /^(?:[0-9]|[+.][0-9]|\.(?:inf|nan)$)/i;
+
+  function labelScalar(value) {
+    var v = String(value);
+    if (PLAIN_SAFE.test(v) && RESERVED_PLAIN.indexOf(v.toLowerCase()) < 0 && !NUMBER_LIKE.test(v)) return v;
+    var out = '"';
+    for (var i = 0; i < v.length; i++) {
+      var ch = v.charAt(i);
+      var code = v.charCodeAt(i);
+      if (ch === '\\') out += '\\\\';
+      else if (ch === '"') out += '\\"';
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\t') out += '\\t';
+      else if (ch === '\r') out += '\\r';
+      else if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029 || code === 0xfeff) {
+        out += '\\u' + ('000' + code.toString(16)).slice(-4);
+      } else out += ch;
+    }
+    return out + '"';
+  }
+
+  // One label as `{ type: journey, name: checkout }` or `{ type: t, name: n, when: [ios] }`; absent
+  // optional fields are left out.
+  function renderLabelEntry(label) {
+    var parts = [];
+    LABEL_FIELDS.forEach(function (f) {
+      if (label[f] == null) return;
+      var value = LABEL_LIST_FIELDS.indexOf(f) >= 0
+        ? '[' + label[f].map(labelScalar).join(', ') + ']'
+        : labelScalar(label[f]);
+      parts.push(f + ': ' + value);
+    });
+    return '{ ' + parts.join(', ') + ' }';
+  }
+
+  function isStringList(v) {
+    return Array.isArray(v) && v.every(function (x) { return typeof x === 'string'; });
+  }
+
+  // A label list the one-line form can write: mappings holding only known fields, each a string (a
+  // list of strings for `when`/`except`). Anything else (a Date or number js-yaml typed, a bare
+  // string entry, a field this editor doesn't know) is left to the dumper untouched, so nothing is
+  // dropped.
+  function isWritableLabelList(v) {
+    return Array.isArray(v) && v.every(function (l) {
+      return l && typeof l === 'object' && !Array.isArray(l) &&
+        Object.keys(l).every(function (f) { return LABEL_FIELDS.indexOf(f) >= 0; }) &&
+        LABEL_FIELDS.every(function (f) {
+          if (l[f] == null) return true;
+          return LABEL_LIST_FIELDS.indexOf(f) >= 0 ? isStringList(l[f]) : typeof l[f] === 'string';
+        });
+    });
+  }
+
+  // Dump a unified doc with [dump] (js-yaml in the browser), then write each config label list in the
+  // one-line form. Falls back to [dump] alone when the dumper's output has no line to splice into
+  // (a flow-style dumper), so a placeholder can never reach the file.
+  function dumpUnifiedDoc(doc, dump) {
+    var config = doc && doc.config;
+    var lists = {};
+    var out = doc;
+    if (config && typeof config === 'object') {
+      var patched = Object.assign({}, config);
+      LABEL_KEYS.forEach(function (k) {
+        if (isWritableLabelList(config[k])) {
+          lists[k] = config[k];
+          patched[k] = 'TRAIL_LABELS_PLACEHOLDER_' + k;
+        }
+      });
+      if (Object.keys(lists).length) out = Object.assign({}, doc, { config: patched });
+    }
+    if (out === doc) return dump(doc);
+    var text = dump(out);
+    var spliced = Object.keys(lists).every(function (k) {
+      var line = new RegExp('^( *)' + k + ": ['\"]?TRAIL_LABELS_PLACEHOLDER_" + k + "['\"]?$", 'm');
+      if (!line.test(text)) return false;
+      text = text.replace(line, function (_, indent) {
+        if (!lists[k].length) return indent + k + ': []';
+        return indent + k + ':\n' + lists[k].map(function (l) { return indent + '  - ' + renderLabelEntry(l); }).join('\n');
+      });
+      return true;
+    });
+    return spliced ? text : dump(doc);
+  }
+
+  // Load a trail with [jsyaml], keeping config label fields exactly as written. js-yaml's default
+  // schema types an unquoted `001` as 1 and `2026-11-03` as a Date, where the CLI reads both as the
+  // strings they are; the label lists are re-read with the failsafe schema, which types nothing.
+  function loadUnifiedDoc(yaml, jsyaml) {
+    var doc = jsyaml.load(yaml);
+    if (!jsyaml.FAILSAFE_SCHEMA) return doc;
+    var raw;
+    try { raw = jsyaml.load(yaml, { schema: jsyaml.FAILSAFE_SCHEMA }); } catch (e) { return doc; }
+    return withSourceLabels(doc, raw);
+  }
+
+  // [doc] with its config label fields spelled as in [raw], the same file loaded with every scalar a
+  // string. Field by field: a field the typed load read as null stays null (the failsafe load spells
+  // an explicit `null` as the string "null"), and only a field it typed as something other than a
+  // string takes the raw spelling. A list whose shape the two loads disagree on is left as typed.
+  function withSourceLabels(doc, raw) {
+    var config = doc && !Array.isArray(doc) && doc.config;
+    var rawConfig = raw && !Array.isArray(raw) && raw.config;
+    if (!config || typeof config !== 'object' || !rawConfig || typeof rawConfig !== 'object') return doc;
+    var patched = null;
+    LABEL_KEYS.forEach(function (k) {
+      var typed = config[k];
+      var source = rawConfig[k];
+      if (!Array.isArray(typed) || !Array.isArray(source) || typed.length !== source.length) return;
+      var changed = false;
+      var restored = typed.map(function (entry, i) {
+        var rawEntry = source[i];
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !rawEntry || typeof rawEntry !== 'object') return entry;
+        var out = entry;
+        LABEL_FIELDS.forEach(function (f) {
+          var v = entry[f];
+          var r = rawEntry[f];
+          var retype = LABEL_LIST_FIELDS.indexOf(f) >= 0
+            ? Array.isArray(v) && !isStringList(v) && isStringList(r) && r.length === v.length
+            : v != null && typeof v !== 'string' && typeof r === 'string';
+          if (retype) {
+            if (out === entry) out = Object.assign({}, entry);
+            out[f] = r;
+            changed = true;
+          }
+        });
+        return out;
+      });
+      if (changed) {
+        patched = patched || Object.assign({}, config);
+        patched[k] = restored;
+      }
+    });
+    return patched ? Object.assign({}, doc, { config: patched }) : doc;
+  }
+
   var api = {
+    dumpUnifiedDoc: dumpUnifiedDoc,
+    loadUnifiedDoc: loadUnifiedDoc,
+    withSourceLabels: withSourceLabels,
+    renderLabelEntry: renderLabelEntry,
     recToTools: recToTools,
     toolsToRec: toolsToRec,
     unifiedDocToMatrix: unifiedDocToMatrix,

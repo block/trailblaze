@@ -17,7 +17,7 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
 import xyz.block.trailblaze.android.accessibility.ReplayCaptureOptions
-import xyz.block.trailblaze.android.accessibility.ScriptedToolBundleReuse
+import xyz.block.trailblaze.android.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.accessibility.InProcessIdleForegroundGate
 import xyz.block.trailblaze.android.accessibility.InProcessIdleAttacher
 import xyz.block.trailblaze.android.accessibility.OnDeviceTurbo
@@ -1089,7 +1089,7 @@ open class AndroidTrailblazeRule(
     trailFilePath: String?,
     useRecordedSteps: Boolean,
   ) {
-    refuseIfRequiresHost(testYaml, trailFilePath)
+    refuseIfRequiresHostExecution(testYaml, trailFilePath)
     // A direct run has no host and no [runFromAsset] ahead of it, so the default is applied here.
     // A trail that can't be read is left to the run's own decode to report. A changed language
     // restarts the app, as [runFromAsset] does, or a running process keeps strings it cached.
@@ -1154,12 +1154,12 @@ open class AndroidTrailblazeRule(
   }
 
   /**
-   * Refuse a trail whose device entry declares `requiresHost`: [run] and [runFromAsset] execute on
+   * Refuse a trail whose device entry requires `android-host-execution`: [run] and [runFromAsset] execute on
    * the device with no host behind them. Host-driven runs reach the device through [runSuspend],
    * so they never pass through here.
    */
-  private fun refuseIfRequiresHost(yaml: String, trailName: String?) {
-    trailblazeYaml.requiresHostRefusal(
+  private fun refuseIfRequiresHostExecution(yaml: String, trailName: String?) {
+    trailblazeYaml.hostExecutionRefusal(
       yaml,
       trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
       trailName,
@@ -1359,7 +1359,7 @@ open class AndroidTrailblazeRule(
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
     val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
-    refuseIfRequiresHost(yamlContent, computedAssetPath)
+    refuseIfRequiresHostExecution(yamlContent, computedAssetPath)
     val appIdToForceStop = targetAppId ?: defaultForceStopAppId
     val reuseEnabled = TrailheadRuns.reuseEnabled(
       InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),

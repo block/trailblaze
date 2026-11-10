@@ -37,6 +37,8 @@ Options:
       --allow-stream-errors A stream that fails to derive is reported, but only surveys' own errors
                             make the exit nonzero
       --survey <name>       Only run the survey exported under this name (repeatable)
+      --warnings            Only run warning surveys (\`warning: true\`), whose findings mark a run that passed but needs a look
+      --allow-none          Finding no survey to run is not an error: exit 0 and say nothing
       --platform <p>        Only sessions on this platform: android, ios, web, ... (repeatable)
       --device <classifier> Only sessions whose device carries this classifier: iphone, ipad, tablet, ... (repeatable)
       --app-id <id>         Only sessions of this app id (repeatable)
@@ -66,6 +68,8 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
       streams: { type: "boolean" },
       "allow-stream-errors": { type: "boolean" },
       survey: { type: "string", multiple: true },
+      warnings: { type: "boolean" },
+      "allow-none": { type: "boolean" },
       platform: { type: "string", multiple: true },
       device: { type: "string", multiple: true },
       "app-id": { type: "string", multiple: true },
@@ -145,13 +149,17 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
   // A survey scoped to another target would only report every session as skipped.
   if (values.target?.length) surveys = surveys.filter((c) => !c.spec.targets || c.spec.targets.some((t) => values.target!.includes(t)));
   if (values.survey?.length) surveys = surveys.filter((c) => c.id !== undefined && values.survey!.includes(c.id));
+  if (values.warnings) surveys = surveys.filter((c) => c.spec.warning === true);
   if (surveys.length === 0) {
+    // `trailblaze report` runs the warning surveys of every workspace, most of which have none.
+    if (values["allow-none"]) return 0;
+    const kind = values.warnings ? "warning surveys" : "surveys";
     // A workspace of streams alone is valid: `report --surveys` has written them, and there is nothing more to run.
-    if (!values.survey?.length && !values.target?.length && streams.length > 0) {
+    if (!values.warnings && !values.survey?.length && !values.target?.length && streams.length > 0) {
       process.stderr.write(`No surveys in ${lookedIn}, only derived streams; nothing to run.\n`);
       return 0;
     }
-    process.stderr.write(`No surveys found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);
+    process.stderr.write(`No ${kind} found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);
     return 2;
   }
   log?.(`${surveys.length} survey(s) from ${new Set(loaded.map((l) => l.file)).size} file(s)`);
@@ -202,6 +210,8 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
     const running = report.sessions.filter((s) => s.session.endedAtMs === undefined).length;
     if (running > 0) log?.(`${running} session(s) still running, so not stored`);
   }
+  // `trailblaze report` has already written the streams and recorded on each session why one failed.
+  const counted = (e: { survey: string }) => !(values["allow-stream-errors"] && e.survey.startsWith("stream:"));
   const format = values.format ?? (values.out ? "summary" : "markdown");
   switch (format) {
     case "markdown":
@@ -214,6 +224,15 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
       process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       break;
     case "none":
+      // Nothing else shows a survey's failure, so it goes to stderr, `--quiet` or not.
+      for (const s of report.sessions) {
+        for (const e of s.errors.filter(counted)) process.stderr.write(`Survey ${e.survey} failed on ${s.session.path}: ${e.message}\n`);
+      }
+      for (const e of report.labelErrors) process.stderr.write(`Labels of survey ${e.survey} failed: ${e.message}\n`);
+      // A session that would not load was not surveyed at all. Conflicts are told below either way.
+      for (const u of report.unreadable) {
+        if (u.conflictsWith === undefined) process.stderr.write(`Could not survey ${u.path}: ${u.message}\n`);
+      }
       break;
     default:
       process.stderr.write(`Unknown --format ${format}\n`);
@@ -229,8 +248,6 @@ export async function runSurveyCli(argv: string[]): Promise<number> {
   // Two recordings of one session: the batch surveyed only one of them, so it is not complete.
   const conflicts = report.unreadable.filter((u) => u.conflictsWith !== undefined);
   for (const u of conflicts) process.stderr.write(`Left out ${u.path}: it ${u.message}\n`);
-  // `trailblaze report` has already written the streams and recorded on each session why one failed.
-  const counted = (e: { survey: string }) => !(values["allow-stream-errors"] && e.survey.startsWith("stream:"));
   const errorCount =
     report.sessions.reduce((n, s) => n + s.errors.filter(counted).length, 0) + report.labelErrors.length + unstored.length + conflicts.length;
   return errorCount > 0 ? 1 : 0;

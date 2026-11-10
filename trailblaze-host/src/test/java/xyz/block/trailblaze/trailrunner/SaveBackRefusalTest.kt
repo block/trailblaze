@@ -6,7 +6,15 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 
 /**
  * A step-range recording rewrites a trail a human is free to edit, so [saveBackRefusal] is the gate
@@ -73,4 +81,44 @@ class SaveBackRefusalTest {
     assertNotNull(refusal)
     assertTrue(refusal.contains("renamed or deleted"), refusal)
   }
+
+  @Test
+  fun `a whole-trail recording keeps a trailhead's raw Maestro step`() = withRawMaestroTrailhead { file, trail ->
+    // The whole trail replays its trailhead, and the raw step it replays is never recorded.
+    val refusal = rawMaestroTrailheadRefusal(file, trail, listOf("android", "phone"))
+    assertNotNull(refusal)
+    assertTrue(refusal.contains("mobile_maestro"), refusal)
+  }
+
+  @Test
+  fun `a narrowed range runs no trailhead, so it may save back`() = withRawMaestroTrailhead { file, trail ->
+    assertNull(rawMaestroTrailheadRefusal(file, trail.copy(trailhead = null), listOf("android")))
+  }
+
+  @Test
+  fun `another device's raw Maestro trailhead does not block this one`() = withRawMaestroTrailhead { file, trail ->
+    assertNull(rawMaestroTrailheadRefusal(file, trail, listOf("ios")))
+  }
+
+  /** A unified trail whose `android` trailhead is a raw Maestro step and whose `ios` one is typed. */
+  private fun withRawMaestroTrailhead(block: (File, UnifiedTrail) -> Unit) {
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trailhead = UnifiedTrailStep(
+        step = "Sign in",
+        recordings = mapOf(
+          "android" to listOf(TrailblazeToolYamlWrapper("mobile_maestro", MaestroTrailblazeTool(yaml = "- back\n"))),
+          "ios" to listOf(typed("myapp_signIn")),
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(typed("myapp_pay"))))),
+    )
+    withTrailFile { file ->
+      file.writeText(createTrailblazeYaml().encodeUnifiedTrailToString(trail))
+      block(file, trail)
+    }
+  }
+
+  private fun typed(name: String) =
+    TrailblazeToolYamlWrapper(name, OtherTrailblazeTool(toolName = name, raw = JsonObject(emptyMap())))
 }

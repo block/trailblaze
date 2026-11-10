@@ -28,6 +28,7 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -398,6 +399,63 @@ class TrailCommandSaveRecordingTest {
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
     assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording leaves a trail alone when this device's recording has a raw Maestro step`() {
+    // The raw Maestro step replays but is never recorded, so saving a healed run would write the
+    // step back without it and the next replay would skip that action.
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(
+          UnifiedTrailStep(step = "Open the app", recordings = mapOf("android" to listOf(rawMaestro(), tool("myapp_tap")))),
+          UnifiedTrailStep(step = "Check out"),
+        ),
+      ),
+    )
+    val cmd = command(selfHeal = true)
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = true))
+    assertTrue(
+      cmd.shouldSaveRecording(dir, listOf("ios"), selectedDeviceConfiguration = null, selfHealed = false),
+      "another device's first recording replays nothing of android's, so it still saves",
+    )
+    cmd.useRecordedSteps = false
+    assertTrue(
+      cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false),
+      "an AI re-drive records typed tools for every step, so it replaces the Maestro step",
+    )
+  }
+
+  @Test
+  fun `shouldSaveRecording keeps a trailhead's raw Maestro step even when every step is re-recorded`() {
+    // --no-use-recorded-steps re-drives the trail's steps, but the trailhead still replays its
+    // recording, so saving would drop its raw step and the next run would lose its setup.
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(rawMaestro()))),
+        trail = listOf(UnifiedTrailStep(step = "Check out", recordings = mapOf("android" to listOf(tool("myapp_tap"))))),
+      ),
+    )
+    val cmd = command()
+    cmd.useRecordedSteps = false
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording leaves a per-device sibling alone when it has a raw Maestro step`() {
+    val cmd = command(selfHeal = true)
+    val dir = tempFolder.newFolder()
+    val trail = File(dir, "source.trail.yaml").apply { writeText("") }
+    File(dir, "android-phone.trail.yaml").writeText(
+      "- prompts:\n  - step: Open the app\n    recording:\n      tools:\n      - mobile_maestro:\n          yaml: x\n",
+    )
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = true))
   }
 
   @Test
@@ -1959,6 +2017,11 @@ class TrailCommandSaveRecordingTest {
         classifier = classifier,
       ),
     )
+
+  private fun rawMaestro() = TrailblazeToolYamlWrapper(
+    name = "mobile_maestro",
+    trailblazeTool = MaestroTrailblazeTool(yaml = "- back\n"),
+  )
 
   private fun tool(name: String) = TrailblazeToolYamlWrapper(
     name = name,

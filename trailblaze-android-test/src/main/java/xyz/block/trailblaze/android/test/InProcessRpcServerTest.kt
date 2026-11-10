@@ -4,12 +4,14 @@ import android.app.Activity
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestRule
 import org.junit.runners.model.Statement
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.android.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
 import xyz.block.trailblaze.api.MigrationScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -20,6 +22,7 @@ import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceCapturedScreenState
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateNotReadyException
@@ -58,7 +61,26 @@ import xyz.block.trailblaze.util.Console
  */
 abstract class InProcessRpcServerTest(
   hostAppTarget: () -> TrailblazeHostAppTarget?,
+  /**
+   * Runs once for each session this server ran, when the request that ends it returns (success,
+   * failure or cancellation) or, for a session the host kept open, when the host drains the
+   * connection. State a tool keeps in this process for a session, which the host's own session
+   * finalizer cannot reach, is released here. Must not throw.
+   */
+  private val onSessionEnded: (SessionId) -> Unit = {},
 ) {
+
+  /** Sessions this server ran that have not ended yet; see [onSessionEnded]. */
+  private val openSessions = ConcurrentHashMap.newKeySet<SessionId>()
+
+  private fun endSession(sessionId: SessionId) {
+    if (!openSessions.remove(sessionId)) return
+    // Its scripted-tool bundles stay loaded between its steps and go with it: a per-step dispatch
+    // never owns the session's end, so its own cleanup leaves them for this.
+    ScriptedToolBundleReuse.release(sessionId)
+    runCatching { onSessionEnded(sessionId) }
+      .onFailure { Console.log("[Trailblaze] onSessionEnded($sessionId) threw: ${it.message}") }
+  }
 
   /**
    * The host's device id, adopted from the connect-time device-info exchange so RPC-driven
@@ -97,7 +119,7 @@ abstract class InProcessRpcServerTest(
         // 120s launch timeout. Without the pin, an Activity leaving RESUMED between the captor's
         // bounded pre-check and the capture itself parks that Ktor worker for two minutes — the
         // stall the pre-check exists to prevent, moved one call later.
-        activityProvider = { captureActivity.get() ?: AppUnderTestLauncher.awaitResumedActivity() },
+        activityProvider = { captureActivity.get() ?: AppUnderTestLauncher.awaitResumedActivity(yieldToAnotherApp = true) },
         composeTestRule = composeRule,
       )
     },
@@ -119,9 +141,11 @@ abstract class InProcessRpcServerTest(
    * Starts the RPC server before every other rule, ahead of the Compose rule's initial idle wait.
    * That wait is the app's own main-thread startup (seconds, on a cold process), and the app
    * launch follows it. Listening first lets the host's connect, device-info exchange and readiness
-   * polling run alongside both, instead of starting once the app is already up. Readiness still
-   * means a RESUMED Activity: until the test body launches the app, the captor answers not-ready,
-   * and a run request waits in [workQueue] until the test body drains it.
+   * polling run alongside both, instead of starting once the app is already up.
+   *
+   * The launch itself cannot move ahead of the Compose rule: the rule only finds Compose roots
+   * attached after it starts, so an Activity launched before it reads as having no Compose UI.
+   * A run request waits in [workQueue] until the test body drains it.
    */
   @get:Rule(order = Int.MIN_VALUE)
   val earlyRpcServer: TestRule = TestRule { base, _ ->
@@ -151,8 +175,11 @@ abstract class InProcessRpcServerTest(
       return
     }
 
-    // Deliberately not an `@Before`: the farm no-op above must not pay for an app launch.
-    AppUnderTestLauncher.launchAppUnderTest()
+    // The first tool that needs the app launches it, not this body. A trailhead's own first steps
+    // often restart the process before the app shows anything (a session seed, a data clear), and
+    // a launch here would be a cold start thrown away with it. Until then the captor reads whatever
+    // is in front, so the host's readiness check needs no Activity.
+    AppUnderTestLauncher.launchOnFirstUse = true
     workQueue.drainUntilStopped()
   }
 
@@ -233,6 +260,11 @@ abstract class InProcessRpcServerTest(
       // no accessibility-event settle to await before dispatch.
       waitForSettled = {},
       deviceClassifiers = AndroidTestLoggingRule.defaultDeviceClassifiers(),
+      // The host is tearing the connection down, so sessions it kept open end with it.
+      onDrain = {
+        openSessions.toList().forEach(::endSession)
+        0
+      },
     )
     server.startServer(port = port, wait = false)
     Console.log("[Trailblaze] In-process RPC server listening on port $port")
@@ -291,6 +323,7 @@ abstract class InProcessRpcServerTest(
     agentMemory: AgentMemory,
   ): RunYamlCallbackResult {
     loggingRule.setSession(session)
+    openSessions += session.sessionId
     val toolLogCount = AtomicInteger(0)
     val lastToolSuccess: TrailblazeToolResult.Success? = try {
       loggingRule.withLogObserver(
@@ -306,6 +339,7 @@ abstract class InProcessRpcServerTest(
       }
     } finally {
       loggingRule.setSession(null)
+      if (request.config.sendSessionEndLog) endSession(session.sessionId)
     }
     return RunYamlCallbackResult(
       session = session,

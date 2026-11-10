@@ -175,6 +175,14 @@ sealed interface AccessibilityAction {
      * from the resolved node's fields. Set by `android_accessibilityClick`; null means the gate decides.
      */
     val tapRoute: TapRouteOverride? = null,
+    /**
+     * Whether to dismiss a visible soft keyboard before resolving the element. Default `true`:
+     * a keyboard left up by an earlier `inputText` can cover the target, and a recording has no
+     * LLM to insert the dismissal. `false` keeps the keyboard up, for a tap that moves focus
+     * between fields on a form that scrolls its focused field back into view when the keyboard
+     * closes. The pre-tap IME-occlusion check still fails a tap the keyboard covers.
+     */
+    val hideKeyboardBefore: Boolean = true,
   ) : AccessibilityAction {
     override val description: String
       get() = "${if (longPress) "Long press" else "Tap"} on ${nodeSelector.description()}"

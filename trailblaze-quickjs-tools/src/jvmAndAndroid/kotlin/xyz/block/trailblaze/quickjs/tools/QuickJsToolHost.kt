@@ -4,13 +4,19 @@ import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.function
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import java.util.concurrent.Executors
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.serialization.builtins.serializer
@@ -23,6 +29,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Evaluates a `@trailblaze/scripting` JS bundle in a QuickJS engine and exposes the registered
@@ -128,12 +135,12 @@ class QuickJsToolHost internal constructor(
           // Reads the registry, projects each entry to `{name, spec}`, JSON-stringifies. The
           // `|| {}` fallback means an empty registry returns `[]` rather than crashing on `Object.keys(undefined)`.
           """
-          JSON.stringify(
+          $ASCII_JSON_FN(JSON.stringify(
             Object.entries(globalThis.__trailblazeTools || {}).map(([name, t]) => ({
               name,
               spec: t.spec || {}
             }))
-          )
+          ))
           """.trimIndent(),
           "list-tools.js",
           false,
@@ -496,7 +503,7 @@ class QuickJsToolHost internal constructor(
         """.trimIndent()
         quickJs.evaluate<Any?>(dispatchExpr, "call-tool-$name.js", true)
         val resultJson = quickJs.evaluate<String>(
-          "globalThis.__trailblazeLastResult",
+          "$ASCII_JSON_FN(globalThis.__trailblazeLastResult)",
           "read-result.js",
           false,
         )
@@ -517,18 +524,34 @@ class QuickJsToolHost internal constructor(
    * just freed — the exact cross-thread hazard this whole class exists to eliminate. Holding
    * [evalMutex] here guarantees `shutdown()` either runs before any call starts or waits for the
    * current one to finish first.
+   *
+   * The caller waits at most [wait]. A call that can't be cancelled (stuck in blocking I/O
+   * after its caller gave up on it) would otherwise hang shutdown; past the wait, the free carries
+   * on in the background and runs as soon as that call lets go of the engine. Taking the lock,
+   * freeing and releasing all happen in that one task, so a timeout can't strand a lock it took.
    */
-  suspend fun shutdown() {
+  suspend fun shutdown(wait: Duration = SHUTDOWN_WAIT) {
     if (!isShutdown.compareAndSet(false, true)) return
-    evalMutex.withLock {
-      withContext(engineDispatcher) {
-        runCatching { closeEngine(quickJs) }
+    val free = engineFrees.launch {
+      evalMutex.withLock {
+        withContext(engineDispatcher) {
+          runCatching { closeEngine(quickJs) }
+        }
+        runCatching { engineDispatcher.close() }
       }
-      runCatching { engineDispatcher.close() }
+    }
+    if (withTimeoutOrNull(wait) { free.join() } == null) {
+      Console.error("[QuickJsToolHost] a call still holds the engine after $wait; freeing it when that call ends")
     }
   }
 
   companion object {
+
+    /** How long [shutdown] waits for an in-flight call before freeing the engine in the background. */
+    val SHUTDOWN_WAIT: Duration = 10.seconds
+
+    /** Where [shutdown] frees engines, so one a stuck call still holds is freed once it lets go. */
+    private val engineFrees = CoroutineScope(SupervisorJob() + TrailblazeDispatchers.IO)
 
     /**
      * Monotonic id for engine threads. Each [connect] mints its own single-thread dispatcher, so
@@ -641,7 +664,7 @@ class QuickJsToolHost internal constructor(
               // engines. The reentrancy tripwire (`host.hostCallThread`/`checkNotReentrant`) guards
               // against a host call re-entering this dispatch while one is already in flight, and a
               // host call is cancelled with its tool call through [callJob].
-              quickJs.function(HOST_CALL_BINDING) { args ->
+              quickJs.function(nativeBinding(HOST_CALL_BINDING)) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_CALL_BINDING called without a tool name string")
                 val argsJson = args.getOrNull(1) as? String
@@ -678,7 +701,7 @@ class QuickJsToolHost internal constructor(
               // `ctx.host.<name>(args)`: a host function, which is plumbing rather than a tool, so it
               // takes its own binding instead of riding `trailblaze.call`. Same synchronous shape
               // and the same rule: no exception crosses the native boundary.
-              quickJs.function(HOST_FUNCTION_BINDING) { args ->
+              quickJs.function(nativeBinding(HOST_FUNCTION_BINDING)) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_FUNCTION_BINDING called without a host function name string")
                 val argsJson = args.getOrNull(1) as? String
@@ -705,6 +728,8 @@ class QuickJsToolHost internal constructor(
                 }
               }
             }
+            // Every JSON string leaves JS as ASCII; see ASCII_JSON_PRELUDE for why.
+            quickJs.evaluate<Any?>(ASCII_JSON_PRELUDE, "ascii-json.js", false)
             // `console.log`/`error`/`warn`/`info` shim — author code from any Node-flavored
             // source expects `console` to exist. Bundles that hit `console.foo(...)` route
             // through the [logSink] parameter so callers control destination (logcat, daemon
@@ -715,7 +740,10 @@ class QuickJsToolHost internal constructor(
             // two modules' logs grep the same.
             quickJs.function("__trailblazeLog") { args ->
               val level = (args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: "log"
-              val message = args.getOrNull(1) as? String ?: ""
+              // The console shim sends the message as an ASCII JSON string (see ASCII_JSON_PRELUDE);
+              // a caller that passes a bare string still logs it as is.
+              val raw = args.getOrNull(1) as? String ?: ""
+              val message = runCatching { JSON.decodeFromString(String.serializer(), raw) }.getOrDefault(raw)
               val sanitized = message.replace("\n", "\\n").replace("\r", "\\r")
               logSink("[trailblaze-tools] level=$level msg=$sanitized")
               null
@@ -730,10 +758,10 @@ class QuickJsToolHost internal constructor(
                   return typeof a === 'string' ? a : (function () { try { return JSON.stringify(a); } catch (e) { return String(a); } })();
                 }).join(' '); }
                 globalThis.console = globalThis.console || {
-                  log:   function () { __trailblazeLog('log',   fmt(arguments)); },
-                  error: function () { __trailblazeLog('error', fmt(arguments)); },
-                  warn:  function () { __trailblazeLog('warn',  fmt(arguments)); },
-                  info:  function () { __trailblazeLog('info',  fmt(arguments)); },
+                  log:   function () { __trailblazeLog('log',   $ASCII_JSON_FN(JSON.stringify(fmt(arguments)))); },
+                  error: function () { __trailblazeLog('error', $ASCII_JSON_FN(JSON.stringify(fmt(arguments)))); },
+                  warn:  function () { __trailblazeLog('warn',  $ASCII_JSON_FN(JSON.stringify(fmt(arguments)))); },
+                  info:  function () { __trailblazeLog('info',  $ASCII_JSON_FN(JSON.stringify(fmt(arguments)))); },
                 };
               })();
               """.trimIndent(),
@@ -805,6 +833,43 @@ class QuickJsToolHost internal constructor(
       java.security.MessageDigest.getInstance("SHA-256")
         .digest(source.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
+
+    /** Suffix of the global a host binding's native function is installed under; see [ASCII_JSON_PRELUDE]. */
+    private const val NATIVE_BINDING_SUFFIX: String = "Native"
+
+    private fun nativeBinding(name: String): String = name + NATIVE_BINDING_SUFFIX
+
+    /** Global that rewrites a JSON string to ASCII; see [ASCII_JSON_PRELUDE]. */
+    const val ASCII_JSON_FN: String = "__trailblazeAsciiJson"
+
+    /**
+     * Makes every JSON string that leaves JS for Kotlin pure ASCII, by writing each non-ASCII UTF-16
+     * unit as a `\uXXXX` escape. quickjs-kt hands JS strings to the JVM through JNI's modified
+     * UTF-8, which has no encoding for a character outside the BMP (an emoji is a surrogate pair):
+     * such a string arrives mangled or cut short, so a tool could neither send nor return "👍".
+     * The rewrite is lossless because valid JSON only carries non-ASCII inside string literals,
+     * where an escape means the same character. Installed before the author bundle, it wraps the
+     * two host bindings so their `argsJson` crosses as ASCII; tool results, the spec listing and
+     * `console` messages pass through [ASCII_JSON_FN] too, as does the `fetch` extension's request.
+     */
+    private val ASCII_JSON_PRELUDE: String = """
+      (function () {
+        function ascii(json) {
+          return typeof json === 'string'
+            ? json.replace(/[\u007f-\uffff]/g, function (c) { return '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4); })
+            : json;
+        }
+        globalThis.$ASCII_JSON_FN = ascii;
+        // quickjs-kt's native globals can't be reassigned, so each binding is installed under
+        // its native name and published here under the public one.
+        ['$HOST_CALL_BINDING', '$HOST_FUNCTION_BINDING'].forEach(function (name) {
+          var native = globalThis[name + '$NATIVE_BINDING_SUFFIX'];
+          if (typeof native === 'function') {
+            globalThis[name] = function (toolName, argsJson) { return native(toolName, ascii(argsJson)); };
+          }
+        });
+      })();
+    """.trimIndent()
 
     /** Name of the host binding installed for `trailblaze.call(name, args)` round-trips. */
     const val HOST_CALL_BINDING: String = "__trailblazeCall"

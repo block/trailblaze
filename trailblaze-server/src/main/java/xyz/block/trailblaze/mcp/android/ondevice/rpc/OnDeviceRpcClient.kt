@@ -335,7 +335,10 @@ class OnDeviceRpcClient(
     // app install, HTTP server listener, and accessibility service binding can collectively
     // exceed 30s. Callers with a faster-known-good path can pass a tighter budget.
     timeoutMs: Long = 60_000L,
-    pollIntervalMs: Long = 500L,
+    // A probe against a runner that is not listening yet fails in a few ms (the adb forward refuses
+    // it), so polling often costs little and lands readiness close to when the server comes up.
+    // An in-process run starts its runner up to three times per trail, so 500 ms cost ~0.75 s.
+    pollIntervalMs: Long = 100L,
     requireAndroidAccessibilityService: Boolean = false,
   ): GetScreenStateResponse {
     val startMs = Clock.System.now().toEpochMilliseconds()
@@ -424,6 +427,13 @@ class OnDeviceRpcClient(
   }
 
   /**
+   * Whether the on-device server answers its `/ping` route within [timeoutMs]. That route is served
+   * by the HTTP server alone, so it answers while the app's main thread is busy or between
+   * Activities, when a screen read would fail with the server still alive.
+   */
+  suspend fun answersPing(timeoutMs: Long): Boolean = httpRequestUtils.answersGet("/ping", timeoutMs)
+
+  /**
    * Disambiguates host-side eviction (runner pid present) from on-device death (pid absent).
    * Public so the host-side re-warm-fail branches can include it in their failure note.
    */
@@ -435,6 +445,16 @@ class OnDeviceRpcClient(
     val trimmed = output.trim()
     return if (trimmed.isEmpty()) "ABSENT" else trimmed
   }
+
+  /**
+   * The pid(s) of [packageName]'s running process: blank when it has none, null when adb could not
+   * tell. A changed pid means the app's process was replaced, which a running/not check can miss.
+   */
+  fun appProcessId(packageName: String): String? =
+    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+      deviceId = trailblazeDeviceId,
+      args = listOf("pidof", packageName),
+    )?.trim()
 
   private companion object {
     const val DEFAULT_REQUEST_TIMEOUT_MS = 300_000L

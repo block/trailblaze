@@ -52,7 +52,9 @@ class TrailheadGroupingTest {
       "  id: suite/first\n  title: First\n  description: |\n    Skip nothing; any locale.\n" +
         "  metadata:\n    caseId: 1\n  tags: [smoke]\n  target: myapp"
     val second =
-      "  id: suite/second\n  title: Second\n  priority: P0\n  metadata:\n    caseId: 2\n  tags:\n  - search\n  target: myapp"
+      "  id: suite/second\n  title: Second\n  priority: P0\n  metadata:\n    caseId: 2\n  tags:\n  - search\n" +
+        "  labels:\n    - { type: job, name: search }\n" +
+        "  generatedLabels:\n    - { type: journey, name: search, survey: journeys/search }\n  target: myapp"
 
     assertNotNull(trailheadGroupKey(trail("bart@example.com", config = first)))
     assertEquals(

@@ -35,6 +35,14 @@ object DispatchCancellation {
     }
   }
 
+  /**
+   * Throws when the installed trail Job is cancelled. For work a stopped trail must not start even
+   * from a context that is not itself cancelled, such as bringing a device's runner back up.
+   */
+  fun ensureTrailActive() {
+    if (trailJob.get()?.isCancelled == true) throw CancellationException("the trail was cancelled")
+  }
+
   /** Runs [block] in [scope], cancelling the scope when the installed trail Job is cancelled. */
   suspend fun <T> linked(scope: CoroutineScope, block: suspend () -> T): T = linked(scope, trailJob.get(), block)
 

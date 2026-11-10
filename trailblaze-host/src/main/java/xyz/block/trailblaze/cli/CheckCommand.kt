@@ -23,6 +23,7 @@ import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.host.DevicePinLint
 import xyz.block.trailblaze.host.ParallelWork
 import xyz.block.trailblaze.host.SelectorDialectLint
+import xyz.block.trailblaze.host.TrailLabelLint
 import xyz.block.trailblaze.host.TrailTargetLint
 import xyz.block.trailblaze.host.TrailCorpus
 import xyz.block.trailblaze.host.TrailTscValidator
@@ -323,6 +324,9 @@ class CheckCommand : Callable<Int> {
     //    Advisory rather than fatal because no CLI command writes a trailmap, so a hard failure
     //    would strand a first-time user; this repo's own trails get the fatal version from
     //    TrailTargetCorpusTest. Silence it with TRAILBLAZE_DISABLE_TRAIL_TARGET_GATE=1.
+    //  - Trail-label ([TrailLabelLint]): `labels:` / `generatedLabels:` breaking the label rules, or a
+    //    `generatedLabels:` block not in the form the survey command writes, FAILS. Opt out with
+    //    TRAILBLAZE_DISABLE_TRAIL_LABEL_GATE=1.
     // Separate kill-switches on purpose: disabling the dialect gate mid-migration must not also
     // silently drop the device-pin ratchet.
     val trailLintExit = runTrailLintPhase(
@@ -331,6 +335,7 @@ class CheckCommand : Callable<Int> {
       selectorDialectGateEnabled = !isSelectorDialectGateDisabled(),
       devicePinGateEnabled = !isDevicePinGateDisabled(),
       trailTargetGateEnabled = !isTrailTargetGateDisabled(),
+      trailLabelGateEnabled = !isEnvFlagSet(TrailLabelLint.DISABLE_ENV_VAR),
     )
 
     // Surveys that run mid-trail must be able to. See [SurveyLint]. Opt out with TRAILBLAZE_DISABLE_SURVEY_GATE=1.
@@ -1011,8 +1016,11 @@ class CheckCommand : Callable<Int> {
     selectorDialectGateEnabled: Boolean = true,
     devicePinGateEnabled: Boolean = true,
     trailTargetGateEnabled: Boolean = true,
+    trailLabelGateEnabled: Boolean = true,
   ): Int {
-    if (!selectorDialectGateEnabled && !devicePinGateEnabled && !trailTargetGateEnabled) return EXIT_OK
+    if (!selectorDialectGateEnabled && !devicePinGateEnabled && !trailTargetGateEnabled && !trailLabelGateEnabled) {
+      return EXIT_OK
+    }
     var exit = EXIT_OK
     try {
       val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
@@ -1020,6 +1028,7 @@ class CheckCommand : Callable<Int> {
       val dialectFindings = mutableListOf<SelectorDialectLint.Finding>()
       val devicePinFindings = mutableListOf<DevicePinLint.Finding>()
       val targetFindings = mutableListOf<TrailTargetLint.Finding>()
+      val labelFindings = mutableListOf<TrailLabelLint.Finding>()
       // Resolvable ids mirror what the runtime actually registers for a workspace
       // ([listAllWorkspaceTargetIds] — trailmaps plus hand-authored and compiled `targets/<name>.yaml`,
       // scope-independent so an out-of-scope trailmap still counts) plus classpath manifests. Null
@@ -1041,6 +1050,7 @@ class CheckCommand : Callable<Int> {
         val devicePin: DevicePinLint.Finding? = null,
         val dialect: SelectorDialectLint.Finding? = null,
         val target: TrailTargetLint.Finding? = null,
+        val label: TrailLabelLint.Finding? = null,
       )
       ParallelWork.map(
         items = (corpus?.invoke() ?: TrailCorpus.load(trailsRoot)).trails,
@@ -1048,13 +1058,16 @@ class CheckCommand : Callable<Int> {
           lints?.devicePin?.let { devicePinFindings.add(it) }
           lints?.dialect?.let { dialectFindings.add(it) }
           lints?.target?.let { targetFindings.add(it) }
+          lints?.label?.let { labelFindings.add(it) }
         },
       ) { trail ->
         val file = trail.file
         val rel = trailsRoot.toPath().relativize(file.toPath()).toString()
         val text = trail.text.getOrElse { return@map null }
         val devicePin = if (devicePinGateEnabled) DevicePinLint.lint(rel, text) else null
-        if (!selectorDialectGateEnabled && !trailTargetGateEnabled) return@map TrailLints(devicePin = devicePin)
+        if (!selectorDialectGateEnabled && !trailTargetGateEnabled && !trailLabelGateEnabled) {
+          return@map TrailLints(devicePin = devicePin)
+        }
         try {
           val unified = when (val doc = trail.document.getOrThrow()) {
             is TrailDocument.Unified -> doc.trail
@@ -1062,6 +1075,7 @@ class CheckCommand : Callable<Int> {
           TrailLints(
             devicePin = devicePin,
             dialect = if (selectorDialectGateEnabled) SelectorDialectLint.lint(rel, unified) else null,
+            label = if (trailLabelGateEnabled) TrailLabelLint.lint(rel, text, unified) else null,
             target = targetIdResolver?.let { resolver ->
               // Per trail, not per phase: in the standalone layout the scan root IS the workspace
               // root, so this walk can descend into a NESTED workspace, whose trails must be judged
@@ -1084,8 +1098,12 @@ class CheckCommand : Callable<Int> {
           // Unparseable trail — the parse-level validators own that error; double-reporting is
           // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
           // as non-Exception Throwables (see SessionProgressHelpers / YamlEditorCommon), and one
-          // bad trail must not crash the phase.
-          TrailLints(devicePin = devicePin)
+          // bad trail must not crash the phase. The exception is the label gate: nothing else
+          // makes the decode failure fatal, so it reads the two lists on their own and lints them.
+          TrailLints(
+            devicePin = devicePin,
+            label = if (trailLabelGateEnabled) TrailLabelLint.lintUndecodedTrail(rel, text) else null,
+          )
         }
       }
       // Warnings first, so the fatal blocks are what's left on screen at the end of the phase.
@@ -1098,6 +1116,10 @@ class CheckCommand : Callable<Int> {
       }
       if (dialectFindings.isNotEmpty()) {
         Console.error(SelectorDialectLint.renderFailures(dialectFindings))
+        exit = EXIT_TYPE_ERROR
+      }
+      if (labelFindings.isNotEmpty()) {
+        Console.error(TrailLabelLint.renderFailures(labelFindings))
         exit = EXIT_TYPE_ERROR
       }
       // Advisory, NOT fatal — deliberately the odd one out among the three lints here. There is no

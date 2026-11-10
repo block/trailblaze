@@ -86,17 +86,14 @@ class TrailblazeDriverTypeTest {
   }
 
   /**
-   * The host-agent-over-RPC path builds a dynamic LLM client and delegates unrecorded and
-   * self-heal steps to it. ANDROID_TEST opts out as a driver contract: it is a merge-blocking
-   * gate whose on-device runner fails an unrecorded step BY NAME, and a gate that can improvise
-   * is a gate that can pass for the wrong reason. Pinned both ways — granting it host-agent
-   * dispatch is the regression this guards, and revoking the accessibility driver's would strand
-   * multi-device trails, which run on no other path.
+   * The drivers the host agent may drive over RPC. Revoking the accessibility driver's would strand
+   * multi-device trails, which run on no other path; revoking ANDROID_TEST's would strand trails
+   * that call host-only tools on it.
    */
   @Test
   fun `host-agent dispatch membership is pinned`() {
     assertEquals(
-      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, TrailblazeDriverType.ANDROID_TEST),
       TrailblazeDriverType.entries.filter { it.hostAgentDispatchable }.toSet(),
     )
     assertTrue(

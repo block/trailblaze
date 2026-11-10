@@ -30,6 +30,8 @@ internal object FetchProbeBundle {
             contentType: res.headers.get("content-type"),
             body: bodyText,
             jsonHello: jsonHello,
+            location: res.headers.get("location"),
+            redirected: res.redirected,
           }) }] };
         } catch (e) {
           return { content: [{ type: "text", text: JSON.stringify({

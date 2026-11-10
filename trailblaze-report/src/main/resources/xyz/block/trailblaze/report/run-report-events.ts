@@ -524,12 +524,13 @@ export const DERIVED_STREAMS_MAX_BYTES = 1024 * 1024;
 export const DERIVED_FROM_MAX = 20;
 
 /**
- * Lane facts for the derived streams `events/derived.json` lists: each one's title and fold, when it
- * has them, and the streams and logs it was derived from (empty when the manifest predates recording them).
+ * Lane facts for the derived streams `events/derived.json` lists: each one's title, fold and how long it
+ * took to derive, when it has them, and the streams and logs it was derived from (empty when the
+ * manifest predates recording them).
  * Empty for a file that is absent, unreadable, or not that manifest.
  */
-export function derivedLanes(json: string | null): Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]> }> {
-  const out = new Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]> }>();
+export function derivedLanes(json: string | null): Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]>; deriveMs?: number }> {
+  const out = new Map<string, { title?: string; derivedFrom: string[]; fold?: NonNullable<LaneOptions["fold"]>; deriveMs?: number }>();
   if (!json) return out;
   try {
     const m = JSON.parse(json);
@@ -541,7 +542,9 @@ export function derivedLanes(json: string | null): Map<string, { title?: string;
       const from = Array.isArray(entry?.derivedFrom) ? entry.derivedFrom : [];
       const derivedFrom = [...new Set(from.filter((s: unknown): s is string => typeof s === "string" && s !== "").map((s: string) => clampText(s, CAPS.label)))].slice(0, DERIVED_FROM_MAX) as string[];
       const { fold } = laneOptionsOf(entry?.lane);
-      out.set(name, { ...(typeof title === "string" && title ? { title: clampText(title, CAPS.label) } : {}), derivedFrom, ...(fold ? { fold } : {}) });
+      const ms = entry?.ms;
+      const deriveMs = typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : undefined;
+      out.set(name, { ...(typeof title === "string" && title ? { title: clampText(title, CAPS.label) } : {}), derivedFrom, ...(fold ? { fold } : {}), ...(deriveMs !== undefined ? { deriveMs } : {}) });
     }
   } catch {
     // Not the manifest: no stream is derived.
@@ -549,9 +552,44 @@ export function derivedLanes(json: string | null): Map<string, { title?: string;
   return out;
 }
 
+/** Far past the derived streams any session holds; the rest are left off the report's list. */
+export const DERIVED_STATUS_MAX = 100;
+
+/**
+ * Every stream `events/derived.json` ([json]) lists, in its order, with its row count, how long it
+ * took to derive and why it failed, for the report's Run details. Unlike the lanes, this keeps the
+ * streams that failed or found nothing, which have no lane to say so. Empty for a file that is
+ * absent, unreadable, or not that manifest.
+ */
+export function derivedStreamStatus(json: string | null): DerivedStreamStatus[] {
+  const out: DerivedStreamStatus[] = [];
+  if (!json) return out;
+  try {
+    const m = JSON.parse(json);
+    const streams = m && typeof m === "object" ? m.streams : null;
+    if (!streams || typeof streams !== "object" || Array.isArray(streams)) return out;
+    for (const name of Object.keys(streams).slice(0, DERIVED_STATUS_MAX)) {
+      const entry = streams[name];
+      if (!entry || typeof entry !== "object") continue;
+      const { title, rows, ms, error } = entry;
+      out.push({
+        name: clampText(name, CAPS.label),
+        ...(typeof title === "string" && title ? { title: clampText(title, CAPS.label) } : {}),
+        rows: typeof rows === "number" && Number.isFinite(rows) && rows >= 0 ? Math.trunc(rows) : 0,
+        ...(typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? { ms: Math.round(ms) } : {}),
+        // A failure with an empty message is still a failure: an older writer recorded it as "".
+        ...(typeof error === "string" ? { error: clampText(error || "failed without a message", CAPS.label) } : {}),
+      });
+    }
+  } catch {
+    // Not the manifest: nothing to list.
+  }
+  return out;
+}
+
 /**
  * Marks each of [streams] that `events/derived.json` ([json]) lists as derived: its lane opens by
- * default, under the stream's title, saying what it was derived from, and folding as it declares
+ * default, under the stream's title, saying what it was derived from and how long that took, and folding as it declares
  * unless the formatter that owns it already set a fold. Shared by the CLI report and
  * the archive viewer, so one session shows the same lanes in both.
  */
@@ -559,6 +597,6 @@ export function applyDerivedLanes(streams: EventStream[], json: string | null): 
   const lanes = derivedLanes(json);
   for (const stream of streams) {
     const lane = lanes.get(stream.name);
-    if (lane) Object.assign(stream, { shown: true, derivedFrom: lane.derivedFrom }, lane.title ? { title: lane.title } : {}, lane.fold && !stream.fold ? { fold: lane.fold } : {});
+    if (lane) Object.assign(stream, { shown: true, derivedFrom: lane.derivedFrom }, lane.title ? { title: lane.title } : {}, lane.fold && !stream.fold ? { fold: lane.fold } : {}, lane.deriveMs !== undefined ? { deriveMs: lane.deriveMs } : {});
   }
 }

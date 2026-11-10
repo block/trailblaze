@@ -47,9 +47,9 @@ import {
   type StreamsModel,
 } from './run-report-summary-model';
 
-/** The Summary lays out any run with a trace. */
+/** The Summary lays out any run with a trace, and shows a run's warnings even without one. */
 export function summaryAvailable(session: SessionPayload): boolean {
-  return (session.trace || []).length > 0;
+  return (session.trace || []).length > 0 || (session.meta?.warnings?.length ?? 0) > 0;
 }
 
 const NOTE_HEIGHT = 20;
@@ -224,6 +224,26 @@ function diagnosisRowHtml(problem: DiagnosisProblem, label: string, index: numbe
   </div>`;
 }
 
+/** The run's warnings, one row each beside the diagnosis. Plain text: an archive's warnings are untrusted. */
+export function warningsHtml(warnings: readonly RunWarning[] | undefined): string {
+  if (!warnings?.length) return '';
+  return `<section class="streamsdiag streamswarnings" aria-label="Run warnings">${warnings.map((warning) => `<div class="streamsdiagrow">
+    <div class="streamsdiagline">
+      <span class="streamsdiagkind" data-streams-tone="warn">Warning</span>
+      <span class="streamsdiagtext"><span class="streamsdiagsummary">${esc(warning.summary)}</span> <span class="streamsdiagvia">via ${esc(warning.survey)}</span></span>
+    </div>
+  </div>`).join('')}</section>`;
+}
+
+/**
+ * The run's warnings and its diagnosis in one bounded scroller, so however many there are, and
+ * however many details are open, together they never take the step grid's height.
+ */
+export function runNotesHtml(warnings: readonly RunWarning[] | undefined, diagnosis: string): string {
+  const notes = warningsHtml(warnings) + diagnosis;
+  return notes ? `<div class="streamsrunnotes">${notes}</div>` : '';
+}
+
 function spotlightHtml(boxes: ScreenBox[], id: string): string {
   return `<svg class="streamsspotlight" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
     <mask id="${id}"><rect width="1" height="1" fill="white"/>${boxes.map((b) => `<rect x="${b.left}" y="${b.top}" width="${b.width}" height="${b.height}" fill="black"/>`).join('')}</mask>
@@ -317,8 +337,21 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
   const diagLabel = /error/i.test(failedStatus) ? 'Error' : 'Failed';
 
   if (model.steps.length === 0) {
-    root.innerHTML = `${model.diagnosis ? `<section class="streamsdiag" aria-label="Run diagnosis">${model.diagnosis.problems.map((p, i) => diagnosisRowHtml(p, diagLabel, i, false)).join('')}</section>` : ''}<div class="streamsempty">This run's archive has no trace steps or timestamped events.</div>`;
-    return { dispose() { root.remove(); } };
+    // No grid, so none of its handlers below: this view wires its own Details toggles.
+    const open = new Set<number>();
+    const render = (): void => {
+      root.innerHTML = `${runNotesHtml(host.session.meta?.warnings, model.diagnosis ? `<section class="streamsdiag" aria-label="Run diagnosis">${model.diagnosis.problems.map((p, i) => diagnosisRowHtml(p, diagLabel, i, open.has(i))).join('')}</section>` : '')}<div class="streamsempty">This run's archive has no trace steps or timestamped events.</div>`;
+    };
+    const onToggle = (event: MouseEvent): void => {
+      const toggle = (event.target as Element | null)?.closest<HTMLElement>('[data-streams-detail]');
+      if (!toggle) return;
+      const index = Number(toggle.dataset.streamsDetail);
+      if (!open.delete(index)) open.add(index);
+      render();
+    };
+    render();
+    root.addEventListener('click', onToggle);
+    return { dispose() { root.removeEventListener('click', onToggle); root.remove(); } };
   }
 
   // ── Persistent state ────────────────────────────────────────────────────────────────────────
@@ -392,7 +425,7 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
         <button type="button" class="streamsmenubutton" data-streams-menu-toggle="toolbar" title="Choose streams"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span class="streamsmenubuttoncount" hidden></span></button>
       </div>
     </div>
-    ${model.diagnosis ? '<section class="streamsdiag" aria-label="Run diagnosis"></section>' : ''}
+    ${runNotesHtml(host.session.meta?.warnings, model.diagnosis ? '<section class="streamsdiag" aria-label="Run diagnosis"></section>' : '')}
     <div class="streamsscroll"><div class="streamsgrid"></div></div>`;
   const scroll = root.querySelector<HTMLElement>('.streamsscroll')!;
   const grid = root.querySelector<HTMLElement>('.streamsgrid')!;
@@ -400,7 +433,7 @@ export function mountSummary(container: HTMLElement, host: ReportTabHost): Repor
   const findCount = root.querySelector<HTMLElement>('.streamsfindcount')!;
   const menuButton = root.querySelector<HTMLElement>('.streamsmenubutton')!;
   const menuButtonCount = root.querySelector<HTMLElement>('.streamsmenubuttoncount')!;
-  const diagEl = root.querySelector<HTMLElement>('.streamsdiag');
+  const diagEl = root.querySelector<HTMLElement>('.streamsdiag:not(.streamswarnings)');
   findInput.value = query;
 
   const renderDiagnosis = (): void => {

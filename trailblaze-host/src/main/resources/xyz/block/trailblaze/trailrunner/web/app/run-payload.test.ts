@@ -533,7 +533,7 @@ describe('fetchSideChannels', () => {
       },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [] });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [], warnings: null, derivedStreams: null });
   });
 
   test('a thrown request yields nulls rather than rejecting', async () => {
@@ -541,7 +541,7 @@ describe('fetchSideChannels', () => {
       fetch: () => { throw new Error('daemon went away'); },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [] });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [], warnings: null, derivedStreams: null });
   });
 
   test('flattens the event-stream DTO and derives the original YAML from the logs', async () => {
@@ -608,8 +608,11 @@ describe('fetchSideChannels', () => {
         streams.forEach((st) => { if (lanes[st.name]) Object.assign(st, { shown: true, title: lanes[st.name].title }); });
       },
       parseDeviceClockSync: (t: string) => ({ parsed: JSON.parse(t) }),
+      derivedStreamStatus: (json: string) => Object.keys(JSON.parse(json).streams).map((name) => ({ name })),
     }, []);
 
+    // Every listed stream reaches Run details, `gone` included.
+    expect(side.derivedStreams).toEqual([{ name: 'app.screens' }, { name: 'gone' }]);
     // `gone` has no file, so nothing is built for it; the clock file reaches the builder parsed.
     expect(built).toEqual([{ file: 'app.screens.ndjson', lines: ['{"timeMs":5,"data":{"screen":"cart"},"row":{"label":"cart"}}'], clockSync: { parsed: { devices: [] } } }]);
     expect(side.events).toEqual([
@@ -792,6 +795,47 @@ describe('fetchSideChannels', () => {
     const older = await Payload.fetchSideChannels('sess_1', { fetch: async (url: string) => { calls.length = 0; calls.push(url); return okJson([]); }, originalYamlFromLogs: () => null }, []);
     expect(older.spans).toBeNull();
     expect(calls).not.toContain('/static/sess_1/trace.json');
+  });
+
+  // The run's warnings are a side channel too, so a live or Shared report shows what a CLI-built one does.
+  test("reads the run's warnings from the session's surveys.json off /static through the shared reader", async () => {
+    const surveys = { format: 1, surveys: { crashes: { warning: true, findings: [{ summary: 'App crashed' }] } } };
+    const runWarningsFromSurveys = (text: string) => JSON.parse(text).surveys.crashes.findings.map((f: any) => ({ survey: 'crashes', summary: f.summary }));
+    const fetch = async (url: string) => {
+      if (url === '/static/sess_1/surveys.json') return { ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(surveys)).buffer };
+      if (url.endsWith('/export') || url.endsWith('trace.json')) return { ok: false, status: 404 };
+      if (url.endsWith('/events')) return okJson({ streams: [] });
+      return okJson([]);
+    };
+    const deps = { fetch, originalYamlFromLogs: () => null, traceScreenshotFiles: () => [], runWarningsFromSurveys, SURVEYS_FILE: 'surveys.json', MAX_SURVEYS_BYTES: 1024 * 1024 };
+    const side = await Payload.fetchSideChannels('sess_1', deps, []);
+    expect(side.warnings).toEqual([{ survey: 'crashes', summary: 'App crashed' }]);
+
+    const input = await Payload.buildSessionInput({ sessionId: 'sess_1', s: { id: 'sess_1', status: 'passed' }, trace: [], llmLogs: [], deps, logs: [], mode: 'link' });
+    expect(input.meta.warnings).toEqual([{ survey: 'crashes', summary: 'App crashed' }]);
+    expect(input.meta.status).toBe('passed');
+  });
+
+  test("a derived stream that failed is a run warning, after the surveys' own, as in a CLI-built report", async () => {
+    const surveys = { format: 1, surveys: { crashes: { warning: true, findings: [{ summary: 'App crashed' }] } } };
+    const manifest = { format: 1, streams: { feature: { rows: 0, error: 'HTTP 403' } } };
+    const body = (v: unknown) => ({ ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(v)).buffer });
+    const fetch = async (url: string) => {
+      if (url === '/static/sess_1/surveys.json') return body(surveys);
+      if (url === '/static/sess_1/events/derived.json') return body(manifest);
+      if (url.endsWith('/export') || url.endsWith('trace.json')) return { ok: false, status: 404 };
+      if (url.endsWith('/events')) return okJson({ streams: [] });
+      return okJson([]);
+    };
+    const deps = {
+      fetch, originalYamlFromLogs: () => null, traceScreenshotFiles: () => [],
+      runWarningsFromSurveys: () => [{ survey: 'crashes', summary: 'App crashed' }], SURVEYS_FILE: 'surveys.json', MAX_SURVEYS_BYTES: 1024 * 1024,
+      runWarningsFromDerivedStreams: (text: string) => Object.keys(JSON.parse(text).streams).map((name) => ({ survey: `derived stream ${name}`, summary: 'failed' })),
+      DERIVED_MANIFEST_PATH: 'events/derived.json', MAX_DERIVED_MANIFEST_BYTES: 1024 * 1024,
+      mergeRunWarnings: (...lists: any[]) => lists.flatMap((l) => l || []),
+    };
+    const side = await Payload.fetchSideChannels('sess_1', deps, []);
+    expect(side.warnings).toEqual([{ survey: 'crashes', summary: 'App crashed' }, { survey: 'derived stream feature', summary: 'failed' }]);
   });
 
   // The app chooses its own property names, so `name` and `source` can collide with the two fields

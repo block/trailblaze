@@ -30,6 +30,7 @@ import java.io.File
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedTrailItems
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 
 /**
  * The installed app targets on a device (plus the currently-selected one) — the shared source for
@@ -457,6 +458,33 @@ internal fun saveBackRefusal(status: SessionStatus, trailFile: File): String? = 
 }
 
 /**
+ * Why a recording of the whole trail must NOT be saved back because it would drop a raw
+ * `mobile_maestro` step from the trailhead, or null when it may be.
+ *
+ * A record-range run re-drives its steps with the AI, but a run of the whole trail ([dispatched]
+ * has a trailhead) still replays the trailhead's recording. The raw Maestro tool is never recorded,
+ * so the merge would replace that trailhead with one missing the step, and the next run would lose
+ * its setup. Same rule as the CLI's save-back. A narrowed range runs no trailhead and leaves it alone.
+ */
+internal fun rawMaestroTrailheadRefusal(
+  trailFile: File,
+  dispatched: UnifiedTrail,
+  deviceClassifiers: List<String>,
+): String? {
+  if (dispatched.trailhead == null) return null
+  val replayed = UnifiedRecordingWriter.replayedToolNamesForDevice(
+    trailFile,
+    deviceClassifiers,
+    selectedDeviceConfiguration = null,
+    trailheadOnly = true,
+  )
+  if (UnifiedRecordingWriter.RAW_MAESTRO_TOOL_NAME !in replayed) return null
+  return "Recording not saved back into ${trailFile.name}: its trailhead for this device has a raw " +
+    "${UnifiedRecordingWriter.RAW_MAESTRO_TOOL_NAME} step, which saving would drop. The trailhead always " +
+    "replays its recording, so replace that step with typed tools."
+}
+
+/**
  * The tool logs a recording is built from: the same `isRecordable` population
  * [xyz.block.trailblaze.yaml.generateRecordedTrailItems] reads. Counting the rest would let a run
  * whose only tool calls are non-recordable author utilities look like it recorded something. Failed
@@ -646,6 +674,11 @@ private fun maybeMergeIntoUnifiedTrail(deps: TrailRunnerDeps, body: RunRequest, 
       Console.info(message)
       return logSaveBackOutcome(deps, sessionId, message, false)
     }
+    rawMaestroTrailheadRefusal(trailFile, dispatched, deviceInfo?.classifiers.orEmpty().map { it.classifier })
+      ?.let { refusal ->
+        Console.info(refusal)
+        return logSaveBackOutcome(deps, sessionId, refusal, false)
+      }
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(
       trailFileOrDir = trailFile,
       recordedItems = logs.generateRecordedTrailItems(createTrailblazeYaml()),

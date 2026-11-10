@@ -28,8 +28,9 @@ const ev = require("./run-report-events.ts") as {
   attachmentRefOf: (value: unknown) => AttachmentRef | null;
   findAttachmentRefs: (value: unknown) => AttachmentRef[];
   collectStreamAttachmentRefs: (streams: EventStream[] | null | undefined) => AttachmentRef[];
-  derivedLanes: (json: string | null) => Map<string, { title?: string; derivedFrom: string[] }>;
+  derivedLanes: (json: string | null) => Map<string, { title?: string; derivedFrom: string[]; deriveMs?: number }>;
   applyDerivedLanes: (streams: EventStream[], json: string | null) => void;
+  derivedStreamStatus: (json: string | null) => Array<{ name: string; title?: string; rows: number; ms?: number; error?: string }>;
 };
 
 // A request/response-pairing formatter, the shape a real network formatter takes: it sees the whole
@@ -588,6 +589,33 @@ describe("a stream whose lines carry their own rows", () => {
   });
 });
 
+describe("derivedStreamStatus", () => {
+  test("lists every derived stream with its rows and time, including one that failed or found nothing", () => {
+    const json = JSON.stringify({ format: 1, streams: {
+      "experiment-eval": { rows: 16, ms: 5.4, title: "Experiment Eval" },
+      flags: { rows: 0, error: "Flag service answered HTTP 403", ms: 120 },
+      quiet: { rows: 0 },
+    } });
+    expect(ev.derivedStreamStatus(json)).toEqual([
+      { name: "experiment-eval", title: "Experiment Eval", rows: 16, ms: 5 },
+      { name: "flags", rows: 0, ms: 120, error: "Flag service answered HTTP 403" },
+      { name: "quiet", rows: 0 },
+    ]);
+  });
+
+  test("a stream recorded with an empty error is still listed as failed", () => {
+    expect(ev.derivedStreamStatus(JSON.stringify({ format: 1, streams: { silent: { rows: 0, error: "" } } }))).toEqual([
+      { name: "silent", rows: 0, error: "failed without a message" },
+    ]);
+  });
+
+  test("drops values that are not what the manifest records, and is empty for no manifest", () => {
+    expect(ev.derivedStreamStatus(JSON.stringify({ format: 1, streams: { odd: { rows: "3", ms: -2, error: 7 }, bad: null } }))).toEqual([{ name: "odd", rows: 0 }]);
+    expect(ev.derivedStreamStatus(null)).toEqual([]);
+    expect(ev.derivedStreamStatus("not json")).toEqual([]);
+  });
+});
+
 describe("derivedLanes", () => {
   test("lists each derived stream with its title", () => {
     const lanes = ev.derivedLanes(JSON.stringify({ format: 1, streams: { screens: { rows: 3, title: "Screens" }, flags: { rows: 0 } } }));
@@ -605,6 +633,14 @@ describe("derivedLanes", () => {
     ev.applyDerivedLanes(streams, JSON.stringify({ format: 1, streams: { visits: { rows: 1, title: "Cart visits", derivedFrom: ["screens"] } } }));
     expect(streams[0]).toMatchObject({ title: "Cart visits", shown: true, derivedFrom: ["screens"] });
     expect(streams[1]!.derivedFrom).toBeUndefined();
+  });
+
+  test("carries how long each stream took to derive onto its lane, and drops a time that is not one", () => {
+    const streams: EventStream[] = [{ name: "visits", events: [] }, { name: "flags", events: [] }];
+    ev.applyDerivedLanes(streams, JSON.stringify({ format: 1, streams: { visits: { rows: 1, ms: 34.4 }, flags: { rows: 1, ms: -1 } } }));
+    expect(streams[0]!.deriveMs).toBe(34);
+    expect(streams[1]!.deriveMs).toBeUndefined();
+    expect(ev.derivedLanes(JSON.stringify({ format: 1, streams: { odd: { rows: 1, ms: "34" } } })).get("odd")?.deriveMs).toBeUndefined();
   });
 
   test("applies a derived stream's lane fold, and only a known one", () => {

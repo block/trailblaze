@@ -477,7 +477,8 @@
     // silently drop it.
     let trailhead = null;
     try {
-      const doc = window.jsyaml.load(existingYaml);
+      // TM keeps config labels as written and writes them one per line, as the CLI does.
+      const doc = window.TM ? window.TM.loadUnifiedDoc(existingYaml, window.jsyaml) : window.jsyaml.load(existingYaml);
       if (Array.isArray(doc)) {
         for (const it of doc) {
           if (it && it.config) config = { ...it.config };
@@ -508,7 +509,8 @@
     if (trailhead != null) out.trailhead = trailhead;
     if (trail.length) out.trail = trail;
     try {
-      return window.jsyaml.dump(out, { lineWidth: -1, noRefs: true }).trimEnd();
+      const dump = (d) => window.jsyaml.dump(d, { lineWidth: -1, noRefs: true });
+      return (window.TM ? window.TM.dumpUnifiedDoc(out, dump) : dump(out)).trimEnd();
     } catch (e) {
       return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
     }

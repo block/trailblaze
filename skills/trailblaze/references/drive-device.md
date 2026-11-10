@@ -23,10 +23,15 @@ section first if you haven't.
 
 ## The `--device` flag is required on every device-driving call
 
-Trailblaze is multi-tenant — the daemon supports many devices at once,
-with no implicit "current device" on the CLI side. Every command that
-acts on a device takes `-d <device>` (or `--device <device>`). Pass it
-every time.
+Trailblaze is multi-tenant - the daemon supports many devices at once.
+Every command that acts on a device takes `-d <device>` (or `--device
+<device>`). Agents run each command in a fresh shell, so nothing
+carries over between calls: pass it every time. The CLI does fall back
+to the `TRAILBLAZE_DEVICE` env var, then to a `trailblaze device
+connect` pin for the current terminal, then to the only connected
+device. The env var and the pin don't carry across fresh shells, and
+the single-device fallback breaks once a second device appears, so
+don't rely on them.
 
 ```bash
 trailblaze device list                    # what's connected
@@ -76,8 +81,9 @@ or bundle id>` and then the indented element tree.
 To click the link in the web example, you'd reference it as
 `ref=e3`. If the device's current screen has nothing interactive on
 it (e.g. immediately after connecting, before navigating), you may
-see `(no interactive elements found)` — that's fine, drive the device
-to a screen with content first.
+see `(no interactive elements found)` on web, or `(no elements found)`
+on Android and iOS - that's fine, drive the device to a screen with
+content first.
 
 Refs are short *content-hashed* slugs computed from the element's
 class, label, and rough position — NOT positional indices, NOT
@@ -113,7 +119,7 @@ trailblaze tool -d <device> <tool-name> <arg-pairs> -s "<step>"
 This is the canonical action form. `<tool-name>` is one of the
 primitives or custom tools available on the connected device's driver.
 **Primitive names are platform-namespaced on web** (e.g. `web_click`,
-`web_type`, `web_scroll`, `web_verify_*`) and unprefixed on mobile
+`web_type`, `web_scroll`, `web_verifyElementVisible`) and unprefixed on mobile
 (e.g. `tap`, `type`). Use `trailblaze toolbox` (below) to see
 the real names available for your device.
 
@@ -132,14 +138,13 @@ trailblaze tool web_click --help
 `trailblaze toolbox --name web_click` produces the same output if
 you prefer the explicit catalog form.
 
-**`-s "<step>"` is required on every action.** It captures the
-natural-language intent — what this step is *trying to do* — and gets
-recorded into the trail YAML alongside the resolved selector. Without
-it the trail is unreadable, undiagnosable, and self-heal won't work.
-(The CLI doesn't enforce this by default — set
-`trailblaze config require-steps true` to make a missing `-s` a hard
-error in your environment.) Write step text the way you'd write a
-test step description for a human reviewer:
+**Always pass `-s "<step>"` on every action.** The CLI only requires it
+when `trailblaze config require-steps true` is set, but without it the
+trail is unreadable, undiagnosable, and self-heal won't work. It
+captures the natural-language intent - what this step is *trying to
+do* - and gets recorded into the trail YAML alongside the resolved
+selector. Write step text the way you'd write a test step description
+for a human reviewer:
 
 ```bash
 trailblaze tool -d android/emulator-5554 tap ref=y778 -s "Tap the Sign in button"
@@ -228,10 +233,12 @@ If a `tool` call returns a non-zero exit code or surfaces an error:
 
 A few first-call messages aren't errors — don't treat them as such:
 
-- **`Target app changed (X → Y) — creating new session.`** appears on
-  first device interaction (and any time the target switches). It's
-  Trailblaze bootstrapping a session for the current `(device,
-  target)` pair. Not a problem.
+- **`Target app changed (A -> B) -- creating new session.`** appears
+  when you switch `--target` on a device that already has a saved
+  session. It's Trailblaze starting a fresh session for the new
+  `(device, target)` pair, not a problem. `device connect --target`
+  can print a `-- pinned on existing session.` variant instead. The
+  first interaction on a device doesn't print either one.
 - **`Installing Playwright (this may take up to 2 minutes)`** appears
   on the first web action of a fresh install. One-time setup; later
   web calls don't repeat it.

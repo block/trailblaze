@@ -89,17 +89,44 @@
     return entries;
   }
 
-  // Default browser inflate. bun tests inject node:zlib's inflateRawSync instead.
-  function inflateRawWithDecompressionStream(compressed) {
+  // Default browser inflate. bun tests inject node:zlib's inflateRawSync instead. With `maxBytes`,
+  // it stops reading as soon as the output passes that, so a small entry that inflates to gigabytes
+  // costs no more than the cap.
+  function inflateRawWithDecompressionStream(compressed, maxBytes) {
     var stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Response(stream).arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+    if (!maxBytes) return new Response(stream).arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+    var reader = stream.getReader();
+    var chunks = [];
+    var total = 0;
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) {
+          var out = new Uint8Array(total);
+          var at = 0;
+          chunks.forEach(function (chunk) { out.set(chunk, at); at += chunk.byteLength; });
+          return out;
+        }
+        total += r.value.byteLength;
+        if (total > maxBytes) {
+          reader.cancel().catch(function () {});
+          throw new Error('ZIP entry inflates past ' + maxBytes + ' bytes.');
+        }
+        chunks.push(r.value);
+        return pump();
+      });
+    }
+    return pump();
   }
 
   // Read + decompress one entry's bytes. The data offset comes from the LOCAL header (its
-  // name/extra lengths can legitimately differ from the central directory's).
-  function readZipEntry(bytes, entry, inflateRaw) {
+  // name/extra lengths can legitimately differ from the central directory's). `maxBytes`, when given,
+  // bounds the bytes actually inflated, not just the size the archive declares.
+  function readZipEntry(bytes, entry, inflateRaw, maxBytes) {
     var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     var p = entry.localHeaderOffset;
+    if (!(p >= 0 && p + 30 <= bytes.byteLength)) {
+      return Promise.reject(new Error('Corrupt ZIP: local header out of range for "' + entry.name + '".'));
+    }
     if (view.getUint32(p, true) !== LOC_SIG) {
       return Promise.reject(new Error('Corrupt ZIP: bad local-header signature for "' + entry.name + '".'));
     }
@@ -110,13 +137,23 @@
     var extraLength = view.getUint16(p + 28, true);
     var dataStart = p + 30 + nameLength + extraLength;
     var raw = bytes.subarray(dataStart, dataStart + entry.compressedSize);
-    if (entry.method === 0) return Promise.resolve(raw);
+    var tooBig = function (out) {
+      if (maxBytes && out.byteLength > maxBytes) throw new Error('ZIP entry "' + entry.name + '" is past ' + maxBytes + ' bytes.');
+      return out;
+    };
+    if (entry.method === 0) {
+      try { return Promise.resolve(tooBig(raw)); }
+      catch (e) { return Promise.reject(e); }
+    }
     // A REJECTION, never a synchronous throw: inflating a corrupt entry throws, and every caller
     // handles a bad entry with `.catch` — a throw would escape that and fail the whole report
-    // build over one unreadable file.
+    // build over one unreadable file. An injected inflater cannot stop early, so its output is
+    // checked once it returns.
     if (entry.method === 8) {
-      try { return Promise.resolve((inflateRaw || inflateRawWithDecompressionStream)(raw)); }
-      catch (e) { return Promise.reject(e); }
+      try {
+        if (!inflateRaw) return inflateRawWithDecompressionStream(raw, maxBytes);
+        return Promise.resolve(inflateRaw(raw)).then(tooBig);
+      } catch (e) { return Promise.reject(e); }
     }
     return Promise.reject(new Error('Unsupported ZIP compression method ' + entry.method + ' for "' + entry.name + '".'));
   }
@@ -706,6 +743,17 @@
     });
   }
 
+  // Every stream the session's `events/derived.json` lists, with its rows, time taken and error, for
+  // Run details, as the CLI report lists them. Null when the archive has no manifest or the renderer
+  // predates the list.
+  function sessionDerivedStreams(zipBytes, session, render, inflateRaw) {
+    var entry = session.byFileName[DERIVED_STREAMS_FILE];
+    if (typeof render.derivedStreamStatus !== 'function' || !entry || entry.uncompressedSize > DERIVED_STREAMS_MAX_BYTES) return Promise.resolve(null);
+    return readZipEntry(zipBytes, entry, inflateRaw)
+      .then(function (data) { return render.derivedStreamStatus(utf8.decode(data)); })
+      .catch(function () { return null; });
+  }
+
   // The session's `trace.json` → the same TracerSpan[] the bun driver embeds, through the renderer's
   // own slimmer (run-report-trace-spans via run-report-core) so a report opened from an archive
   // exports the tracer's spans to Perfetto exactly as a CLI-built one does. The same size cap as the
@@ -722,6 +770,28 @@
     return readZipEntry(zipBytes, entry, inflateRaw)
       .then(function (data) { return render.slimTracerSpans(JSON.parse(utf8.decode(data))); })
       .catch(function () { return null; }); // a broken trace costs the Perfetto spans, not the report
+  }
+
+  // The run's warnings from the session's `surveys.json`, then each derived stream that failed in
+  // `events/derived.json`, through the renderer's own readers (run-report-warnings via run-report-core)
+  // so an archive shows the same warnings as a CLI-built report. An older bundle without a reader
+  // leaves out that kind of warning, exactly as before.
+  function sessionRunWarnings(zipBytes, session, render, inflateRaw) {
+    function read(name, maxBytes, parse) {
+      if (typeof parse !== 'function' || !name || !maxBytes) return Promise.resolve(null);
+      var entry = session.byFileName[name];
+      if (!entry || entry.uncompressedSize > maxBytes) return Promise.resolve(null);
+      return readZipEntry(zipBytes, entry, inflateRaw, maxBytes)
+        .then(function (data) { return parse(utf8.decode(data)); })
+        .catch(function () { return null; }); // a broken file costs its warnings, not the report
+    }
+    return Promise.all([
+      read(render.SURVEYS_FILE, render.MAX_SURVEYS_BYTES, render.runWarningsFromSurveys),
+      read(render.DERIVED_MANIFEST_PATH, render.MAX_DERIVED_MANIFEST_BYTES, render.runWarningsFromDerivedStreams),
+    ]).then(function (lists) {
+      if (typeof render.mergeRunWarnings === 'function') return render.mergeRunWarnings(lists[0], lists[1]);
+      return lists[0];
+    });
   }
 
   // Attachment refs embedded in event payloads (see AttachmentRef in trailblaze-models), resolved
@@ -847,9 +917,17 @@
       traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
       buildEventStream: render.buildEventStream || g.buildEventStream,
       applyDerivedLanes: render.applyDerivedLanes || g.applyDerivedLanes,
+      derivedStreamStatus: render.derivedStreamStatus || g.derivedStreamStatus,
       rootNetworkStreamFiles: render.rootNetworkStreamFiles || g.rootNetworkStreamFiles,
       parseDeviceClockSync: render.parseDeviceClockSync || g.parseDeviceClockSync,
       collectStreamAttachmentRefs: render.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,
+      runWarningsFromSurveys: render.runWarningsFromSurveys || g.runWarningsFromSurveys,
+      MAX_SURVEYS_BYTES: render.MAX_SURVEYS_BYTES || g.MAX_SURVEYS_BYTES,
+      SURVEYS_FILE: render.SURVEYS_FILE || g.SURVEYS_FILE,
+      runWarningsFromDerivedStreams: render.runWarningsFromDerivedStreams || g.runWarningsFromDerivedStreams,
+      DERIVED_MANIFEST_PATH: render.DERIVED_MANIFEST_PATH || g.DERIVED_MANIFEST_PATH,
+      MAX_DERIVED_MANIFEST_BYTES: render.MAX_DERIVED_MANIFEST_BYTES || g.MAX_DERIVED_MANIFEST_BYTES,
+      mergeRunWarnings: render.mergeRunWarnings || g.mergeRunWarnings,
       ATTACHMENT_MIME: render.ATTACHMENT_MIME || g.ATTACHMENT_MIME,
       MAX_ATTACHMENTS_PER_SESSION: render.MAX_ATTACHMENTS_PER_SESSION || g.MAX_ATTACHMENTS_PER_SESSION,
       ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES: render.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES || g.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES,
@@ -932,13 +1010,20 @@
             .then(function (videoClips) {
               return sessionEventStreams(zipBytes, session, render, inflateRaw).then(function (events) {
                 return sessionAttachments(zipBytes, session, events, render, inflateRaw).then(function (attachments) {
-                  return sessionTraceSpans(zipBytes, session, render, inflateRaw).then(function (spans) {
+                  return Promise.all([
+                    sessionTraceSpans(zipBytes, session, render, inflateRaw),
+                    sessionRunWarnings(zipBytes, session, render, inflateRaw),
+                    sessionDerivedStreams(zipBytes, session, render, inflateRaw),
+                  ]).then(function (read) {
+                    var spans = read[0];
+                    if (read[1]) meta.warnings = read[1];
+                    var derivedStreams = read[2];
                     inputs.push({
                       meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
                       recordingYaml: session.recordingYaml, originalYaml: originalYaml,
                       videoClip: videoClips.length ? videoClips[0] : null,
                       videoClips: videoClips.length ? videoClips : null,
-                      events: events, attachments: attachments,
+                      events: events, attachments: attachments, derivedStreams: derivedStreams,
                       spans: spans, visibleStrings: visibleStrings,
                     });
                   });
@@ -982,7 +1067,7 @@
         var html = inputs.length === 1
           ? render.buildRunReportHtml({
             meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots,
-            events: s0.events || null, attachments: s0.attachments || null,
+            events: s0.events || null, attachments: s0.attachments || null, derivedStreams: s0.derivedStreams || null,
             hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null,
             spans: s0.spans || null, visibleStrings: s0.visibleStrings || null,
             videoClip: s0.videoClip || null, videoClips: s0.videoClips || null,

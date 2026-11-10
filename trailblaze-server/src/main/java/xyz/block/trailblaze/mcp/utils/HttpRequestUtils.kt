@@ -47,6 +47,24 @@ class HttpRequestUtils(
     return responseBody
   }
 
+  /**
+   * Whether a GET of [urlPath] answers 2xx within [timeoutMs]. False on any transport failure: the
+   * question is only whether something is listening and serving there.
+   */
+  suspend fun answersGet(urlPath: String, timeoutMs: Long): Boolean = try {
+    client.get("$baseUrl$urlPath") {
+      timeout {
+        requestTimeoutMillis = timeoutMs
+        connectTimeoutMillis = timeoutMs
+        socketTimeoutMillis = timeoutMs
+      }
+    }.status.value in 200..299
+  } catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+  } catch (_: Exception) {
+    false
+  }
+
   class HttpRpcException(message: String, val responseBody: String?) : Exception(message)
 
   override fun close() {

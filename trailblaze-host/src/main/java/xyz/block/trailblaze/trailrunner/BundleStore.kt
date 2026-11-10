@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.trailrunner
 
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
@@ -228,12 +229,18 @@ internal object BundleStore {
     // A refused recording renders as blank. Never replace an existing variant with it.
     if (yaml.isBlank()) return null
     val safe = variantSlug(variant)
+    // A re-record replaces the variant's recording, not what the variant says about the trail: keep
+    // its labels. Unreadable labels refuse the write rather than deleting them.
+    val target = File(dir, "$safe.trail.yaml")
+    val content = UnifiedRecordingWriter.withLabelsCarried(yaml, target).getOrElse {
+      Console.log("[BundleStore] variant $safe in ${dir.name} not written: ${it.message}")
+      return null
+    }
     // Unique tmp name per write so two concurrent re-records of the same platform each own their own
     // scratch file (a shared `.<safe>.trail.yaml.tmp` would let them interleave bytes before the move).
     val tmp = File(dir, ".$safe.trail.yaml.${java.util.UUID.randomUUID()}.tmp")
     return runCatching {
-      tmp.writeText(yaml)
-      val target = File(dir, "$safe.trail.yaml")
+      tmp.writeText(content)
       Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
       target
     }.getOrElse {

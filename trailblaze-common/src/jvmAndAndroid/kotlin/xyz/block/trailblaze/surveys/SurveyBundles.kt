@@ -126,7 +126,86 @@ object SurveyBundles {
   fun exportedSurveyNames(text: String): List<String> = exportedSurveys(text).map { it.name }
 
   /**
-   * Every survey [text] exports, with the two spec fields the generated bindings need. Read from
+   * Whether [text] exports a value [exportedSurveys] cannot read: a re-export (`export { a } from`,
+   * `export *`), an export list or default, `export const` of something other than `survey(`, or a
+   * `survey(` followed by a further declarator (`a = survey({…}), b = survey({…})`), which
+   * [exportedSurveys] does not read. Any of them may be a survey only loading the file can see.
+   * Types, functions, and a single `export const` whose value plainly is not a survey (a literal,
+   * `new`, a function, or an `eventStream(` call) are not surveys.
+   */
+  fun hasUnreadExports(text: String): Boolean {
+    val code = SurveySourceText.codeOnly(text)
+    val surveys = EXPORTED_SURVEY.findAll(code).filter { endsItsDeclaration(code, it) }.map { it.range.first }.toSet()
+    val exports = EXPORT.findAll(code).toList()
+    return exports.withIndex().any { (n, export) ->
+      val start = export.range.first
+      start !in surveys && !NOT_A_VALUE.matches(export.groupValues[1]) &&
+        !exportsPlainValue(code, start, exports.getOrNull(n + 1)?.range?.first ?: code.length)
+    }
+  }
+
+  /**
+   * Whether the `export const` at [start] declares one name whose value cannot be a survey: an object,
+   * array, string, number, boolean or `null` literal, a `new` expression, a function, or an
+   * `eventStream(` call. A further declarator before the statement ends (`;`, or [until], the next
+   * export) could be a survey, so it reads as unread.
+   */
+  private fun exportsPlainValue(code: String, start: Int, until: Int): Boolean {
+    val declared = EXPORTED_VALUE.find(code, start)?.takeIf { it.range.first == start } ?: return false
+    val value = declared.range.last + 1
+    if (!PLAIN_VALUE.containsMatchIn(code.substring(value, minOf(code.length, value + 200))) && !isArrowAt(code, value)) return false
+    // `{ ...sharedSurvey }` copies a survey, brand and all: only loading the file tells.
+    if (code.startsWith("{", value)) {
+      val literal = SurveySourceText.objectLiteralAt(code, value) ?: return false
+      if ("..." in SurveySourceText.topLevelOf(code, literal)) return false
+    }
+    var depth = 0
+    for (i in value until until) {
+      when (code[i]) {
+        '(', '[', '{' -> depth++
+        ')', ']', '}' -> depth--
+        ';' -> if (depth == 0) return true
+        ',' -> if (depth == 0) return false
+      }
+    }
+    return true
+  }
+
+  /** Whether an arrow function starts at [from]: `(a, b) =>`, `(a): T =>`, or `x =>`. */
+  private fun isArrowAt(code: String, from: Int): Boolean {
+    if (code.startsWith("(", from)) {
+      var depth = 0
+      var i = from
+      while (i < code.length) {
+        when (code[i]) {
+          '(', '[', '{' -> depth++
+          ')', ']', '}' -> if (--depth == 0) break
+        }
+        i++
+      }
+      return ARROW_AFTER_PARAMS.containsMatchIn(code.substring(minOf(code.length, i + 1), minOf(code.length, i + 201)))
+    }
+    return SINGLE_PARAM_ARROW.containsMatchIn(code.substring(from, minOf(code.length, from + 200)))
+  }
+
+  /** Whether [match]'s `survey(…)` call closes with nothing declared after it in the same statement. */
+  private fun endsItsDeclaration(code: String, match: MatchResult): Boolean {
+    var i = SurveySourceText.callArgumentsAt(code, match.range.last + 1) ?: return false
+    var depth = 1
+    while (i < code.length && depth > 0) {
+      when (code[i]) {
+        '(', '[', '{' -> depth++
+        ')', ']', '}' -> depth--
+      }
+      i++
+    }
+    if (depth > 0) return false
+    while (i < code.length && code[i].isWhitespace()) i++
+    return i >= code.length || code[i] != ','
+  }
+
+  /**
+   * Every survey [text] exports, with the spec fields the generated bindings and the end-of-run warnings need. Read from
    * the top level of the object literal passed as `survey(`'s first argument, so a flag in another
    * survey's spec, or nested in a finding's data, never counts; a spec built elsewhere and passed in by name reads as a default
    * survey, and running it mid-trail still refuses it, naming the flag. Comments and literals
@@ -142,11 +221,39 @@ object SurveyBundles {
         name = match.groupValues[1],
         feature = spec?.let { valueOf(code, readable, it, "feature") }?.let { STRING_VALUE.find(it)?.groupValues?.get(2) },
         requiresFinishedSession = spec?.let { valueOf(code, readable, it, "requiresFinishedSession") }?.let { TRUE_VALUE.containsMatchIn(it) } == true,
+        warning = spec?.let { valueOf(code, readable, it, "warning") }?.let { TRUE_VALUE.containsMatchIn(it) } == true,
+        specInSource = spec != null,
+        warningInSource = spec != null && warningIsLiteral(code, readable, spec),
       )
     }.toList()
   }
 
-  class ExportedSurvey(val name: String, val feature: String?, val requiresFinishedSession: Boolean)
+  /**
+   * [warning] is the spec's `warning: true`: each finding is a warning on its run. [specInSource] is false
+   * when the spec is built elsewhere and passed in by name, so its fields here are defaults, not
+   * what the survey declares. [warningInSource] is false too when the literal's `warning` is computed,
+   * shorthand, or may come from a spread or computed key: only loading the spec tells.
+   */
+  class ExportedSurvey(
+    val name: String,
+    val feature: String?,
+    val requiresFinishedSession: Boolean,
+    val warning: Boolean = false,
+    val specInSource: Boolean = true,
+    val warningInSource: Boolean = specInSource,
+  )
+
+  /**
+   * Whether the literal at [spec] shows its `warning` outright: `warning: true`, `warning: false`, or no `warning`
+   * key, with no spread or computed key that could add one.
+   */
+  private fun warningIsLiteral(code: String, readable: String, spec: IntRange): Boolean {
+    val codeTop = SurveySourceText.topLevelOf(code, spec)
+    if ("..." in codeTop || COMPUTED_KEY.containsMatchIn(codeTop)) return false
+    val value = valueOf(code, readable, spec, "warning")
+      ?: return !SHORTHAND_WARNING.containsMatchIn(codeTop)
+    return LITERAL_BOOLEAN.containsMatchIn(value)
+  }
 
   /**
    * Every derived event stream [text] declares with `eventStream(`, by the `name` its spec gives,
@@ -183,11 +290,33 @@ object SurveyBundles {
 
   private val STRING_VALUE = Regex("""^\s*(["'`])([^"'`]+)\1""")
   private val TRUE_VALUE = Regex("""^\s*true\b""")
+  private val LITERAL_BOOLEAN = Regex("""^\s*(?:true|false)\s*(?:,|$)""")
+
+  /** `warning` as a key with no colon after it: `{ warning, ... }`. */
+  private val SHORTHAND_WARNING = Regex("""(?<![\w$.])warning\s*(?:,|$)""")
+
+  /** A key whose brackets [SurveySourceText.topLevelOf] blanked: `[name]: value`. */
+  private val COMPUTED_KEY = Regex("""(?:^|,)\s*:""")
 
   /** A string literal with nothing computed in or after it: `"screens",` but not `"app." + kind`. */
   private val PLAIN_STRING = Regex("""^\s*(["'`])([^"'`$\\]+)\1\s*(?:,|$)""")
 
   private val EVENT_STREAM_CALL = Regex("""(?<![\w$])eventStream\b""")
+
+  /** An `export` statement, with the word or symbol that follows it. */
+  private val EXPORT = Regex("""(?<![\w$.])export\s+(\*|\{|[A-Za-z]+)""")
+  private val NOT_A_VALUE = Regex("""type|interface|function|class|enum|declare|async|abstract""")
+
+  /** `export const <name> =`, through to where its value starts. */
+  private val EXPORTED_VALUE = Regex("""export\s+(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*""")
+
+  /** A value that is not a survey, by how it starts. */
+  private val PLAIN_VALUE =
+    Regex("""^(?:[{\["'`]|-?\d|(?:new|true|false|null|undefined|function|async)\b|(?:trailblaze\s*\.\s*)?eventStream\s*[<(])""")
+
+  /** What follows an arrow's parameter list: `=>`, or a return type before it. */
+  private val ARROW_AFTER_PARAMS = Regex("""^\s*(?:=>|:[^=;]*=>)""")
+  private val SINGLE_PARAM_ARROW = Regex("""^[A-Za-z_$][\w$]*\s*=>""")
 
   private val EXPORTED_SURVEY =
     Regex("""export\s+const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:trailblaze\s*\.\s*)?survey\b""")

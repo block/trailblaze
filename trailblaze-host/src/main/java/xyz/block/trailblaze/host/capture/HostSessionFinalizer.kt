@@ -2,10 +2,12 @@ package xyz.block.trailblaze.host.capture
 
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.networkcapture.WebCompanionNetworkCapture
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.toolcalls.SessionCleanups
 import xyz.block.trailblaze.util.Console
 
 /** Prevents artifact publication before downstream session resources are durable. */
@@ -52,6 +54,15 @@ internal fun finalizeHostSessionResources(
 ) {
   val failures = mutableListOf<Throwable>()
   sessionIds.distinct().forEach { sessionId ->
+    // Undo calls a session registered but never ran, because it ran no trail (MCP, interactive).
+    // First, while the device and any lease are still held. The session's drivers may already be
+    // released (`endSessionForDevice` releases them before this barrier), so an undo that needs a
+    // Maestro or Playwright driver fails here; adb-based undos don't. Logged, not failed: the
+    // trail-end run reports the same failures for trails.
+    runCatching {
+      val failures = runBlocking { SessionCleanups.runAll(SessionCleanups.drain(sessionId)) { it.runDetached() } }
+      failures.forEach { Console.log("[SessionCleanup] $sessionId: $it") }
+    }.onFailure { Console.log("[SessionCleanup] $sessionId: ${it.message}") }
     runCatching { HostSessionFinalizerRegistry.finalizeSession(sessionId) }
       .onFailure(failures::add)
     // The Android network-capture activator is registered per distribution, so stop it here in

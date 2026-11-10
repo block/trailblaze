@@ -665,6 +665,24 @@ class SessionCaptureCoordinator(
     return true
   }
 
+  /**
+   * A device the session records rebooted mid-session and the host is connected to it again. The
+   * recording of that device, the start device's or a companion's, resumes the streams the reboot
+   * ended. Returns false when the session records nothing for that device. Streams resume outside
+   * the lock: reopening one is device round trips.
+   */
+  fun onDeviceReconnected(sessionId: SessionId, deviceId: TrailblazeDeviceId): Boolean {
+    val session = synchronized(lock) {
+      val capture = active[sessionId]?.takeIf { it.started } ?: return false
+      when {
+        capture.deviceId == deviceId.instanceId -> capture.session
+        else -> capture.companions.values.firstOrNull { it.started && it.deviceId == deviceId }?.session
+      }
+    } ?: return false
+    session.onDeviceReconnected()
+    return true
+  }
+
   /** Writes the newest [ActiveCapture.publishedArtifacts]; writers queue on the session's own lock, so the last write is the fullest. */
   private fun writeCaptureMetadata(capture: ActiveCapture) {
     synchronized(capture.metadataWriteLock) {
