@@ -152,10 +152,10 @@ class WaypointMergeTest {
       idToFile = mapOf("local/only" to file),
       trailmapContents = TrailmapContents(ids = emptySet(), examples = emptyMap()),
       root = root,
-      loadFilesystemExample = { f, id ->
+      loadFilesystemExample = { f, def ->
         // Sanity-check: loader is invoked with the right pair, then returns our fixture.
         assertEquals(file, f)
-        assertEquals("local/only", id)
+        assertEquals("local/only", def.id)
         filesystemExample
       },
     )
@@ -181,8 +181,8 @@ class WaypointMergeTest {
       idToFile = mapOf("local/bare" to file),
       trailmapContents = TrailmapContents(ids = emptySet(), examples = emptyMap()),
       root = root,
-      loadFilesystemExample = { f, id ->
-        loaderCalls += f to id
+      loadFilesystemExample = { f, def ->
+        loaderCalls += f to def.id
         null
       },
     )
