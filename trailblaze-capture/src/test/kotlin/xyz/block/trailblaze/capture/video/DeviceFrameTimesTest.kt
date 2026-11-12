@@ -385,12 +385,12 @@ class DeviceFrameTimesTest {
   }
 
   @Test
-  fun `the server is started video-only, orientation-locked, with frame times on`() {
+  fun `the server is started video-only, orientation-locked, capped at 10 fps, with frame times on`() {
     val command = AdbScrcpyProducerFactory.serverCommand(scid = "0000abcd", videoSize = "720x1560", bitRate = "4000000")
     assertEquals(AdbScrcpyProducerFactory.VERSION, command[command.indexOf("com.genymobile.scrcpy.Server") + 1])
     listOf(
       "scid=0000abcd", "tunnel_forward=true", "audio=false", "control=false", "send_frame_meta=true",
-      "video_codec=h264", "video_bit_rate=4000000", "max_size=1560", "capture_orientation=@", "power_on=false",
+      "video_codec=h264", "video_bit_rate=4000000", "max_size=1560", "max_fps=10", "capture_orientation=@", "power_on=false",
     ).forEach { assertTrue(it in command, "missing $it: $command") }
     assertEquals(1280, AdbScrcpyProducerFactory.maxSide("720x1280"))
     assertEquals(0, AdbScrcpyProducerFactory.maxSide("unknown"), "0 asks scrcpy for the display's own size")

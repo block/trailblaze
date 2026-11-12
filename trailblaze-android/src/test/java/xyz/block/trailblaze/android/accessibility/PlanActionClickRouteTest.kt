@@ -451,6 +451,45 @@ class PlanActionClickRouteTest {
   }
 
   @Test
+  fun `a GESTURE pin sends a read-only field that shows its own value to gesture`() {
+    // Measured on an API-34 phone: a cart item's quantity field is a non-editable EditText that
+    // shows its value ("1"), advertises ACTION_CLICK and ACTION_SET_SELECTION, and has no
+    // ACTION_SET_TEXT. Its ACTION_CLICK only focuses it; only a touch opens the numpad that edits
+    // it. A price field on the same screen has the same gate-relevant fields and opens its numpad
+    // from ACTION_CLICK, as does every labelled button the first test in this class covers, so the
+    // gate cannot route this field by its fields. `android_gestureTap` pins the route instead.
+    val quantityField = node(
+      bounds = TrailblazeNode.Bounds(420, 1500, 660, 1620),
+      detail = androidA11y(
+        className = "android.widget.EditText",
+        resourceId = "com.example.app:id/quantity_field",
+        text = "1",
+        actions = listOf(
+          "ACTION_CLEAR_FOCUS",
+          ACTION_CLICK_NAME,
+          "ACTION_LONG_CLICK",
+          "ACTION_SET_SELECTION",
+        ),
+        isEditable = false,
+      ),
+    )
+    assertNull(
+      planActionClickRoute(node = quantityField, longPress = false, tapRoute = TapRouteOverride.GESTURE),
+      "A GESTURE pin must send the field to a touch.",
+    )
+    assertEquals(
+      ActionClickPlan(
+        bounds = TrailblazeNode.Bounds(420, 1500, 660, 1620),
+        className = "android.widget.EditText",
+        resourceId = "com.example.app:id/quantity_field",
+      ),
+      planActionClickRoute(node = quantityField, longPress = false, tapRoute = null),
+      "Negative control: unpinned, the field routes to ACTION_CLICK, as measured. Every unpinned " +
+        "tap on a field of this shape keeps the route it has today.",
+    )
+  }
+
+  @Test
   fun `an ACTION_CLICK pin cannot dispatch an action the node cannot answer`() {
     // The pin overrides one judgement — leaf-vs-container — not the conditions that make
     // ACTION_CLICK dispatchable at all. A recording that pins a route the node can't honor gets

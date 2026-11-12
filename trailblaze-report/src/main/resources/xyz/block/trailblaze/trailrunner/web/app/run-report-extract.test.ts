@@ -194,3 +194,37 @@ describe('a visibility assertion\'s mark', () => {
     expect(mark?.visible).toBe(false);
   });
 });
+
+describe('an action mark built from malformed geometry', () => {
+  const objective = { class: `${T}.ObjectiveStartLog`, promptStep: { step: 'Tap it' }, timestamp: at(0) };
+  const markOf = (driverLog: Record<string, unknown>) => {
+    const rows = extractTrace([objective, { ...tool('tapOn', 1, 200, { text: 'Go' }), traceId: 'geo' }, { ...driverLog, traceId: 'geo' }]);
+    return slimTraceForShare(rows).find((row) => row.mark)?.mark;
+  };
+  const tapAt = (x: unknown, y: unknown, extra: Record<string, unknown> = {}) => ({ ...tapLog(1, 0, 0, extra), action: { class: 'xyz.AgentDriverAction.TapPoint', x, y } });
+  const swipe = (fields: Record<string, unknown>) => ({ ...tapLog(1, 0, 0), action: { class: 'xyz.AgentDriverAction.Swipe', startX: 1, startY: 2, endX: 3, endY: 4, ...fields } });
+
+  test('finite numeric coordinates still draw their mark', () => {
+    expect(markOf(tapAt(10, 20))).toMatchObject({ kind: 'tap', x: 10, y: 20, dw: 1080, dh: 2400 });
+    expect(markOf(swipe({}))).toMatchObject({ kind: 'swipe', x1: 1, y1: 2, x2: 3, y2: 4 });
+  });
+
+  test('a tap whose coordinates are not finite numbers draws nothing', () => {
+    for (const bad of [NaN, Infinity, -Infinity, '10', '<b>', {}, true]) {
+      expect(markOf(tapAt(bad, 20))).toBeUndefined();
+      expect(markOf(tapAt(10, bad))).toBeUndefined();
+    }
+  });
+
+  test('a swipe with any non-finite endpoint draws nothing', () => {
+    for (const field of ['startX', 'startY', 'endX', 'endY']) {
+      expect(markOf(swipe({ [field]: NaN }))).toBeUndefined();
+      expect(markOf(swipe({ [field]: '7' }))).toBeUndefined();
+    }
+  });
+
+  test('a device size that is not a finite number draws nothing', () => {
+    expect(markOf(tapAt(10, 20, { deviceWidth: Infinity }))).toBeUndefined();
+    expect(markOf(tapAt(10, 20, { deviceHeight: '2400' }))).toBeUndefined();
+  });
+});

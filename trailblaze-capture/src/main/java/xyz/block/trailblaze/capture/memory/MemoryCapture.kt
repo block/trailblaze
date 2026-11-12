@@ -29,16 +29,20 @@ import xyz.block.trailblaze.util.Console
  *    [MemoryChangeDetector] says something moved — an allocation spike between tools, or the
  *    process dying. The first and last readings are always written so the report has both bookends.
  *
- * A reading costs real time (measured: ~50 ms over adb, ~116 ms through the on-device runner,
- * ~207 ms on the iOS Simulator, each about 65 ms more with a forced GC), and a
- * trail makes hundreds of tool calls, so by default NO reading runs on the tool's own thread:
+ * A reading costs real time (measured: ~50 ms over adb on a small Android app, 340–410 ms on a
+ * large production app over adb or the on-device runner alike, ~207 ms on the iOS Simulator, about
+ * 65 ms more with a forced GC), and a trail makes hundreds of tool calls, so by default NO reading
+ * runs on the tool's own thread. Off the thread is not free on every route, though: a runner outside
+ * the app's process holds the UiAutomation lock each step's screenshot needs for the whole read,
+ * which is why Android reads over adb unless the runner shares the app's process. By default
  * [onToolCall] hands the request to the one background worker that also runs the cron and returns
  * at once. The event keeps the boundary's timestamp and reason; the reading itself lands a
  * fraction of a second later, which is why a default-mode `before_tool` row is "around the start
  * of the tool", not strictly before it. Boundaries that arrive while a reading is in flight wait
- * their turn in a short queue, so a run of instant tools still gets both halves of each pair; only
- * once [MAX_PENDING_REQUESTS] have banked up — a device that has stopped answering — is the oldest
- * dropped, and the stop summary says how many.
+ * for the next one, and that ONE reading answers all of them: each still gets its own row, with
+ * its own reason, tool and timestamp, so a run of tools faster than a reading keeps both halves of
+ * every pair without queuing a backlog of late reads. Only a device that has stopped answering
+ * banks [MAX_PENDING_REQUESTS]; past that the oldest is dropped, and the stop summary says how many.
  *
  * With [synchronousToolSamples] on (the diagnostics mode) the tool thread takes the reading itself
  * and waits for it, so the pair is an exact before/after at the cost of two readings per tool
@@ -80,7 +84,8 @@ class MemoryCapture(
   override val type = CaptureType.MEMORY
 
   /** A reading somebody asked for: a tool boundary (with its time, reason and trace) or the cron. */
-  private class Request(val reason: String?, val tool: String?, val traceId: String?, val timeMs: Long)
+  /** A moment a row is owed for. [timeMs] null means "when the reading lands" (the cron, the bookends). */
+  private class Request(val reason: String?, val tool: String?, val traceId: String?, val timeMs: Long?)
 
   private val lock = ReentrantLock()
   private val wakeUp = lock.newCondition()
@@ -122,15 +127,23 @@ class MemoryCapture(
   private var ceilingLogged = false
 
   /**
-   * Boundary requests waiting for the reader, oldest first.
+   * Boundary requests waiting for the reader, oldest first. The next reading answers all of them.
    *
-   * A queue rather than a single slot because a tool that finishes faster than a reading takes is
+   * A list rather than a single slot because a tool that finishes faster than a reading takes is
    * ordinary, and with one slot its `before`, its `after` and the NEXT tool's `before` all collapse
-   * into whichever arrived last: that tool gets no rows at all, and the surviving `after_tool` row
-   * still carries a tool name and a delta measured against something much older. Bounded because a
-   * device that has stopped answering must not bank an unbounded backlog of reads.
+   * into whichever arrived last: that tool gets no rows at all. Served in one batch rather than one
+   * reading each because steps can outpace readings for a whole stretch of a run (a fast driver on
+   * a large app, ~400 ms a reading); one at a time, the backlog grows, every row lands later, and
+   * whatever is still waiting when the run ends is lost. Bounded because a device that has stopped
+   * answering must not bank an unbounded backlog.
    */
   private val pending = ArrayDeque<Request>()
+
+  /**
+   * The batch the worker is reading for. Kept until its rows are written so that a reading [stop]
+   * interrupts hands its boundaries to the closing reading instead of losing them.
+   */
+  private var inFlight: List<Request> = emptyList()
 
   /** How many boundary requests are waiting. Internal so a test can assert the queue's bound. */
   internal fun pendingRequestCount(): Int = lock.withLock { pending.size }
@@ -157,6 +170,7 @@ class MemoryCapture(
       failureCount = 0
       ceilingLogged = false
       pending.clear()
+      inFlight = emptyList()
       toolInFlight = false
       stopped = false
       this.sessionDir = sessionDir
@@ -184,14 +198,17 @@ class MemoryCapture(
     // The first pass is immediate so the session has its opening bookend.
     runCatching { sampleOnce() }.onFailure { noteSampleFailure("sample", it) }
     while (!stopped) {
-      val request = try {
+      val request: List<Request>? = try {
         lock.withLock {
           while (!stopped && pending.isEmpty()) {
             val wait = nextCronAt - clock()
             if (wait <= 0) break
             if (!wakeUp.await(wait, TimeUnit.MILLISECONDS)) break
           }
-          pending.removeFirstOrNull()
+          pending.toList().also {
+            pending.clear()
+            inFlight = it
+          }.ifEmpty { null }
         }
       } catch (_: InterruptedException) {
         return // stop() is taking the final bookend itself.
@@ -199,12 +216,11 @@ class MemoryCapture(
       if (stopped) return
       runCatching {
         if (request != null) {
-          sampleOnce(
-            forcedReason = request.reason,
-            tool = request.tool,
-            traceId = request.traceId,
-            atTimeMs = request.timeMs,
-          )
+          val written = runCatching { sampleFor(request) }
+          // Rows written, or the reading failed on its own: the batch is done. Cut short by stop()
+          // with nothing written, it stays for the closing reading to answer.
+          lock.withLock { if (!stopped || written.getOrNull() != null) inFlight = emptyList() }
+          written.getOrThrow()
         } else {
           // A diagnostics tool owns the readings until it finishes; this tick is dropped, not queued.
           if (!toolInFlight) sampleOnce()
@@ -239,7 +255,10 @@ class MemoryCapture(
    * yet. A RUN of them is the signal, and is what "my session has no memory data" looks like from
    * the inside, so it is said once and the recovery is said once too.
    */
-  private fun noteUnreadable() {
+  private fun noteUnreadable(closing: Boolean) {
+    // The worker's reading that stop() cut short is not a hole: its boundaries go to the closing
+    // reading. The closing reading itself has nobody to hand them to, so its miss always counts.
+    if (stopped && !closing) return
     val run = lock.withLock {
       unreadableCount++
       ++consecutiveUnreadable
@@ -323,14 +342,14 @@ class MemoryCapture(
       w.isAlive
     } ?: false
     worker = null
-    // Boundary readings still waiting are folded into the final bookend — it is the same moment.
-    // The newest one's tool and trace ride along, so the last tool of a run keeps the row that
-    // joins to its log instead of the session ending on an unattributed `final`.
-    val foldedIn = lock.withLock {
+    // Boundaries still waiting are answered by the closing reading, each with its own row, so the
+    // last tools of a run keep the rows that join to their logs. The bookend follows them.
+    val waiting = lock.withLock {
       if (sink == null) return null
-      val newest = pending.lastOrNull()
-      pending.clear()
-      newest
+      (inFlight + pending).also {
+        inFlight = emptyList()
+        pending.clear()
+      }
     }
     // Outside the lock: the final reading takes as long as any other, and holding the lock across
     // it would make a concurrent tool boundary wait for the device after all.
@@ -338,12 +357,11 @@ class MemoryCapture(
       Console.log("[memory-capture] a reading is still in flight against $deviceId; skipping the final sample")
     } else {
       runCatching {
-        sampleOnce(
-          forcedReason = MemoryChangeDetector.REASON_FINAL,
-          tool = foldedIn?.tool,
-          traceId = foldedIn?.traceId,
-        )
-      }.onFailure { Console.log("[memory-capture] final sample failed: ${it.message}") }
+        sampleFor(waiting + Request(MemoryChangeDetector.REASON_FINAL, tool = null, traceId = null, timeMs = null))
+      }.onFailure {
+        Console.log("[memory-capture] final sample failed: ${it.message}")
+        noteGap("the closing reading failed")
+      }
     }
     lock.withLock {
       sink?.close()
@@ -395,7 +413,15 @@ class MemoryCapture(
     tool: String? = null,
     traceId: String? = null,
     atTimeMs: Long? = null,
-  ): String? {
+  ): String? = sampleFor(listOf(Request(forcedReason, tool, traceId, atTimeMs)))
+
+  /**
+   * One reading, and a row for each of [asks] in order (a cron pass is one ask with no reason, which
+   * writes only when [MemoryChangeDetector] says something moved). Every row after the first in a
+   * batch carries the same figures with a zero delta: the reading was taken once. Returns the reason
+   * of the last row written, or null when none was.
+   */
+  private fun sampleFor(asks: List<Request>): String? {
     val device: String
     val app: String?
     lock.withLock {
@@ -408,7 +434,7 @@ class MemoryCapture(
     // the lock — it is reported as the cost of a reading.
     val (reading, readMs) = readLock.withLock {
       val readStartedNs = System.nanoTime()
-      val reading = if (forcedReason == MemoryChangeDetector.REASON_FINAL) {
+      val reading = if (asks.any { it.reason == MemoryChangeDetector.REASON_FINAL }) {
         probe.readFinal(device, app, forceGc)
       } else {
         probe.read(device, app, forceGc)
@@ -416,7 +442,7 @@ class MemoryCapture(
       reading to (System.nanoTime() - readStartedNs) / 1_000_000
     }
     if (reading == null) {
-      noteUnreadable()
+      noteUnreadable(closing = asks.any { it.reason == MemoryChangeDetector.REASON_FINAL })
       return null
     }
     lock.withLock {
@@ -428,44 +454,51 @@ class MemoryCapture(
     lock.withLock {
       val activeSink = sink ?: return null
       sampledCount++
-      // A boundary reading carries the moment it was ASKED about, which can predate a cron row that
-      // landed while the boundary waited its turn at the reader. The report sorts rows by
-      // timestamp, so an unclamped stamp would file this row BEFORE the very reading its `delta` is
-      // measured against and point the change backwards. Holding the stamp at or after the last
-      // emitted row keeps the file's order and the report's order the same one; the cost is that
-      // such a row reads as the instant the queue cleared rather than the instant it was asked for.
-      val askedAtMs = atTimeMs ?: clock()
-      val snapshot = reading.copy(timeMs = maxOf(askedAtMs, lastEmitted?.timeMs ?: askedAtMs))
-      // A boundary reading that discovers the process gone (or back, or replaced) reports THAT: it
-      // is the only reading that can, because the next one compares against this pid-less snapshot
-      // and finds nothing changed. The bookends keep their own names — `first` has nothing to
-      // compare against, and `final` is a contract the report reads as the session's last row.
-      val transition = MemoryChangeDetector.processTransition(lastEmitted, snapshot)
-        ?.takeIf { forcedReason == MemoryChangeDetector.REASON_BEFORE_TOOL || forcedReason == MemoryChangeDetector.REASON_AFTER_TOOL }
-      val reason = transition
-        ?: forcedReason
-        ?: MemoryChangeDetector.changeReason(lastEmitted, snapshot)
-        ?: return null
-      if (forcedReason != MemoryChangeDetector.REASON_FINAL && emittedCount >= maxEvents) {
-        // Announced once, and NOT by bumping the counter: that would make the stop summary claim
-        // one more event than the file holds.
-        if (!ceilingLogged) {
-          ceilingLogged = true
-          Console.log("[memory-capture] reached $maxEvents events; only the final sample will be written")
-          sessionDir?.let {
-            recordLoss(it, "reached the $maxEvents-event ceiling; later changes were not written")
+      var written: String? = null
+      for (ask in asks) {
+        val forcedReason = ask.reason
+        // A boundary reading carries the moment it was ASKED about, which can predate a cron row
+        // that landed while the boundary waited its turn at the reader. The report sorts rows by
+        // timestamp, so an unclamped stamp would file this row BEFORE the very reading its `delta`
+        // is measured against and point the change backwards. Holding the stamp at or after the
+        // last emitted row keeps the file's order and the report's order the same one; the cost is
+        // that such a row reads as the instant the queue cleared rather than the instant it was
+        // asked for.
+        val askedAtMs = ask.timeMs ?: clock()
+        val snapshot = reading.copy(timeMs = maxOf(askedAtMs, lastEmitted?.timeMs ?: askedAtMs))
+        // A boundary reading that discovers the process gone (or back, or replaced) reports THAT:
+        // it is the only reading that can, because the next one compares against this pid-less
+        // snapshot and finds nothing changed. The bookends keep their own names — `first` has
+        // nothing to compare against, and `final` is a contract the report reads as the session's
+        // last row.
+        val transition = MemoryChangeDetector.processTransition(lastEmitted, snapshot)
+          ?.takeIf { forcedReason == MemoryChangeDetector.REASON_BEFORE_TOOL || forcedReason == MemoryChangeDetector.REASON_AFTER_TOOL }
+        val reason = transition
+          ?: forcedReason
+          ?: MemoryChangeDetector.changeReason(lastEmitted, snapshot)
+          ?: continue
+        if (forcedReason != MemoryChangeDetector.REASON_FINAL && emittedCount >= maxEvents) {
+          // Announced once, and NOT by bumping the counter: that would make the stop summary claim
+          // one more event than the file holds.
+          if (!ceilingLogged) {
+            ceilingLogged = true
+            Console.log("[memory-capture] reached $maxEvents events; only the final sample will be written")
+            sessionDir?.let {
+              recordLoss(it, "reached the $maxEvents-event ceiling; later changes were not written")
+            }
           }
+          continue
         }
-        return null
+        activeSink.append(
+          STREAM_NAME,
+          snapshot.timeMs,
+          snapshot.toEventPayload(reason, lastEmitted, ask.tool, readMs, ask.traceId),
+        )
+        lastEmitted = snapshot
+        emittedCount++
+        written = reason
       }
-      activeSink.append(
-        STREAM_NAME,
-        snapshot.timeMs,
-        snapshot.toEventPayload(reason, lastEmitted, tool, readMs, traceId),
-      )
-      lastEmitted = snapshot
-      emittedCount++
-      return reason
+      return written
     }
   }
 
@@ -480,11 +513,11 @@ class MemoryCapture(
     const val MAX_EVENTS: Int = 5_000
 
     /**
-     * How many boundary requests may wait for the reader before the oldest is dropped. Sized for
-     * "a few instant tools while one reading is in flight", not for a device that has stopped
-     * answering — past this, banking more work would only make the backlog outlive the run.
+     * How many boundary requests may wait for the reader before the oldest is dropped. They all wait
+     * on ONE reading, so this many only bank up behind a device that has stopped answering; a
+     * healthy reading (well under a second) never comes close, however fast the steps run.
      */
-    const val MAX_PENDING_REQUESTS: Int = 8
+    const val MAX_PENDING_REQUESTS: Int = 256
 
     /** A run of empty readings this long is reported once, and its recovery reported once. */
     const val UNREADABLE_RUN_TO_REPORT: Int = 5

@@ -5,6 +5,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.events.SessionEvents
+import xyz.block.trailblaze.logs.client.SessionSecrets
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.network.NetworkEvent
@@ -25,6 +26,52 @@ import kotlin.test.assertTrue
 class WebNetworkCaptureIntegrationTest {
 
   @get:Rule val tmp: TemporaryFolder = TemporaryFolder()
+
+  @Test
+  fun `a sign-in's password, cookies and session token never reach the capture`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+    val sessionId = "signin-${System.nanoTime()}"
+    val password = "Staging-Pw-0451!"
+    // What dispatch registers when web_fillSecret types the password.
+    SessionSecrets.register(sessionId, listOf(password))
+
+    WebNetworkCapture.start(ctx.proxy, sessionId, dir)
+    // The sign-in form, as a browser encodes it: the password URL-encoded.
+    ctx.fireRequest(
+      PlaywrightTestProxies.fakeRequest(
+        method = "POST",
+        url = "https://app.example.com/login",
+        headers = mapOf("content-type" to "application/x-www-form-urlencoded"),
+        postBody = "email=owner%40example.com&password=Staging-Pw-0451%21".toByteArray(),
+      ),
+    )
+    // A JSON API call carrying the session it got back, with the cookie and CSRF headers.
+    ctx.fireRequest(
+      PlaywrightTestProxies.fakeRequest(
+        method = "POST",
+        url = "https://app.example.com/api/session?session_token=tok-abc-123&page=2",
+        headers = mapOf(
+          "content-type" to "application/json",
+          "cookie" to "_session=cookie-value-789",
+          "x-csrf-token" to "csrf-value-456",
+        ),
+        postBody = """{"user":{"email":"owner@example.com","password":"Staging-Pw-0451!"},"accessToken":"tok-abc-123"}"""
+          .toByteArray(),
+      ),
+    )
+    WebNetworkCapture.stop(ctx.proxy)
+
+    val written = File(dir, "network.ndjson").readText() +
+      (File(dir, "bodies").listFiles()?.joinToString("") { it.readText() } ?: "")
+    listOf(password, "Staging-Pw-0451%21", "cookie-value-789", "csrf-value-456", "tok-abc-123").forEach {
+      assertFalse(written.contains(it), "'$it' must not be persisted: $written")
+    }
+    // What was sent stays readable.
+    assertTrue(written.contains("owner%40example.com"), written)
+    assertTrue(written.contains("page=2"), written)
+    assertTrue(written.contains("\"cookie\""), "the header is listed, its value masked: $written")
+  }
 
   @Test
   fun `session reset detaches old listeners and routes events to the new session dir`() {

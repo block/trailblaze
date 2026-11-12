@@ -801,6 +801,35 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
+   * `android_gestureTap` is the only tool that carries a GESTURE pin to the device. Sent as
+   * `tapOnElementBySelector`, the pin would be dropped and the device's route gate would send a
+   * read-only field that carries its own text to ACTION_CLICK, which only focuses it.
+   */
+  @Test
+  fun `executeNodeSelectorTap forwards a GESTURE pin as android_gestureTap`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+
+    runBlocking {
+      createAgent().executeNodeSelectorTap(
+        nodeSelector = TrailblazeNodeSelector.withMatch(
+          DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "com.example.app:id/quantity_field"),
+        ),
+        longPress = false,
+        tapRoute = TapRouteOverride.GESTURE,
+        traceId = null,
+      )
+    }
+
+    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
+    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
+    assertThat(yaml).contains("android_gestureTap")
+    assertThat(yaml).doesNotContain("tapOnElementBySelector")
+    assertThat(yaml).contains("com.example.app:id/quantity_field")
+  }
+
+  /**
    * A host-run accessibility trail forwards its taps to the device as tool YAML. The device agent
    * does the waiting, so the tap's `timeoutMs` has to survive that trip or the device waits only
    * its default.

@@ -122,6 +122,20 @@ class SensitiveTrailYamlTest {
   }
 
   @Test
+  fun `a password a tool is handed is masked, though it declares nothing by value`() {
+    val copy = persistedCopy(
+      """
+      - fixture_signIn:
+          email: owner@example.com
+          password: Staging-Pw-0451!
+      """.trimIndent(),
+    )
+
+    assertFalse(copy.contains("Staging-Pw-0451!"), copy)
+    assertTrue(copy.contains("owner@example.com"), copy)
+  }
+
+  @Test
   fun `a trail with nothing secret is kept as written`() {
     val yaml = """
       - ios_openApp:

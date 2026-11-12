@@ -69,6 +69,21 @@ object TrailblazeClassifierLineage {
   const val UNIVERSAL_ROOT = "all"
 
   /**
+   * Platforms with exactly one form factor, mapped to it. A device that reports only the platform
+   * falls back to `<platform>-<form factor>` right after its own key.
+   *
+   * A local browser reports bare `web`, while CI names the same browser `web-browser`, and trails
+   * record under the name CI uses. Without this, every `web-browser:` recording is invisible to a
+   * local browser and the AI drives those steps instead. A browser is the only web device, so the
+   * two names are the same device. `web:` stays first because a local recording or self-heal is
+   * saved under `web`, and a fresh save must not lose to an older `web-browser:` entry.
+   *
+   * Only platforms whose single form factor is certain belong here. `android` and `ios` have two
+   * (phone/tablet, iphone/ipad), so a bare `android` from an incomplete probe stays ambiguous.
+   */
+  private val SOLE_FORM_FACTORS: Map<String, String> = mapOf("web" to "browser")
+
+  /**
    * Globally-registered explicit parent overrides (child classifier → parent classifier), held as
    * an immutable map reassigned wholesale on registration.
    *
@@ -142,6 +157,9 @@ object TrailblazeClassifierLineage {
    *    resolve. Step 2 appends `revyl-cloud` (and its parent) as a lower-priority fallback after
    *    the compound identity.
    *
+   * A device that reports only a platform with a single form factor (bare `web`) falls back to that
+   * form factor's key (`web-browser`) right after its own — see [SOLE_FORM_FACTORS].
+   *
    * Empty input → empty chain (no device identity to resolve).
    */
   fun resolutionChain(
@@ -157,6 +175,11 @@ object TrailblazeClassifierLineage {
     // 1. Compound device identity (most specific) → its lineage.
     val compound = segments.joinToString("-") { it.classifier }
     ordered.addAll(chainForString(compound, overrides))
+    // A device that reports only a platform with exactly one form factor IS that form factor, so
+    // its form-factor key comes next — after its own key, which is the one a local save writes.
+    segments.singleOrNull()?.classifier?.let { platform ->
+      SOLE_FORM_FACTORS[platform]?.let { ordered.add("$platform-$it") }
+    }
     // 2. Each original segment's lineage, most-specific segment first, so a
     //    non-suffix segment (e.g. `revyl-cloud`) remains probeable as a fallback.
     for (segment in segments.asReversed()) {

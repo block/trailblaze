@@ -170,8 +170,7 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
-    SessionStartRecords.observe(startLog)
-    logEmitter.emit(startLog)
+    emit(startLog)
   }
 
   /**
@@ -209,8 +208,7 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
-    SessionStartRecords.observe(endLog)
-    logEmitter.emit(endLog)
+    emit(endLog)
   }
 
   /**
@@ -240,8 +238,17 @@ class TrailblazeSessionManager(
       session = session.sessionId,
       timestamp = Clock.System.now(),
     )
-    SessionStartRecords.observe(endLog)
-    logEmitter.emit(endLog)
+    emit(endLog)
+  }
+
+  /**
+   * Writes a lifecycle log through the same scrub as [TrailblazeLogger.log], so a failure whose
+   * message or stack trace repeats a sign-in's password doesn't carry it into the session.
+   */
+  private fun emit(log: TrailblazeLog.TrailblazeSessionStatusChangeLog) {
+    val safe = SessionSecrets.scrub(log.session, log) as? TrailblazeLog.TrailblazeSessionStatusChangeLog ?: return
+    SessionStartRecords.observe(safe)
+    logEmitter.emit(safe)
   }
 
   /**

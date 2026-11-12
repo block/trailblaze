@@ -95,6 +95,8 @@ class LoopCommandTest {
         "loop can't check a snapshot baseline: it would compare only the first pass's snapshots",
       listOf(stepless.path, "-n", "2") to "loop repeats a trail's `trail:` steps, and c.trail.yaml has none",
       listOf(first.path, "-n", "0") to "--iterations must be a positive integer (got 0)",
+      listOf(first.path, "-n", "2", "--stop-after-failures", "-1") to
+        "--stop-after-failures must be 0 or a positive integer (got -1)",
       listOf(first.path, "-n", "2", "--reuse-trailhead", "--same-session") to
         "--reuse-trailhead hands a setup from one session to the next, so it can't run with --same-session",
     )
@@ -377,6 +379,8 @@ class LoopCommandTest {
       deadlinePollMillis = 10
       cancelPassInFlight = { cancelled.countDown(); true }
       envReader = { null }
+      abandonedSessionWaitMillis = 50
+      passPollMillis = 10
     }
     loop.runTrails = {
       loop.yamlToRun(trail)
@@ -709,8 +713,8 @@ class LoopCommandTest {
       loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = abandoned, abandoned = noProgress))
     }.takeWhile { it }.onEach { assertEquals(false, loop.trailheadReuse) }.count()
 
-    assertEquals(MAX_SESSIONS_WITHOUT_A_PASS - 1, reruns)
-    assertEquals(List(MAX_SESSIONS_WITHOUT_A_PASS) { abandoned.absolutePath }.joinToString(" ", postfix = " "), out.readText())
+    assertEquals(DEFAULT_STOP_AFTER_FAILURES - 1, reruns)
+    assertEquals(List(DEFAULT_STOP_AFTER_FAILURES) { abandoned.absolutePath }.joinToString(" ", postfix = " "), out.readText())
   }
 
   @Test
@@ -840,7 +844,7 @@ class LoopCommandTest {
       .takeWhile { it }
       .count()
 
-    assertEquals(MAX_SESSIONS_WITHOUT_A_PASS - 1, reruns)
+    assertEquals(DEFAULT_STOP_AFTER_FAILURES - 1, reruns)
   }
 
   @Test
@@ -1101,7 +1105,129 @@ class LoopCommandTest {
       .takeWhile { it }
       .count()
 
-    assertEquals(MAX_SESSIONS_WITHOUT_A_PASS - 1, reruns)
+    assertEquals(DEFAULT_STOP_AFTER_FAILURES - 1, reruns)
+  }
+
+  @Test
+  fun `--stop-after-failures sets how many failed passes in a row stop the loop, in either mode`() {
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+    for (sameSession in listOf(false, true)) {
+      val loop = LoopCommand().apply {
+        iterations = 100
+        stopAfterFailures = 5
+        this.sameSession = sameSession
+      }
+      loop.yamlToRun(trail)
+
+      val reruns = generateSequence { loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)) }
+        .takeWhile { it }
+        .count()
+
+      assertEquals(4, reruns, "sameSession=$sameSession")
+    }
+  }
+
+  @Test
+  fun `with --same-session a pass that fails after the session passed others counts as one failure in a row`() {
+    // Pass 1 finished both steps; pass 2 failed on its second step.
+    val passedThenFailed = {
+      sessionDir(
+        DirectionStep("Launch signed in", isTrailhead = true) to null,
+        DirectionStep("Open the menu") to null,
+        VerificationStep("The menu is open") to null,
+        DirectionStep("Open the menu") to null,
+        VerificationStep("The menu is open") to "The menu is closed",
+      )
+    }
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+
+    val once = LoopCommand().apply { iterations = 100; sameSession = true; stopAfterFailures = 1 }
+    once.yamlToRun(trail)
+    val output = captureConsoleInfo {
+      assertFalse(once.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = passedThenFailed())))
+    }
+    assertTrue("Stopping: 1 passes in a row failed." in output, output)
+
+    val twice = LoopCommand().apply { iterations = 100; sameSession = true; stopAfterFailures = 2 }
+    twice.yamlToRun(trail)
+    assertTrue(twice.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = passedThenFailed())))
+    twice.yamlToRun(trail)
+    assertFalse(twice.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)))
+  }
+
+  @Test
+  fun `with --stop-after-failures 0 failed passes in a row never stop the loop before its count`() {
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+    for (sameSession in listOf(false, true)) {
+      val loop = LoopCommand().apply {
+        iterations = 10
+        stopAfterFailures = 0
+        this.sameSession = sameSession
+      }
+      loop.yamlToRun(trail)
+
+      val tally = captureConsoleInfo {
+        val reruns = generateSequence { loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)) }
+          .takeWhile { it }
+          .count()
+        assertEquals(9, reruns, "sameSession=$sameSession")
+      }
+
+      assertFalse("Stopping:" in tally, "the count, not the failures, should end the loop, got: <<$tally>>")
+      assertTrue("Loop: 0 of 10 pass(es) passed, 10 failed." in tally, "expected the tally, got: <<$tally>>")
+    }
+  }
+
+  @Test
+  fun `with --stop-after-failures 0 the time limit still ends a loop of failing passes, in either mode`() {
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+    for (sameSession in listOf(false, true)) {
+      var now = 0L
+      val loop = LoopCommand().apply {
+        timeLimit = "1h"
+        stopAfterFailures = 0
+        this.sameSession = sameSession
+        nowMs = { now }
+        cancelPassInFlight = { false }
+        runsCancellable = { true }
+      }
+
+      repeat(20) {
+        loop.yamlToRun(trail)
+        loop.sessionStarting(sessionDir())
+        now += 1.minutes.inWholeMilliseconds
+        assertTrue(
+          loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)),
+          "sameSession=$sameSession, failure ${it + 1}",
+        )
+      }
+      loop.yamlToRun(trail)
+      loop.sessionStarting(sessionDir())
+      now = 1.hours.inWholeMilliseconds
+      val output = captureConsoleInfo {
+        assertFalse(loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)), "sameSession=$sameSession")
+      }
+      assertTrue("Stopping: the time limit is up." in output, "sameSession=$sameSession: $output")
+    }
+  }
+
+  @Test
+  fun `the end-of-loop tally lists only the latest failed passes`() {
+    val loop = LoopCommand().apply {
+      iterations = FAILURES_LISTED + 5
+      stopAfterFailures = 0
+    }
+    loop.yamlToRun(trail)
+    val stuck = sessionDir(DirectionStep("Launch signed in", isTrailhead = true) to "App did not launch")
+
+    val tally = captureConsoleInfo {
+      generateSequence { loop.runAgain(TrailCommand.FinishedRun(passed = false, sessionDir = stuck)) }.takeWhile { it }.count()
+    }.substringAfter("Loop: ")
+
+    assertTrue("...and 5 earlier failed pass(es)" in tally, "expected the elided count, got: <<$tally>>")
+    assertEquals(FAILURES_LISTED, tally.lines().count { it.startsWith("  ✗ ") }, tally)
+    assertTrue("  ✗ Pass ${FAILURES_LISTED + 5}/${FAILURES_LISTED + 5} failed" in tally, "expected the last pass listed, got: <<$tally>>")
+    assertFalse("  ✗ Pass 5/${FAILURES_LISTED + 5} failed" in tally, "expected the earliest passes elided, got: <<$tally>>")
   }
 
   @Test

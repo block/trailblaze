@@ -63,15 +63,31 @@ class SubprocessSensitiveArgsLogRedactionTest {
     assertThat(tool.rawToolArguments["password"]).isEqualTo(JsonPrimitive("s3cret-staging-pw"))
   }
 
-  @Test fun `a tool declaring nothing sensitive logs its args unchanged`() {
+  @Test fun `a tool declaring nothing sensitive logs its ordinary args unchanged`() {
     val tool = SubprocessTrailblazeTool(
       sessionProvider = fakeSessionProvider(),
       advertisedName = ToolName("myapp_tap"),
-      args = buildJsonObject { put("password", "not-declared-so-not-masked") },
+      args = buildJsonObject { put("label", "not-declared-so-not-masked") },
     )
 
-    assertThat(tool.toLogPayload().raw["password"])
+    assertThat(tool.toLogPayload().raw["label"])
       .isEqualTo(JsonPrimitive("not-declared-so-not-masked"))
+  }
+
+  @Test fun `an undeclared password arg is masked by its name`() {
+    val tool = SubprocessTrailblazeTool(
+      sessionProvider = fakeSessionProvider(),
+      advertisedName = ToolName("myapp_signIn"),
+      args = buildJsonObject {
+        put("email", "user@example.com")
+        put("password", "s3cret-staging-pw")
+      },
+    )
+
+    val payload = tool.toLogPayload()
+
+    assertThat(payload.raw["password"]).isEqualTo(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER))
+    assertThat(payload.raw["email"]).isEqualTo(JsonPrimitive("user@example.com"))
   }
 
   @Test fun `an unreadable declaration masks every arg in the log payload`() {

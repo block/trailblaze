@@ -9,6 +9,7 @@ import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.server.plugins.partialcontent.PartialContent
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
@@ -132,6 +133,10 @@ object ServerEndpoints {
       }
     }
     install(WebSockets) { pingPeriod = 15.seconds }
+    // Answer `Range` requests (206, `Accept-Ranges: bytes`) for everything served from `/static`.
+    // Without it a browser can't seek a session recording the report links by URL: the video
+    // sits on its first frame and never reaches the moment the viewer scrubbed to.
+    install(PartialContent)
     install(CORS) {
       anyHost()
       anyMethod()

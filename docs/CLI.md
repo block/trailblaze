@@ -350,7 +350,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 
 ### `trailblaze loop`
 
-Run a trail over and over.  Each pass runs the whole trail, `trailhead:` included, in a session of its own, so it sets up from scratch and inherits nothing from the pass before.  A failed pass is reported, handed to --on-failure, and counted toward --iterations, and the loop goes on with the next pass. It stops early after 3 passes in a row fail. Exits non-zero if any pass failed.  Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the time limit, a pass still running is cancelled and is not counted as a failure.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it.  With --same-session, one session runs the `trailhead:` once, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began. After a failed pass, the loop recovers in a new session that runs the trailhead again.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations and --time-limit each. Never saves a recording: it would record every pass into the trail.
+Run a trail over and over.  Each pass runs the whole trail, `trailhead:` included, in a session of its own, so it sets up from scratch and inherits nothing from the pass before.  A failed pass is reported, handed to --on-failure, and counted toward --iterations, and the loop goes on with the next pass. It stops early after 3 passes in a row fail, or as many as --stop-after-failures says. Exits non-zero if any pass failed.  Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the time limit, a pass still running is cancelled and is not counted as a failure.  With --reuse-trailhead, each pass's trailhead may reuse the setup the previous pass left instead of setting up again, when that trailhead supports it.  With --same-session, one session runs the `trailhead:` once, then the `trail:` steps --iterations times in a row, each pass starting where the previous one left the app. The steps should end where they began. After a failed pass, the loop recovers in a new session that runs the trailhead again.  Takes the `trailblaze run` options, for one trail file. Several devices each loop in turn, for --iterations and --time-limit each. Never saves a recording: it would record every pass into the trail.
 
 **Synopsis:**
 
@@ -407,6 +407,7 @@ trailblaze loop [OPTIONS] [<<trailFile>>]
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
 | `-n`, `--iterations` | How many passes to run, failed ones included. Optional with --time-limit. | - |
 | `--time-limit` | How long to loop, as hours, minutes and seconds: 8h, 90m, 1h30m, 45s. At the limit, a pass still running is cancelled and not counted as a failure. A run that is not delegated to a daemon (--no-daemon) can't be cancelled, so its pass finishes first. Optional with --iterations. | - |
+| `--stop-after-failures` | Stop the loop early once this many passes in a row fail (default: 3). 0 never stops early, so the loop runs on through a fault that outlasts a few passes, until --iterations or --time-limit ends it. | - |
 | `--on-failure` | Run this shell command for each failed pass, with the failed session's log directory appended as its last argument. It runs alongside the loop, one at a time: the loop waits for it before starting the next one, and before exiting. | - |
 | `--reuse-trailhead` | Let each pass's trailhead reuse the setup the previous pass handed on, instead of setting up again. A pass then inherits whatever the last one left in the app or on the account. Only a trailhead that defines `teardown` hands its setup on, and only after a pass that passed; otherwise the next pass sets up from scratch. | - |
 | `--same-session` | Run the trailhead once, then repeat the trail's steps in one session, each pass starting where the previous one left the app. Faster, for a trail whose steps end where they began. A failed pass ends the session, and a new one runs the trailhead again. | - |
@@ -1885,7 +1886,7 @@ trailblaze skill show [OPTIONS] [<<file>>]
 
 ### `trailblaze skill install`
 
-Write the bundled skill into an agent's skill directory (defaults to Claude Code's)
+Install the agent skill into an agent's skill directory (defaults to Claude Code's). A build that registers a skill manager installs through it, and writes the bundled copy only when the manager can't run; --dir always writes the bundled copy.
 
 **Synopsis:**
 
@@ -1900,7 +1901,7 @@ trailblaze skill install [OPTIONS]
 | `--agent` | Target agent: claude (.claude/skills) or agents (.agents/skills, shared by Codex, Cursor, Gemini CLI, Goose, ...). codex/cursor/gemini/goose are aliases for agents. Defaults to claude. | - |
 | `--all` | Install into both locations (.claude/skills and .agents/skills) in one go. | - |
 | `--global` | Install under your home directory instead of the current project. | - |
-| `--dir` | Explicit destination directory. Mutually exclusive with --agent/--all/--global. | - |
+| `--dir` | Write the bundled copy into this directory, which becomes the skill's own folder (SKILL.md lands directly in it). Mutually exclusive with --agent/--all/--global. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

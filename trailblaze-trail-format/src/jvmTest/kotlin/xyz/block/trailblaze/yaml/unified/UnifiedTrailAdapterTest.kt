@@ -133,6 +133,47 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
+  fun `a local browser reporting bare web replays web-browser recordings, its own web key first`() {
+    // CI names its browser lane `web-browser` and trails record under that key, but a local
+    // browser reports only `web`. A `web-browser:`-only step must replay locally rather than go to
+    // the AI; a step that also has `web:` (where a local save writes) keeps replaying that.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Open the dashboard",
+              recordings = mapOf("web-browser" to listOf(toolNamed("browser-recorded"))),
+            ),
+            UnifiedTrailStep(
+              step = "Open settings",
+              recordings =
+                linkedMapOf(
+                  "web-browser" to listOf(toolNamed("older-browser")),
+                  "web" to listOf(toolNamed("saved-locally")),
+                ),
+            ),
+            UnifiedTrailStep(
+              step = "Open reports",
+              recordings =
+                linkedMapOf(
+                  "all" to listOf(toolNamed("shared")),
+                  "web-browser" to listOf(toolNamed("browser-specific")),
+                ),
+            ),
+          ),
+      )
+    val tools =
+      UnifiedTrailAdapter.lowerToTrailItems(unified, listOf(classifier("web")))
+        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+        .single()
+        .promptSteps
+        .map { it.recording?.tools?.singleOrNull()?.name }
+    assertEquals(listOf("browser-recorded", "saved-locally", "browser-specific"), tools)
+  }
+
+  @Test
   fun `no classifier match leaves recording null — executor falls back to LLM mode`() {
     val unified =
       UnifiedTrail(

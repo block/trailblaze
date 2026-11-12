@@ -317,8 +317,17 @@ error TS2820: Type '"passwrod"' is not assignable to type 'keyof SignInInput'.
   Did you mean '"password"'?
 ```
 
-Four more things worth knowing:
+Six more things worth knowing:
 
+- **The value stays masked where you pass it on.** Typing the password with `inputText`,
+  sending it as a broadcast extra or filling it into a web form doesn't put it back in the
+  log: once a call declares a value secret, every log written for the session afterwards,
+  and the web network capture, masks it too. That reaches values of 8 characters or more;
+  a shorter one (a passcode) is masked only in the declaring call's own entry.
+- **An argument named like a credential is masked even undeclared.** `password` (and any
+  name ending in it), `secret`, `apiKey`, `accessToken`, `sessionToken`, `cookie(s)` and
+  similar are treated as declared. A `{{memory}}` token in one is kept, so recordings
+  replay. Declare anything else, including passcodes and PINs.
 - **Masking is log-only.** Your handler, and the wire encoding that reaches it, still get
   the real value. Only the persisted payload is masked.
 - **Names are top-level input keys.** A secret nested inside an object argument isn't

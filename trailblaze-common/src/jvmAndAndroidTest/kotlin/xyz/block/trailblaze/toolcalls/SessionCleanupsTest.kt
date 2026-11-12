@@ -352,4 +352,19 @@ class SessionCleanupsTest {
   fun `registration logs mask the undo's args`() {
     assertEquals(setOf("args", "calls"), RegisterCleanupTrailblazeTool("android_adbShell", args("secret")).sensitiveArgNames)
   }
+
+  @Test
+  fun `an undo's tool names never become session secrets, its credentials do`() {
+    val undo = RegisterCleanupTrailblazeTool(
+      calls = listOf(
+        RegisterCleanupTrailblazeTool.Call("android_adbShell", args("pm clear com.example.app")),
+        RegisterCleanupTrailblazeTool.Call(
+          "fixture_signOut",
+          JsonObject(mapOf("password" to JsonPrimitive("Staging-Pw-0451!"))),
+        ),
+      ),
+    )
+
+    assertEquals(listOf("Staging-Pw-0451!"), undo.credentialArgValues())
+  }
 }

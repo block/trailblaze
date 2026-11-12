@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.utils
 
+import kotlin.concurrent.thread
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -13,8 +14,24 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.isCommandAvailabl
 
 object JvmLLMProvidersUtil {
 
+  /**
+   * How long the Ollama PATH lookup may take. Short because the first MCP session asks while
+   * answering the client's `initialize`, which the CLI bounds at a few seconds. Ollama is an
+   * optional provider, so a lookup cut off here only hides it for this run.
+   */
+  private const val OLLAMA_LOOKUP_TIMEOUT_MS = 1_000L
+
   val isOllamaInstalled: Boolean by lazy {
-    isCommandAvailable("ollama")
+    isCommandAvailable("ollama", OLLAMA_LOOKUP_TIMEOUT_MS)
+  }
+
+  /**
+   * Starts the [isOllamaInstalled] lookup on a background thread and returns at once, so the first
+   * MCP session's `initialize` normally finds it done. A session that arrives before it finishes
+   * waits at most [OLLAMA_LOOKUP_TIMEOUT_MS].
+   */
+  fun warmUpInBackground() {
+    thread(isDaemon = true, name = "trailblaze-llm-provider-lookup") { isOllamaInstalled }
   }
 
   fun getEnvironmentVariableKeyForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {

@@ -652,6 +652,48 @@ describe("loadZipSessions end-to-end", () => {
     expect(await Zip.sessionImageDataUri(zip, session, remote, { inflateRaw })).toBe(remote);
   });
 
+  test("rejects a remote screenshot URL that could end the HTML attribute it is written into", async () => {
+    // The URL becomes an <img src="..."> in the report, so a quote, angle bracket, whitespace or
+    // backslash would let a hostile log inject markup. Such a URL is dropped, not escaped.
+    const zip = buildZip([{ name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) }]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    for (const hostile of [
+      'https://x.test/a.webp" onerror="alert(1)',
+      "https://x.test/a.webp' onerror='alert(1)",
+      "https://x.test/a.webp><script>alert(1)</script>",
+      "https://x.test/a b.webp",
+      "https://x.test/a\\b.webp",
+    ]) {
+      expect(await Zip.sessionImageDataUri(zip, session, hostile, { inflateRaw })).toBeNull();
+    }
+    const safe = "https://x.test/shots/a.webp?key=run%2F1&v=2";
+    expect(await Zip.sessionImageDataUri(zip, session, safe, { inflateRaw })).toBe(safe);
+  });
+
+  test("drops a log-named file that has no timestamp, so it cannot stretch the run to the epoch", async () => {
+    // A hex-prefixed .json sidecar (a self-heal's diff, say) passes the log-file name rule but is
+    // not a log; keeping it would sort it to 1970 and make the run look decades long.
+    const zip = buildZip([
+      { name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: SESSION_ID + "/002_Log.json", text: JSON.stringify(startedLog({ timestamp: "2026-06-30T20:05:00.000Z" })) },
+      { name: SESSION_ID + "/abc_category2_heal_diff.json", text: JSON.stringify({ before: "a", after: "b" }) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    expect(session.logs.length).toBe(2);
+    expect(session.logs.every((log: { timestamp?: string }) => typeof log.timestamp === "string")).toBe(true);
+  });
+
+  test("drops a log-named file whose timestamp is empty or not a date", async () => {
+    const zip = buildZip([
+      { name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: SESSION_ID + "/abc_empty.json", text: JSON.stringify({ timestamp: "" }) },
+      { name: SESSION_ID + "/abd_garbled.json", text: JSON.stringify({ timestamp: "not-a-date" }) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    expect(session.logs.length).toBe(1);
+    expect(Date.parse(session.logs[0].timestamp)).toBeGreaterThan(0);
+  });
+
   test("skips top-level groups that contain no session logs", async () => {
     const zip = buildZip([
       { name: "not-a-session/readme.txt", text: "hi" },

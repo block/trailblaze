@@ -627,6 +627,48 @@ val copyAgentSkillResources by tasks.registering(Sync::class) {
   }
 }
 
+// Record the commits that changed the bundled skill, newest first, so `skill status` can tell whether
+// a copy another tool installed is older than this build's: a copy that names one of these commits
+// as its source predates the bundled one. Symlinked skill files are followed to the directories they
+// live in, so a change made through a link still counts. `trailblaze.agentSkillHistoryPaths`
+// (comma-separated, relative to the root project) adds files whose changes also republish the skill,
+// so a copy stamped with such a commit is found too. A shallow clone or a source tree without git
+// writes fewer (or no) commits, which only means the CLI can't say a copy is older.
+val generateAgentSkillHistory by tasks.registering {
+  group = "trailblaze"
+  description = "Records the commits that changed the bundled agent skill."
+  val sourceDir = agentSkillSourceDir
+  val repoRoot = rootDir
+  val outputDir = layout.buildDirectory.dir("generated-resources/agent-skill-history")
+  val extraPaths = providers.gradleProperty("trailblaze.agentSkillHistoryPaths").orNull
+    ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+    ?: emptyList()
+  inputs.dir(sourceDir).withPropertyName("skillSource")
+  inputs.property("extraPaths", extraPaths)
+  inputs.property("gitHash", rootProject.extra["gitHash"] as String)
+  outputs.dir(outputDir)
+  doLast {
+    val canonicalSource = sourceDir.canonicalFile
+    val pathspecs = sourceDir.walkTopDown()
+      .filter { it.isFile }
+      .map { it.canonicalFile }
+      .map { if (it.startsWith(canonicalSource)) canonicalSource else it.parentFile }
+      .toSortedSet()
+      .map { it.path } + extraPaths
+    val commits = runCatching {
+      val process = ProcessBuilder(listOf("git", "log", "--format=%H", "-n", "500", "--") + pathspecs)
+        .directory(repoRoot)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+      val out = process.inputStream.bufferedReader().readText()
+      if (process.waitFor() == 0) out.lines().map { it.trim() }.filter { it.isNotEmpty() } else emptyList()
+    }.getOrDefault(emptyList())
+    val file = outputDir.get().asFile.resolve("xyz/block/trailblaze/skill-commits.txt")
+    file.parentFile.mkdirs()
+    file.writeText(commits.joinToString("\n", postfix = if (commits.isEmpty()) "" else "\n"))
+  }
+}
+
 // Package the bundled trailblaze authoring skill (skills/trailblaze) as a single zip JAR
 // resource so AgentSkillMaterializer can unpack it into a workspace's .claude/skills/ when
 // an external agent session starts and no trailblaze skill is otherwise discoverable there.
@@ -668,6 +710,9 @@ sourceSets {
     resources.srcDir(
       copyAgentSkillResources.map { layout.buildDirectory.dir("generated-resources/agent-skill").get() },
     )
+    resources.srcDir(
+      generateAgentSkillHistory.map { layout.buildDirectory.dir("generated-resources/agent-skill-history").get() },
+    )
     // Both skill zips write into this one dir; a single srcDir picks up both, so it must not be
     // registered twice or the entries collide. builtBy carries BOTH producers to every consumer
     // of the source set (processResources, sourcesJar, ...) - a provider mapped from just one
@@ -685,6 +730,7 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   dependsOn(verifyTypescriptCompilerPayload)
   dependsOn(copyScriptedToolWrapperTemplate)
   dependsOn(copyAgentSkillResources)
+  dependsOn(generateAgentSkillHistory)
   dependsOn(zipTrailblazeSkill)
   dependsOn(zipTrailblazeAuthorSkill)
 }

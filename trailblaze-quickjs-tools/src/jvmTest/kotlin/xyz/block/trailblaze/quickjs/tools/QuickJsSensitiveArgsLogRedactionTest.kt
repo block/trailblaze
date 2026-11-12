@@ -72,14 +72,33 @@ class QuickJsSensitiveArgsLogRedactionTest {
   }
 
   @Test
-  fun `a tool declaring nothing sensitive logs its args unchanged`() {
+  fun `a tool declaring nothing sensitive logs its ordinary args unchanged`() {
     val tool = QuickJsTrailblazeTool(
       host = noopHost(),
       advertisedName = ToolName("myapp_tap"),
-      args = buildJsonObject { put("password", "not-declared-so-not-masked") },
+      args = buildJsonObject { put("label", "not-declared-so-not-masked") },
     )
 
-    assertEquals(JsonPrimitive("not-declared-so-not-masked"), tool.toLogPayload().raw["password"])
+    assertEquals(JsonPrimitive("not-declared-so-not-masked"), tool.toLogPayload().raw["label"])
+  }
+
+  @Test
+  fun `an undeclared password arg is masked by its name`() {
+    // A sign-in step that forgets `sensitiveArgNames` must not log the password it was handed.
+    val tool = QuickJsTrailblazeTool(
+      host = noopHost(),
+      advertisedName = ToolName("myapp_clearLaunchAndSignIn"),
+      args = buildJsonObject {
+        put("email", "user@example.com")
+        put("password", "s3cret-staging-pw")
+      },
+    )
+
+    val payload = tool.toLogPayload()
+
+    assertEquals(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER), payload.raw["password"])
+    assertEquals(JsonPrimitive("user@example.com"), payload.raw["email"])
+    assertEquals(JsonPrimitive("s3cret-staging-pw"), tool.rawToolArguments["password"])
   }
 
   @Test

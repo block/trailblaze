@@ -300,7 +300,7 @@ class AgentMemory {
    * short sensitive value can over-match, but over-hiding a value from an LLM/log surface is the
    * safe failure direction.
    */
-  private fun containsSensitiveValue(text: String): Boolean = _sensitiveKeys.any { key ->
+  fun containsSensitiveValue(text: String): Boolean = _sensitiveKeys.any { key ->
     val value = variables[key]
     !value.isNullOrEmpty() && text.contains(value)
   }

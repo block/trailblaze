@@ -18,12 +18,14 @@ import xyz.block.trailblaze.maestro.withKnownMaestroLaunchValuesRedacted
 import xyz.block.trailblaze.maestro.withMaestroLaunchArgumentsRedacted
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.logs.client.SessionSecrets
 import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
 import xyz.block.trailblaze.toolcalls.scrubSensitivePayload
 import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
+import xyz.block.trailblaze.toolcalls.withCredentialArgsRedacted
 import xyz.block.trailblaze.toolcalls.withSensitiveArgsRedacted
 import xyz.block.trailblaze.toolcalls.withSensitiveValuesRedacted
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -133,7 +135,7 @@ fun TrailblazeAgentContext.logToolExecution(
         if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
           .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
         else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
-      }
+      }.withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
     } else {
       val payload = recordedTool.toLogPayload()
       // Nested arguments may already be resolved; use both snapshots in one scrub.
@@ -181,11 +183,11 @@ fun TrailblazeAgentContext.logToolExecution(
   context.recordedToolOverride = null
 
   ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_BUILT)
+  val session = sessionProvider.invoke()
   val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
-  Console.log("toolLogJson: $toolLogJson")
+  Console.log("toolLogJson: ${SessionSecrets.scrubText(session.sessionId, toolLogJson)}")
   ActionTrace.markWith(ActionTrace.Boundary.TOOL_LOG_PRINTED, toolLogJson.length.toLong())
 
-  val session = sessionProvider.invoke()
   trailblazeLogger.log(session, toolLog)
   ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_UPLOADED)
   // A call the agent's dispatch started is already in the history; this adds the ones logged
@@ -298,7 +300,7 @@ fun TrailblazeAgentContext.logToolExecution(
       if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
         .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
       else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
-    }
+    }.withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
   } else {
     tool.toLogPayload()
   }

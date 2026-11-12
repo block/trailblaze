@@ -120,8 +120,8 @@ class SessionCaptureCoordinator(
    * [IosBaguetteVideoGate] (`trailblaze config ios-baguette-video true` or
    * `TRAILBLAZE_IOS_BAGUETTE_VIDEO=1`) — wall-clock-accurate frame timing so the report can overlay
    * session-log events on the video, with simctl as its automatic fallback. Android memory is
-   * read through the on-device runner when one is installed ([OnDeviceRpcMemoryProbe]), over adb
-   * otherwise.
+   * read over adb, except through a runner that shares the app's process, which alone can report
+   * the app's own `Runtime` heap ([OnDeviceRpcMemoryProbe] says why the other runners are skipped).
    */
   private val captureSessionFactory: (CaptureOptions, TrailblazeDevicePlatform) -> CaptureSession? =
     { options, platform ->

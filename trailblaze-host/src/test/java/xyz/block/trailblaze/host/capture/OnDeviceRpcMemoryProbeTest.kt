@@ -118,6 +118,56 @@ class OnDeviceRpcMemoryProbeTest {
   }
 
   @Test
+  fun `a runner outside the app's process is asked once and then the device is read over adb`() {
+    // A runner in its own process reads the same dump adb does, but holds the UiAutomation lock
+    // each step's screenshot needs while it reads. Its first answer is kept; the rest go to adb.
+    var rpcCalls = 0
+    val fallback = FakeFallback()
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = fallback,
+      rpc = { _, _ -> rpcCalls++; RpcResult.Success(response(inProcess = false)) },
+    )
+    val device = "emulator-standalone-runner"
+    assertEquals(MemoryProbe.SOURCE_ONDEVICE, probe.read(device, "com.example.app", forceGc = false)?.source)
+    repeat(3) { assertEquals(MemoryProbe.SOURCE_ADB, probe.read(device, "com.example.app", forceGc = false)?.source) }
+    assertEquals(MemoryProbe.SOURCE_ADB, probe.readFinal(device, "com.example.app", forceGc = false)?.source)
+    assertEquals(1, rpcCalls, "the runner is not asked again once it says it is outside the app")
+    assertEquals(4, fallback.reads.size)
+  }
+
+  @Test
+  fun `an in-process runner keeps being read for its Runtime figures`() {
+    var rpcCalls = 0
+    val fallback = FakeFallback()
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = fallback,
+      rpc = { _, _ -> rpcCalls++; RpcResult.Success(response(inProcess = true)) },
+    )
+    repeat(4) { assertEquals(MemoryProbe.SOURCE_ONDEVICE, probe.read("emulator-in-process", "com.example.app", true)?.source) }
+    assertEquals(4, rpcCalls)
+    assertTrue(fallback.reads.isEmpty(), "adb is never used while the runner shares the app's process")
+  }
+
+  @Test
+  fun `a runner that reconnects in the app's process is read through again`() {
+    // The session's first reply can come from a standalone runner that a later connect replaces
+    // with an in-process one; that runner's Runtime figures must not be lost to the earlier answer.
+    val device = "emulator-reconnected-in-process"
+    var inProcess = false
+    val probe = OnDeviceRpcMemoryProbe(
+      fallback = FakeFallback(),
+      rpc = { _, _ -> RpcResult.Success(response(inProcess)) },
+    )
+    probe.read(device, "com.example.app", true)
+    inProcess = true
+    assertEquals(MemoryProbe.SOURCE_ADB, probe.read(device, "com.example.app", true)?.source)
+    OnDeviceRpcMemoryProbe.runnerReady(device)
+    val snapshot = probe.read(device, "com.example.app", true)
+    assertEquals(MemoryProbe.SOURCE_ONDEVICE, snapshot?.source)
+    assertEquals(65_536 - 20_480, snapshot?.app?.javaHeapUsedKb)
+  }
+
+  @Test
   fun `the request carries the app id and the GC choice`() {
     var seen: GetMemoryInfoRequest? = null
     val probe = OnDeviceRpcMemoryProbe(fallback = FakeFallback(), rpc = { _, request -> seen = request; RpcResult.Success(response(false)) })
@@ -197,7 +247,7 @@ class OnDeviceRpcMemoryProbeTest {
       fallback = FakeFallback(),
       rpc = { _, _ ->
         rpcCalls++
-        if (fail) RpcResult.Failure(RpcResult.ErrorType.NETWORK_ERROR, "starting") else RpcResult.Success(response(false))
+        if (fail) RpcResult.Failure(RpcResult.ErrorType.NETWORK_ERROR, "starting") else RpcResult.Success(response(true))
       },
       clock = { now },
       backoffMs = 15_000,

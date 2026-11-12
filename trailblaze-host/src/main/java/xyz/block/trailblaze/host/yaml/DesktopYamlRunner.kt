@@ -102,6 +102,8 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTo
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnknownDriverException
+import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -756,6 +758,47 @@ class DesktopYamlRunner(
     }
 
     /**
+     * One warning per step of [trailYaml] that has recordings, none of them for this device, so the
+     * AI drives it (or, with AI off, it fails). Names the step, the keys it has, and the keys this
+     * device looked for, so a mis-keyed recording reads as one rather than as a flaky AI step.
+     *
+     * Empty for a step with no recordings at all: a plain-language step is valid authoring, not a
+     * miss. Callers show these only where the runner replays with these same classifiers. Empty, too, for a document that does not decode as a unified trail here; the run's own
+     * decode reports that.
+     */
+    internal fun unmatchedRecordingWarnings(
+      trailYaml: String,
+      deviceClassifiers: List<TrailblazeDeviceClassifier>,
+      selectedDeviceConfiguration: String?,
+    ): List<String> {
+      if (deviceClassifiers.isEmpty()) return emptyList()
+      val unified =
+        (runCatching { createTrailblazeYaml().decodeTrailDocument(trailYaml) }.getOrNull()
+          as? TrailDocument.Unified)?.trail ?: return emptyList()
+      val resolution = runCatching {
+        UnifiedTrailAdapter.describeRecordingResolution(
+          unified,
+          deviceClassifiers,
+          selectedDeviceConfiguration,
+        )
+      }.getOrNull() ?: return emptyList()
+      // Only steps none of whose keys is on this device's chain. A step whose key matched but held
+      // nothing replayable is a re-record, not a mis-keyed recording, and the lowering logs it.
+      val misses = resolution.unresolvedDeclared.filter { step ->
+        step.declaredClassifiers.none { it in resolution.resolutionChain }
+      }
+      return misses.map { step ->
+        val label = step.stepIndex?.let { index ->
+          val text = unified.trail[index].step
+          "Step ${index + 1} \"${if (text.length > 60) text.take(57) + "..." else text}\""
+        } ?: "The trailhead"
+        val keys = step.declaredClassifiers.joinToString(", ")
+        "⚠️ $label has recordings for [$keys] but none for this device " +
+          "(looked for ${resolution.resolutionChain.joinToString(", ")}), so the AI will drive it."
+      }
+    }
+
+    /**
      * The driver [trailYaml] pins for the device described by [deviceClassifiers]. Covers both
      * formats: a v1 `driver:` scalar (classifier-independent) and a unified per-classifier
      * `devices:` map (closest-wins). Three outcomes:
@@ -1191,6 +1234,14 @@ class DesktopYamlRunner(
       // `runYamlRequest.copy(driverType = …)`. The swap is same-platform (resolution is
       // platform-scoped), so instanceId / platform / deviceId are unchanged.
       val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
+      // Visible on every run, unlike the lowering's own log line: a step whose recordings are keyed
+      // for other devices otherwise turns into an AI step with nothing saying why. Only where the
+      // runner picks recordings with these same classifiers, or the warning would name a miss the
+      // runner doesn't make (Compose replays as `desktop-compose`, not the host's `desktop`).
+      if (classificationDefinitive && trailblazeDriverType in driversReplayingHostClassification) {
+        unmatchedRecordingWarnings(runYamlRequest.yaml, deviceClassifiers, selectedConfigurationName)
+          .forEach(prefixedProgressMessage)
+      }
       val deviceLocale = systemLocaleToApply(driverType = trailblazeDriverType, locale = requestedLocale)
 
       // Which path this run takes. Resolved once here so the multi-device gate below and the
@@ -2108,6 +2159,13 @@ class DesktopYamlRunner(
           "this trail.",
       )
     }
+    // Every successful connect may have replaced the runner — a standalone one with an in-process
+    // one, or the reverse — so memory probes ask it again where it lives rather than keep a route
+    // chosen against the runner this connect replaced. Not only for a recording that started with
+    // this connect: one already running for the session reads this device too.
+    fun ready(connection: ReadyOnDeviceConnection): ReadyOnDeviceConnection =
+      connection.also { OnDeviceRpcMemoryProbe.runnerReady(trailblazeDeviceId.instanceId) }
+
     val initialStatus = doConnectAndEnable(forceRestart = recoverFromPriorWedge)
     initialStatus.failFastIfTerminal()
     if (recoverFromPriorWedge) {
@@ -2115,7 +2173,7 @@ class DesktopYamlRunner(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
       wedgedDeviceIds -= trailblazeDeviceId
-      return ReadyOnDeviceConnection(initialStatus, readiness)
+      return ready(ReadyOnDeviceConnection(initialStatus, readiness))
     }
 
     // Step 2: readiness probe. This is the specific failure mode we retry — the instrumentation
@@ -2123,7 +2181,7 @@ class DesktopYamlRunner(
     // the HTTP server inside it is stuck or dead. Force-restart reinstalls the APK and relaunches
     // instrumentation, which is the only thing that actually recovers a zombie. The common path
     // pays nothing for this fallback: the first `waitForReady` succeeds in ms on a warm device.
-    return try {
+    return ready(try {
       val readiness = onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
@@ -2138,7 +2196,7 @@ class DesktopYamlRunner(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
       ReadyOnDeviceConnection(restartedStatus, readiness)
-    }
+    })
   }
 
   /**
@@ -2322,8 +2380,6 @@ class DesktopYamlRunner(
             connectAndroid(launchDeviceId, launchDriver, instrumentationTarget, runTargetApp)
           }
           recordingStartedEarly = startedEarly
-          // Memory samples taken while the runner was still starting fell back to adb; it is up now.
-          if (startedEarly) OnDeviceRpcMemoryProbe.runnerReady(launchDeviceId.instanceId)
           connected
         }
 
@@ -2799,8 +2855,6 @@ class DesktopYamlRunner(
           )
         }
         recordingStartedEarly = startedEarly
-        // Memory samples taken while the runner was still starting fell back to adb; it is up now.
-        if (startedEarly) OnDeviceRpcMemoryProbe.runnerReady(trailblazeConnectedDevice.trailblazeDeviceId.instanceId)
         val (status, readiness) = connection
 
         withContext(Dispatchers.Default) {

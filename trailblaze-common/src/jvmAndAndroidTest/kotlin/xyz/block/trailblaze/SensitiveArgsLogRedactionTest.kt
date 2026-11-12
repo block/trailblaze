@@ -269,6 +269,34 @@ class SensitiveArgsLogRedactionTest {
     }
   }
 
+  @Test
+  fun aDeclaredArgAuthoredAsAMemoryReferenceKeepsTheReferenceForRecordings() {
+    val context = CapturingAgentContext()
+    val executed = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/local/tmp/seed.json",
+      base64Content = secretBase64,
+    )
+    val authored = AuthoredRawArgsTool(
+      instanceToolName = "android_writeBytesToFile",
+      rawToolArguments = buildJsonObject {
+        put("devicePath", "/data/local/tmp/seed.json")
+        put("base64Content", "{{seed}}")
+      },
+    )
+
+    context.logToolExecution(
+      tool = executed,
+      timeBeforeExecution = Clock.System.now(),
+      traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+      result = TrailblazeToolResult.Success(message = "Wrote 20 bytes."),
+      rawTool = authored,
+    )
+
+    val toolLog = context.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertEquals(JsonPrimitive("{{seed}}"), toolLog.rawTrailblazeTool!!.raw["base64Content"])
+    assertEquals(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER), toolLog.trailblazeTool.raw["base64Content"])
+  }
+
   /**
    * The authored form carries `{{token}}`, not the secret, so masking the raw payload finds
    * nothing. Resolution then writes the real value from ORDINARY (non-sensitive) memory into the

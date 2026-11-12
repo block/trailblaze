@@ -28,6 +28,8 @@ class MemoryCaptureTest {
     var throwing = false
     /** How long each read takes — the real thing costs a few hundred milliseconds. */
     var readDelayMs: Long = 0
+    /** Answer an interrupted read with null, the way the adb probe does when its shell is interrupted. */
+    var nullWhenInterrupted = false
     val gcRequests = mutableListOf<Boolean>()
     val readThreads = mutableListOf<String>()
     var closed = false
@@ -44,7 +46,14 @@ class MemoryCaptureTest {
         maxConcurrentReads = maxOf(maxConcurrentReads, readersNow)
       }
       try {
-        if (readDelayMs > 0) Thread.sleep(readDelayMs)
+        if (readDelayMs > 0) {
+          try {
+            Thread.sleep(readDelayMs)
+          } catch (e: InterruptedException) {
+            if (nullWhenInterrupted) return null
+            throw e
+          }
+        }
         if (throwing) error("the device went away")
         if (!answering) return null
         val app = if (pid != null && appId != null) DumpsysMeminfoParser.parseAppSample(MeminfoFixtures.dumpsysWith(36_940, heapSizeKb = heapSizeKb)) else null
@@ -222,24 +231,106 @@ class MemoryCaptureTest {
   }
 
   @Test
-  fun `a boundary still waiting when the session stops keeps its tool on the final row`() = withSession { sessionDir ->
+  fun `a boundary still waiting when the session stops keeps its own row before the final one`() = withSession { sessionDir ->
     val probe = FakeProbe().apply { pid = 17220; readDelayMs = 300 }
     val capture = MemoryCapture(probe = probe, sampleIntervalMs = 60_000)
     capture.start(sessionDir, "emulator-5554", "com.android.settings")
     waitForEvents(sessionDir, 1)
 
-    // The run ends while the last tool's `after` reading is still queued. Dropping it outright
-    // would end the session on a row joined to nothing, losing the last tool's memory entirely.
+    // The run ends while the last tool's `after` reading is still queued. It is answered by the
+    // closing reading rather than lost, so the last tool keeps the row that joins to its log.
     capture.onToolCall(ToolCallPhase.BEFORE, "assertVisible", traceId = "tool-91")
     waitUntil("the worker picked the first request up") { synchronized(probe) { probe.gcRequests.size } == 2 }
     capture.onToolCall(ToolCallPhase.AFTER, "assertVisible", traceId = "tool-91")
     capture.stop()
 
     val written = events(sessionDir)
-    val last = written.last()
-    assertEquals("final", last.reason())
-    assertEquals("assertVisible", last.tool(), "the folded-in boundary's tool")
-    assertEquals("tool-91", last.traceId())
+    assertEquals(listOf("first", "before_tool", "after_tool", "final"), written.map { it.reason() })
+    assertEquals("assertVisible", written[2].tool())
+    assertEquals("tool-91", written[2].traceId())
+    assertEquals(FakeProbe.FINAL_SOURCE, written[2].data.jsonObject["source"]?.jsonPrimitive?.content, "read by the closing reading")
+  }
+
+  @Test
+  fun `a reading the stop cuts short neither loses its boundary nor marks the stream incomplete`() = withSession { sessionDir ->
+    // The adb probe answers an interrupted shell with null. At stop that is not a hole in the
+    // stream: the boundary it was reading for goes to the closing reading.
+    val probe = FakeProbe().apply { pid = 17220; readDelayMs = 2_000; nullWhenInterrupted = true }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 60_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+
+    capture.onToolCall(ToolCallPhase.AFTER, "teardown", traceId = "tool-12")
+    waitUntil("the worker picked the request up") { synchronized(probe) { probe.gcRequests.size } == 2 }
+    capture.stop()
+
+    val written = events(sessionDir)
+    assertEquals(listOf("first", "after_tool", "final"), written.map { it.reason() })
+    assertEquals("teardown", written[1].tool())
+    assertNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME), "a complete stream")
+  }
+
+  @Test
+  fun `a closing reading that comes back with nothing marks the stream incomplete`() = withSession { sessionDir ->
+    // The device stops answering at session end: the boundaries handed to the closing reading have
+    // no rows, so a query must not call the stream complete.
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 60_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+
+    probe.answering = false
+    capture.stop()
+
+    assertEquals(listOf("first"), events(sessionDir).map { it.reason() })
+    assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+  }
+
+  @Test
+  fun `a closing reading that throws marks the stream incomplete`() = withSession { sessionDir ->
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = MemoryCapture(probe = probe, sampleIntervalMs = 60_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+
+    probe.throwing = true
+    capture.stop()
+
+    assertNotNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME))
+  }
+
+  @Test
+  fun `steps that outrun the reader keep every boundary row, all answered by the next reading`() = withSession { sessionDir ->
+    // A fast driver on a large app: a reading costs ~400 ms, and a stretch of quick taps reports
+    // more boundaries than that while one is in flight. Each must keep its row, and the reader must
+    // not fall behind by reading once per boundary.
+    val probe = FakeProbe().apply { pid = 17220; readDelayMs = 300 }
+    var now = 1_700_000_000_000L
+    val capture = MemoryCapture(probe = probe, clock = { now }, sampleIntervalMs = 60_000)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+
+    capture.onToolCall(ToolCallPhase.BEFORE, "tap0")
+    waitUntil("the worker picked the first request up") { synchronized(probe) { probe.gcRequests.size } == 2 }
+    val burst = 20 // well past the 8 an earlier queue held
+    for (i in 0 until burst) {
+      now += 10
+      capture.onToolCall(ToolCallPhase.AFTER, "tap$i")
+      capture.onToolCall(ToolCallPhase.BEFORE, "tap${i + 1}")
+    }
+    waitForEvents(sessionDir, 2 + 2 * burst)
+    val readsForTheBurst = synchronized(probe) { probe.gcRequests.size } - 2
+    capture.stop()
+
+    val boundaries = events(sessionDir).filter { it.reason() == "before_tool" || it.reason() == "after_tool" }
+    assertEquals(1 + 2 * burst, boundaries.size, "every boundary has its row")
+    assertEquals(1, readsForTheBurst, "one reading answered the whole burst")
+    assertEquals(
+      boundaries.map { it.timeMs }.sorted(),
+      boundaries.map { it.timeMs },
+      "each row keeps its own moment, in order",
+    )
+    assertNull(SessionCaptureHealth.failure(sessionDir, MemoryCapture.STREAM_NAME), "nothing was dropped")
   }
 
   @Test

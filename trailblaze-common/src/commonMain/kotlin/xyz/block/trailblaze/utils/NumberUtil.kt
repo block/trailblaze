@@ -2,8 +2,11 @@ package xyz.block.trailblaze.utils
 
 import xyz.block.trailblaze.util.Console
 
-// Regex to extract any positive or negative integer or float from a string
-private val numberRegex = """-?\d{1,3}(?:,\d{3})*(?:\.\d+)?${'$'}|^-?\d+(?:\.\d+)?""".toRegex()
+// Regex to extract any positive or negative integer or float from a string: one that starts the
+// string, else one that ends it. Either may carry comma thousands separators; before the second
+// alternative allowed them, "71,830 Points available" read as 71.
+private val numberRegex =
+  """-?\d{1,3}(?:,\d{3})*(?:\.\d+)?${'$'}|^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?""".toRegex()
 
 // This function will find the first instance of a number matching the above regex.
 // It matches positive and negative numbers

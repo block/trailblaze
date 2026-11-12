@@ -26,6 +26,10 @@ def test_redaction():
     _check("non-sensitive header preserved", out["Accept"] == "application/json")
     _check("case-insensitive key match", m.redact_headers({"authorization": "x"}, m.SENSITIVE_REQUEST_HEADERS)["authorization"] == m.REDACTED_VALUE)
     _check("set-cookie redacted on response set", m.redact_headers({"Set-Cookie": "a=b"}, m.SENSITIVE_RESPONSE_HEADERS)["Set-Cookie"] == m.REDACTED_VALUE)
+    cookies = m.redact_headers({"Cookie": "sid=abc", "X-CSRF-Token": "t", "Accept": "json"}, m.SENSITIVE_REQUEST_HEADERS)
+    _check("cookie redacted on request set", cookies["Cookie"] == m.REDACTED_VALUE)
+    _check("token-carrying header redacted", cookies["X-CSRF-Token"] == m.REDACTED_VALUE)
+    _check("ordinary header kept", cookies["Accept"] == "json")
     _check("none headers stay none", m.redact_headers(None, m.SENSITIVE_REQUEST_HEADERS) is None)
     _check("empty headers stay none", m.redact_headers({}, m.SENSITIVE_REQUEST_HEADERS) is None)
 

@@ -44,6 +44,14 @@ class NumberUtilTest {
       "1,234,567" to "1234567",
       "-1234567" to "-1234567",
       "-1,234,567" to "-1234567",
+      // A number that starts the text keeps its separators too.
+      "71,830 Points available" to "71830",
+      "-1,234 Points" to "-1234",
+      "1,234.50 due" to "1234.50",
+      "1234 Points" to "1234",
+      // One that starts the text still wins over one that ends it.
+      "10 Points for $2.00" to "10",
+      "Balance 71,830" to "71830",
     )
     for (test in comparisons) {
       assertThat(parseNumberString(test.key)).isEqualTo(test.value)

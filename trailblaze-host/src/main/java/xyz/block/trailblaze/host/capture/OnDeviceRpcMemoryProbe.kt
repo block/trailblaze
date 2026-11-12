@@ -19,9 +19,19 @@ import xyz.block.trailblaze.transport.AndroidWireTransportMode
 import xyz.block.trailblaze.util.Console
 
 /**
- * Reads an Android app's memory by asking the Trailblaze on-device runner ([GetMemoryInfoRequest])
- * — no adb round trips while a runner is installed — and falls back to [fallback] (adb) when it
- * is not.
+ * Reads an Android app's memory through the Trailblaze on-device runner ([GetMemoryInfoRequest])
+ * when the runner shares the app's process (the in-process driver), and over [fallback] (adb)
+ * otherwise.
+ *
+ * Only an in-process runner adds anything: the app's own `Runtime` heap and exact heap limit. A
+ * runner in its own process reads the same `dumpsys` adb does, and costs the
+ * trail time doing it: the runner's shell holds the process-wide UiAutomation lock for the whole
+ * read (~360 ms on a large app), and every step's screenshot waits on that lock. So the first
+ * reply that says the runner is outside the app's process ([GetMemoryInfoResponse.inProcess]
+ * false) sends the device to adb until a runner connects again ([runnerReady]), which may be an
+ * in-process one. Measured on a large production app with the accessibility driver: per-step
+ * screen capture took 529 ms with every reading through the runner, 158 ms over adb, and 139 ms
+ * with memory capture off.
  *
  * A device without a reachable runner is remembered for [backoffMs] so a session on a plain adb
  * device does not pay a failed connection before every sample. The backoff is short because the
@@ -48,6 +58,11 @@ class OnDeviceRpcMemoryProbe(
   private val unreachableCountByDevice = mutableMapOf<String, Int>()
   /** The [runnerReady] count each device's backoff was set under; a newer count ends it. */
   private val backoffReadinessByDevice = mutableMapOf<String, Long>()
+  /**
+   * Devices whose runner said it is outside the app's process, with the [runnerReady] count it said
+   * so under. Read over adb while the count is unchanged; a newer runner is asked again.
+   */
+  private val outOfProcessReadinessByDevice = mutableMapOf<String, Long>()
   private var announced = false
 
   override fun read(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
@@ -70,15 +85,27 @@ class OnDeviceRpcMemoryProbe(
       unreachableCountByDevice.remove(deviceId)
       backoffReadinessByDevice.remove(deviceId)
     }
+    if (outOfProcessReadinessByDevice[deviceId]?.let { it != readiness } == true) {
+      outOfProcessReadinessByDevice.remove(deviceId)
+    }
+    if (deviceId in outOfProcessReadinessByDevice) return fallback.read(deviceId, appId, forceGc)
     if ((backoffUntilByDevice[deviceId] ?: 0L) > now) return fallback.read(deviceId, appId, forceGc)
     val request = GetMemoryInfoRequest(appId = appId, forceGc = forceGc)
     val result = if (budgetMs == null) rpc(deviceId, request) else rpcWithin(budgetMs) { rpc(deviceId, request) }
     return when (result) {
       is RpcResult.Success -> {
         unreachableCountByDevice.remove(deviceId)
-        if (!announced) {
-          announced = true
-          Console.log("[memory-capture] reading memory through the on-device runner on $deviceId")
+        if (result.data.inProcess) {
+          if (!announced) {
+            announced = true
+            Console.log("[memory-capture] reading memory through the in-process runner on $deviceId")
+          }
+        } else {
+          outOfProcessReadinessByDevice[deviceId] = readiness
+          Console.log(
+            "[memory-capture] the on-device runner on $deviceId runs outside the app's process; " +
+              "reading memory over adb so readings never hold the runner's UiAutomation lock",
+          )
         }
         toSnapshot(result.data)
       }

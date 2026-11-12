@@ -125,6 +125,9 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
           }
         }
       }
+    }.apply {
+      // Incomplete replies must close promptly so dropped-connection tests do not wait 45 seconds.
+      engineConfig.connectionIdleTimeoutSeconds = 1
     }
 
   /**
