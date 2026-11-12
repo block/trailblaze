@@ -140,9 +140,8 @@ node with its class name and state description.
 
 ## On-device tests
 
-`src/androidTest` carries the driver's behavioral contract, run in CI by the
-`uitest-trailblaze-android-test-driver` step against a self-contained mixed View + Compose fixture
-Activity (`MixedUiFixtureActivity`):
+`src/androidTest` carries the driver's behavioral contract, run against a self-contained mixed
+View + Compose fixture Activity (`MixedUiFixtureActivity`):
 
 - `androidView` selectors drive classic Views, and `compose` selectors drive semantics nodes, both
   through the same three tools, each asserting the app's own state changed.

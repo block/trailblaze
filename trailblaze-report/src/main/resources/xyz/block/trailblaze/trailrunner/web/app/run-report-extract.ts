@@ -1111,22 +1111,28 @@ function boundsAt(tree: any, x: number, y: number): MarkBox | null {
 
 function actionMark(action: any, log: TrailblazeLogRecord): ActionMark | null {
   if (!action) return null;
-  const dw = log.deviceWidth || null;
-  const dh = log.deviceHeight || null;
+  // Geometry lands in SVG/HTML attributes and arithmetic; a NaN, Infinity or numeric string from a
+  // malformed log would corrupt both, so only finite numbers count as coordinates.
+  const num = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const dw = num(log.deviceWidth);
+  const dh = num(log.deviceHeight);
   if (!dw || !dh) return null;
   const kind = (action.class || '').split('.').pop() || '';
   if (kind === 'Swipe') {
-    if (action.startX == null || action.startY == null || action.endX == null || action.endY == null) return null;
-    return { kind: 'swipe', x1: action.startX, y1: action.startY, x2: action.endX, y2: action.endY, dw, dh };
+    const x1 = num(action.startX); const y1 = num(action.startY);
+    const x2 = num(action.endX); const y2 = num(action.endY);
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return null;
+    return { kind: 'swipe', x1, y1, x2, y2, dw, dh };
   }
-  if (action.x == null || action.y == null) return null;
+  const x = num(action.x); const y = num(action.y);
+  if (x == null || y == null) return null;
   if (kind === 'AssertCondition') {
     // A not-visible check's point is the screen's center, not something it found.
     const found = action.isVisible === true && action.succeeded !== false;
-    const box = found ? boundsAt((log as any).trailblazeNodeTree, action.x, action.y) : null;
-    return { kind: 'assert', x: action.x, y: action.y, dw, dh, ok: action.succeeded !== false, ...(action.isVisible === false ? { visible: false as const } : {}), ...(box ? { box } : {}) };
+    const box = found ? boundsAt((log as any).trailblazeNodeTree, x, y) : null;
+    return { kind: 'assert', x, y, dw, dh, ok: action.succeeded !== false, ...(action.isVisible === false ? { visible: false as const } : {}), ...(box ? { box } : {}) };
   }
-  return { kind: 'tap', x: action.x, y: action.y, dw, dh };
+  return { kind: 'tap', x, y, dw, dh };
 }
 
 function describeAction(action: any): string {

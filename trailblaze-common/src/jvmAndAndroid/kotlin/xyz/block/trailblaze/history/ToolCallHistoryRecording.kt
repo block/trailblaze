@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.withExecutedToolSecretsRedacted
+import xyz.block.trailblaze.logs.client.SessionSecrets
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
@@ -16,7 +17,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
+import xyz.block.trailblaze.toolcalls.credentialArgValues
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
+import xyz.block.trailblaze.toolcalls.isMemoryReference
 import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.scrubSensitivePayload
 import xyz.block.trailblaze.toolcalls.sensitiveArgValues
@@ -127,6 +130,16 @@ internal fun ToolCallHistory.beginDispatch(
   }
   val secretArgs = tool.sensitiveArgValues(resolve) + executed.sensitiveArgValues()
   val maskedSecrets = (declaredSecrets + secretArgs).distinct().withJsonEscapedForms()
+  // Before the tool runs, so the calls it makes with these values (typing a password, filling a
+  // form) are masked in their own log entries too. Only credentials: a declared container arg
+  // (an undo's `calls`) also holds tool names, which must stay legible in later logs. Sensitive
+  // memory goes in as well, for the logs that don't swap it back to its `{{key}}`.
+  SessionSecrets.register(
+    sessionId,
+    (declaredSecrets + tool.credentialArgValues(resolve) + executed.credentialArgValues())
+      .filterNot(::isMemoryReference) +
+      memoryAtStart.sensitiveKeys.mapNotNull { memoryAtStart.variables[it] },
+  )
   val raw = tool.toLogPayload().withExecutedToolSecretsRedacted(executed)
   val rendered = buildLogSafeResolvedPayload(raw, memory, deviceInfo)
   val scrubbing = listOf(memoryAtStart)

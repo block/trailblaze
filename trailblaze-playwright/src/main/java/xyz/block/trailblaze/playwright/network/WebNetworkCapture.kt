@@ -10,6 +10,8 @@ import xyz.block.trailblaze.network.BodyRef
 import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.network.NetworkEvent
 import xyz.block.trailblaze.network.Phase
+import xyz.block.trailblaze.logs.client.SessionSecrets
+import xyz.block.trailblaze.network.NetworkCaptureRedaction
 import xyz.block.trailblaze.network.REDACTED_VALUE
 import xyz.block.trailblaze.network.Source
 import xyz.block.trailblaze.trailhead.TrailheadRuns
@@ -49,9 +51,9 @@ import java.util.function.Consumer
  * referenced via [BodyRef.blobPath]; payloads beyond [MAX_BLOB_BYTES] are
  * truncated and flagged with [BodyRef.truncated].
  *
- * Redaction is intentionally minimal: `Authorization` request headers and
- * `Set-Cookie` response headers are scrubbed, with the field names listed in
- * [NetworkEvent.redactedFields] so the renderer can show what was removed.
+ * Every event goes through [NetworkCaptureRedaction] as it is written: credential headers,
+ * credential-named query and body fields, and every secret the session's tools have handled
+ * ([SessionSecrets]) are masked, so a run that signs in can be shared.
  *
  * Lookup is keyed by [BrowserContext] identity via a [WeakHashMap] so a closed
  * context's capture is eligible for GC. The [Companion] methods are the public
@@ -468,11 +470,19 @@ class WebNetworkCapture private constructor(
    * failure drops the body but keeps the event.
    */
   private fun toLine(pending: PendingWrite): String {
+    // Read at write time, not capture time: the drainer runs behind the page, so a password typed
+    // just before its sign-in request was sent is registered by the time that request is written.
+    val secrets = SessionSecrets.valuesFor(sessionId)
     val bodyRef = pending.requestBodyBytes?.let { bytes ->
       runCatching {
         persistBody(
           eventId = pending.event.id,
-          bytes = bytes,
+          bytes = NetworkCaptureRedaction.redactBody(
+            bytes,
+            pending.requestBodyContentType,
+            isText = isLikelyText(pending.requestBodyContentType),
+            secrets = secrets,
+          ),
           contentType = pending.requestBodyContentType,
           prefix = "req",
           originalSizeBytes = pending.requestBodyOriginalSize,
@@ -485,7 +495,7 @@ class WebNetworkCapture private constructor(
         }
         .getOrNull()
     }
-    val event = bodyRef?.let { pending.event.copy(requestBodyRef = it) } ?: pending.event
+    val event = redactEvent(bodyRef?.let { pending.event.copy(requestBodyRef = it) } ?: pending.event, secrets)
     return JSON.encodeToString(NetworkEvent.serializer(), event)
   }
 
@@ -604,15 +614,19 @@ class WebNetworkCapture private constructor(
    * [NetworkEvent.requestHeaders] for the full story.
    */
   internal fun redactRequestHeaders(headers: Map<String, String>): Map<String, String> =
-    headers.mapValues { (key, value) ->
-      if (key.lowercase() == "authorization") REDACTED_VALUE else value
-    }
+    NetworkCaptureRedaction.redactHeaders(headers)
 
   /** Same scrub-value pattern as [redactRequestHeaders], for response-side sensitive headers. */
   internal fun redactResponseHeaders(headers: Map<String, String>): Map<String, String> =
-    headers.mapValues { (key, value) ->
-      if (key.lowercase() == "set-cookie") REDACTED_VALUE else value
-    }
+    NetworkCaptureRedaction.redactHeaders(headers)
+
+  /** [event]'s URL and headers with [secrets] and credential fields masked; the body is done before. */
+  internal fun redactEvent(event: NetworkEvent, secrets: Collection<String>): NetworkEvent = event.copy(
+    url = NetworkCaptureRedaction.redactUrl(event.url, secrets),
+    urlPath = NetworkCaptureRedaction.redactUrl(event.urlPath, secrets),
+    requestHeaders = event.requestHeaders?.let { NetworkCaptureRedaction.redactHeaders(it, secrets) },
+    responseHeaders = event.responseHeaders?.let { NetworkCaptureRedaction.redactHeaders(it, secrets) },
+  )
 
   private fun safeHeaders(block: () -> Map<String, String>): Map<String, String> =
     runCatching(block).getOrDefault(emptyMap())

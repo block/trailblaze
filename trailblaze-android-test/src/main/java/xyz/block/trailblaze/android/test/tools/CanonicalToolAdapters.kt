@@ -59,6 +59,8 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool
 import xyz.block.trailblaze.android.test.hierarchy.InProcessAccessibilityTree
 import xyz.block.trailblaze.android.tools.AndroidAccessibilityClickTrailblazeTool
+import xyz.block.trailblaze.android.tools.AndroidGestureTapTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
 import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitUntilNotVisibleTrailblazeTool
@@ -282,6 +284,14 @@ internal object CanonicalToolAdapters {
       accessibilityClick(target, tool, context)
     }
 
+    // An element measured to ignore the accessibility click takes a touch at the centre of the node
+    // the step was recorded on, through the system's input pipeline. Not [AndroidTestTapTool]: its
+    // View path mirrors the accessibility driver's route gate and calls `performClick` on a node
+    // that carries its own label, which is the dispatch such an element ignores.
+    is AndroidGestureTapTrailblazeTool -> CanonicalDispatch { target, context ->
+      gestureTap(target, tool, context)
+    }
+
     // A recorded drag between two screen points, given as percentages of the display: a finger
     // on the glass, as Maestro's swipe is, so it goes through the system's input pipeline. No fling,
     // matching the accessibility driver's gesture strokes the recording was validated on.
@@ -455,6 +465,54 @@ internal object CanonicalToolAdapters {
         return TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = "android_accessibilityClick: ${tool.nodeSelector.description()} " +
             (if (info == null) "matched nothing" else "refused the click action") + "$where.",
+          command = tool,
+        )
+      }
+      SystemClock.sleep(ACCESSIBILITY_CLICK_POLL_MS)
+    }
+  }
+
+  /**
+   * Touches the centre of [tool]'s node, polling the accessibility tree until it matches or the
+   * timeout passes. The node is picked as [accessibilityClick] picks it: a placed match, visible
+   * ones first, never from a partial read. The touch is injected, so it reaches whatever window is
+   * on top there, as the accessibility driver's gesture does.
+   */
+  private fun gestureTap(
+    target: AndroidTestTarget,
+    tool: AndroidGestureTapTrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    // The same requirement the tool's own execute() enforces on the accessibility driver. This
+    // path bypasses it, and without a matcher an empty or index-only selector would resolve to
+    // some placed node and touch it.
+    if (tool.nodeSelector.allDriverMatches().none { it is DriverNodeMatch.AndroidAccessibility }) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "android_gestureTap needs a selector with an androidAccessibility match.",
+        command = tool,
+      )
+    }
+    val templateContext = context.resolvedTarget?.let { resolved ->
+      TargetTemplateContext(appId = context.appId, appIds = resolved.appIds)
+    }
+    val deadline = SystemClock.uptimeMillis() + (tool.timeoutMs ?: ACCESSIBILITY_CLICK_TIMEOUT_MS)
+    while (true) {
+      val inForeignWindow = ForeignWindow.frontPackage() != null
+      if (!inForeignWindow) target.waitForIdle()
+      val a11y = InProcessAccessibilityTree.capture(uncached = true)
+      val bounds = a11y?.let { placedA11yMatchesIn(it, tool.nodeSelector, templateContext) }
+        ?.firstOrNull()?.bounds
+      val where = if (inForeignWindow) " in another app's window" else ""
+      if (bounds != null) {
+        ForeignWindow.tap(bounds.centerX, bounds.centerY)
+        if (ForeignWindow.frontPackage() == null) target.waitForIdle()
+        return TrailblazeToolResult.Success(
+          message = "Touched ${tool.nodeSelector.description()} at its centre with a gesture$where.",
+        )
+      }
+      if (SystemClock.uptimeMillis() >= deadline) {
+        return TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "android_gestureTap: ${tool.nodeSelector.description()} matched nothing$where.",
           command = tool,
         )
       }

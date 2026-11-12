@@ -7,15 +7,20 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze skill install [-hV] [--all] [--global] [--agent=<agent>]
                                 [--dir=<dir>]
-Write the bundled skill into an agent's skill directory (defaults to Claude
-Code's)
+Install the agent skill into an agent's skill directory (defaults to Claude
+Code's).
+A build that registers a skill manager installs through it, and writes the
+bundled copy only when the manager can't run; --dir always writes the bundled
+copy.
       --agent=<agent>   Target agent: claude (.claude/skills) or agents (.
                           agents/skills, shared by Codex, Cursor, Gemini CLI,
                           Goose, ...). codex/cursor/gemini/goose are aliases
                           for agents. Defaults to claude.
       --all             Install into both locations (.claude/skills and .
                           agents/skills) in one go.
-      --dir=<dir>       Explicit destination directory. Mutually exclusive with
+      --dir=<dir>       Write the bundled copy into this directory, which
+                          becomes the skill's own folder (SKILL.md lands
+                          directly in it). Mutually exclusive with
                           --agent/--all/--global.
       --global          Install under your home directory instead of the
                           current project.

@@ -95,6 +95,30 @@ internal object BundledAgentSkill {
     dest.resolve(VERSION_STAMP_FILE).writeText(version + "\n")
   }
 
+  /**
+   * Commits that changed the bundled skill, newest first (staged by `generateAgentSkillHistory`).
+   * Empty for a build made without git history — then a managed copy can't be judged older.
+   */
+  val sourceCommits: List<String> by lazy {
+    BundledAgentSkill::class.java.getResourceAsStream("/xyz/block/trailblaze/skill-commits.txt")
+      ?.bufferedReader(Charsets.UTF_8)
+      ?.use { reader -> reader.readLines().map { it.trim() }.filter { it.isNotEmpty() } }
+      ?: emptyList()
+  }
+
+  /**
+   * True when every bundled file is present at [dir] with the same content. Files the bundle doesn't
+   * ship (another tool's metadata, user additions) are ignored.
+   */
+  fun matchesInstalledAt(dir: Path): Boolean {
+    val files = files()
+    if (files.isEmpty()) return false
+    return files.all { relativePath ->
+      val installed = dir.resolve(relativePath)
+      installed.exists() && runCatching { installed.readText() }.getOrNull() == readFile(relativePath)
+    }
+  }
+
   /** True if a skill copy exists at [dir] (its `SKILL.md` is present). */
   fun isInstalledAt(dir: Path): Boolean = dir.resolve("SKILL.md").exists()
 
@@ -195,8 +219,12 @@ internal object SkillInstallPlanner {
   }
 }
 
-/** State of an installed skill copy relative to the running CLI. */
-internal enum class SkillVersionState { NOT_INSTALLED, NOT_STAMPED, CURRENT, STALE }
+/**
+ * State of an installed skill copy relative to the running CLI. [DIFFERENT] is a copy a skill manager
+ * owns whose content differs from the bundled skill but can't be shown older — usually newer, since
+ * managers update ahead of CLI releases.
+ */
+internal enum class SkillVersionState { NOT_INSTALLED, NOT_STAMPED, CURRENT, STALE, DIFFERENT }
 
 /** Pure staleness classification — no filesystem access, so it unit-tests with plain strings. */
 internal object SkillVersionStatus {
@@ -215,6 +243,30 @@ internal object SkillVersionStatus {
   }
 }
 
+/**
+ * Classifies a copy a [SkillDistribution] owns. Same content as the bundled skill is CURRENT. Otherwise
+ * the copy is STALE when the commit it was published from is one of [bundledCommits] other than the
+ * newest — an earlier change to the skill than this build carries — and DIFFERENT when that can't be
+ * shown.
+ */
+internal object ManagedSkillStatus {
+  fun classify(
+    contentMatches: Boolean,
+    sourceCommit: String?,
+    bundledCommits: List<String>,
+  ): SkillVersionState = when {
+    contentMatches -> SkillVersionState.CURRENT
+    (changesBehind(sourceCommit, bundledCommits) ?: 0) > 0 -> SkillVersionState.STALE
+    else -> SkillVersionState.DIFFERENT
+  }
+
+  /** How many bundled skill changes are newer than [sourceCommit], or null if it isn't one of them. */
+  fun changesBehind(sourceCommit: String?, bundledCommits: List<String>): Int? {
+    val commit = sourceCommit?.trim()?.lowercase()?.takeIf { it.length >= 7 } ?: return null
+    return bundledCommits.indexOfFirst { it.lowercase().startsWith(commit) }.takeIf { it >= 0 }
+  }
+}
+
 /** An installed copy discovered by scanning the known skill directories. */
 internal data class DetectedInstall(
   val target: SkillTarget,
@@ -222,6 +274,10 @@ internal data class DetectedInstall(
   val global: Boolean,
   val installedVersion: String?,
   val state: SkillVersionState,
+  /** The manager that owns this copy, or null for a copy `skill install` wrote. */
+  val managedBy: SkillDistribution? = null,
+  /** For a managed copy, the commit it was published from. */
+  val sourceCommit: String? = null,
 )
 
 /**
@@ -238,11 +294,29 @@ internal fun detectSkillInstalls(
   homeDir: Path,
   currentVersion: String = BundledAgentSkill.version,
   currentIsVersioned: Boolean = BundledAgentSkill.isVersioned,
+  distribution: SkillDistribution? = SkillDistributions.current,
+  bundledCommits: List<String> = BundledAgentSkill.sourceCommits,
 ): List<DetectedInstall> =
   SkillTarget.entries.flatMap { target ->
     listOf(target.projectDir(baseDir) to false, target.globalDir(homeDir) to true).mapNotNull { (dir, global) ->
       if (!BundledAgentSkill.isInstalledAt(dir)) {
         null
+      } else if (distribution != null && distribution.owns(dir)) {
+        // A managed copy carries no version stamp; compare its content and source commit instead.
+        val sourceCommit = distribution.sourceCommitOf(dir)
+        DetectedInstall(
+          target = target,
+          dir = dir,
+          global = global,
+          installedVersion = null,
+          state = ManagedSkillStatus.classify(
+            contentMatches = BundledAgentSkill.matchesInstalledAt(dir),
+            sourceCommit = sourceCommit,
+            bundledCommits = bundledCommits,
+          ),
+          managedBy = distribution,
+          sourceCommit = sourceCommit,
+        )
       } else {
         val installed = BundledAgentSkill.installedVersionAt(dir)
         DetectedInstall(
@@ -288,6 +362,7 @@ class SkillCommand : Callable<Int> {
   internal var homeDir: Path = homeDir()
   internal var currentVersion: String = BundledAgentSkill.version
   internal var currentIsVersioned: Boolean = BundledAgentSkill.isVersioned
+  internal var distribution: SkillDistribution? = SkillDistributions.current
 
   override fun call(): Int {
     val files = BundledAgentSkill.files()
@@ -317,7 +392,7 @@ class SkillCommand : Callable<Int> {
       |  trailblaze skill install --all           (both of the above)
       |  trailblaze skill install --global        (under your home dir, not this project)
       |  trailblaze skill install --dir <path>    (any other layout)
-      |
+      |${distribution?.let { "\n|This build installs through ${it.managerName}: `skill install` hands off to it. --dir, or\n|${it.managerName} being unavailable, writes the bundled copy instead.\n|" } ?: ""}
       |(--agent also accepts codex/cursor/gemini/goose as aliases for the shared
       |.agents/skills location.)
       |
@@ -329,7 +404,7 @@ class SkillCommand : Callable<Int> {
     )
 
     val stale = runCatching {
-      detectSkillInstalls(baseDir, homeDir, currentVersion, currentIsVersioned)
+      detectSkillInstalls(baseDir, homeDir, currentVersion, currentIsVersioned, distribution)
         .filter { it.state == SkillVersionState.STALE || it.state == SkillVersionState.NOT_STAMPED }
     }.getOrDefault(emptyList())
     if (stale.isNotEmpty()) {
@@ -384,7 +459,11 @@ class SkillShowCommand : Callable<Int> {
 @Command(
   name = "install",
   mixinStandardHelpOptions = true,
-  description = ["Write the bundled skill into an agent's skill directory (defaults to Claude Code's)"],
+  description = [
+    "Install the agent skill into an agent's skill directory (defaults to Claude Code's).",
+    "A build that registers a skill manager installs through it, and writes the bundled copy only " +
+      "when the manager can't run; --dir always writes the bundled copy.",
+  ],
 )
 class SkillInstallCommand : Callable<Int> {
 
@@ -415,13 +494,17 @@ class SkillInstallCommand : Callable<Int> {
   @Option(
     names = ["--dir"],
     paramLabel = "<dir>",
-    description = ["Explicit destination directory. Mutually exclusive with --agent/--all/--global."],
+    description = [
+      "Write the bundled copy into this directory, which becomes the skill's own folder (SKILL.md " +
+        "lands directly in it). Mutually exclusive with --agent/--all/--global.",
+    ],
   )
   var dir: Path? = null
 
   /** Overridable in tests to keep filesystem writes out of the working tree. */
   internal var baseDir: Path = Path.of("").toAbsolutePath()
   internal var homeDir: Path = homeDir()
+  internal var distribution: SkillDistribution? = SkillDistributions.current
 
   override fun call(): Int {
     val files = BundledAgentSkill.files()
@@ -456,6 +539,14 @@ class SkillInstallCommand : Callable<Int> {
       }
     }
 
+    // A registered skill manager owns installs into the known layouts. It links every agent it
+    // supports, so --agent/--all need no mapping; only an explicit --dir writes the bundled copy.
+    val manager = distribution
+    if (manager != null && dir == null) {
+      manager.install(global = global, projectDir = baseDir, homeDir = homeDir)?.let { return it }
+      Console.info("Writing the skill bundled in this CLI instead.")
+    }
+
     val destinations = SkillInstallPlanner.resolve(
       target = target,
       all = all,
@@ -467,6 +558,15 @@ class SkillInstallCommand : Callable<Int> {
 
     val installed = mutableListOf<Path>()
     for (destination in destinations) {
+      if (manager != null && writesIntoManagedCopy(manager, destination.dir, files)) {
+        // Writing here would change the manager's copy under it — a symlinked agent directory, or a
+        // linked subdirectory or file, points into it — so leave it alone.
+        Console.info(
+          "Skipped ${destination.dir}: ${manager.managerName} manages this copy. " +
+            "Update it with `${manager.updateCommand}`.",
+        )
+        continue
+      }
       try {
         BundledAgentSkill.installTo(destination.dir)
       } catch (e: IllegalStateException) {
@@ -502,6 +602,15 @@ class SkillInstallCommand : Callable<Int> {
     return TrailblazeExitCode.SUCCESS.code
   }
 
+  /**
+   * True when any path [BundledAgentSkill.installTo] would write under [dest] — the directory, each
+   * bundled file, the version stamp — resolves into a copy [manager] owns. Checked per path, since a
+   * linked `references/` or a single linked file reaches the managed copy as surely as a linked root.
+   */
+  private fun writesIntoManagedCopy(manager: SkillDistribution, dest: Path, files: List<String>): Boolean =
+    (listOf(dest, dest.resolve(BundledAgentSkill.VERSION_STAMP_FILE)) + files.map { dest.resolve(it) })
+      .any { manager.owns(it) }
+
   /** On a multi-target (`--all`) failure, name what already landed so a half-done install isn't silent. */
   private fun reportPartialInstall(done: List<Path>) {
     if (done.isNotEmpty()) {
@@ -522,9 +631,11 @@ class SkillStatusCommand : Callable<Int> {
   internal var homeDir: Path = homeDir()
   internal var currentVersion: String = BundledAgentSkill.version
   internal var currentIsVersioned: Boolean = BundledAgentSkill.isVersioned
+  internal var distribution: SkillDistribution? = SkillDistributions.current
+  internal var bundledCommits: List<String> = BundledAgentSkill.sourceCommits
 
   override fun call(): Int {
-    val installs = detectSkillInstalls(baseDir, homeDir, currentVersion, currentIsVersioned)
+    val installs = detectSkillInstalls(baseDir, homeDir, currentVersion, currentIsVersioned, distribution, bundledCommits)
     println("Bundled skill version (this CLI): $currentVersion")
     if (installs.isEmpty()) {
       println("No installed copies found in the known skill directories.")
@@ -532,26 +643,70 @@ class SkillStatusCommand : Callable<Int> {
       return TrailblazeExitCode.SUCCESS.code
     }
     println()
-    var anyStale = false
+    val refreshes = linkedSetOf<String>()
+    var staleManager: SkillDistribution? = null
+    var staleProjectCopy = false
     for (install in installs) {
-      val marker = when (install.state) {
-        SkillVersionState.CURRENT -> "✓ up to date"
-        SkillVersionState.STALE -> "✗ stale (installed ${install.installedVersion})".also { anyStale = true }
-        SkillVersionState.NOT_STAMPED -> "? unstamped (pre-versioning install)".also { anyStale = true }
-        SkillVersionState.NOT_INSTALLED -> "not installed"
+      val manager = install.managedBy
+      val marker = if (manager != null) {
+        val from = install.sourceCommit?.let { " from ${it.take(SHORT_SHA)}" } ?: ""
+        when (install.state) {
+          SkillVersionState.STALE -> {
+            staleManager = manager
+            if (!install.global) staleProjectCopy = true
+            val behind = ManagedSkillStatus.changesBehind(install.sourceCommit, bundledCommits)
+            "✗ older than this CLI ($behind skill change(s) behind; published$from)"
+          }
+          SkillVersionState.DIFFERENT -> "✓ differs from this CLI's copy, likely newer (published$from)"
+          else -> "✓ matches this CLI"
+        } + " — managed by ${manager.managerName}"
+      } else {
+        when (install.state) {
+          SkillVersionState.CURRENT -> "✓ up to date"
+          SkillVersionState.STALE -> "✗ stale (installed ${install.installedVersion})".also { refreshes += refreshCommand(install) }
+          SkillVersionState.NOT_STAMPED -> "? unstamped (pre-versioning install)".also { refreshes += refreshCommand(install) }
+          SkillVersionState.NOT_INSTALLED -> "not installed"
+          SkillVersionState.DIFFERENT -> "✓ differs from this CLI's copy"
+        }
       }
       val scope = if (install.global) "global" else "project"
       println("  ${install.dir} ($scope — ${install.target.label})")
       println("      $marker")
     }
-    if (anyStale) {
+    staleManager?.let {
       println()
-      println("Refresh a stale copy by re-running its install, e.g. `trailblaze skill install` (doubles as upgrade).")
+      println("Update a managed copy with `${it.updateCommand}`.")
+      if (staleProjectCopy) println("Run it from this project's directory to update the project copy.")
+    }
+    if (refreshes.isNotEmpty()) {
+      println()
+      val replacedBy = distribution?.let { " (when ${it.managerName} can run, it replaces the copy with one it manages)" } ?: ""
+      println("Refresh a stale copy by re-running its install$replacedBy:")
+      refreshes.forEach { println("  $it") }
       println("Or skip the committed copy entirely: agents can `trailblaze skill show`, which always matches this CLI.")
     }
     return TrailblazeExitCode.SUCCESS.code
   }
+
+  /**
+   * The `skill install` that rewrites [install]'s directory. A registered skill manager links every
+   * agent's directory itself, so only the scope matters then.
+   */
+  private fun refreshCommand(install: DetectedInstall): String = buildString {
+    append("trailblaze skill install")
+    if (distribution == null && install.target != SkillTarget.CLAUDE) append(" --agent ${install.target.id}")
+    if (install.global) append(" --global")
+  }
 }
 
-/** The user's home directory, as a [Path]. Isolated so the version-status commands read it once. */
-private fun homeDir(): Path = Path.of(System.getProperty("user.home") ?: "")
+/** Characters of a commit SHA shown in status output. */
+private const val SHORT_SHA = 10
+
+/**
+ * The user's home directory, as a [Path]: `$HOME` when set, so a shell that points it elsewhere (a
+ * sandbox, a test) is honoured, else the JVM's `user.home`.
+ */
+internal fun homeDir(
+  env: (String) -> String? = System::getenv,
+  userHome: String? = System.getProperty("user.home"),
+): Path = Path.of(env("HOME")?.takeIf { it.isNotBlank() } ?: userHome ?: "")

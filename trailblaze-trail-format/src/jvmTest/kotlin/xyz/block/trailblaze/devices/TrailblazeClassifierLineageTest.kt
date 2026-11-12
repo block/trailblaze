@@ -208,6 +208,29 @@ class TrailblazeClassifierLineageTest {
   }
 
   @Test
+  fun `a bare web device falls back to web-browser, the only web form factor, after its own key`() {
+    // `web` first: a local save writes `web:`, so a fresh local recording must win over an older
+    // `web-browser:` one. `web-browser` before `all`, so CI's browser recordings replay locally.
+    assertEquals(
+      listOf("web", "web-browser", "all"),
+      TrailblazeClassifierLineage.resolutionChain(listOf(TrailblazeDeviceClassifier("web"))).map {
+        it.classifier
+      },
+    )
+  }
+
+  @Test
+  fun `a bare platform with two form factors stays ambiguous`() {
+    // An incomplete probe can leave a phone or a tablet reporting bare `android`; neither guess is
+    // safe, so it keeps its platform-only chain.
+    assertEquals(
+      listOf("android", "all"),
+      TrailblazeClassifierLineage.resolutionChain(listOf(TrailblazeDeviceClassifier("android")))
+        .map { it.classifier },
+    )
+  }
+
+  @Test
   fun `resolutionChain of an empty device-classifier list is empty`() {
     assertTrue(TrailblazeClassifierLineage.resolutionChain(emptyList()).isEmpty())
   }

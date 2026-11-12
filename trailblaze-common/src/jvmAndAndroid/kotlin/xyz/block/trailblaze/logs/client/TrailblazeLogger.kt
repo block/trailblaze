@@ -95,8 +95,11 @@ class TrailblazeLogger(
    * @param log The log event to emit
    */
   fun log(session: TrailblazeSession, log: TrailblazeLog) {
-    SessionStartRecords.observe(log)
-    logEmitter.emit(log)
+    // Every session log is written through here, so this is where a secret a tool handled is kept
+    // out of the session wherever it travelled — see [SessionSecrets].
+    val safe = SessionSecrets.scrub(session.sessionId, log) ?: return
+    SessionStartRecords.observe(safe)
+    logEmitter.emit(safe)
   }
 
   /**

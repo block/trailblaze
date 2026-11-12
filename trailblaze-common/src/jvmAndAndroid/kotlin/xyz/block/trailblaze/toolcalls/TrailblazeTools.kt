@@ -124,6 +124,7 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  * ways (`@Contextual TrailblazeTool` fields) the unredacted one gets reached.
  */
 fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted()
+  .withCredentialArgsRedacted()
   .let { if (this is SensitiveArgsTrailblazeTool) it.withSensitiveArgsRedacted(sensitiveArgNames) else it }
   .let {
     if (this is MaestroTrailblazeTool) it.copy(raw = it.raw.withMaestroLaunchArgumentsRedacted()
@@ -136,7 +137,11 @@ fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted(
 internal fun TrailblazeTool.toAuthoredLogPayload(executed: TrailblazeTool): OtherTrailblazeTool {
   val authored = toLogPayloadUnredacted()
   val resolved = executed.toLogPayloadUnredacted()
-  val maskedNames = (executed as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet()
+  // A declared arg authored as a `{{token}}` that resolution replaced names its secret rather than
+  // holding it, so it stays: a recording made from this payload replays the reference, not the mask.
+  val maskedNames = ((executed as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet())
+    .filterNot { name -> authored.raw.isProvenMemoryReference(name, resolved.raw) }
+    .toSet()
   val rawDeclaredValues = if (executed is SensitiveValuesTrailblazeTool) {
     (authored.raw["secrets"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }
       ?.filterNot(::isMemoryReference) ?: emptyList()
@@ -144,7 +149,30 @@ internal fun TrailblazeTool.toAuthoredLogPayload(executed: TrailblazeTool): Othe
   val maskedValues = rawDeclaredValues +
     ((this as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList()) +
     ((executed as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList())
-  return authored.withSensitiveArgsRedacted(maskedNames).withSensitiveValuesRedacted(maskedValues, resolved)
+  return authored.withCredentialArgsRedacted().withSensitiveArgsRedacted(maskedNames)
+    .withSensitiveValuesRedacted(maskedValues, resolved)
+}
+
+private fun JsonObject.isProvenMemoryReference(name: String, resolved: JsonObject): Boolean {
+  val authored = this[name] as? JsonPrimitive ?: return false
+  return authored.isString && isMemoryReference(authored.content) && resolved[name] != authored
+}
+
+/**
+ * This payload with each top-level arg whose name marks it a credential ([isCredentialFieldName])
+ * masked, whether or not the tool declared it. A `{{token}}` naming the value is kept, since it is
+ * the name of a secret rather than the secret, and a recording made from the log can replay it.
+ */
+fun OtherTrailblazeTool.withCredentialArgsRedacted(): OtherTrailblazeTool {
+  val masked = raw.filter { (key, value) -> isCredentialFieldName(key) && value.holdsCredential() }.keys
+  return withSensitiveArgsRedacted(masked)
+}
+
+private fun JsonElement.holdsCredential(): Boolean = when (this) {
+  JsonNull -> false
+  is JsonPrimitive -> content.isNotBlank() && !(isString && isMemoryReference(content))
+  is JsonArray -> isNotEmpty()
+  is JsonObject -> isNotEmpty()
 }
 
 /**
@@ -180,9 +208,12 @@ internal fun TrailblazeTool.toAuthoredMaestroLogPayload(executed: MaestroTrailbl
  * it (a token to what memory holds); the length rule applies to what it resolves to.
  */
 internal fun TrailblazeTool.sensitiveArgValues(resolve: (String) -> String? = { null }): List<String> {
-  val names = (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames.orEmpty()
-  if (names.isEmpty()) return emptyList()
   val args = toLogPayloadUnredacted().raw
+  val declared = (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames.orEmpty()
+  // A credential-named arg counts as declared, except that a `{{token}}` it holds is only a name.
+  val credentialNamed = args.keys.filter { it !in declared && isCredentialFieldName(it) }
+  val names = declared + credentialNamed
+  if (names.isEmpty()) return emptyList()
   return buildList {
     fun addTexts(value: JsonElement, nested: Boolean) {
       when (value) {
@@ -197,8 +228,64 @@ internal fun TrailblazeTool.sensitiveArgValues(resolve: (String) -> String? = { 
       }
     }
     names.forEach { name -> args[name]?.let { addTexts(it, nested = false) } }
+  }.let { values ->
+    if (credentialNamed.isEmpty()) values
+    else values.filterNot { value -> isMemoryReference(value) && credentialNamed.any { args[it] == JsonPrimitive(value) } }
   }
 }
+
+/**
+ * The credentials among this call's args, which stay masked in every log of the session written
+ * after it: a declared secret arg holding text, an arg named like a credential, and whatever sits
+ * under a credential-named key inside any object or list arg. Pure `{{memory}}` references are
+ * names, not values, and are left out; their [resolve]d values are kept.
+ *
+ * Narrower than [sensitiveArgValues]. A declared object or list arg (an undo's `args` and `calls`)
+ * is masked whole in this call's own entry, but its other contents (a tool name, an app id) are not
+ * credentials, and masking them session-wide would hide them from every later log.
+ */
+internal fun TrailblazeTool.credentialArgValues(resolve: (String) -> String? = { null }): List<String> {
+  val args = toLogPayloadUnredacted().raw
+  val declared = (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames.orEmpty()
+  return buildList {
+    fun addText(value: JsonPrimitive) {
+      if (value == JsonNull || !(value.isString || value.booleanOrNull == null)) return
+      listOfNotNull(value.content, resolve(value.content)).filter { it.isNotBlank() }.forEach(::add)
+    }
+    fun addEvery(value: JsonElement) {
+      when (value) {
+        is JsonObject -> value.values.forEach(::addEvery)
+        is JsonArray -> value.forEach(::addEvery)
+        is JsonPrimitive -> addText(value)
+      }
+    }
+    fun addCredentialFields(value: JsonElement) {
+      when (value) {
+        is JsonObject -> value.forEach { (key, nested) ->
+          if (isCredentialFieldName(key)) addEvery(nested) else addCredentialFields(nested)
+        }
+        is JsonArray -> value.forEach(::addCredentialFields)
+        is JsonPrimitive -> Unit
+      }
+    }
+    args.forEach { (name, value) ->
+      when {
+        isCredentialFieldName(name) -> addEvery(value)
+        name in declared && value is JsonPrimitive -> addText(value)
+        else -> addCredentialFields(value)
+      }
+    }
+  }.filterNot(::isMemoryReference).distinct()
+}
+
+/**
+ * The values this call declares secret, by value or by naming the args that hold them, for a copy
+ * of it that is persisted before it runs (a session-start trail). See [credentialArgValues].
+ */
+fun TrailblazeTool.declaredSecretValues(): List<String> =
+  ((this as? SensitiveValuesTrailblazeTool)?.sensitiveValues.orEmpty() + credentialArgValues())
+    .filterNot(::isMemoryReference)
+    .distinct()
 
 /** Shortest value inside an object or list secret arg that [sensitiveArgValues] masks elsewhere. */
 private const val MIN_NESTED_SECRET_CHARS = 3

@@ -21,6 +21,7 @@ Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
                        [--max-llm-calls=<maxLlmCalls>] [-n=<count>]
                        [--on-failure=<command>] [--snapshot-baseline=<ref>]
                        [--snapshot-baseline-threshold=<percent>]
+                       [--stop-after-failures=<count>]
                        [--test-name=<testNameOverride>]
                        [--time-limit=<duration>] [--arg=KEY=VAL]...
                        [--bind=<name=deviceId>[,<name=deviceId>...]]...
@@ -34,7 +35,8 @@ so it sets up from scratch and inherits nothing from the pass before.
 
 A failed pass is reported, handed to --on-failure, and counted toward
 --iterations, and the loop goes on with the next pass. It stops early after 3
-passes in a row fail. Exits non-zero if any pass failed.
+passes in a row fail, or as many as --stop-after-failures says. Exits non-zero
+if any pass failed.
 
 Give --iterations, --time-limit, or both: the loop ends at whichever comes
 first. At the time limit, a pass still running is cancelled and is not counted
@@ -308,6 +310,12 @@ it would record every pass into the trail.
                                passes when its pixel diff percentage is <= this
                                value. Default: 2.0 (or
                                TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set).
+      --stop-after-failures=<count>
+                             Stop the loop early once this many passes in a row
+                               fail (default: 3). 0 never stops early, so the
+                               loop runs on through a fault that outlasts a few
+                               passes, until --iterations or --time-limit ends
+                               it.
       --tags=<name>[,<name>...]
                              Only run trails whose `config.tags:` list contains
                                at least one of the given names. Repeatable

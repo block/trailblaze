@@ -932,6 +932,7 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .scrubtooltip { position: absolute; z-index: 4; left: 50%; bottom: calc(100% + 8px); display: flex; width: max-content; max-width: calc(100vw - 32px); padding: var(--space-3); border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--raised); color: var(--txt); box-shadow: var(--shadow-raised); opacity: 0; pointer-events: none; transform: translate(-50%,4px); transition: opacity 100ms ease-out,transform 100ms ease-out; }
 .scrubtooltipmeta { display: flex; align-items: center; gap: 6px; }
 .scrubtooltiptag { display: inline-flex; align-items: center; min-height: 21px; padding: 3px 11px; font-size: calc(var(--type-micro) * 1.5); line-height: 1; text-transform: uppercase; }
+.scrubtooltiptime { margin-right: 2px; font-size: calc(var(--type-micro) * 1.5); font-weight: var(--font-weight-emphasis); font-variant-numeric: tabular-nums; }
 .scrubtooltipstep { color: var(--step-token-text); background: var(--step-token-surface); }
 .scrubtooltipstep.scrubtooltiptrailhead { color: var(--trail-text); background: var(--trail-surface); }
 .scrubtooltipkind { display: none; color: var(--tick-color); background: color-mix(in srgb,var(--tick-color) 14%,var(--raised)); }

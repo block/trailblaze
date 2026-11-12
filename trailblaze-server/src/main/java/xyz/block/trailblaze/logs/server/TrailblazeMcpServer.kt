@@ -99,6 +99,7 @@ import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.MultiDeviceToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailMcpTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor
+import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
@@ -162,6 +163,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.client.SessionSecrets
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
+import xyz.block.trailblaze.toolcalls.withCredentialFieldsMasked
 import xyz.block.trailblaze.logs.model.TraceId
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -1911,15 +1915,18 @@ class TrailblazeMcpServer(
         }
         activeMcpSessionContext?.noteRecordingsAfterOwnToolCall()
 
-        // Log REQUEST immediately (before any processing)
-        val argsPreview = argumentsJsonObject.toString().take(500)
-        Console.log("[MCP] -> $toolName (trace=${traceId.traceId}, session=$mcpSessionIdForLog) args=$argsPreview${if (argumentsJsonObject.toString().length > 500) "..." else ""}")
+        // Log REQUEST immediately (before any processing). The request is written before its tool
+        // runs, so before the tool can register what it declares secret: credential-named fields
+        // and the session's known secrets are masked here.
+        val loggableArgs = argumentsJsonObject.forLog(sessionIdForLog)
+        val argsPreview = loggableArgs.toString().take(500)
+        Console.log("[MCP] -> $toolName (trace=${traceId.traceId}, session=$mcpSessionIdForLog) args=$argsPreview${if (loggableArgs.toString().length > 500) "..." else ""}")
 
 
         // Save REQUEST log to disk (before processing starts)
         saveToolCallRequestLog(
           toolName = toolName,
-          toolArgs = argumentsJsonObject,
+          toolArgs = loggableArgs,
           mcpSessionId = mcpSessionIdForLog,
           sessionIdForLog = sessionIdForLog,
           traceId = traceId,
@@ -2100,6 +2107,9 @@ class TrailblazeMcpServer(
     // Refuse a port a device could be allocated. `adb forward` would take it from us silently,
     // and the daemon would go unreachable rather than fail loudly here.
     TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(port, httpsPort)
+    // Before the first client connects: its `initialize` lists LLM providers, and the Ollama one
+    // is a PATH search the CLI's handshake bound should not wait on.
+    JvmLLMProvidersUtil.warmUpInBackground()
 
     serverStartTimeMillis = System.currentTimeMillis()
     emitDebugState()
@@ -3136,7 +3146,7 @@ class TrailblazeMcpServer(
     )
 
     try {
-      logsRepo.saveLogToDisk(log)
+      logsRepo.saveLogToDisk(SessionSecrets.scrub(sessionIdForLog, log) ?: return)
     } catch (e: Exception) {
       Console.log("[MCP] Warning: Failed to save request log: ${e.message}")
     }
@@ -3172,10 +3182,20 @@ class TrailblazeMcpServer(
     )
 
     try {
-      logsRepo.saveLogToDisk(log)
+      logsRepo.saveLogToDisk(SessionSecrets.scrub(sessionIdForLog, log) ?: return)
     } catch (e: Exception) {
       Console.log("[MCP] Warning: Failed to save response log: ${e.message}")
     }
+  }
+
+  /** These MCP arguments as the session's request log keeps them: credentials masked. */
+  private fun JsonObject.forLog(sessionId: SessionId): JsonObject {
+    val named = withCredentialFieldsMasked(REDACTED_TOOL_ARG_PLACEHOLDER) as JsonObject
+    val secrets = SessionSecrets.valuesFor(sessionId)
+    if (secrets.isEmpty()) return named
+    return runCatching {
+      Json.parseToJsonElement(SessionSecrets.scrubText(sessionId, named.toString())) as JsonObject
+    }.getOrElse { JsonObject(mapOf("redacted" to JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER))) }
   }
 
   /**

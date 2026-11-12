@@ -305,6 +305,7 @@ type PlaybackDriveContext = {
   keyShot: (key: string) => { defaultPrevented: boolean; stopped: boolean };
   hoverScrub: (fraction: number, marker?: { step: string; kind: string; color?: string }) => void;
   leaveScrub: () => void;
+  scrubHoverTime: () => string;
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
@@ -485,8 +486,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   };
   const scrubHoverStep = scrubNode();
   const scrubHoverKind = scrubNode();
+  const scrubHoverTime = scrubNode();
   const scrubHover = scrubNode();
-  scrubHover.querySelector = (sel: string) => sel === "[data-scrubhover-step]" ? scrubHoverStep : sel === "[data-scrubhover-kind]" ? scrubHoverKind : null;
+  scrubHover.querySelector = (sel: string) => sel === "[data-scrubhover-step]" ? scrubHoverStep : sel === "[data-scrubhover-kind]" ? scrubHoverKind : sel === "[data-scrubhover-time]" ? scrubHoverTime : null;
   const scrubHoverRange = scrubNode();
   const scrubEl: any = scrubNode();
   // The preview pane's mark overlay. Playback repaints it in place — clear, then insert the current
@@ -1358,6 +1360,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
         },
         hoverScrub: (fraction, marker) => scrubEl.onpointermove?.({ clientX: fraction * 100, target: { closest: () => marker ? { dataset: { scrubStep: marker.step, scrubKind: marker.kind }, style: { "--tick-color": marker.color || "" } } : null } }),
         leaveScrub: () => scrubEl.onpointerleave?.(),
+        scrubHoverTime: () => scrubHoverTime.textContent,
         scrubHoverState: () => ({ tooltipVisible: scrubHover.classes.has("visible"), rangeVisible: scrubHoverRange.classes.has("visible"), step: scrubHoverStep.textContent, kind: scrubHoverKind.textContent, ariaHidden: scrubHover.attrs["aria-hidden"] }),
       });
     } finally {
@@ -6547,6 +6550,31 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     });
   });
 
+  test("scrubber hover leads with the elapsed time at the pointer, on the rail's clock", () => {
+    const trace = [
+      { i: 1, label: "Prepare checkout", tool: "agent step", objective: true, ok: true, ts: 1_000, ms: 0 },
+      { i: 2, label: "launchApp", tool: "launchApp", objective: false, ok: true, ts: 2_000, ms: 100 },
+      { i: 3, label: "Choose payment", tool: "agent step", objective: true, ok: true, ts: 61_000, ms: 0 },
+      { i: 4, label: "tapOnElement", tool: "text: Pay", objective: false, ok: true, ts: 121_000, ms: 100 },
+    ];
+    const payload = { generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] };
+    const out = renderViewer(payload);
+    // The time comes before the step token inside the tooltip.
+    expect(out).toContain('<span class="scrubtooltiptime" data-scrubhover-time></span><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step>');
+    expect(out).toContain('<div class="scrubclock">2:00</div>');
+    expect(core.RUN_REPORT_CSS).toContain(".scrubtooltiptime {");
+
+    renderViewerState(payload, {
+      drive: (ctx) => {
+        ctx.hoverScrub(0);
+        expect(ctx.scrubHoverTime()).toBe("0:00");
+        // The far end of the rail reads the run's total, the same figure the end clock shows.
+        ctx.hoverScrub(1);
+        expect(ctx.scrubHoverTime()).toBe("2:00");
+      },
+    });
+  });
+
   test("failed and self-healed authored steps use prominent semantic scrubber bars", () => {
     const healedTrace = [
       { i: 1, label: "Recover checkout", tool: "agent step", objective: true, selfHeal: true, ok: false, ts: 1, ms: 0 },
@@ -9467,6 +9495,120 @@ describe("formatted event streams (EventStream.rows)", () => {
     expect(pretty).not.toContain('\\"');
     // A plain string stays a plain string rather than being JSON-quoted.
     expect((core as any).rawPrettyText("plain text")).toBe("plain text");
+  });
+});
+
+describe("named stream links (?stream=)", () => {
+  const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
+  const eventStream = (name: string) => ({ name, total: 1, truncated: false, events: [{ t: 1, d: "{}" }] });
+  const payload = {
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "Plugin events", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null,
+      events: [eventStream("analytics"), eventStream("com.example.plugin.network")],
+    }],
+  };
+
+  test("an exact stream name selects that stream", () => {
+    const state = renderViewerState(payload, { query: "?tab=timeline&stream=analytics" });
+    expect(state.html).toContain('aria-label="Streams, 1 of 2 selected"');
+    expect(state.html).toContain('type="checkbox" data-tlstream="0" checked');
+    expect(state.html).not.toContain('type="checkbox" data-tlstream="1" checked');
+  });
+
+  test("a producer-scoped name resolves through the name a producer prefixes", () => {
+    const state = renderViewerState(payload, { query: "?tab=timeline&stream=network" });
+    expect(state.html).toContain('aria-label="Streams, 1 of 2 selected"');
+    expect(state.html).toContain('type="checkbox" data-tlstream="1" checked');
+    expect(state.html).not.toContain('type="checkbox" data-tlstream="0" checked');
+    expect(state.readRoute()).toContain("streams=1");
+  });
+
+  test("a name that matches no stream selects none, and a partial name is not a match", () => {
+    const missing = renderViewerState(payload, { query: "?tab=timeline&stream=nope" });
+    expect(missing.html).toContain('aria-label="Streams, 0 of 2 selected"');
+    const partial = renderViewerState(payload, { query: "?tab=timeline&stream=work" });
+    expect(partial.html).toContain('aria-label="Streams, 0 of 2 selected"');
+  });
+
+  test("a stream entry with no name is skipped and a later match is still selected", () => {
+    const nameless = { total: 1, truncated: false, events: [{ t: 1, d: "{}" }] };
+    const withGaps = { ...payload, sessions: [{ ...payload.sessions[0], events: [nameless, eventStream("analytics"), eventStream("com.example.plugin.network")] }] };
+    for (const [name, index] of [["analytics", 1], ["network", 2]] as const) {
+      const state = renderViewerState(withGaps, { query: `?tab=timeline&stream=${name}` });
+      expect(state.html).toContain(`type="checkbox" data-tlstream="${index}" checked`);
+      expect(state.html).toContain('aria-label="Streams, 1 of 3 selected"');
+    }
+  });
+
+  test("an exact name wins over a producer-scoped one", () => {
+    const both = { ...payload, sessions: [{ ...payload.sessions[0], events: [eventStream("com.example.plugin.network"), eventStream("network")] }] };
+    const state = renderViewerState(both, { query: "?tab=timeline&stream=network" });
+    expect(state.html).toContain('type="checkbox" data-tlstream="1" checked');
+    expect(state.html).not.toContain('type="checkbox" data-tlstream="0" checked');
+  });
+
+  test("numeric streams= indices still work, and an empty value means no streams rather than stream 0", () => {
+    const indexed = renderViewerState(payload, { query: "?tab=timeline&streams=1" });
+    expect(indexed.html).toContain('type="checkbox" data-tlstream="1" checked');
+    expect(indexed.html).not.toContain('type="checkbox" data-tlstream="0" checked');
+    const empty = renderViewerState(payload, { query: "?tab=timeline&streams=" });
+    expect(empty.html).toContain('aria-label="Streams, 0 of 2 selected"');
+    expect(empty.html).not.toContain('type="checkbox" data-tlstream="0" checked');
+  });
+
+  test("a name resolves once a compressed events payload inflates", async () => {
+    const gz = (value: unknown) => require("zlib").gzipSync(JSON.stringify(value)).toString("base64");
+    const state = renderViewerState({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsGz: gz([eventStream("analytics"), eventStream("com.example.plugin.network")]) }],
+    }, { query: "?tab=timeline&stream=network" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.liveHtml()).toContain('aria-label="Streams, 1 of 2 selected"');
+    expect(state.liveHtml()).toContain('type="checkbox" data-tlstream="1" checked');
+    expect(state.readRoute()).toContain("streams=1");
+  });
+
+  describe("while the events are still inflating", () => {
+    const gz = (value: unknown) => require("zlib").gzipSync(JSON.stringify(value)).toString("base64");
+    const compressed = {
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsGz: gz([eventStream("analytics"), eventStream("com.example.plugin.network")]) }],
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    test("the URL keeps stream=<name> until it resolves, then carries the resolved streams= index", async () => {
+      const state = renderViewerState(compressed, { query: "?tab=timeline&stream=network" });
+      expect(state.readRoute()).toContain("stream=network");
+      expect(state.readRoute()).not.toContain("streams=");
+      await settle();
+      expect(state.readRoute()).toContain("streams=1");
+      expect(state.readRoute()).not.toContain("stream=");
+    });
+
+    test("a later route with streams= wins over a name that resolves afterwards", async () => {
+      const state = renderViewerState(compressed, { query: "?tab=timeline&stream=network" });
+      state.firePopstate("?tab=timeline&streams=0");
+      await settle();
+      expect(state.readRoute()).toContain("streams=0");
+      expect(state.readRoute()).not.toContain("stream=");
+      expect(state.liveHtml()).toContain('type="checkbox" data-tlstream="0" checked');
+      expect(state.liveHtml()).not.toContain('type="checkbox" data-tlstream="1" checked');
+    });
+  });
+
+  test("a bare ?stream= link opens the Timeline with that stream selected", () => {
+    const state = renderViewerState(payload, { query: "?stream=analytics" });
+    expect(state.readRoute()).toContain("tab=timeline");
+    expect(state.readRoute()).toContain("streams=0");
+    expect(state.html).toContain('type="checkbox" data-tlstream="0" checked');
+  });
+
+  test("a stream= link beside another tab keeps that tab and still records the selection", () => {
+    const state = renderViewerState(payload, { query: "?tab=lightbox&stream=analytics" });
+    expect(state.readRoute()).toContain("tab=lightbox");
+    state.clickTab("timeline");
+    expect(state.readRoute()).toContain("streams=0");
   });
 });
 

@@ -153,6 +153,8 @@
   // browser model: most-specific compound key, progressively broader parents, each bare segment,
   // then the universal `all` recording. The executor uses the same ordering, so a matrix cell never
   // claims a deterministic recording is missing when the runtime would replay it.
+  var SOLE_FORM_FACTORS = { web: 'browser' };
+
   function classifierLineage(key) {
     var clean = String(key || '').trim().toLowerCase();
     if (!clean) return [];
@@ -163,6 +165,8 @@
     };
     add(clean);
     for (var end = parts.length - 1; end > 0; end -= 1) add(parts.slice(0, end).join('-'));
+    // A bare platform with one form factor falls back to it next (`web` -> `web-browser`).
+    if (parts.length === 1 && SOLE_FORM_FACTORS[parts[0]]) add(parts[0] + '-' + SOLE_FORM_FACTORS[parts[0]]);
     parts.slice().reverse().forEach(add);
     chain.push('all');
     return chain;

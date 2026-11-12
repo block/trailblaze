@@ -3,6 +3,7 @@ package xyz.block.trailblaze.playwright.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import com.microsoft.playwright.Page
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -37,9 +38,13 @@ data class PlaywrightNativeFillSecretTool(
   val ref: String,
   @param:LLMDescription("Secret value to fill; never logged.")
   val value: String,
-) : PlaywrightExecutableTool {
+) : PlaywrightExecutableTool, SensitiveArgsTrailblazeTool {
   override val targetRef: String?
     get() = ref
+
+  /** Masks [value] in this call's session log entry and, through dispatch, everywhere else. */
+  override val sensitiveArgNames: Set<String>
+    get() = setOf("value")
 
   override suspend fun executeWithPlaywright(
     page: Page,

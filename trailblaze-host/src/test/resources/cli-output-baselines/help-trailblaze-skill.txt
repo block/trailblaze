@@ -11,6 +11,6 @@ Print or install the bundled agent skill that teaches a coding agent this CLI
   -V, --version   Print version information and exit.
 Commands:
   show     Print a bundled skill file to stdout (defaults to SKILL.md)
-  install  Write the bundled skill into an agent's skill directory (defaults to
-             Claude Code's)
+  install  Install the agent skill into an agent's skill directory (defaults to
+             Claude Code's).
   status   Report installed skill copies and whether they match this CLI

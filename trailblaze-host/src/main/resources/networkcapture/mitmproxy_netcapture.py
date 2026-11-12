@@ -10,7 +10,9 @@ response), sharing the flow id, plus a FAILED line on transport error. The outpu
 schema, redaction, and body rules deliberately mirror the web capture path
 (`WebNetworkCapture`) so events render identically in the HTML report:
 
-  - request `Authorization` and response `Set-Cookie` header values -> "***REDACTED***"
+  - credential header values (`Authorization`, `Cookie`, `Set-Cookie`, anything carrying a
+    token, session, secret or API key) -> "***REDACTED***", by the rule in
+    `NetworkCaptureRedaction.isSensitiveHeader`
   - bodies <= 4 KB and "likely text" are inlined; larger/binary go to `bodies/`;
     bodies over 1 MB are truncated on disk with `truncated=true` (original size kept)
   - null / default fields are omitted from the JSON (matches the Kotlin serializer's
@@ -33,9 +35,18 @@ from typing import Any, Optional
 REDACTED_VALUE = "***REDACTED***"
 SOURCE_ANDROID = "ANDROID"
 
-# Keep these in sync with WebNetworkCapture: only these header values are scrubbed.
-SENSITIVE_REQUEST_HEADERS = {"authorization"}
+# Keep in sync with NetworkCaptureRedaction.isSensitiveHeader (Kotlin, used by the web capture):
+# a header is scrubbed when its name is one of these, or contains one of the parts below.
+SENSITIVE_REQUEST_HEADERS = {"authorization", "proxy-authorization", "cookie"}
 SENSITIVE_RESPONSE_HEADERS = {"set-cookie"}
+_SENSITIVE_HEADER_PARTS = (
+    "token", "secret", "password", "api-key", "apikey", "auth", "session", "csrf", "xsrf", "cookie",
+)
+
+
+def is_sensitive_header(name: str) -> bool:
+    lowered = name.lower()
+    return any(part in lowered for part in _SENSITIVE_HEADER_PARTS)
 
 INLINE_BODY_MAX_BYTES = 4 * 1024
 BODY_TRUNCATE_BYTES = 1024 * 1024
@@ -65,7 +76,8 @@ def redact_headers(
         return None
     out: dict[str, str] = {}
     for key, value in headers.items():
-        out[key] = REDACTED_VALUE if key.lower() in sensitive_lowercased else value
+        sensitive = key.lower() in sensitive_lowercased or is_sensitive_header(key)
+        out[key] = REDACTED_VALUE if sensitive else value
     return out
 
 

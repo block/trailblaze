@@ -38,6 +38,15 @@ import xyz.block.trailblaze.util.Console
  *    not change the video's size mid-recording — `screenrecord`'s behavior too.
  *  - `cleanup=false`: keeps the pushed server on the device between sessions.
  *  - `power_on=false`: leaves the screen's power state alone, as `screenrecord` does.
+ *  - `max_fps=10` ([MAX_FPS]): an emulator has no hardware encoder, so the H.264 encode runs in
+ *    software on the cores the app under test needs. Measured on a 2-vCPU emulator, the cap more
+ *    than halved the encoder's peak CPU and four app trails ran 3-4% faster. The cap drops
+ *    frames, never the screen a burst settles on: the encoder keeps the last dropped frame and
+ *    scrcpy asks the encoder to repeat it 100 ms after the screen goes still. The final picture
+ *    is therefore still encoded, about 100 ms later than uncapped, plus the usual encode and adb
+ *    delay. Consumers that pair a frame with a settled screen (stream screenshots' 300 ms
+ *    quiet window, the report's frame for a screenshot-less capture) still get that picture.
+ *    `screenrecord`, the fallback, has no frame-rate option and stays uncapped.
  *
  * Any failure to start throws, and [AndroidScreenProducerFactory] falls back to `screenrecord`.
  */
@@ -58,6 +67,9 @@ internal object AdbScrcpyProducerFactory : H264Tee.ProducerFactory {
 
   /** How long the server may take to start listening. A loaded CI emulator takes a few seconds. */
   private const val CONNECT_TIMEOUT_MS = 15_000L
+
+  /** Frame-rate cap on the device encoder; see the class KDoc for why 10. */
+  internal const val MAX_FPS = 10
 
   private val bundledServer: File by lazy {
     val stream = javaClass.getResourceAsStream(RESOURCE)
@@ -88,6 +100,7 @@ internal object AdbScrcpyProducerFactory : H264Tee.ProducerFactory {
     "video_codec=h264",
     "video_bit_rate=$bitRate",
     "max_size=${maxSide(videoSize)}",
+    "max_fps=$MAX_FPS",
     "capture_orientation=@",
   )
 
@@ -119,7 +132,7 @@ internal object AdbScrcpyProducerFactory : H264Tee.ProducerFactory {
       stop(deviceId, server, port, scid)
       throw e
     }
-    Console.log("[scrcpy] streaming ${deviceId.instanceId} (scid=$scid, max_size=${maxSide(videoSize)})")
+    Console.log("[scrcpy] streaming ${deviceId.instanceId} (scid=$scid, max_size=${maxSide(videoSize)}, max_fps=$MAX_FPS)")
     return object : H264Tee.ProducerHandle {
       override val input: InputStream = ScrcpyAnnexBInputStream(socket.getInputStream())
       override val carriesDeviceFrameTimes: Boolean = true

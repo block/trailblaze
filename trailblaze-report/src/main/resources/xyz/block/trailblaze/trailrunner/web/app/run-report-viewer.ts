@@ -1484,7 +1484,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, deviceSetupOpen: true, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlStreamName: null as string | null, tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, deviceSetupOpen: true, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1733,7 +1733,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const openSession = (i) => {
     // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
     // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); closeTranscript(); pendingDetailRoute = null; pendingDetailRouteFromHistory = false; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.tlTracksOpen = false; st.tlTrackOpen = openTrackSet(); st.tlTrackSel = null; st.tlSeek = null; st.trailOpen = true; st.stepsOpen = {}; st.kidsOpen = {}; st.lightboxAll = false;
+    stopTimeline(); closeTranscript(); pendingDetailRoute = null; pendingDetailRouteFromHistory = false; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlStreamName = null; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.tlTracksOpen = false; st.tlTrackOpen = openTrackSet(); st.tlTrackSel = null; st.tlSeek = null; st.trailOpen = true; st.stepsOpen = {}; st.kidsOpen = {}; st.lightboxAll = false;
     st.strMode = 'string'; st.strSel = null; st.strScreen = 0; st.strHit = 0; st.strKinds = { ...DEFAULT_STRING_KINDS }; st.strVis = DEFAULT_STRING_VISIBILITY; st.strQ = '';
     // The trail tabs stage THIS run's trail, so anything aimed at the previous one's lanes has to
     // go with it: hidden lanes are keyed by session index, and the playhead points at a stage that
@@ -1871,15 +1871,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const sort = legacySort === 'grouped' ? 'original' : legacySort === 'owner' ? 'name' : legacySort;
       return { view: 'index', group, sort, search: p.get('search') || '' };
     }
-    if (!p.has('run') && !p.has('tab') && !p.has('step')) return null;
+    if (!p.has('run') && !p.has('tab') && !p.has('step') && !p.has('stream')) return null;
     return {
       // No tab named: the run opens on its default tab (seedSessionDetail), not a fixed one.
-      view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || '',
+      // A bare `stream=<name>` link opens the Timeline, where the streams are.
+      view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || (p.has('stream') ? 'timeline' : ''),
       step: p.has('step') ? Number(p.get('step')) : null,
       kid: p.has('kid') ? Number(p.get('kid')) : null,
       at: p.has('at') ? Number(p.get('at')) : null,
       llm: p.has('llm') ? Number(p.get('llm')) : null,
       inspect: p.has('inspect') ? Number(p.get('inspect')) : null,
+      stream: p.get('stream') || null,
       streams: p.get('streams'),
       types: p.get('types'),
       // The trail tabs' own settings. Named as the standalone trail page named them, so links
@@ -1891,6 +1893,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Split out of applyRoute because a route into a not-yet-hydrated session parks here and
   // re-applies from seedSessionDetail once the chunk lands.
   let routedSeek: { at: number; step: number; kid: number | null } | null = null;
+  // Every change to the stream selection goes through here, so it also drops a `stream=<name>` still
+  // waiting on its events: that name no longer describes the selection.
+  const setTimelineStreams = (next: number[]) => { st.tlStreams = next; st.tlStreamName = null; };
   const applyDetailRoute = (r, fromHistory = false) => {
     pendingInspectorOpen = null;
     pendingInspectorHistoryBacked = false;
@@ -1951,11 +1956,37 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     // No upper-bound check here: stream counts may be unknown while a compressed events payload
     // is still inflating, so the consumer owns the clamp (streamEvents ignores unknown tlStreams
-    // indices).
-    if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0);
+    // indices). An empty value is an explicit "no streams" selection, not stream 0.
+    if (r.streams != null) setTimelineStreams(r.streams === '' ? [] : r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0));
+    // `stream=<name>` selects one stream by its exact name, or by the name a producer scopes
+    // (`<producer>.<name>`). The names are known only once a compressed events payload inflates, so
+    // the name stays in the route (tlStreamName) until it resolves to an index.
+    else if (r.stream != null) {
+      const session = D;
+      const name: string = r.stream;
+      const selectNamedStream = () => {
+        const streams = sessionEvents(session) || [];
+        // A payload entry may be null or carry no name; it simply matches nothing.
+        const names = streams.map((stream) => String((stream && stream.name) || ''));
+        const exact = names.indexOf(name);
+        const index = exact >= 0 ? exact : names.findIndex((candidate) => candidate.endsWith(`.${name}`));
+        setTimelineStreams(index >= 0 ? [index] : []);
+      };
+      if (eventsInflater.settled(session)) selectNamedStream();
+      else {
+        st.tlStreamName = name;
+        ensureEventsInflated(session).then(() => {
+          // Any other selection, route or session since then supersedes this one.
+          if (D !== session || st.view !== 'detail' || st.tlStreamName !== name) return;
+          selectNamedStream();
+          writeRoute(true);
+          render();
+        });
+      }
+    }
     // An old Network link that lands on the Timeline opens with the session's network streams shown.
     else if (r.tab === 'network' && st.tab === 'timeline') {
-      st.tlStreams = (sessionEvents(D) || []).flatMap((stream, i) => (stream && NETWORK_STREAM_NAME.test(stream.name) ? [i] : []));
+      setTimelineStreams((sessionEvents(D) || []).flatMap((stream, i) => (stream && NETWORK_STREAM_NAME.test(stream.name) ? [i] : [])));
     }
   };
   // The built-in capture (`network`, `network.<device>`) and a plugin's (`<plugin>.network…`).
@@ -1996,7 +2027,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       } else if (run != null) {
         r = {
           view: 'detail', session: run, tab: mode, step: null, kid: null, at: null, llm: null, inspect: null,
-          streams: null, types: null, all: r.all, align: r.align, layout: '',
+          stream: null, streams: null, types: null, all: r.all, align: r.align, layout: '',
         };
       } else {
         if (MULTI) st.view = 'index';
@@ -2190,7 +2221,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         if (at != null) params.set('at', String(at));
       }
       if (MOUNTED_TABS.indexOf(st.tab) >= 0 && st.tabAt != null) params.set('at', String(Math.round(st.tabAt)));
-      if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
+      // A named stream still waiting on its events stays in the URL by name; `streams` takes over once it resolves.
+      if (st.tab === 'timeline' && st.tlStreamName) params.set('stream', st.tlStreamName);
+      else if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
       if (st.tab === 'timeline') { const selected = selectedOfferedEventKinds(); if (selected.length !== offeredTimelineEventKinds().length) params.set('types', selected.length ? selected.join(',') : 'none'); }
       // The trail tabs' own settings. The tab already names the projection, so `mode` is gone;
       // the rest read as they always did.
@@ -2893,9 +2926,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const offset = fractionToOffset(real, stepFrac, f);
       return offset == null ? null : lo + offset;
     };
+    // Elapsed time at a rail position, on the same clock as totalMs: wall time when the entries
+    // carry timestamps, the steps schedule otherwise.
+    const fracMs = (f: number): number => {
+      const at = fracTs(f);
+      return at == null ? Math.max(0, Math.min(1, f)) * span : at - lo;
+    };
     // Without two distinct timestamps there is no clock to place an instant on: no seek between
     // entries, and no tracks.
-    return { stepFrac, tsFrac, fracTs, hasClock: haveTs, totalMs: haveTs ? Math.max(1, hi - lo) : span };
+    return { stepFrac, tsFrac, fracTs, fracMs, hasClock: haveTs, totalMs: haveTs ? Math.max(1, hi - lo) : span };
   };
 
   // Match Trail Runner's high-volume stream behavior: streams are opt-in on the timeline (a crash
@@ -3454,7 +3493,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const tracksToggle = trackCount
       ? `<button type="button" class="tltracksbtn${tracksOpen ? ' open' : ''}" id="tltracksbtn" aria-expanded="${tracksOpen}" aria-controls="tltracks" aria-label="Event tracks, ${trackCount} stream${trackCount === 1 ? '' : 's'}" title="${tracksOpen ? 'Hide' : 'Show'} the event tracks — one per event stream (${trackCount}), on this rail's axis"><svg class="tltrackchev" viewBox="0 0 8 8" aria-hidden="true"><path d="M2.5 1.5 5.5 4l-3 2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`
       : '';
-    return `<div class="scrub${trackCount ? ' hastracks' : ''}">${tracksToggle}<div class="scrubclock">0:00</div><div class="scrubtrack${laneCount ? ' devlanes' : ''}"${laneCount ? ` style="--scrub-lanes:${laneCount}"` : ''} data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${deviceBands}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}${tracksOpen ? timelineTracksHtml(axis, frac) : ''}</div>`;
+    return `<div class="scrub${trackCount ? ' hastracks' : ''}">${tracksToggle}<div class="scrubclock">0:00</div><div class="scrubtrack${laneCount ? ' devlanes' : ''}"${laneCount ? ` style="--scrub-lanes:${laneCount}"` : ''} data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${deviceBands}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptime" data-scrubhover-time></span><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}${tracksOpen ? timelineTracksHtml(axis, frac) : ''}</div>`;
   };
 
   // Chat glyph for every "open this call's transcript" affordance (timeline rows, LLM tab rows) —
@@ -9548,7 +9587,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     stopTimeline();
     st.tlTrackSel = mark.key;
     // The list only shows the streams the reader picked; the one they just clicked into joins them.
-    if (st.tlStreams.indexOf(hit.streamIndex) < 0) st.tlStreams = [...st.tlStreams, hit.streamIndex].sort((a, b) => a - b);
+    if (st.tlStreams.indexOf(hit.streamIndex) < 0) setTimelineStreams([...st.tlStreams, hit.streamIndex].sort((a, b) => a - b));
     // Seek to the event: the screen shows what was up when it happened.
     const axis = timelineAxis();
     const entries = timelineEntries();
@@ -10639,11 +10678,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       st.tlEventMenuOpen = true; st.tlMenuOpen = false; writeRoute(true); render(true);
     });
     root.querySelectorAll<HTMLElement>('[data-tlstream]').forEach((el) => el.onclick = () => {
-      const i = +el.dataset.tlstream; st.tlStreams = st.tlStreams.indexOf(i) >= 0 ? st.tlStreams.filter((v) => v !== i) : [...st.tlStreams, i].sort((a, b) => a - b);
+      const i = +el.dataset.tlstream; setTimelineStreams(st.tlStreams.indexOf(i) >= 0 ? st.tlStreams.filter((v) => v !== i) : [...st.tlStreams, i].sort((a, b) => a - b));
       st.tlMenuOpen = true; st.tlEventMenuOpen = false; writeRoute(true); render(true);
     });
     root.querySelectorAll<HTMLElement>('[data-tlstreams]').forEach((el) => el.onclick = () => {
-      st.tlStreams = el.dataset.tlstreams === 'all' ? (sessionEvents(D) || []).map((_, i) => i) : [];
+      setTimelineStreams(el.dataset.tlstreams === 'all' ? (sessionEvents(D) || []).map((_, i) => i) : []);
       st.tlMenuOpen = true; st.tlEventMenuOpen = false; writeRoute(true); render(true);
     });
     root.querySelectorAll<HTMLElement>('.phasecontrol[data-phase]').forEach((control) => control.onclick = () => {
@@ -10833,6 +10872,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const hoverRanges = scrubTimelineModel(hoverAxis).ranges;
       const hoverStep = scrubHover.querySelector<HTMLElement>('[data-scrubhover-step]');
       const hoverKind = scrubHover.querySelector<HTMLElement>('[data-scrubhover-kind]');
+      const hoverTime = scrubHover.querySelector<HTMLElement>('[data-scrubhover-time]');
       scrub.onpointermove = (e) => {
         const r = scrub.getBoundingClientRect();
         const pointerX = Math.min(r.width, Math.max(0, e.clientX - r.left));
@@ -10857,6 +10897,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           hoverKind.textContent = kind;
           hoverKind.classList.toggle('visible', !!kind);
         }
+        if (hoverTime) hoverTime.textContent = fmtClock(hoverAxis.fracMs(f));
         const markerColor = marker ? getComputedStyle(marker).getPropertyValue('--tick-color') : '';
         scrubHover.style.setProperty('--tick-color', markerColor || 'var(--timeline-objective-mark)');
         scrubHover.classList.add('visible');

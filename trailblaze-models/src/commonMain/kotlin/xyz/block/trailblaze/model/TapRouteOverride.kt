@@ -12,13 +12,17 @@ import kotlinx.serialization.Serializable
  * given API level. When they are, no global predicate separates them and the recording is the only
  * place that knows which route actually actuates the row.
  *
- * Trails reach it only through `android_accessibilityClick`, which pins [ACTION_CLICK]; the shared
- * `tapOnElementBySelector` carries no pin. Leave unset unless a specific step has been measured to
- * need it. Only the leaf-vs-container
- * judgement is overridable: the conditions that make `ACTION_CLICK` dispatchable at all (the node
- * advertises the action, is enabled, visible, and not editable; the tap is not a long-press) still
- * apply, so a pin that contradicts one of them routes to gesture rather than dispatching an action
- * the node cannot answer.
+ * Trails reach it only through two Android-only tools: `android_accessibilityClick` pins
+ * [ACTION_CLICK] and `android_gestureTap` pins [GESTURE]; the shared `tapOnElementBySelector`
+ * carries no pin. Leave unset unless a specific step has been measured to need it.
+ *
+ * The two pins reach different amounts of the decision. [GESTURE] is unconditional: a touch needs
+ * nothing from the node beyond its bounds, so a gesture-pinned tap touches the node's centre even
+ * when it is disabled, editable, not visible to the user or does not advertise ACTION_CLICK.
+ * [ACTION_CLICK] overrides only the leaf-vs-container judgement: the conditions that make
+ * `ACTION_CLICK` dispatchable at all (the node advertises the action, is enabled, visible, and not
+ * editable; the tap is not a long-press) still apply, so an ACTION_CLICK pin that contradicts one
+ * of them routes to gesture rather than dispatching an action the node cannot answer.
  */
 @Serializable
 enum class TapRouteOverride {
@@ -33,13 +37,13 @@ enum class TapRouteOverride {
   ACTION_CLICK,
 
   /**
-   * Dispatch via coordinate gesture. No tool pins this any more; it stays so session logs that
-   * recorded it still decode.
+   * Dispatch via coordinate gesture. Pinned by `android_gestureTap`.
    *
-   * For the mirror-image shape: a container that does publish state, and so would be granted
-   * `ACTION_CLICK`, but whose `ACTION_CLICK` performs a *different* action than a real touch — an
-   * accordion row that selects its option semantically while only a touch expands it to reveal the
-   * sub-options the recording goes on to tap.
+   * For the mirror-image shape: a node the gate grants `ACTION_CLICK`, because it carries its own
+   * text or publishes state, but whose `ACTION_CLICK` performs a *different* action than a real
+   * touch. A read-only field that shows its value, where the action only focuses it while a touch
+   * opens the editor for it; an accordion row that selects its option semantically while only a
+   * touch expands it to reveal the sub-options the recording goes on to tap.
    */
   GESTURE,
 }

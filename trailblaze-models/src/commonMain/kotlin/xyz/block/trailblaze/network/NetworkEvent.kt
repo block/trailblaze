@@ -26,12 +26,11 @@ data class NetworkEvent(
   val statusCode: Int? = null,
   val durationMs: Long? = null,
   /**
-   * Headers as captured. Sensitive headers (e.g. `Authorization`) keep their
-   * key but have their value replaced with [REDACTED_VALUE] so consumers can
-   * see the header was sent without the secret leaking into session
-   * artifacts. Cookie / Set-Cookie aren't surfaced at all today — Playwright's
-   * non-blocking `headers()` API filters them — so the absence of those keys
-   * here is "Playwright didn't expose them", not "we redacted them".
+   * Headers as captured. Credential headers (`Authorization`, `Cookie`, `Set-Cookie`, anything
+   * carrying a token or session; see [NetworkCaptureRedaction.isSensitiveHeader]) keep their key
+   * but have their value replaced with [REDACTED_VALUE], so consumers can see the header was sent
+   * without the secret leaking into session artifacts. The web capture rarely sees cookie headers
+   * at all, since Playwright's non-blocking `headers()` filters them; the mobile proxy does.
    */
   val requestHeaders: Map<String, String>? = null,
   val responseHeaders: Map<String, String>? = null,

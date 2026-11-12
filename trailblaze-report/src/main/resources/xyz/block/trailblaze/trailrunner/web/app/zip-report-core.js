@@ -619,7 +619,13 @@
           // host-stamped records interleaves them wrongly, and every later consumer (the timeline,
           // the recording's host-clock window) inherits the error.
           var normalize = resolveRenderer(options && options.render).normalizedToHostClock;
-          var logs = sortLogsByTimestamp(normalize ? normalize(parsedLogs) : parsedLogs);
+          // A log name only says "starts with a hex digit", which also admits sidecar JSON such as
+          // a self-heal's category2_heal_diff.json. Every Trailblaze log carries a timestamp; a
+          // document without a parseable one would sort to the epoch and stretch the run's duration to it.
+          var timed = parsedLogs.filter(function (log) {
+            return log && typeof log.timestamp === 'string' && Number.isFinite(Date.parse(log.timestamp));
+          });
+          var logs = sortLogsByTimestamp(normalize ? normalize(timed) : timed);
           var recordingEntry = group.byFileName[RECORDING_YAML_NAME];
           var yamlPromise = recordingEntry
             ? readZipEntry(zipBytes, recordingEntry, inflateRaw).then(function (data) { return utf8.decode(data); })
@@ -645,9 +651,13 @@
   // sheet). A screenshotFile is one of two shapes: a bare in-zip filename (the common case, read out
   // as a data URI) OR an absolute http(s) URL — test-farm runs store screenshots remotely and record
   // their lambda URLs, bundling only a subset locally. A URL is already a usable <img src>, so it's
-  // passed through verbatim; only a bare filename is looked up in the archive.
+  // passed through verbatim, unless it carries a character that could end the HTML attribute it is
+  // written into (quote, angle bracket, whitespace, backslash); only a bare filename is looked up in
+  // the archive.
   function sessionImageDataUri(zipBytes, session, fileName, options) {
-    if (/^https?:\/\//i.test(fileName)) return Promise.resolve(fileName);
+    if (/^https?:\/\//i.test(fileName)) {
+      return Promise.resolve(/^[^"'<>\s\\]+$/.test(fileName) ? fileName : null);
+    }
     var entry = session.byFileName[fileName];
     if (!entry) return Promise.resolve(null);
     var inflateRaw = (options && options.inflateRaw) || null;

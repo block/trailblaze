@@ -15,8 +15,27 @@ Load this reference when the task is to save a trail, replay one, run
 a suite, inspect a session (HTML report or desktop trace viewer), or
 look up the results of a past CI run.
 
+## Product user-flow acceptance
+
+Product user-flow trails operate the app or surface as a user and assert
+user-visible behavior. Do not append independent API, database, or backend
+saved-setting reads as extra UI acceptance, or replace the interaction under
+test with hidden writes. When persistence is explicitly required, prove it
+by returning to the relevant screen or relaunching as the requirement calls
+for—not by inspecting storage. Do not add persistence checks otherwise.
+
+Authorized deterministic setup belongs in the trailhead or a separate setup
+workflow; it is not proof of the interaction under test. Failure diagnostics
+and explicitly requested non-UI, backend, or integration checks are separate
+workflows with their own claims and evidence. They do not substitute for
+visible UI acceptance, and backend success cannot turn a failed UI assertion
+into a pass. Preserve existing explicitly required test contracts: do not
+delete or weaken an assertion, or silently change a requested test's meaning,
+to apply this default. Surface a concrete conflict separately.
+
 ## Contents
 
+- [Product user-flow acceptance](#product-user-flow-acceptance)
 - [Sessions are auto-created on first device action](#sessions-are-auto-created-on-first-device-action)
 - [Saving a session as a `.trail.yaml`](#saving-a-session-as-a-trailyaml)
 - [Replaying a trail](#replaying-a-trail)

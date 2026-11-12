@@ -1779,8 +1779,9 @@ internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): A
  *
  * [tapRoute] lets a single step pin its own route for the case this gate cannot decide: two rows
  * that need opposite routes presenting identical fields (see [TapRouteOverride]). Trails set it
- * only through `android_accessibilityClick`. The pin
- * reaches only the leaf-vs-container judgement above. Every check before it is a precondition for
+ * only through `android_accessibilityClick` (ACTION_CLICK) and `android_gestureTap` (GESTURE). A
+ * GESTURE pin declines before any other check: a touch needs nothing from the node. The ACTION_CLICK
+ * pin reaches only the leaf-vs-container judgement above. Every check before it is a precondition for
  * `ACTION_CLICK` being dispatchable at all, so a step that pins `ACTION_CLICK` on a long-press, an
  * editable field, an invisible node, or a node that doesn't advertise the action still routes to
  * gesture rather than dispatching an action the node can't answer.

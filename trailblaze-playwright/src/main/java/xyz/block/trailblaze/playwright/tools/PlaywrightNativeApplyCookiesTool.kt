@@ -13,6 +13,8 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -34,7 +36,22 @@ data class PlaywrightNativeApplyCookiesTool(
       "e.g. [{\"name\":\"sid\",\"value\":\"abc\",\"domain\":\".example.com\",\"path\":\"/\"}].",
   )
   val cookiesJson: String = "",
-) : PlaywrightExecutableTool {
+) : PlaywrightExecutableTool, SensitiveArgsTrailblazeTool, SensitiveValuesTrailblazeTool {
+
+  /** The cookies are a signed-in session: never written to the session log. */
+  override val sensitiveArgNames: Set<String>
+    get() = setOf("cookiesJson")
+
+  /**
+   * Each cookie's value, so dispatch keeps them out of every other log and the network capture
+   * too (a later request sends them back in a `Cookie` header or a page script reads them).
+   */
+  override val sensitiveValues: Collection<String>
+    get() = runCatching {
+      val parsed = Json.parseToJsonElement(cookiesJson)
+      val cookies = (parsed as? JsonObject)?.get("cookies") ?: parsed
+      cookies.jsonArray.mapNotNull { (it as? JsonObject)?.get("value")?.jsonPrimitive?.contentOrNull }
+    }.getOrDefault(emptyList())
 
   override suspend fun executeWithPlaywright(
     page: Page,

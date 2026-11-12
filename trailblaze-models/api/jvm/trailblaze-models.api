@@ -3,6 +3,7 @@ public final class xyz/block/trailblaze/AgentMemory {
 	public final fun argsForLlmContext ()Ljava/util/Map;
 	public final fun argsForLogSafePayload ()Ljava/util/Map;
 	public final fun clear ()V
+	public final fun containsSensitiveValue (Ljava/lang/String;)Z
 	public final fun delete (Ljava/lang/String;)V
 	public final fun getArgs ()Ljava/util/Map;
 	public final fun getDeletedKeys ()Ljava/util/Set;
@@ -11945,6 +11946,20 @@ public final class xyz/block/trailblaze/network/InflightRequestTracker {
 	public final fun reset ()V
 }
 
+public final class xyz/block/trailblaze/network/NetworkCaptureRedaction {
+	public static final field INSTANCE Lxyz/block/trailblaze/network/NetworkCaptureRedaction;
+	public final fun isSensitiveHeader (Ljava/lang/String;)Z
+	public final fun redactBody ([BLjava/lang/String;ZLjava/util/Collection;)[B
+	public static synthetic fun redactBody$default (Lxyz/block/trailblaze/network/NetworkCaptureRedaction;[BLjava/lang/String;ZLjava/util/Collection;ILjava/lang/Object;)[B
+	public final fun redactBodyText (Ljava/lang/String;Ljava/lang/String;Ljava/util/Collection;)Ljava/lang/String;
+	public static synthetic fun redactBodyText$default (Lxyz/block/trailblaze/network/NetworkCaptureRedaction;Ljava/lang/String;Ljava/lang/String;Ljava/util/Collection;ILjava/lang/Object;)Ljava/lang/String;
+	public final fun redactHeaders (Ljava/util/Map;Ljava/util/Collection;)Ljava/util/Map;
+	public static synthetic fun redactHeaders$default (Lxyz/block/trailblaze/network/NetworkCaptureRedaction;Ljava/util/Map;Ljava/util/Collection;ILjava/lang/Object;)Ljava/util/Map;
+	public final fun redactUrl (Ljava/lang/String;Ljava/util/Collection;)Ljava/lang/String;
+	public static synthetic fun redactUrl$default (Lxyz/block/trailblaze/network/NetworkCaptureRedaction;Ljava/lang/String;Ljava/util/Collection;ILjava/lang/Object;)Ljava/lang/String;
+	public final fun secretForms (Ljava/util/Collection;)Ljava/util/List;
+}
+
 public final class xyz/block/trailblaze/network/NetworkEvent {
 	public static final field Companion Lxyz/block/trailblaze/network/NetworkEvent$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;JLxyz/block/trailblaze/network/Phase;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/util/Map;Ljava/util/Map;Lxyz/block/trailblaze/network/BodyRef;Lxyz/block/trailblaze/network/BodyRef;Lxyz/block/trailblaze/network/Source;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Ljava/lang/String;)V
@@ -12163,6 +12178,11 @@ public abstract interface class xyz/block/trailblaze/recording/WebDeviceScreenSt
 public final class xyz/block/trailblaze/recording/WebDeviceScreenStream$DefaultImpls {
 	public static fun getMirrorScreenshot (Lxyz/block/trailblaze/recording/WebDeviceScreenStream;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getTrailblazeNodeTree (Lxyz/block/trailblaze/recording/WebDeviceScreenStream;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class xyz/block/trailblaze/toolcalls/CredentialFieldNamesKt {
+	public static final fun isCredentialFieldName (Ljava/lang/String;)Z
+	public static final fun withCredentialFieldsMasked (Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lkotlinx/serialization/json/JsonElement;
 }
 
 public abstract interface class xyz/block/trailblaze/toolcalls/DeclaredSensitiveArgs {

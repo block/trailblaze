@@ -73,14 +73,33 @@ object TrailblazeProcessBuilderUtils {
   }
 
   /**
-   * Checks if a command is available on the system PATH. Uses `where` on Windows and `which` on
-   * other platforms.
+   * How long [isCommandAvailable] waits for `where`/`which` by default before treating the command
+   * as absent. Long on purpose: on a slow Windows host `where` has taken seconds, and a short
+   * default would report a tool the caller needs (adb) as not installed. It only stops a wedged
+   * lookup from hanging forever. A caller that a client is waiting on passes a shorter bound.
    */
-  fun isCommandAvailable(command: String): Boolean {
+  const val COMMAND_LOOKUP_TIMEOUT_MS = 30_000L
+
+  /**
+   * Checks if a command is available on the system PATH. Uses `where` on Windows and `which` on
+   * other platforms. Gives up after [timeoutMs] and reports the command as absent.
+   */
+  @JvmOverloads
+  fun isCommandAvailable(command: String, timeoutMs: Long = COMMAND_LOOKUP_TIMEOUT_MS): Boolean =
+    isCommandAvailable(command, listOf(if (isWindows()) "where" else "which", command), timeoutMs)
+
+  /** [isCommandAvailable] with the lookup's argv injectable, so tests can stand in a slow lookup. */
+  internal fun isCommandAvailable(command: String, lookupArgs: List<String>, timeoutMs: Long): Boolean {
+    var process: Process? = null
     return try {
-      val whichCommand = if (isWindows()) "where" else "which"
-      val result = createProcessBuilder(listOf(whichCommand, command)).runProcess {}
-      val found = result.exitCode == 0
+      process = createProcessBuilder(lookupArgs, mergeErrorStream = false)
+        .redirectOutput(ProcessBuilder.Redirect.to(File(if (isWindows()) "NUL" else "/dev/null")))
+        .start()
+      if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+        Console.log("$command lookup on the PATH timed out after ${timeoutMs}ms; treating it as not installed")
+        return false
+      }
+      val found = process.exitValue() == 0
       if (found) {
         Console.log("$command installation is available on the PATH")
       } else {
@@ -90,6 +109,8 @@ object TrailblazeProcessBuilderUtils {
     } catch (e: Throwable) {
       Console.log("$command installation not found")
       false
+    } finally {
+      if (process?.isAlive == true) process.destroyTreeForcibly()
     }
   }
 

@@ -47,6 +47,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
 import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.android.tools.AndroidAccessibilityClickTrailblazeTool
+import xyz.block.trailblaze.android.tools.AndroidGestureTapTrailblazeTool
 import xyz.block.trailblaze.host.recording.StreamFrameMonitor
 import xyz.block.trailblaze.host.recording.StreamScreenshotScreenState
 import xyz.block.trailblaze.host.recording.DeviceStreamScreenshotSource
@@ -783,13 +784,17 @@ class HostOnDeviceRpcTrailblazeAgent(
     // live accessibility tree. No infinite loop — the host and device sides are
     // distinct agent instances.
     //
-    // An ACTION_CLICK pin travels as `android_accessibilityClick`, the one tool that carries it.
-    // The whole tree is checked because a `containsChild:` / `childOf:` selector nests its match.
+    // A pin travels as the one tool that carries it: ACTION_CLICK as `android_accessibilityClick`,
+    // GESTURE as `android_gestureTap`. `tapOnElementBySelector` has no route field, so sending it
+    // would drop the pin. The whole tree is checked because a `containsChild:` / `childOf:`
+    // selector nests its match.
     if (nodeSelector.allDriverMatches().any { it is DriverNodeMatch.AndroidAccessibility }) {
-      val tool = if (tapRoute == TapRouteOverride.ACTION_CLICK && !longPress) {
-        AndroidAccessibilityClickTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = timeoutMs)
-      } else {
-        TapOnByElementSelector(
+      val tool = when {
+        !longPress && tapRoute == TapRouteOverride.ACTION_CLICK ->
+          AndroidAccessibilityClickTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = timeoutMs)
+        !longPress && tapRoute == TapRouteOverride.GESTURE ->
+          AndroidGestureTapTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = timeoutMs)
+        else -> TapOnByElementSelector(
           nodeSelector = nodeSelector,
           longPress = longPress,
           timeoutMs = timeoutMs,

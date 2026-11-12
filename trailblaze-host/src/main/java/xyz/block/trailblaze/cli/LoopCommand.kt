@@ -31,8 +31,11 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-/** Sessions in a row that complete no pass before the loop gives up. */
-internal const val MAX_SESSIONS_WITHOUT_A_PASS = 3
+/** --stop-after-failures by default: failed passes in a row before the loop gives up. */
+internal const val DEFAULT_STOP_AFTER_FAILURES = 3
+
+/** Failed passes the end-of-loop tally lists, the latest ones; a loop that never stops early can fail hundreds. */
+internal const val FAILURES_LISTED = 20
 
 /** Passes one session repeats when only --time-limit bounds the loop; it then starts another. */
 internal const val PASSES_PER_SESSION_WITHOUT_A_COUNT = 50
@@ -59,8 +62,8 @@ internal const val PASSES_PER_SESSION_WITHOUT_A_COUNT = 50
       "up from scratch and inherits nothing from the pass before.",
     "",
     "A failed pass is reported, handed to --on-failure, and counted toward --iterations, and the " +
-      "loop goes on with the next pass. It stops early after $MAX_SESSIONS_WITHOUT_A_PASS passes " +
-      "in a row fail. Exits non-zero if any pass failed.",
+      "loop goes on with the next pass. It stops early after $DEFAULT_STOP_AFTER_FAILURES passes " +
+      "in a row fail, or as many as --stop-after-failures says. Exits non-zero if any pass failed.",
     "",
     "Give --iterations, --time-limit, or both: the loop ends at whichever comes first. At the " +
       "time limit, a pass still running is cancelled and is not counted as a failure.",
@@ -98,6 +101,20 @@ class LoopCommand : TrailCommand() {
     ],
   )
   var timeLimit: String? = null
+
+  @Option(
+    names = ["--stop-after-failures"],
+    paramLabel = "<count>",
+    description = [
+      "Stop the loop early once this many passes in a row fail (default: $DEFAULT_STOP_AFTER_FAILURES). " +
+        "0 never stops early, so the loop runs on through a fault that outlasts a few passes, until " +
+        "--iterations or --time-limit ends it.",
+    ],
+  )
+  var stopAfterFailures: Int = DEFAULT_STOP_AFTER_FAILURES
+
+  /** Whether the failures in a row so far end the loop early: never when [stopAfterFailures] is 0. */
+  private fun failedTooOftenInARow(): Boolean = stopAfterFailures > 0 && failedPassesInARow >= stopAfterFailures
 
   /** [iterations], or no cap when only [timeLimit] bounds the loop. */
   private val passCap: Int get() = iterations ?: Int.MAX_VALUE
@@ -156,7 +173,7 @@ class LoopCommand : TrailCommand() {
   private var passesReused = 0
   private var passesPassed = 0
   private var stepsPerPass: Int? = null
-  private var sessionsWithoutAPass = 0
+  private var failedPassesInARow = 0
   private val failures = mutableListOf<String>()
   private var failureHook: Process? = null
 
@@ -390,7 +407,7 @@ class LoopCommand : TrailCommand() {
       }
       passesPassed += queued
       passesUsed += queued
-      sessionsWithoutAPass = 0
+      failedPassesInARow = 0
       reportPasses(run.sessionDir, queued, null)
       if (passesUsed >= passCap) return finish()
       stopIfTimeUp()?.let { return it }
@@ -419,10 +436,11 @@ class LoopCommand : TrailCommand() {
     if (progress.holdsDevice) return stopForHeldDevice()
     startFailureHook(run.sessionDir)
 
-    sessionsWithoutAPass = if (completedPasses == 0) sessionsWithoutAPass + 1 else 0
+    // The failed pass is one in a row on its own; only a session that passed none extends the streak.
+    failedPassesInARow = if (completedPasses == 0) failedPassesInARow + 1 else 1
     if (passesUsed >= passCap) return finish()
-    if (sessionsWithoutAPass >= MAX_SESSIONS_WITHOUT_A_PASS) {
-      Console.error("Stopping: $sessionsWithoutAPass sessions in a row failed before completing a pass.")
+    if (failedTooOftenInARow()) {
+      Console.error("Stopping: $failedPassesInARow passes in a row failed.")
       return finish()
     }
     stopIfTimeUp()?.let { return it }
@@ -442,7 +460,7 @@ class LoopCommand : TrailCommand() {
     reportPasses(run.sessionDir, if (run.passed) 1 else 0, failed)
     if (run.passed) {
       passesPassed++
-      sessionsWithoutAPass = 0
+      failedPassesInARow = 0
     } else {
       failedPasses++
       val failure = "Pass ${passLabel(passesUsed)} failed " +
@@ -452,11 +470,11 @@ class LoopCommand : TrailCommand() {
       Console.error("✗ $failure")
       if (progress.holdsDevice) return stopForHeldDevice()
       startFailureHook(run.sessionDir)
-      sessionsWithoutAPass++
+      failedPassesInARow++
     }
     if (passesUsed >= passCap) return finish()
-    if (sessionsWithoutAPass >= MAX_SESSIONS_WITHOUT_A_PASS) {
-      Console.error("Stopping: $sessionsWithoutAPass passes in a row failed.")
+    if (failedTooOftenInARow()) {
+      Console.error("Stopping: $failedPassesInARow passes in a row failed.")
       return finish()
     }
     stopIfTimeUp()?.let { return it }
@@ -574,12 +592,13 @@ class LoopCommand : TrailCommand() {
     if (passesUsed > 0) {
       val reused = if (reuseTrailhead) " $passesReused of them reused the previous pass's setup." else ""
       Console.info("Loop: $passesPassed of $passesUsed pass(es) passed, ${failures.size} failed.$reused")
-      failures.forEach { Console.info("  ✗ $it") }
+      if (failures.size > FAILURES_LISTED) Console.info("  ...and ${failures.size - FAILURES_LISTED} earlier failed pass(es)")
+      failures.takeLast(FAILURES_LISTED).forEach { Console.info("  ✗ $it") }
     }
     passesUsed = 0
     passesPassed = 0
     passesReused = 0
-    sessionsWithoutAPass = 0
+    failedPassesInARow = 0
     lastPassFailed = false
     failures.clear()
     return false
@@ -590,6 +609,7 @@ class LoopCommand : TrailCommand() {
     val misuse = when {
       iterations == null && timeLimit == null -> "loop needs --iterations, --time-limit, or both"
       iterations.let { it != null && it < 1 } -> "--iterations must be a positive integer (got $iterations)"
+      stopAfterFailures < 0 -> "--stop-after-failures must be 0 or a positive integer (got $stopAfterFailures)"
       timeLimit != null && parseTimeLimit(timeLimit) == null ->
         "--time-limit must be a positive duration in hours, minutes and seconds, such as 8h, 90m or 1h30m (got $timeLimit)"
       file == null || file.isDirectory -> "loop takes exactly one trail file"

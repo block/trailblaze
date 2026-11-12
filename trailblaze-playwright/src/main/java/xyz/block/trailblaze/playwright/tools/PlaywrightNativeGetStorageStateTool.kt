@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import com.microsoft.playwright.BrowserContext.StorageStateOptions
 import com.microsoft.playwright.Page
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.history.SecretResultTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -15,7 +16,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 Return the browser's storage state (cookies + localStorage) as Playwright storageState JSON. web_applyCookies restores only its cookies.
 """,
 )
-object PlaywrightNativeGetStorageStateTool : PlaywrightExecutableTool {
+// The result is a signed-in session, so `ctx.history` keeps the call but masks what it returned.
+object PlaywrightNativeGetStorageStateTool : PlaywrightExecutableTool, SecretResultTrailblazeTool {
 
   override suspend fun executeWithPlaywright(
     page: Page,

@@ -224,6 +224,8 @@ io.ktor:ktor-serialization-kotlinx:3.5.0
 io.ktor:ktor-serialization:3.5.0
 io.ktor:ktor-server-cio-jvm:3.5.0
 io.ktor:ktor-server-cio:3.5.0
+io.ktor:ktor-server-conditional-headers-jvm:3.5.0
+io.ktor:ktor-server-conditional-headers:3.5.0
 io.ktor:ktor-server-content-negotiation-jvm:3.5.0
 io.ktor:ktor-server-content-negotiation:3.5.0
 io.ktor:ktor-server-core-jvm:3.5.0
@@ -232,6 +234,8 @@ io.ktor:ktor-server-cors-jvm:3.5.0
 io.ktor:ktor-server-cors:3.5.0
 io.ktor:ktor-server-netty-jvm:3.5.0
 io.ktor:ktor-server-netty:3.5.0
+io.ktor:ktor-server-partial-content-jvm:3.5.0
+io.ktor:ktor-server-partial-content:3.5.0
 io.ktor:ktor-server-sse-jvm:3.5.0
 io.ktor:ktor-server-sse:3.5.0
 io.ktor:ktor-server-websockets-jvm:3.5.0
