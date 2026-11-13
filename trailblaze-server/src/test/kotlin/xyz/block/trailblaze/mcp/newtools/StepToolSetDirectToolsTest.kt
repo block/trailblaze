@@ -520,6 +520,78 @@ class StepToolSetDirectToolsTest {
   }
 
   @Test
+  fun `a rejected direct tool call leaves no step in the saved recording`() = runTest {
+    // `session save` turns every objective window into a trail step. A call rejected before
+    // anything ran must not open one, or the saved trail carries a step with no recording that
+    // fails replay without an LLM ("prompt step without a recording") or falls through to AI.
+    val sessionId = SessionId("rejected-call-session")
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val toolSet = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> dummyScreenState },
+      rawToolExecutor = { _, _ -> "OK" },
+      logEmitter = LogEmitter { emittedLogs += it },
+      sessionIdProvider = { sessionId },
+    )
+
+    toolSet.step(objective = "Tap a point", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+    val missingArg = toolSet.step(objective = "Missing arg", tools = "- tapOnPoint:\n    x: 100")
+    val unknownTool = toolSet.step(objective = "Unknown tool", tools = "- notARealTool:\n    a: 1")
+    val noTools = toolSet.step(objective = "No tools", tools = "[]")
+
+    assertContains(missingArg, "Failed to parse tools YAML")
+    assertContains(unknownTool, "Unknown tool")
+    assertContains(noTools, "No tools found")
+    assertEquals(
+      listOf("Tap a point", "Tap a point"),
+      emittedLogs.objectiveLogPrompts(),
+    )
+    val steps = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .single()
+      .promptSteps
+    assertEquals(listOf("Tap a point"), steps.map { it.prompt })
+    assertEquals(listOf("tapOnPoint"), steps.single().recording?.tools?.map { it.name })
+  }
+
+  @Test
+  fun `a valid direct tool call that never dispatches leaves no objective window`() = runTest {
+    // Validation passes but nothing runs: the screen never becomes available, or there is no
+    // executor to run on. Neither may open an objective window — an unclosed ObjectiveStart or
+    // an empty Start/Complete pair would surface in `session save` as a step that never ran.
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    fun toolSet(
+      screenState: ScreenState?,
+      rawToolExecutor: (suspend (TrailblazeTool, TraceId?) -> String)?,
+    ) = StepToolSet(
+      screenAnalyzer = throwingScreenAnalyzer,
+      executor = throwingExecutor,
+      screenStateProvider = { _, _, _ -> screenState },
+      rawToolExecutor = rawToolExecutor,
+      logEmitter = LogEmitter { emittedLogs += it },
+      sessionIdProvider = { SessionId("undispatched-call-session") },
+    )
+
+    val noDevice = toolSet(screenState = null, rawToolExecutor = { _, _ -> "OK" })
+      .step(objective = "No device", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+    val noExecutor = toolSet(screenState = dummyScreenState, rawToolExecutor = null)
+      .step(objective = "No executor", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+
+    assertContains(noDevice, "No device connected")
+    assertContains(noExecutor, "not available")
+    assertEquals(emptyList(), emittedLogs.objectiveLogPrompts())
+  }
+
+  private fun List<TrailblazeLog>.objectiveLogPrompts(): List<String> = mapNotNull {
+    when (it) {
+      is TrailblazeLog.ObjectiveStartLog -> it.promptStep.prompt
+      is TrailblazeLog.ObjectiveCompleteLog -> it.promptStep.prompt
+      else -> null
+    }
+  }
+
+  @Test
   fun `a direct assertVisible by ref saves the selector it resolved to, not the ref`() = runTest {
     // `trailblaze tool assertVisible ref=k138` expands, inside the executor, into an
     // assertVisibleBySelector that the agent logs; StepToolSet then logs the raw call as the

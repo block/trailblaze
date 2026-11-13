@@ -681,10 +681,13 @@ class StepToolSet(
   ): DirectToolsValidation {
     val promptStep = DirectionStep(step = objective)
     val stepStartTime = Clock.System.now()
-    emitObjectiveStart(promptStep)
 
+    // No objective logs here: `session save` turns every ObjectiveStart/Complete pair into a
+    // trail step, so opening the window before validation made a call that never ran (unknown
+    // tool, missing required arg, bad YAML) land in the saved trail as a step with no recording,
+    // which then fails replay without an LLM or silently falls through to AI with one. The
+    // window opens in [executeDirectTools], once the tools actually run.
     fun fail(msg: String): DirectToolsValidation.Failed {
-      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
       Console.log("[blaze pre-validation] rejected: $msg")
       return DirectToolsValidation.Failed(
         errorMarkdown = StepResult(executed = false, error = msg).toMarkdown(),
@@ -850,19 +853,15 @@ class StepToolSet(
     snapshotDetails: Set<SnapshotDetail> = emptySet(),
   ): String {
     val toolExecutor = rawToolExecutor
-      ?: run {
-        emitObjectiveComplete(
-          validated.promptStep,
-          validated.stepStartTime,
-          success = false,
-          failureReason = "Direct tool execution not available",
-        )
-        return StepResult(executed = false, error = "Direct tool execution not available").toMarkdown()
-      }
+      ?: return StepResult(executed = false, error = "Direct tool execution not available").toMarkdown()
 
     val promptStep = validated.promptStep
     val stepStartTime = validated.stepStartTime
     val resolvedToolWrappers = validated.resolvedToolWrappers
+
+    // Opened only now that the tools are about to run, so a call that was rejected or never
+    // dispatched leaves no step behind in `session save`. Every return below closes this window.
+    emitObjectiveStart(promptStep)
 
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
