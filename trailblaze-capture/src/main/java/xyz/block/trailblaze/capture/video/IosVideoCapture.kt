@@ -12,6 +12,7 @@ import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.CoreSimulatorTempFiles
+import xyz.block.trailblaze.util.SimctlCommand
 import xyz.block.trailblaze.util.isMacOs
 
 /**
@@ -82,6 +83,9 @@ class IosVideoCapture(
   /** Accumulated (merged) recorder output, filled by the drain thread; read by start-verify/stop. */
   private val processOutput = StringBuilder()
 
+  /** False when `simctl io recordVideo` never started, or has since exited. */
+  override val isRecording: Boolean get() = process?.isAlive == true
+
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
 
@@ -111,14 +115,14 @@ class IosVideoCapture(
       this.spawnedAtMs = nowMs()
       process =
         ProcessBuilder(
-            "xcrun",
-            "simctl",
-            "io",
-            deviceId,
-            "recordVideo",
-            "--codec=h264",
-            "--force",
-            recordingTarget.absolutePath,
+            SimctlCommand.argv(
+              "io",
+              deviceId,
+              "recordVideo",
+              "--codec=h264",
+              "--force",
+              recordingTarget.absolutePath,
+            ),
           )
           .redirectErrorStream(true)
           .start()

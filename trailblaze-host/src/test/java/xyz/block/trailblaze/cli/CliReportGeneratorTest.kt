@@ -217,7 +217,9 @@ class CliReportGeneratorTest {
     val tempDir = Files.createTempDirectory("cli-report-gen-trail-path-test").toFile()
     try {
       val sessionId = SessionId("2026_09_01_trail_path_session")
-      val deviceInfo = androidDeviceInfo()
+      val deviceInfo = androidDeviceInfo().copy(locale = "es-US",
+        classifiers = listOf("android", "phone", "es", "mx").map { xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(it) },
+        metadata = mapOf("executionDeviceClass" to "android-phone-es"))
       val nestedMetadata = mapOf(
         "tracker" to TrailMetadataValue.MapValue(
           mapOf(
@@ -233,7 +235,7 @@ class CliReportGeneratorTest {
         fileName = "001_TrailblazeSessionStatusChangeLog.json",
         log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
           sessionStatus = SessionStatus.Started(
-            trailConfig = TrailConfig(id = "estate/checkout", metadata = nestedMetadata),
+            trailConfig = TrailConfig(id = "estate/checkout", metadata = nestedMetadata, locale = "es-MX"),
             trailFilePath = "trails/estate/C4242-checkout.trail.yaml",
             hasRecordedSteps = true,
             testMethodName = "payAtCheckout",
@@ -285,6 +287,10 @@ class CliReportGeneratorTest {
         "trails/estate/C4242-checkout.trail.yaml",
         report.results.single { it.session_id == sessionId }.trail_file_path,
       )
+      val wire = Json.parseToJsonElement(text).jsonObject.getValue("results").jsonArray
+        .single { it.jsonObject.getValue("session_id").jsonPrimitive.content == sessionId.value }.jsonObject
+      assertEquals("es-MX", wire["locale"]?.jsonPrimitive?.content)
+      assertEquals("android-phone-es", wire["device_classifier"]?.jsonPrimitive?.content)
       val trailResult = report.results.single { it.session_id == sessionId }
       assertEquals(
         "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
@@ -305,6 +311,7 @@ class CliReportGeneratorTest {
         .jsonArray
         .single { it.jsonObject.getValue("session_id").jsonPrimitive.content == harnessId.value }
         .jsonObject
+      assertNull(encodedHarnessRow["locale"])
       assertEquals(
         JsonNull,
         encodedHarnessRow["trail_file_path"],

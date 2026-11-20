@@ -22,7 +22,7 @@
 // type-checked. The single export keeps it a TypeScript module rather than a global
 // script (so `import` statements at the top resolve correctly).
 
-import type { TrailblazeClient } from "@trailblaze/scripting";
+import { memoryKeys, type TrailblazeClient, type TrailblazeMemoryKey } from "@trailblaze/scripting";
 
 // Pure type-level fixture — never instantiated, never invoked. `declare` produces a binding
 // at the type-checker level only, so this file generates no runtime references and would
@@ -87,6 +87,22 @@ void client.callTool("dynamicallyDispatchedTool", { foo: "bar" });
 
 // @ts-expect-error callTool with a known tool name and a wrong-keyed arg
 void client.callTool("inputText", { tex: "wrong key" });
+
+// === Declared memory keys: `memory:` in trailmap.yaml becomes `memoryKeys.<trailmap>.<key>`. ===
+
+// A declared key compiles and is typed as its own name, so `ctx.memory` gets the exact string.
+const contactFormEmail: "contact_form_email" = memoryKeys.playwrightSample.contact_form_email;
+void contactFormEmail;
+
+// @ts-expect-error a key nobody declared is not on `memoryKeys` — a typo fails here, not silently at run time
+void memoryKeys.playwrightSample.contact_from_email;
+
+// `ctx.memory`'s key union is derived from the same grouped declarations, so it needs no second list.
+const declaredKey: TrailblazeMemoryKey = "contact_form_email";
+void declaredKey;
+// @ts-expect-error the derived union holds only declared keys (ctx.memory still takes any string)
+const undeclaredKey: TrailblazeMemoryKey = "contact_from_email";
+void undeclaredKey;
 
 // Marks this file as a TS module — required when using `@ts-expect-error` directives that
 // reference imported symbols. Without it, TS treats the file as a global script and

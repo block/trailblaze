@@ -28,7 +28,6 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -202,6 +201,139 @@ class TrailCommandSaveRecordingTest {
     val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
 
     assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `a replayed run names the steps its self-heal logs repaired by position`() {
+    // A templated step heals with its prose expanded, so the log's prose can't name the authored step.
+    val sessionDir = tempFolder.newFolder()
+    writeLog(sessionDir, "1_SelfHealInvokedLog.json", selfHealInvokedLog(SessionId("s"), "Open https://example.test", 1))
+
+    val run = command().replayedRun(sessionDir, listOf("android", "phone"), emptyList())
+
+    assertEquals(listOf("android", "phone"), run?.deviceClassifiers)
+    assertEquals(setOf(1), run?.healedSteps)
+  }
+
+  @Test
+  fun `a heal logged without its step's position saves the whole recording`() {
+    val sessionDir = tempFolder.newFolder()
+    writeLog(sessionDir, "1_SelfHealInvokedLog.json", selfHealInvokedLog(SessionId("s"), "Open the cart", null))
+
+    assertNull(command().replayedRun(sessionDir, listOf("android"), emptyList()))
+  }
+
+  @Test
+  fun `an AI-driven trailhead's setup tools survive a save whose first step replayed`() {
+    // The trailhead has no recording, so the AI drove it with two tools; the generator keeps the
+    // first in the trailhead and moves the second to step 1, which replayed the android leg.
+    val dir = tempFolder.newFolder()
+    val trail = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply {
+      writeText(
+        """
+        |config:
+        |  id: demo/blazed-trailhead
+        |trailhead:
+        |  step: Launch the sample app
+        |trail:
+        |  - step: Open the cart
+        |    recording:
+        |      android:
+        |        - tapCart:
+        |            label: 'true'
+        |
+        """.trimMargin(),
+      )
+    }
+    val recording = generateSession(
+      trailheadTools = listOf("bootstrapLaunch", "bootstrapSignIn"),
+      stepTools = listOf("tapCart"),
+    )
+
+    command().saveRecordingAsUnified(trail, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val saved = createTrailblazeYaml().decodeUnifiedTrail(trail.readText())
+    assertEquals(listOf("bootstrapLaunch"), saved.trailhead?.recordings?.get("android-phone")?.map { it.name })
+    assertEquals(
+      listOf("bootstrapSignIn", "tapCart"),
+      saved.trail.single().recordings["android-phone"]?.map { it.name },
+      "the trailhead's second tool runs ahead of the leg step 1 replayed",
+    )
+    assertEquals(
+      saved.trail.single().recordings["android"]?.single(),
+      saved.trail.single().recordings["android-phone"]?.get(1),
+      "the replayed tool keeps its authored arguments, not the recorder's capture of it",
+    )
+  }
+
+  @Test
+  fun `a replayed trailhead's extra captured tools stay out of an AI-driven first step`() {
+    val dir = tempFolder.newFolder()
+    val original =
+      """
+      |config:
+      |  id: demo/replayed-trailhead
+      |trailhead:
+      |  step: Launch the sample app
+      |  recording:
+      |    android:
+      |      bootstrapLaunch: {}
+      |trail:
+      |  - step: Open the cart
+      |
+      """.trimMargin()
+    val trail = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(original) }
+    // The replayed trailhead tool ran a nested tool the recorder also captured.
+    val recording = generateSession(
+      trailheadTools = listOf("bootstrapLaunch", "bootstrapSignIn"),
+      stepTools = listOf("tapCart"),
+    )
+
+    command().saveRecordingAsUnified(trail, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val saved = createTrailblazeYaml().decodeUnifiedTrail(trail.readText())
+    assertEquals(setOf("android"), saved.trailhead?.recordings?.keys, "the replayed trailhead gains no leg")
+    assertEquals(
+      listOf("tapCart"),
+      saved.trail.single().recordings["android-phone"]?.map { it.name },
+      "step 1 takes only its own tools, not the trailhead's",
+    )
+  }
+
+  /**
+   * A session that ran a trailhead with [trailheadTools] and one step "Open the cart" with
+   * [stepTools], its recording generated the way a run's is. Returns the recording file.
+   */
+  private fun generateSession(trailheadTools: List<String>, stepTools: List<String>): File {
+    val logsDir = tempFolder.newFolder()
+    val sessionId = SessionId("session-${System.nanoTime()}")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    val trailhead = DirectionStep(step = "Launch the sample app", isTrailhead = true)
+    val step = DirectionStep(step = "Open the cart")
+    var second = 0
+    val logs = buildList {
+      add(startedLog(sessionId, classifier = "android-phone"))
+      add(objectiveStartLog(sessionId, trailhead, atSecond(++second)))
+      trailheadTools.forEach { add(recordableToolLog(sessionId, it, atSecond(++second))) }
+      add(objectiveCompleteLog(sessionId, trailhead, atSecond(++second)))
+      add(objectiveStartLog(sessionId, step, atSecond(++second)))
+      stepTools.forEach { add(recordableToolLog(sessionId, it, atSecond(++second))) }
+      add(objectiveCompleteLog(sessionId, step, atSecond(++second)))
+    }
+    logs.forEachIndexed { i, log -> writeLog(sessionDir, "%03d.json".format(i), log) }
+    command().generateRecordingForSession(sessionId, logsDir)
+    return File(sessionDir, "recording.trail.yaml").also { assertTrue(it.exists(), "the run generated a recording") }
+  }
+
+  @Test
+  fun `an explicit AI re-drive saves every step but still treats the trailhead as replayed`() {
+    // The trailhead replays its recording even under --no-use-recorded-steps.
+    val cmd = command().apply { useRecordedSteps = false }
+
+    val run = cmd.replayedRun(tempFolder.newFolder(), listOf("android"), emptyList())
+
+    assertEquals(true, run?.stepsReRecorded)
+    assertEquals(emptySet(), run?.healedSteps)
   }
 
   // ---------------------------------------------------------------------------
@@ -402,63 +534,6 @@ class TrailCommandSaveRecordingTest {
   }
 
   @Test
-  fun `shouldSaveRecording leaves a trail alone when this device's recording has a raw Maestro step`() {
-    // The raw Maestro step replays but is never recorded, so saving a healed run would write the
-    // step back without it and the next replay would skip that action.
-    val dir = tempFolder.newFolder()
-    writeUnified(
-      dir,
-      UnifiedTrail(
-        config = UnifiedTrailConfig(id = "x", target = "y"),
-        trail = listOf(
-          UnifiedTrailStep(step = "Open the app", recordings = mapOf("android" to listOf(rawMaestro(), tool("myapp_tap")))),
-          UnifiedTrailStep(step = "Check out"),
-        ),
-      ),
-    )
-    val cmd = command(selfHeal = true)
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = true))
-    assertTrue(
-      cmd.shouldSaveRecording(dir, listOf("ios"), selectedDeviceConfiguration = null, selfHealed = false),
-      "another device's first recording replays nothing of android's, so it still saves",
-    )
-    cmd.useRecordedSteps = false
-    assertTrue(
-      cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false),
-      "an AI re-drive records typed tools for every step, so it replaces the Maestro step",
-    )
-  }
-
-  @Test
-  fun `shouldSaveRecording keeps a trailhead's raw Maestro step even when every step is re-recorded`() {
-    // --no-use-recorded-steps re-drives the trail's steps, but the trailhead still replays its
-    // recording, so saving would drop its raw step and the next run would lose its setup.
-    val dir = tempFolder.newFolder()
-    writeUnified(
-      dir,
-      UnifiedTrail(
-        config = UnifiedTrailConfig(id = "x", target = "y"),
-        trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(rawMaestro()))),
-        trail = listOf(UnifiedTrailStep(step = "Check out", recordings = mapOf("android" to listOf(tool("myapp_tap"))))),
-      ),
-    )
-    val cmd = command()
-    cmd.useRecordedSteps = false
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false))
-  }
-
-  @Test
-  fun `shouldSaveRecording leaves a per-device sibling alone when it has a raw Maestro step`() {
-    val cmd = command(selfHeal = true)
-    val dir = tempFolder.newFolder()
-    val trail = File(dir, "source.trail.yaml").apply { writeText("") }
-    File(dir, "android-phone.trail.yaml").writeText(
-      "- prompts:\n  - step: Open the app\n    recording:\n      tools:\n      - mobile_maestro:\n          yaml: x\n",
-    )
-    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = true))
-  }
-
-  @Test
   fun `shouldSaveRecording is false when the trailhead is the only step that can be recorded`() {
     // The trailhead's recording counts like any step's: with the only `trail:` step marked
     // always-AI, the trailhead is everything there is to replay.
@@ -573,7 +648,7 @@ class TrailCommandSaveRecordingTest {
   fun `a phone save adds a phone leg only where its tools differ from the android leg`() {
     // A trail recorded under `android:`; the phone run healed step 2 and reached step 3, which had
     // no recording. Step 1 replayed the android leg unchanged, so a phone copy of it is a duplicate.
-    val cmd = command()
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
       twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)),
@@ -601,7 +676,7 @@ class TrailCommandSaveRecordingTest {
   fun `a phone save on a different driver keeps its whole leg`() {
     // The android leg's tools were recorded for another driver; replaying them under the phone's
     // pin is not what either recording did, so nothing is folded into it.
-    val cmd = command()
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
       twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)),
@@ -627,7 +702,7 @@ class TrailCommandSaveRecordingTest {
   @Test
   fun `a phone save still folds into an android leg whose device entry carries a description`() {
     // A description doesn't change what replays, so it mustn't make the phone keep a duplicate leg.
-    val cmd = command()
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     val base = createTrailblazeYaml().decodeUnifiedTrail(twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)))
     val devices = base.config.devices.orEmpty()
@@ -650,7 +725,7 @@ class TrailCommandSaveRecordingTest {
   @Test
   fun `a phone save keeps its whole leg when the android entry pins another locale`() {
     // The android leg was recorded in Spanish; the phone's English run isn't a copy of it.
-    val cmd = command()
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     val base = createTrailblazeYaml().decodeUnifiedTrail(twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)))
     val devices = base.config.devices.orEmpty()
@@ -687,8 +762,10 @@ class TrailCommandSaveRecordingTest {
   }
 
   @Test
-  fun `a phone save keeps its trailhead leg when it differs from the android trailhead`() {
-    val cmd = command()
+  fun `a re-recorded phone run leaves the android trailhead it replayed alone`() {
+    // The trailhead replays even under --no-use-recorded-steps, so a capture that differs from the
+    // android leg (a masked secret, say) is not this device's own trailhead.
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
       unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "android"),
@@ -700,15 +777,32 @@ class TrailCommandSaveRecordingTest {
     cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
 
     val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(setOf("android"), unified.trailhead?.recordings?.keys)
+  }
+
+  @Test
+  fun `a re-recorded phone run saves a trailhead the AI drove because no leg resolved for it`() {
+    val cmd = reRecord()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "ios"),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(unifiedRecordingYamlWithTrailhead(trailheadToolName = "openPhoneBootstrap", classifier = "android-phone"))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
     assertEquals(listOf("openPhoneBootstrap"), unified.trailhead?.recordings?.get("android-phone")?.map { it.name })
-    assertEquals(setOf("android", "android-phone"), unified.trailhead?.recordings?.keys)
+    assertEquals(setOf("ios", "android-phone"), unified.trailhead?.recordings?.keys)
   }
 
   @Test
   fun `a save never folds into all, which other devices read only after a segment's leg`() {
     // An `android-phone` device reads `android:`, then `phone:`, then `all:`. Dropping the android
     // leg of step 1 for matching `all:` would make that device replay `x` instead of `a`.
-    val cmd = command()
+    val cmd = reRecord()
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
       twoStepsPlusUnrecorded(classifier = "all", tools = listOf("a", "b", null)),
@@ -771,6 +865,33 @@ class TrailCommandSaveRecordingTest {
     val step = createTrailblazeYaml().decodeUnifiedTrail(trail.readText()).trail.single()
     assertEquals(listOf("tapCartHealed"), step.recordings["android-phone"]?.map { it.name })
     assertEquals(listOf("a"), step.recordings["android"]?.map { it.name }, "the replayed leg is preserved")
+  }
+
+  @Test
+  fun `a heal on the only device a trail declares rewrites the broader leg it replayed`() {
+    // The trail runs only on an android-phone, recorded under `android:`. A phone-specific copy
+    // beside it would leave the `android` leg read by no device, so the heal replaces it.
+    val cmd = command(selfHeal = true)
+    val dir = tempFolder.newFolder()
+    val trail = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    writeUnifiedWithSlot(trail, "android")
+    val yaml = createTrailblazeYaml()
+    val written = yaml.decodeUnifiedTrail(trail.readText())
+    val androidEntry = written.config.devices.orEmpty().getValue("android")
+    writeUnified(dir, written.copy(config = written.config.copy(devices = mapOf("android-phone" to androidEntry))))
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writePassedSession(logsDir, toolName = "tapCartHealed", healed = true)
+
+    cmd.saveRecordingAfterPass(
+      trail, sessionId, listOf("android", "phone"), selectedDeviceConfiguration = null, logsDir,
+      generateRecording = false,
+    )
+
+    val step = yaml.decodeUnifiedTrail(trail.readText()).trail.single()
+    assertEquals(
+      mapOf("android" to listOf("tapCartHealed")),
+      step.recordings.mapValues { (_, tools) -> tools.map { it.name } },
+    )
   }
 
   @Test
@@ -1907,9 +2028,9 @@ class TrailCommandSaveRecordingTest {
     return sessionId
   }
 
-  private fun selfHealInvokedLog(sessionId: SessionId) =
+  private fun selfHealInvokedLog(sessionId: SessionId, prompt: String = "Open the cart", stepIndex: Int? = 0) =
     TrailblazeLog.SelfHealInvokedLog(
-      promptStep = DirectionStep(step = "Open the cart"),
+      promptStep = DirectionStep(step = prompt),
       session = sessionId,
       timestamp = atSecond(1),
       recordingResult = PromptRecordingResult.Failure(
@@ -1917,8 +2038,15 @@ class TrailCommandSaveRecordingTest {
         failedTool = tool("a"),
         failureResult = TrailblazeToolResult.Error.ExceptionThrown("element not found"),
       ),
-      stepIndex = 0,
+      stepIndex = stepIndex,
     )
+
+  /**
+   * A command for a run that drove every step itself (`--no-use-recorded-steps`), so its save
+   * merges the whole recording. A replayed run writes only the steps its AI drove
+   * (`ReplayedRunSaveBackTest`), which leaves nothing for these merge-folding cases to fold.
+   */
+  private fun reRecord() = command().apply { useRecordedSteps = false }
 
   /** A command with self-heal pinned, so routing tests don't read ambient env/config. */
   private fun command(selfHeal: Boolean = false) = TrailCommand().apply {
@@ -2017,11 +2145,6 @@ class TrailCommandSaveRecordingTest {
         classifier = classifier,
       ),
     )
-
-  private fun rawMaestro() = TrailblazeToolYamlWrapper(
-    name = "mobile_maestro",
-    trailblazeTool = MaestroTrailblazeTool(yaml = "- back\n"),
-  )
 
   private fun tool(name: String) = TrailblazeToolYamlWrapper(
     name = name,

@@ -1643,6 +1643,7 @@ export interface TrailblazeDeviceInfo {
   classifiers?: string[];
   orientation?: TrailblazeDeviceOrientation;
   advertisedInstanceId?: string | null;
+  initialLocale?: string | null;
   platform?: TrailblazeDevicePlatform;
 }
 

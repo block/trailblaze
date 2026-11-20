@@ -237,6 +237,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
         }
       },
     ) { session ->
+      playwrightTest.prepareRecordingClassifiers(runYamlRequest.yaml)
       TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(
         targetTestApp = runOnHostParams.targetTestApp,
         config = runYamlRequest.config,

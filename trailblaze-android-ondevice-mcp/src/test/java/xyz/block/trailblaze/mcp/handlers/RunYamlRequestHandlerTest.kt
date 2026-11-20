@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -89,6 +90,32 @@ class RunYamlRequestHandlerTest {
    * Happy path: sync dispatch with a callback that returns cleanly → response carries
    * `success = true` and no errorMessage.
    */
+  @Test
+  fun `session start freezes selected declaration and projects only runtime identity`() = runTest {
+    val logs = mutableListOf<TrailblazeLog>()
+    val handler = createHandler(logs = logs,
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) })
+    val yaml = """
+      config:
+        devices:
+          android-phone-es: {driver: ANDROID_ONDEVICE_ACCESSIBILITY, locale: es-MX}
+          android-phone-es-mx: {driver: ANDROID_ONDEVICE_ACCESSIBILITY, locale: es-US}
+      trail:
+        - step: Open app
+          recording:
+            android-phone-es-mx: [openApp: {appId: com.example.app}]
+      """.trimIndent()
+    val result = handler.handle(testRequest.copy(yaml = yaml, awaitCompletion = true,
+      deviceClassifierOverride = listOf("android", "phone", "es")))
+    assertTrue(result is RpcResult.Success)
+    val started = logs.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .map { it.sessionStatus }.filterIsInstance<SessionStatus.Started>().single()
+    assertEquals("es-MX", started.trailConfig?.locale)
+    assertEquals(listOf("android", "phone", "es", "mx"), started.trailblazeDeviceInfo.classifiers.map { it.classifier })
+    assertEquals("android-phone-es", started.trailblazeDeviceInfo.metadata["executionDeviceClass"])
+    assertTrue(started.hasRecordedSteps)
+  }
+
   @Test
   fun `sync success returns response with success=true`() = runTest {
     val handler = createHandler(
@@ -1044,11 +1071,264 @@ class RunYamlRequestHandlerTest {
       .filter { it.session == sessionId && it.sessionStatus is SessionStatus.Ended }
       .map { it.sessionStatus }
 
+  @Test
+  fun `server replacement prepares identity only after the previous callback finishes`() = kotlinx.coroutines.runBlocking {
+    val firstStarted = CompletableDeferred<Unit>()
+    val cancellationStarted = CompletableDeferred<Unit>()
+    val releasePrevious = CompletableDeferred<Unit>()
+    val replacementPrepared = CompletableDeferred<Unit>()
+    val previousIdentity = CompletableDeferred<String>()
+    val replacementRan = CompletableDeferred<Unit>()
+    var identity = ""
+    val logging = TestLoggingRule()
+    val server = xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer(
+      loggingRule = logging,
+      prepareRunYamlRequest = { request ->
+        identity = request.testName
+        if (request.testName == "replacement") replacementPrepared.complete(Unit)
+      },
+      runTrailblazeYaml = { request, session, _ ->
+        if (request.testName == "first") {
+          firstStarted.complete(Unit)
+          try { awaitCancellation() } finally {
+            withContext(NonCancellable) {
+              cancellationStarted.complete(Unit)
+              releasePrevious.await()
+              previousIdentity.complete(identity)
+            }
+          }
+        } else replacementRan.complete(Unit)
+        RunYamlCallbackResult(session)
+      },
+      trailblazeDeviceInfoProvider = { logging.trailblazeDeviceInfoProvider() },
+      screenStateCaptor = { error("No device capture") },
+      waitForSettled = {},
+    )
+    val first = testRequest.copy(testName = "first", awaitCompletion = false,
+      config = testRequest.config.copy(overrideSessionId = SessionId("first")))
+    assertTrue(server.handle(first) is RpcResult.Success)
+    firstStarted.await()
+    val replacement = async { server.handle(first.copy(testName = "replacement",
+      config = first.config.copy(overrideSessionId = SessionId("replacement")))) }
+    try {
+      val firstBoundary = kotlinx.coroutines.selects.select<String> {
+        replacementPrepared.onAwait { "replacement prepared" }
+        cancellationStarted.onAwait { "previous cancelled" }
+      }
+      assertEquals("previous cancelled", firstBoundary)
+      assertEquals("first", identity)
+    } finally { releasePrevious.complete(Unit) }
+    assertTrue(replacement.await() is RpcResult.Success)
+    replacementRan.await()
+    assertEquals("first", previousIdentity.await())
+    assertEquals("replacement", identity)
+  }
+
+  @Test
+  fun `replacement wait times out with a structured wedge response and releases preparation`() = runTest {
+    val release = CompletableDeferred<Unit>()
+    val stopped = CompletableDeferred<Unit>()
+    var preparations = 0
+    val handler = createHandler(
+      probeUiAutomationWedge = { true },
+      runTrailblazeYaml = { request, session, _ ->
+        if (request.testName == "blocked") {
+          try { awaitCancellation() } finally {
+            withContext(NonCancellable) { release.await() }
+            stopped.complete(Unit)
+          }
+        }
+        RunYamlCallbackResult(session)
+      },
+    )
+    handler.prepareRunYamlRequest = { preparations++ }
+    val first = testRequest.copy(testName = "blocked", awaitCompletion = false,
+      config = testRequest.config.copy(overrideSessionId = SessionId("blocked"), sendSessionEndLog = false))
+    handler.handle(first)
+    runCurrent()
+    val replacement = async { handler.handle(first.copy(testName = "replacement",
+      config = first.config.copy(overrideSessionId = SessionId("replacement")))) }
+    try {
+      runCurrent()
+      advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+      runCurrent()
+      assertTrue(replacement.isCompleted, "Replacement must answer within the RPC budget while prior cleanup is wedged")
+      val result = replacement.await()
+      assertTrue(result is RpcResult.Success)
+      assertEquals(false, result.data.success)
+      assertTrue(result.data.errorMessage?.contains("timed out") == true)
+      assertTrue(result.data.nonRecoverableWedge)
+      assertEquals(SessionId("replacement"), result.data.sessionId)
+      assertEquals(1, preparations)
+      val next = async { handler.handle(first.copy(testName = "next")) }
+      advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+      runCurrent()
+      assertTrue(next.isCompleted, "A timed-out replacement must release preparation serialization")
+      next.await()
+    } finally {
+      release.complete(Unit)
+      replacement.cancel()
+      runCurrent()
+      stopped.await()
+    }
+    advanceUntilIdle()
+    val recovered = handler.handle(first.copy(testName = "recovered", awaitCompletion = true))
+    assertTrue(recovered is RpcResult.Success)
+    assertEquals(true, recovered.data.success, "Replacement must run once prior cleanup finishes")
+    assertEquals(2, preparations)
+  }
+
+  @Test
+  fun `cancelled preparation never launches a fire and forget callback`() = runTest {
+    var executions = 0
+    var requester: Job? = null
+    val handler = createHandler(runTrailblazeYaml = { _, session, _ ->
+      executions++
+      RunYamlCallbackResult(session)
+    })
+    handler.prepareRunYamlRequest = { requester!!.cancel() }
+    val request = async {
+      requester = currentCoroutineContext()[Job]
+      handler.handle(testRequest.copy(awaitCompletion = false))
+    }
+    advanceUntilIdle()
+    assertTrue(request.isCancelled)
+    assertEquals(0, executions, "A cancelled request must not enqueue detached execution")
+  }
+
+  @Test
+  fun `prepared execution timeout retains terminal cleanup and the wedge response`() = runTest {
+    val logs = mutableListOf<TrailblazeLog>()
+    val handler = createHandler(logs = logs, probeUiAutomationWedge = { true },
+      runTrailblazeYaml = { _, _, _ -> awaitCancellation() })
+    handler.prepareRunYamlRequest = {}
+    val id = SessionId("prepared_timeout")
+    val pending = async { handler.handle(testRequest.copy(config = testRequest.config.copy(overrideSessionId = id))) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+    advanceUntilIdle()
+    val result = pending.await()
+    assertTrue(result is RpcResult.Success)
+    assertEquals(false, result.data.success)
+    assertTrue(result.data.nonRecoverableWedge)
+    assertEquals(1, logs.sessionEndsFor(id).size)
+    assertTrue(logs.sessionEndsFor(id).single() is SessionStatus.Ended.Cancelled)
+  }
+
+  @Test
+  fun `cancellation during provider processing prevents detached execution`() = runTest {
+    var requester: Job? = null
+    var executions = 0
+    val handler = createHandler(beforeDeviceInfo = { requester!!.cancel() },
+      runTrailblazeYaml = { _, session, _ -> executions++; RunYamlCallbackResult(session) })
+    handler.prepareRunYamlRequest = {}
+    val pending = async {
+      requester = currentCoroutineContext()[Job]
+      handler.handle(testRequest.copy(awaitCompletion = false))
+    }
+    advanceUntilIdle()
+    assertTrue(pending.isCancelled)
+    assertEquals(0, executions)
+  }
+
+  @Test
+  fun `replacement cleanup and execution share one RPC budget`() = runTest {
+    val handler = createHandler(probeUiAutomationWedge = { true },
+      runTrailblazeYaml = { request, _, _ ->
+        try { awaitCancellation() } finally {
+          if (request.testName == "old") withContext(NonCancellable) {
+            kotlinx.coroutines.delay(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS / 2)
+          }
+        }
+      })
+    handler.prepareRunYamlRequest = {}
+    handler.handle(testRequest.copy(testName = "old", awaitCompletion = false))
+    runCurrent()
+    val replacement = async { handler.handle(testRequest.copy(testName = "new")) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+    runCurrent()
+    assertTrue(replacement.isCompleted, "Setup time must count against the execution budget")
+    val result = replacement.await()
+    assertTrue(result is RpcResult.Success)
+    assertEquals(false, result.data.success)
+    assertTrue(result.data.nonRecoverableWedge)
+  }
+
+  @Test
+  fun `timed out run has one terminal log after a different session replaces it`() = runTest {
+    assertTimedOutReplacementEndsOnce(replacementTimesOut = false)
+  }
+
+  @Test
+  fun `timed out run has one terminal log after replacement setup times out`() = runTest {
+    assertTimedOutReplacementEndsOnce(replacementTimesOut = true)
+  }
+
+  private suspend fun TestScope.assertTimedOutReplacementEndsOnce(replacementTimesOut: Boolean) {
+    val logs = mutableListOf<TrailblazeLog>()
+    val oldSession = SessionId("timed_out_session")
+    val newSession = SessionId("replacement_session")
+    val releaseOldCallback = CompletableDeferred<Unit>()
+    val handler = createHandler(
+      logs = logs,
+      runTrailblazeYaml = { _, session, _ ->
+        if (session.sessionId == oldSession) {
+          try {
+            awaitCancellation()
+          } finally {
+            withContext(NonCancellable) { releaseOldCallback.await() }
+          }
+        }
+        RunYamlCallbackResult(session)
+      },
+    )
+    handler.prepareRunYamlRequest = {}
+    val firstRequest = testRequest.copy(
+      awaitCompletion = true,
+      config = testRequest.config.copy(overrideSessionId = oldSession, sendSessionEndLog = true),
+    )
+    try {
+      val first = async { handler.handle(firstRequest) }
+      runCurrent()
+      advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+      runCurrent()
+      val timedOut = first.await()
+      assertTrue(timedOut is RpcResult.Success && timedOut.data.success == false)
+      assertTrue(timedOut.data.errorMessage?.contains("timed out") == true)
+      assertEquals(emptyList(), logs.sessionEndsFor(oldSession))
+
+      val replacementRequest = firstRequest.copy(
+        config = firstRequest.config.copy(overrideSessionId = newSession),
+      )
+      val replacement = async { handler.handle(replacementRequest) }
+      runCurrent()
+      assertFalse(replacement.isCompleted, "Replacement must wait for the old callback to stop")
+      if (replacementTimesOut) {
+        advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1)
+        runCurrent()
+        assertTrue(replacement.isCompleted, "Setup must return within the RPC timeout")
+        val setupTimeout = replacement.await()
+        assertTrue(setupTimeout is RpcResult.Success && setupTimeout.data.success == false)
+      }
+
+      releaseOldCallback.complete(Unit)
+      advanceUntilIdle()
+      val resumed = if (replacementTimesOut) handler.handle(replacementRequest) else replacement.await()
+      assertTrue(resumed is RpcResult.Success && resumed.data.success == true)
+      assertEquals(1, logs.sessionEndsFor(newSession).size)
+      assertEquals(1, logs.sessionEndsFor(oldSession).size, "A timed-out session must have one terminal log")
+      assertTrue(logs.sessionEndsFor(oldSession).single() is SessionStatus.Ended.Cancelled)
+    } finally {
+      releaseOldCallback.complete(Unit)
+      advanceUntilIdle()
+    }
+  }
+
   // ── test infrastructure ──────────────────────────────────────────────────
 
   private fun TestScope.createHandler(
     runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
     progressManager: ProgressSessionManager? = null,
+    beforeDeviceInfo: () -> Unit = {},
     waitForSettled: suspend () -> Unit = { /* no-op */ },
     probeUiAutomationWedge: () -> Boolean = { false },
     /** Collects the sessions the rule exported a trace for — see the trace-export tests. */
@@ -1065,6 +1345,7 @@ class RunYamlRequestHandlerTest {
       loggingRule = loggingRule,
       runTrailblazeYaml = runTrailblazeYaml,
       trailblazeDeviceInfoProvider = { deviceId ->
+        beforeDeviceInfo()
         TrailblazeDeviceInfo(
           trailblazeDeviceId = deviceId,
           trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,

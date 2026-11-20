@@ -5,6 +5,9 @@
 #   scripted tools registers it and a recording can dispatch it by name on any target. A scripted
 #   tool is only dispatchable when some toolset delivers it, and this is the one toolset every driver
 #   always has. Compose and Revyl sessions launch no scripted tools, so it does not reach them.
+# - assertRegionColor: a colour check on an element's rendered pixels
+#   (`trailmaps/trailblaze/tools/assertRegionColor.ts`). Here for the same reason as runIf: it is a
+#   `surfaceToLlm: false` check that recordings dispatch by name on any target.
 #
 # `drivers:` is intentionally omitted. Every driver's agent needs a way to end a step, so this
 # toolset is genuinely driver-agnostic; the
@@ -16,3 +19,4 @@ always_enabled: true
 tools:
   - objectiveStatus
   - runIf
+  - assertRegionColor

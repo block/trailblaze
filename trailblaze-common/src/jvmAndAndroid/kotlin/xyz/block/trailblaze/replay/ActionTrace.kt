@@ -85,7 +85,10 @@ object ActionTrace {
     BUNDLES_LAUNCHED("bundlesLaunched"),
     OBJECTIVE_STARTED("objectiveStarted"),
 
-    /** Inside the driver: entered, settle released, screen captured, action executed. */
+    /**
+     * Inside the driver. Inputs settle and capture before executing; positive visibility
+     * assertions execute before diagnostic capture and omit the extra pre-action settle.
+     */
     DRIVER_ENTERED("driverEntered"),
     SETTLE_RELEASED("settleReleased"),
     CAPTURE_DONE("captureDone"),

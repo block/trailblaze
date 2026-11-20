@@ -7,6 +7,7 @@ import xyz.block.trailblaze.host.ios.SimctlCli
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * **EXPERIMENTAL, opt-in** ([DisableAnimationsGate]). Disables OS-level animations on the device
@@ -252,16 +253,16 @@ object SessionAnimationDisabler {
    * [IosReadOutcome.Unknown] because treating it as unset would restore-by-delete a value we
    * never actually observed.
    */
-  internal fun classifyIosCoefficientRead(read: SimctlCli.Result): IosReadOutcome = when {
+  internal fun classifyIosCoefficientRead(read: SimctlCommand.Result): IosReadOutcome = when {
     read.success -> IosReadOutcome.Value(read.stdout.trim())
     read.stderr.contains("does not exist") -> IosReadOutcome.Unset
     else -> IosReadOutcome.Unknown
   }
 
-  /** [SimctlCli.spawn] that never throws (e.g. missing `xcrun`) — a thrown start is a failed [SimctlCli.Result]. */
-  private fun spawnSafely(udid: String, command: List<String>): SimctlCli.Result =
+  /** [SimctlCli.spawn] that never throws (e.g. missing `xcrun`) — a thrown start is a failed [SimctlCommand.Result]. */
+  private fun spawnSafely(udid: String, command: List<String>): SimctlCommand.Result =
     runCatching { SimctlCli.spawn(udid, command) }
-      .getOrElse { SimctlCli.Result(-1, "", it.message ?: it.javaClass.simpleName) }
+      .getOrElse { SimctlCommand.Result(-1, "", it.message ?: it.javaClass.simpleName) }
 
   private fun installShutdownHookOnce() {
     if (shutdownHookInstalled) return

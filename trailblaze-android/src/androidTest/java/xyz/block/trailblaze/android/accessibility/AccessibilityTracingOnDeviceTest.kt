@@ -50,9 +50,9 @@ import xyz.block.trailblaze.util.Console
  *
  * 6. **No span records a text payload.** `trace.json` is uploaded to the host, packaged into report
  *    artifacts and exported as OpenTelemetry attributes, so a typed password or a
- *    `rememberSensitive` value must not reach it. Actions carry their text in
- *    `AccessibilityAction.description`, which makes "name the action in its span" a one-word change
- *    away from a leak — and one that no other test would notice.
+ *    `rememberSensitive` value must not reach it. Actions carry their text as a field, which makes
+ *    "record the action's fields in its span" a short change away from a leak — and one that no
+ *    other test would notice.
  *
  * The capture runs through [AccessibilityDeviceManager], the way production reaches it, so the
  * driver-level spans are covered too and not just the screen state's own.
@@ -213,8 +213,8 @@ class AccessibilityTracingOnDeviceTest {
     TrailblazeTracer.clear()
     TrailblazeTracer.level = TraceLevel.VERBOSE
 
-    // SetClipboard puts its text straight into `AccessibilityAction.description`, the same way
-    // InputText does, and needs no focused field to dispatch — so it is the cheapest way to drive a
+    // SetClipboard carries a text payload the same way InputText does, and needs no focused field
+    // to dispatch — so it is the cheapest way to drive a
     // text-bearing action through `execute()` for real.
     AccessibilityDeviceManager(deviceClassifiers = emptyList())
       .execute(AccessibilityAction.SetClipboard(SECRET))

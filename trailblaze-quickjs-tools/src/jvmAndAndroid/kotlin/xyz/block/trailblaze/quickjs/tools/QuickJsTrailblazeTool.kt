@@ -257,6 +257,7 @@ class QuickJsTrailblazeTool(
         trailblazePort =
           trailblazePortOrNull(deviceInfo.trailblazeDeviceId),
         classifiers = deviceInfo.classifiers.map { it.classifier },
+        initialLocale = deviceInfo.initialLocale,
       ),
       target = target,
       memory = nonSensitiveMemory,

@@ -30,6 +30,7 @@ import type {
 import { createSessionEvents, type SessionEvents } from "./session-events.js";
 import { createSessionSurveys, type TrailblazeSurveys } from "./session-surveys.js";
 import { createToolHistory, type ToolHistory } from "./history.js";
+import { createScreen, type TrailblazeScreen } from "./screen-image.js";
 import { guardedDuringCleanupBuild, toolSessionForContext, type TrailblazeToolSession } from "./session-undo.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
 import {
@@ -130,6 +131,11 @@ export interface ToolContext {
    * so complete when read. A `teardown` reads the trail section's calls to choose its cleanups.
    */
   history: ToolHistory;
+  /**
+   * What is on the device's screen right now, as pixels: `await ctx.screen.image({ bounds })` for
+   * one element's rectangle, or no bounds for the whole screen. For a tool's own visual checks.
+   */
+  screen: TrailblazeScreen;
 }
 
 /**
@@ -476,6 +482,7 @@ export function defineTypedTool<TInput, TResult>(
         deviceClassifiers: device?.classifiers,
       }),
       history: createToolHistory(client.host),
+      screen: createScreen(client.tools),
     };
     let out: TResult;
     try {
@@ -535,6 +542,7 @@ export function defineTypedTool<TInput, TResult>(
           deviceClassifiers: device?.classifiers,
         }),
         history: createToolHistory(client.host),
+        screen: createScreen(client.tools),
       };
       const result = await teardown(
         validatedArgs as TInput,

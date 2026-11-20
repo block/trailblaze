@@ -5,9 +5,9 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze check [-hV] [--all] [--no-typecheck] [--show-typed-tools]
-                        [--tests-only] [--workspace=<workspaceDir>]
-                        [<trailmap-id>]
+Usage: trailblaze check [-hV] [--all] [--no-tests] [--no-typecheck]
+                        [--show-typed-tools] [--tests-only]
+                        [--workspace=<workspaceDir>] [<trailmap-id>]
 Validate a trailmap: materialize manifests, type-check its TypeScript, run its
 `*.test.ts` tests.
 Type-checking covers TypeScript/JavaScript sources; tests run via `bun test`.
@@ -26,6 +26,11 @@ re-runs `trailblaze check`).
                              specific trailmap tree. Mutually exclusive with
                              the positional <trailmap-id>.
   -h, --help               Show this help message and exit.
+      --no-tests           Skip the trailmaps' `*.test.ts` unit tests; every
+                             other phase still runs. For CI that runs those
+                             tests itself (in parallel, or with its own
+                             timeouts), so `check` does not run them a second
+                             time.
       --no-typecheck       Skip the bundled-tsc typecheck pass — materialize
                              the workspace's SDK + per-trailmap typed bindings
                              and still run `*.test.ts` unit tests via bun.

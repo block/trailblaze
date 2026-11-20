@@ -1,0 +1,21 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze device install [-hV] [-d=<device>] APP
+Install an app on a device, including one borrowed from another machine
+      APP                 The .apk, .app or .zip to install
+  -d, --device=<device>   Device to install on, as `trailblaze device list`
+                            shows it. Defaults to `$TRAILBLAZE_DEVICE` if set,
+                            otherwise this terminal's pin.
+  -h, --help              Show this help message and exit.
+  -V, --version           Print version information and exit.
+
+Android takes an .apk; an iOS simulator takes an .app bundle or a .zip
+holding one. A borrowed device's app is sent to the machine that lends it.
+
+Example:
+  trailblaze device install app-debug.apk --device android/emulator-5554

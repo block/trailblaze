@@ -161,8 +161,10 @@ object AccessibilityTrailRunner {
   /**
    * Runs a list of accessibility actions with standardized error handling and logging.
    *
-   * For each action, the pre-action screen state is captured first (so tap coordinates
-   * overlay on the correct screenshot), then the action executes. Logging runs
+   * Inputs retain a pre-action snapshot so tap coordinates overlay on the correct screenshot.
+   * Positive visibility assertions poll first: settling and capturing a diagnostic screenshot
+   * before looking for an element can outlast a toast. Their diagnostic snapshot is taken after
+   * the assertion and may show a later state when the element is transient. Logging runs
    * asynchronously on a background thread so the next action can start immediately.
    */
   fun runActions(
@@ -173,36 +175,41 @@ object AccessibilityTrailRunner {
     deviceManager: AccessibilityDeviceManager = AccessibilityDeviceManager(),
   ): TrailblazeToolResult {
     for (action in actions) {
-      // Ensure the UI is settled before capturing. In the RPC flow, actions arrive from the
-      // agent without a local settle guarantee — waitForReady() is event-based and returns
-      // immediately if already stable, so this is free when the previous action already settled.
       ActionTrace.mark(ActionTrace.Boundary.DRIVER_ENTERED)
-      deviceManager.waitForReady()
-      ActionTrace.mark(ActionTrace.Boundary.SETTLE_RELEASED)
-
-      // Capture the pre-action screen state so the screenshot shows the UI at the moment
-      // the action was decided — tap coordinates overlay correctly on the target element.
-      val preScreenState = deviceManager.captureScreenStateForLogging()
-      ActionTrace.mark(ActionTrace.Boundary.CAPTURE_DONE)
-
-      val startTime = Clock.System.now()
-
-      // Execute action (gesture dispatch + event-based settle)
-      val (result, executionResult) =
-        try {
-          val execResult = deviceManager.execute(action)
-          TrailblazeToolResult.Success() to execResult
-        } catch (e: Exception) {
-          Console.log("Action failed: ${action.description}: ${e.message}")
-          TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "Failed action: ${action.description}. Error: ${e.message}",
-            stackTrace = e.stackTraceToString(),
-          ) to AccessibilityDeviceManager.ExecutionResult()
-        }
-
-      val durationMs =
-        Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
-      ActionTrace.mark(ActionTrace.Boundary.ACTION_EXECUTED)
+      val observeFirst = action is AccessibilityAction.AssertVisible
+      var startTime = Clock.System.now()
+      var durationMs = 0L
+      val (screenState, outcome) = runWithDiagnosticSnapshot(
+        observeFirst = observeFirst,
+        capture = {
+          // An assertion already polls the live tree itself. Do not put another settle and
+          // screenshot ahead of it; those are diagnostics, not part of its visibility condition.
+          if (!observeFirst) {
+            deviceManager.waitForReady()
+            ActionTrace.mark(ActionTrace.Boundary.SETTLE_RELEASED)
+          }
+          deviceManager.captureScreenStateForLogging().also {
+            ActionTrace.mark(ActionTrace.Boundary.CAPTURE_DONE)
+          }
+        },
+        execute = {
+          startTime = Clock.System.now()
+          val result = try {
+            val execResult = deviceManager.execute(action)
+            TrailblazeToolResult.Success() to execResult
+          } catch (e: Exception) {
+            Console.log("Action failed: ${action.description}: ${e.message}")
+            TrailblazeToolResult.Error.ExceptionThrown(
+              errorMessage = "Failed action: ${action.description}. Error: ${e.message}",
+              stackTrace = e.stackTraceToString(),
+            ) to AccessibilityDeviceManager.ExecutionResult()
+          }
+          durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
+          ActionTrace.mark(ActionTrace.Boundary.ACTION_EXECUTED)
+          result
+        },
+      )
+      val (result, executionResult) = outcome
 
       // With the join deferred, the previous action's uploads are joined HERE — after this
       // action's gesture, where they have already had a full action to finish — instead of in
@@ -217,7 +224,7 @@ object AccessibilityTrailRunner {
       // Map action to driver log format and log asynchronously
       val driverAction = mapToAgentDriverAction(action, executionResult, result)
       val session = sessionProvider.invoke()
-      logAsync(trailblazeLogger, session, preScreenState, driverAction, durationMs, startTime, traceId)
+      logAsync(trailblazeLogger, session, screenState, driverAction, durationMs, startTime, traceId)
       ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOG_QUEUED)
 
       if (result is TrailblazeToolResult.Error) {

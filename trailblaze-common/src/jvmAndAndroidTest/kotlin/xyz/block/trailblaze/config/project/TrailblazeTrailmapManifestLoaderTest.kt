@@ -12,9 +12,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.config.MemoryKeyDeclaration
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.testing.ClasspathFixture
+import xyz.block.trailblaze.testing.InMemoryConfigResourceSource
 import xyz.block.trailblaze.util.Console
 
 class TrailblazeTrailmapManifestLoaderTest {
@@ -319,6 +321,63 @@ class TrailblazeTrailmapManifestLoaderTest {
     }
   }
 
+  @Test
+  fun `loader reads a memory block`() {
+    val tempDir = createTempDirectory("trailmap-loader-test").toFile()
+    try {
+      val trailmapFile = File(tempDir, "trailmap.yaml").apply {
+        writeText(
+          """
+          id: themed
+          memory:
+            theme:
+              description: The run's theme, applied at launch.
+            session_id:
+              description: The session a setup tool opened.
+          """.trimIndent(),
+        )
+      }
+
+      val memory = TrailblazeTrailmapManifestLoader.load(trailmapFile).manifest.memory
+
+      assertEquals(
+        MemoryKeyDeclaration("The run's theme, applied at launch."),
+        memory["theme"],
+      )
+      assertEquals("The session a setup tool opened.", memory["session_id"]?.description)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `loader rejects a memory block with a blank description or a malformed name`() {
+    val tempDir = createTempDirectory("trailmap-loader-test").toFile()
+    try {
+      val trailmapFile = File(tempDir, "trailmap.yaml").apply {
+        writeText(
+          """
+          id: themed
+          memory:
+            theme:
+              description: " "
+            bad-name:
+              description: Not letters, digits and underscores.
+          """.trimIndent(),
+        )
+      }
+
+      val error = kotlin.test.assertFailsWith<TrailblazeProjectConfigException> {
+        TrailblazeTrailmapManifestLoader.load(trailmapFile)
+      }
+
+      assertTrue(error.message!!.contains("memory key 'theme': `description` says what the key is for"), error.message)
+      assertTrue(error.message!!.contains("memory key 'bad-name': a name is letters"), error.message)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
   // ==========================================================================
   // Deprecation warning for the removed `mcp_servers:` field. Removed when the
   // on-device MCP bundle path was retired in favour of the in-process QuickJS
@@ -552,8 +611,10 @@ class TrailblazeTrailmapManifestLoaderTest {
         listOf(
           "ios_openApp",
           "ios_openUrl",
+          "ios_keychain",
           "ios_resetKeychain",
           "ios_setPermissions",
+          "ios_simctl",
           "ios_terminate",
         ),
         toolset.tools,
@@ -710,6 +771,31 @@ class TrailblazeTrailmapManifestLoaderTest {
 
     val ids = discovered.map { it.manifest.id }.toSet()
     assertEquals(setOf("alpha", "beta"), ids)
+  }
+
+  @Test
+  fun `computeClasspathTrailmaps discovers trailmaps and their waypoints through the resource source`() {
+    // Nothing here is on the classpath — the on-device shape, where a classloader cannot enumerate
+    // the APK's assets and only the resource source can.
+    val resources = InMemoryConfigResourceSource(
+      mapOf(
+        "trails/config/trailmaps/alpha/trailmap.yaml" to "id: alpha\ntarget:\n  display_name: Alpha\n",
+        "trails/config/trailmaps/alpha/waypoints/home.waypoint.yaml" to "id: alpha/home\n",
+        "trails/config/trailmaps/alpha/deeper/trailmap.yaml" to "id: ignored\n",
+        // Not under an `<id>/` directory: an asset source hands this back as the bare key `trailmap.yaml`.
+        "trails/config/trailmaps/trailmap.yaml" to "id: stray\ntarget:\n  display_name: Stray\n",
+      ),
+    )
+
+    val discovered = TrailblazeTrailmapManifestLoader.computeClasspathTrailmaps(resources)
+
+    assertEquals(listOf("alpha"), discovered.map { it.manifest.id })
+    val source = discovered.single().source
+    assertEquals(
+      listOf("waypoints/home.waypoint.yaml"),
+      source.listSiblingsRecursive(relativeDir = "waypoints", suffixes = listOf(".waypoint.yaml")),
+    )
+    assertEquals("id: alpha/home\n", source.readSibling("waypoints/home.waypoint.yaml"))
   }
 
   @Test

@@ -19,6 +19,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.host.install.DeviceInstallEndpoint
+import xyz.block.trailblaze.host.install.DeviceInstallRequest
+import xyz.block.trailblaze.host.install.DeviceInstallResponse
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.server.endpoints.CliEndpoints
@@ -234,6 +237,33 @@ class DaemonClient(
       CliShutdownResponse(success = false, message = e.message ?: "Connection failed")
     }
   }
+
+  /**
+   * Installs the app at [path], a file on this machine, on [device], one of the daemon's own devices
+   * or one it borrows. Allows [INSTALL_TIMEOUT_MS]: a borrowed device's app is uploaded first.
+   */
+  suspend fun installApp(device: String, path: String): DeviceInstallResponse = try {
+    val response = client.post("$baseUrl${DeviceInstallEndpoint.PATH}") {
+      // Both: the daemon sends nothing back until the install is done, so the default read timeout
+      // would give up on any upload slower than that.
+      timeout {
+        requestTimeoutMillis = INSTALL_TIMEOUT_MS
+        socketTimeoutMillis = INSTALL_TIMEOUT_MS
+      }
+      contentType(ContentType.Application.Json)
+      setBody(json.encodeToString(DeviceInstallRequest.serializer(), DeviceInstallRequest(device, path)))
+    }
+    val body = response.bodyAsText()
+    runCatching { json.decodeFromString(DeviceInstallResponse.serializer(), body) }
+      .getOrElse { DeviceInstallResponse(success = false, message = "HTTP ${response.status.value}: $body") }
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    DeviceInstallResponse(success = false, message = e.message ?: "Connection to the daemon failed")
+  }
+
+  /** Blocking wrapper for [installApp]. */
+  fun installAppBlocking(device: String, path: String): DeviceInstallResponse = runBlocking { installApp(device, path) }
 
   // ---------------------------------------------------------------------------
   // Blocking convenience wrappers (for non-coroutine callers)
@@ -565,6 +595,14 @@ class DaemonClient(
 
     /** Read timeout for quick responses */
     const val READ_TIMEOUT_MS = 5000L
+
+    /**
+     * An install: a borrowed device's app is zipped, uploaded to its lender, then installed there.
+     * Longer than the daemon's own wait on the lender (35 minutes, `DeviceLeaseClient`), so the
+     * daemon, not this wait, says when it took too long, and the CLI never reports a failure for an
+     * install still running.
+     */
+    const val INSTALL_TIMEOUT_MS = 40 * 60 * 1000L
 
     /** Poll interval when checking async run status after a failed poll */
     const val RUN_POLL_INTERVAL_MS = 1000L

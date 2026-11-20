@@ -10,6 +10,7 @@ import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.ios.SimctlCli
+import xyz.block.trailblaze.util.SimctlCommand
 
 class DeviceLocaleConfiguratorTest {
 
@@ -307,6 +308,11 @@ class DeviceLocaleConfiguratorTest {
     var killsInterrupted: Int = 0,
     val ipad: Boolean? = false,
     val rebootSucceeds: Boolean = true,
+    var region: String? = language?.replace('-', '_'),
+    val regionWriteSucceeds: Boolean = true,
+    val applyRegionWrites: Boolean = true,
+    var secondaryLanguages: List<String> = emptyList(),
+    var regionWriteThrows: Boolean = false,
   ) : DeviceLocaleConfigurator.IosSimulatorHost {
     val events = mutableListOf<String>()
     private var startedPid: Long = springBoardPid ?: 400L
@@ -314,33 +320,55 @@ class DeviceLocaleConfiguratorTest {
     private var polls = 0
     private var now = 0L
 
-    override fun spawn(udid: String, command: List<String>): SimctlCli.Result {
+    override fun spawn(udid: String, command: List<String>): SimctlCommand.Result {
       events += command.joinToString(" ")
       return when (command) {
         DeviceLocaleConfigurator.iosSpringBoardStartedCommand() -> {
           if (restarted && ++polls >= pollsUntilStarted) startedPid = 900L
-          SimctlCli.Result(0, "com.apple.springboard.finishedstartup $startedPid\n", "")
+          SimctlCommand.Result(0, "com.apple.springboard.finishedstartup $startedPid\n", "")
         }
         DeviceLocaleConfigurator.iosStopSpringBoardCommand() -> {
           restarted = stopSucceeds
-          SimctlCli.Result(if (stopSucceeds) 0 else 1, "", "")
+          SimctlCommand.Result(if (stopSucceeds) 0 else 1, "", "")
         }
         else -> {
-          if (applyWrites) language = command.last()
-          SimctlCli.Result(0, "", "")
+          when {
+            command.take(4) == listOf("defaults", "delete", "-g", "AppleLanguages") -> {
+              language = null; secondaryLanguages = emptyList()
+            }
+            command.take(4) == listOf("defaults", "delete", "-g", "AppleLocale") -> region = null
+            command.getOrNull(3) == "AppleLocale" -> {
+              if (regionWriteThrows) {
+                regionWriteThrows = false
+                throw java.io.IOException("simctl could not start")
+              }
+              if (!regionWriteSucceeds) return SimctlCommand.Result(1, "", "region refused")
+              if (applyRegionWrites) region = command.last()
+            }
+            applyWrites -> {
+              language = command.getOrNull(5)
+              secondaryLanguages = command.drop(6)
+            }
+          }
+          SimctlCommand.Result(0, "", "")
         }
       }
     }
 
     override fun primaryLanguage(udid: String): String? = language.also { events += "read" }
 
+    override fun preferredLanguages(udid: String): List<String>? =
+      primaryLanguage(udid)?.let { listOf(it) + secondaryLanguages }
+
+    override fun regionLocale(udid: String): String? = region
+
     override fun springBoardPid(udid: String): Long? = springBoardPid
 
     override fun isIpad(udid: String): Boolean? = ipad
 
-    override fun reboot(udid: String): SimctlCli.Result {
+    override fun reboot(udid: String): SimctlCommand.Result {
       events += "reboot"
-      return SimctlCli.Result(if (rebootSucceeds) 0 else 1, "", if (rebootSucceeds) "" else "boot failed")
+      return SimctlCommand.Result(if (rebootSucceeds) 0 else 1, "", if (rebootSucceeds) "" else "boot failed")
     }
 
     override fun terminate(pid: Long): Boolean {
@@ -355,6 +383,48 @@ class DeviceLocaleConfiguratorTest {
     override fun sleep(ms: Long) {
       now += ms * 1_000_000
     }
+  }
+
+  @Test
+  fun `equal iOS language with wrong region changes both then becomes a no-op`() {
+    val simulator = FakeSimulator(language = "es-MX", region = "es_US")
+    assertTrue(DeviceLocaleConfigurator.applyIosSimulator("REGION-SIM", "es-MX", simulator))
+    assertEquals("es-MX", simulator.language)
+    assertEquals("es_MX", simulator.region)
+    assertTrue(simulator.events.any { it.startsWith("kill") })
+    assertFalse(DeviceLocaleConfigurator.applyIosSimulator("REGION-SIM", "es-MX", simulator))
+  }
+
+  @Test
+  fun `iOS region write failure restores all previous languages and region`() {
+    val simulator = FakeSimulator(language = "en-US", region = "en_US", regionWriteSucceeds = false,
+      secondaryLanguages = listOf("fr-CA"))
+    assertFailsWith<TrailDeviceLocale.PartiallyAppliedException> {
+      DeviceLocaleConfigurator.applyIosSimulator("REGION-FAIL-SIM", "es-MX", simulator)
+    }
+    assertEquals("en-US", simulator.language)
+    assertEquals(listOf("fr-CA"), simulator.secondaryLanguages)
+    assertEquals("en_US", simulator.region)
+  }
+
+  @Test
+  fun `iOS region command exception restores both preferences`() {
+    val simulator = FakeSimulator(language = "en-US", region = "en_US", regionWriteThrows = true)
+    assertFailsWith<TrailDeviceLocale.PartiallyAppliedException> {
+      DeviceLocaleConfigurator.applyIosSimulator("REGION-IO-SIM", "es-MX", simulator)
+    }
+    assertEquals("en-US", simulator.language)
+    assertEquals("en_US", simulator.region)
+  }
+
+  @Test
+  fun `iOS region readback mismatch restores initially absent preferences`() {
+    val simulator = FakeSimulator(language = null, region = null, applyRegionWrites = false)
+    assertFailsWith<TrailDeviceLocale.PartiallyAppliedException> {
+      DeviceLocaleConfigurator.applyIosSimulator("REGION-ABSENT-SIM", "es-MX", simulator)
+    }
+    assertNull(simulator.language)
+    assertNull(simulator.region)
   }
 
   @Test
@@ -376,6 +446,7 @@ class DeviceLocaleConfiguratorTest {
       listOf(
         "read",
         "defaults write -g AppleLanguages -array es",
+        "defaults write -g AppleLocale -string es",
         "read",
         "kill 500",
         "notifyutil -g com.apple.springboard.finishedstartup",
@@ -392,7 +463,7 @@ class DeviceLocaleConfiguratorTest {
     assertTrue(DeviceLocaleConfigurator.applyIosSimulator("IPAD-UDID", "es", simulator))
 
     assertEquals(
-      listOf("read", "defaults write -g AppleLanguages -array es", "read", "reboot"),
+      listOf("read", "defaults write -g AppleLanguages -array es", "defaults write -g AppleLocale -string es", "read", "reboot"),
       simulator.events,
     )
   }
@@ -455,7 +526,7 @@ class DeviceLocaleConfiguratorTest {
 
     assertTrue(DeviceLocaleConfigurator.applyIosSimulator("SIM-UDID", "es", simulator))
 
-    val restart = simulator.events.drop(3)
+    val restart = simulator.events.drop(4)
     // The state before the stop is what the new SpringBoard's post must differ from.
     assertEquals("notifyutil -g com.apple.springboard.finishedstartup", restart.first())
     assertEquals("launchctl stop com.apple.SpringBoard", restart[1])
@@ -585,6 +656,30 @@ class DeviceLocaleConfiguratorTest {
     assertTrue(DeviceLocaleConfigurator.applyForTrail(deviceId, request) { false })
     DeviceLocaleConfigurator.cleanupDone(deviceId)
     assertFalse(DeviceLocaleConfigurator.applyForTrail(deviceId, request) { false })
+  }
+
+  @Test
+  fun `remembers the language it last put a device in, and forgets it when a switch fails`() {
+    val deviceId = TrailblazeDeviceId("applied-locale", TrailblazeDevicePlatform.IOS)
+    assertNull(DeviceLocaleConfigurator.appliedLocale(deviceId))
+
+    DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail("es-US")) { true }
+    assertEquals("es-US", DeviceLocaleConfigurator.appliedLocale(deviceId))
+    // Already in the language: nothing changed, but the device is still known to be in it.
+    DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail("es-US")) { false }
+    assertEquals("es-US", DeviceLocaleConfigurator.appliedLocale(deviceId))
+    // A trail that declares no locale puts the device back in the default.
+    DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail(null)) { true }
+    assertEquals(TrailDeviceLocale.DEFAULT, DeviceLocaleConfigurator.appliedLocale(deviceId))
+    // The recorded tag is the normalized one the device was set to.
+    DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail("es-us")) { true }
+    assertEquals("es-US", DeviceLocaleConfigurator.appliedLocale(deviceId))
+    // A failed switch leaves the device's language unknown.
+    assertFailsWith<IllegalStateException> {
+      DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail("fr")) { error("no command") }
+    }
+    assertNull(DeviceLocaleConfigurator.appliedLocale(deviceId))
+    DeviceLocaleConfigurator.cleanupDone(deviceId)
   }
 
   @Test

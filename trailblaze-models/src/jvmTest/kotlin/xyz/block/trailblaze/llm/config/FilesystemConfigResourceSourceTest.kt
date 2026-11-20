@@ -122,4 +122,20 @@ class FilesystemConfigResourceSourceTest {
 
     assertEquals(setOf("openai"), loaded.keys)
   }
+
+  @Test
+  fun `a filesystem layer wins a single-resource read over the classpath beneath it`() {
+    val path = "${TrailblazeConfigPaths.CONFIG_DIR}/trailmaps/alpha/waypoints/home.waypoint.yaml"
+    File(rootDir, "trailmaps/alpha/waypoints").apply { mkdirs() }
+      .let { File(it, "home.waypoint.yaml").writeText("id: alpha/home # workspace") }
+    val classpath = object : ConfigResourceSource {
+      override fun discoverAndLoad(directoryPath: String, suffix: String) = emptyMap<String, String>()
+      override fun readResource(path: String) = "id: alpha/home # classpath"
+    }
+
+    val composite = CompositeConfigResourceSource(listOf(classpath, FilesystemConfigResourceSource(rootDir)))
+
+    assertEquals("id: alpha/home # workspace", composite.readResource(path))
+    assertEquals(null, FilesystemConfigResourceSource(rootDir).readResource("$path.missing"))
+  }
 }

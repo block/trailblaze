@@ -8,10 +8,13 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import java.io.File
+import kotlin.test.assertFailsWith
 import kotlinx.datetime.Clock
+import kotlinx.serialization.SerializationException
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -62,6 +65,117 @@ class HostRuleNoLoggingTest {
   private val throwingLlmClient = object : DynamicLlmClient {
     override fun createPromptExecutor(): PromptExecutor = error("no LLM in this test")
     override fun createLlmClient(): LLMClient = error("no LLM in this test")
+  }
+
+  @Test
+  fun `malformed YAML clears the previous locale and stops the app before reporting decode failure`() {
+    val original = listOf("ios", "iphone", "es").map(::TrailblazeDeviceClassifier)
+    var classifiersAtStop: List<TrailblazeDeviceClassifier>? = null
+    val rule = object : BaseHostTrailblazeTest(
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      dynamicLlmClient = throwingLlmClient,
+      explicitDeviceId = iosDeviceId,
+      deviceClassifierOverride = original,
+      logsDir = tempFolder.newFolder("malformed-yaml"),
+      noLogging = true,
+    ) {
+      override fun ensureTargetAppIsStopped() {
+        classifiersAtStop = trailblazeDeviceClassifiers
+      }
+    }
+    rule.prepareRecordingClassifiers(
+      """
+      config:
+        devices:
+          ios-iphone-es: {locale: es-MX}
+      trail:
+        - step: Open app
+      """.trimIndent(),
+    )
+    assertThat(rule.trailblazeDeviceClassifiers.map { it.classifier })
+      .isEqualTo(listOf("ios", "iphone", "es", "mx"))
+
+    assertFailsWith<SerializationException> {
+      rule.runTrailblazeYaml(
+        yaml = "config: [",
+        trailblazeDeviceId = iosDeviceId,
+        trailFilePath = null,
+        sendSessionStartLog = false,
+        forceStopApp = true,
+      )
+    }
+    assertThat(classifiersAtStop).isEqualTo(original)
+    assertThat(rule.trailblazeDeviceClassifiers).isEqualTo(original)
+  }
+
+  @Test
+  fun `a conflicting locale declaration still fails before stopping the app`() {
+    var stopped = false
+    val rule = object : BaseHostTrailblazeTest(
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      dynamicLlmClient = throwingLlmClient,
+      explicitDeviceId = iosDeviceId,
+      deviceClassifierOverride = listOf("ios", "iphone", "es", "us").map(::TrailblazeDeviceClassifier),
+      logsDir = tempFolder.newFolder("conflicting-locale"),
+      noLogging = true,
+    ) {
+      override fun ensureTargetAppIsStopped() {
+        stopped = true
+      }
+    }
+    assertFailsWith<IllegalArgumentException> {
+      rule.runTrailblazeYaml(
+        yaml = """
+          config:
+            devices:
+              ios-iphone-es-us: {locale: es-MX}
+          trail:
+            - step: Open app
+        """.trimIndent(),
+        trailblazeDeviceId = iosDeviceId,
+        trailFilePath = null,
+        sendSessionStartLog = false,
+        forceStopApp = true,
+      )
+    }
+    assertThat(stopped).isFalse()
+  }
+
+  @Test
+  fun `successive trails select sources and definitions using the original lane`() {
+    val rule =
+      object :
+        BaseHostTrailblazeTest(
+          trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+          dynamicLlmClient = throwingLlmClient,
+          explicitDeviceId = iosDeviceId,
+          deviceClassifierOverride = listOf("ios", "iphone").map(::TrailblazeDeviceClassifier),
+          logsDir = tempFolder.newFolder("reused-rule"),
+          noLogging = true,
+        ) {
+        override fun ensureTargetAppIsStopped() = Unit
+      }
+    rule.runTrailblazeYaml(
+      yaml =
+        """
+        config:
+          skip: {ios: offline selection test}
+          devices:
+            ios-iphone: {driver: IOS_AXE, locale: es-MX}
+        trail:
+          - step: Open app
+        """
+          .trimIndent(),
+      forceStopApp = false,
+      trailFilePath = null,
+      sendSessionStartLog = true,
+      trailblazeDeviceId = iosDeviceId,
+    )
+    assertThat(rule.trailblazeDeviceClassifiers.map { it.classifier })
+      .isEqualTo(listOf("ios", "iphone", "es", "mx"))
+    rule.runFromResource("regional-reused-rule", forceStopApp = false)
+    assertThat(rule.trailblazeDeviceClassifiers.map { it.classifier })
+      .isEqualTo(listOf("ios", "iphone", "es", "us"))
   }
 
   private fun aLog() = TrailblazeLog.TrailblazeProgressLog(

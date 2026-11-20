@@ -69,7 +69,7 @@ sealed interface IosDriverAction {
 
   /** Types text into the currently focused field. Caller is responsible for focusing first. */
   data class InputText(val text: String) : IosDriverAction {
-    override val description get() = "Input text \"$text\""
+    override val description get() = "Input text"
   }
 
   /** Erases characters by sending [PressKey.BACKSPACE] keycodes. */
@@ -117,8 +117,8 @@ sealed interface IosDriverAction {
      * When true, a timeout-exhausted no-match is treated as success (no-op) instead of an
      * error. Mirrors Maestro's `optional: true` semantics (and the Android accessibility
      * driver's [xyz.block.trailblaze.android.accessibility.AccessibilityAction.TapOnElement])
-     * so recorded `mobile_maestro` blocks that best-effort-dismiss transient dialogs keep
-     * working under the AXe driver.
+     * so recorded taps that best-effort-dismiss transient dialogs keep working under the AXe
+     * driver.
      */
     val optional: Boolean = false,
   ) : IosDriverAction {

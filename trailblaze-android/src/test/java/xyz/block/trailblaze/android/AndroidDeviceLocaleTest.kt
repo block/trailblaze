@@ -5,11 +5,43 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
+import kotlin.test.assertNotNull
+import xyz.block.trailblaze.devices.DeviceClassifierKey
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.AndroidDeviceLocale
 import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.android.AndroidTrailblazeRule.Companion.shouldForceStopTargetApp
 
 class AndroidDeviceLocaleTest {
+
+  @Test
+  fun `host preflight uses the original lane despite a previous regional session`() {
+    val original = listOf("android", "phone").map(::TrailblazeDeviceClassifier)
+    val previousSession = DeviceClassifierKey.withDeclaredLocale(original, "es-MX")
+    val nextTrail =
+      """
+      config:
+        devices:
+          android-phone: {}
+          android-phone-es-mx: {requires: [android-host-execution]}
+      trail:
+        - step: Open app
+      """
+        .trimIndent()
+    val codec = createTrailblazeYaml()
+    assertNull(codec.hostExecutionRefusal(nextTrail, original, null))
+    assertNotNull(codec.hostExecutionRefusal(nextTrail, previousSession, null))
+  }
+
+  @Test
+  fun `regional declaration is forwarded whole and sibling region is not current`() {
+    assertEquals("es-MX", AndroidDeviceLocale.forTrail("es-MX") { "es-US" })
+    assertTrue(AndroidDeviceLocale.isCurrent("es-MX") { "es-MX" })
+    assertFalse(AndroidDeviceLocale.isCurrent("es-MX") { "es-US" })
+  }
+
 
   @Test
   fun `a language change forces a fresh target process`() {

@@ -36,3 +36,10 @@ fun KClass<out TrailblazeTool>.requiresHost(): Boolean = this.trailblazeToolClas
  * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute.
  */
 fun KClass<out TrailblazeTool>.isVerification(): Boolean = this.trailblazeToolClassAnnotation().isVerification
+
+/**
+ * Whether only another tool may call this one — see [TrailblazeToolClass.callableOnlyFromTools].
+ * Null-safe on the annotation so a decoder walking every registered class can ask it of any.
+ */
+fun KClass<out TrailblazeTool>.isCallableOnlyFromTools(): Boolean =
+  findTrailblazeToolClassAnnotationOrNull()?.callableOnlyFromTools == true

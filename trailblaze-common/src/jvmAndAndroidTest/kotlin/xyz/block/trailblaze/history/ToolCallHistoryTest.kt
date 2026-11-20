@@ -32,6 +32,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.ios.tools.IosOpenAppTrailblazeTool
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -52,7 +53,6 @@ import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -208,8 +208,12 @@ class ToolCallHistoryTest {
 
     runCatching {
       run(
-        MaestroTrailblazeTool(
-          """- launchApp: {appId: com.example.app, arguments: {appToken: literal-app-secret, sessionToken: "{{sessionToken}}"}}""",
+        IosOpenAppTrailblazeTool(
+          appId = "com.example.app",
+          arguments = buildJsonObject {
+            put("appToken", "literal-app-secret")
+            put("sessionToken", "{{sessionToken}}")
+          },
         ),
       )
     }

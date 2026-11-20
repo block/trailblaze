@@ -17,6 +17,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.prompt.withPerStepSystemPromptContext
+import xyz.block.trailblaze.prompt.withTrailContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -54,7 +55,7 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * @param maxLlmCalls optional per-step budget, counted in requests sent to the model (not in graph
  *   iterations); null uses [KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS].
  * @param systemPromptTemplate the platform system prompt template (rendered + augmented by the helper);
- *   [appendToSystemPrompt] appends trail `config.context` to it.
+ *   [appendToSystemPrompt] adds trail `config.context` to it as context, not an instruction (see [withTrailContext]).
  */
 class KoogTestAgentRunner(
   private val agent: KoogRunnableAgent,
@@ -76,8 +77,8 @@ class KoogTestAgentRunner(
   /** Dynamic session context re-read before each step (e.g. roster + active device). */
   var perStepSystemPromptContextProvider: (() -> String?)? = null
 
-  /** Mutable so trail `config.context` can be folded in via [appendToSystemPrompt]. */
-  private var currentSystemPrompt: String = systemPromptTemplate
+  /** Trail `config.context` added via [appendToSystemPrompt], cleared by [resetSystemPrompt]. */
+  private var trailContexts: List<String> = emptyList()
 
   override fun run(
     prompt: PromptStep,
@@ -106,11 +107,11 @@ class KoogTestAgentRunner(
   ): AgentTaskStatus = blaze(promptStep, healObjectiveStep(promptStep, recordingResult))
 
   override fun appendToSystemPrompt(context: String) {
-    currentSystemPrompt = currentSystemPrompt + "\n" + context
+    trailContexts = trailContexts + context
   }
 
   override fun resetSystemPrompt() {
-    currentSystemPrompt = systemPromptTemplate
+    trailContexts = emptyList()
   }
 
   /** Runs [objectiveStep] through the graph while the logs name [prompt], the step as written. */
@@ -148,7 +149,7 @@ class KoogTestAgentRunner(
         session = session,
         traceId = traceId,
         maxLlmCalls = maxLlmCalls,
-        systemPromptTemplate = currentSystemPrompt.withPerStepSystemPromptContext(
+        systemPromptTemplate = systemPromptTemplate.withTrailContext(trailContexts).withPerStepSystemPromptContext(
           perStepSystemPromptContextProvider?.invoke(),
         ),
         instrumentation = instrumentation,

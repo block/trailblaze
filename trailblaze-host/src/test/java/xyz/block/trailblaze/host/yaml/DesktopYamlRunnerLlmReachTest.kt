@@ -47,6 +47,26 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
 class DesktopYamlRunnerLlmReachTest {
 
   @Test
+  fun `invalid locale projections complete as misuse before preparing execution`() = runBlocking {
+    for (lane in listOf("ios-iphone-es-us", "ios-iphone-es-custom")) {
+      val yaml =
+        """
+        config:
+          devices:
+            $lane: {driver: IOS_AXE, locale: es-MX}
+        trail:
+          - step: Open app
+      """
+          .trimIndent()
+      val result =
+        runOnHostDevice(yaml, true, false, lane.split("-")) {
+          error("invalid projection must not prepare execution")
+        }
+      assertEquals(true, assertIs<TrailExecutionResult.Failed>(result).misuse)
+    }
+  }
+
+  @Test
   fun `a fully recorded replay with self-heal off cannot reach the AI`() = runBlocking {
     assertEquals(false, runCanReachLlmFor(fullyRecorded, useRecordedSteps = true, selfHeal = false))
   }
@@ -203,6 +223,7 @@ class DesktopYamlRunnerLlmReachTest {
     yaml: String,
     useRecordedSteps: Boolean,
     selfHeal: Boolean,
+    classifierOverride: List<String> = emptyList(),
     instrumentationArgs: suspend (Boolean) -> Map<String, String>,
   ): TrailExecutionResult {
     val tempDir = File.createTempFile("desktop-runner-llm-reach-", "").also {
@@ -256,6 +277,7 @@ class DesktopYamlRunnerLlmReachTest {
           runYamlRequest =
             RunYamlRequest(
               testName = "desktop runner llm reach",
+              deviceClassifierOverride = classifierOverride,
               yaml = yaml,
               trailFilePath = null,
               targetAppName = null,

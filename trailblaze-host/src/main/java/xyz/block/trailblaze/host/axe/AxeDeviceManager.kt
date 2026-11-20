@@ -13,6 +13,7 @@ import xyz.block.trailblaze.host.ios.SimctlCli
 import xyz.block.trailblaze.host.screenstate.AxeScreenState
 import xyz.block.trailblaze.host.screenstate.captureAxeScreenshot
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Manages iOS Simulator interaction through the AXe CLI — the reference [IosDeviceManager].
@@ -71,6 +72,13 @@ class AxeDeviceManager(
 
     /** Settle delay after a gesture before the next describe-ui read. */
     private const val SETTLE_DELAY_MS = 300L
+
+    /**
+     * How long a selector tap waits, once its target is found, for the screen to stop changing
+     * (see [executeTapOnElement]). A screen that animates forever, like a ticking timer, gets
+     * tapped anyway once this runs out.
+     */
+    private const val TAP_SETTLE_TIMEOUT_MS = 2_000L
 
     /**
      * Cap on the post-launch/open-link readiness poll (see [awaitTreeReady]) — past this
@@ -299,6 +307,9 @@ class AxeDeviceManager(
     synchronized(sharedReadLock) { keptTree = null }
   }
 
+  /** Counts [captureTree]'s alert dismissals, so a poll can tell a changed screen from a failed read. */
+  private var alertDismissals = 0
+
   /**
    * Fresh tree capture without waiting — used for selector resolution loops.
    *
@@ -314,6 +325,7 @@ class AxeDeviceManager(
   fun captureTree(shared: Boolean = false): TrailblazeNode? {
     val tree = if (shared) sharedTree() else readTree()
     if (tree != null && maybeDismissNotificationAlert(tree)) {
+      alertDismissals++
       // The dismiss tap just changed the UI, so this capture is stale — it still shows the
       // alert. Returning it would let the caller resolve selectors against a hierarchy that no
       // longer exists; return null so the poll loop that drove this capture re-captures.
@@ -649,24 +661,58 @@ class AxeDeviceManager(
   // capture is just a no-match poll that retries — because resolving against the unclamped
   // tree here would re-open the blind off-screen tap the clamp exists to prevent.
 
+  /**
+   * Taps the selector's match once the screen has stopped changing: two captures in a row must
+   * agree (see [treeContentSignature]) before the tap goes out.
+   *
+   * A pushed screen's rows reach the accessibility tree at their final positions while the push
+   * is still running, and iOS drops touches until the transition finishes. Tapping on the first
+   * capture that matches therefore loses the tap, silently: AXe reports success. Maestro (and so
+   * IOS_HOST) waits for the hierarchy to settle after every action, so it never sees this.
+   *
+   * The wait is bounded by [TAP_SETTLE_TIMEOUT_MS] from the first match and by the action's own
+   * timeout; past either, the latest match is tapped as before.
+   */
   private fun executeTapOnElement(action: IosDriverAction.TapOnElement): ExecutionResult {
     var lastFullTree: TrailblazeNode? = null
     var firstTry = true
+    var previousSignature: List<String>? = null
+    var firstMatchAt: Long? = null
+    // The latest capture's match while the screen is still changing; tapped if time runs out.
+    var unsettledMatch: TrailblazeNode? = null
     val startTime = System.currentTimeMillis()
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
+      val dismissalsBefore = alertDismissals
       val fullTree = captureTree(shared = firstTry)
       firstTry = false
-      if (fullTree != null) {
+      if (fullTree == null) {
+        previousSignature = null
+        // A failed read keeps the last match; a dismissed alert changed the screen under it.
+        if (alertDismissals != dismissalsBefore) unsettledMatch = null
+      } else {
         lastFullTree = fullTree
+        val signature = treeContentSignature(fullTree)
+        val settled = signature == previousSignature
+        previousSignature = signature
         val matched = pickMatch(clampToViewport(fullTree), action.nodeSelector)
+        unsettledMatch = matched
         if (matched != null) {
-          val center = matched.centerPoint()
-            ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
-          tapOrLongPress(center.first, center.second, action.longPress)
-          return ExecutionResult(center.first, center.second)
+          val now = System.currentTimeMillis()
+          val matchedAt = firstMatchAt ?: now.also { firstMatchAt = it }
+          if (settled || now - matchedAt >= TAP_SETTLE_TIMEOUT_MS) {
+            return tapMatch(matched, action, settled, waitedMs = now - matchedAt)
+          }
+          // Matched, but the screen moved since the last capture: re-read straight away. The
+          // describe-ui itself spaces the two captures apart.
+          continue
         }
       }
       Thread.sleep(POLL_INTERVAL_MS)
+    }
+    // Timed out while the target was on screen but the screen hadn't settled: tap it rather than
+    // fail a tap whose target is right there.
+    unsettledMatch?.let { matched ->
+      return tapMatch(matched, action, settled = false, waitedMs = System.currentTimeMillis() - firstMatchAt!!)
     }
     val offViewport = pickMatch(lastFullTree, action.nodeSelector, logMultipleMatches = false)
     if (offViewport != null) {
@@ -696,6 +742,24 @@ class AxeDeviceManager(
       "Element not found for selector: ${action.nodeSelector.description()} " +
         "after ${action.timeoutMs}ms. No fallback coordinates available.",
     )
+  }
+
+  private fun tapMatch(
+    matched: TrailblazeNode,
+    action: IosDriverAction.TapOnElement,
+    settled: Boolean,
+    waitedMs: Long,
+  ): ExecutionResult {
+    if (!settled) {
+      Console.log(
+        "[AxeDeviceManager] tapping '${action.nodeSelector.description()}' on a screen " +
+          "that is still changing (waited ${waitedMs}ms)",
+      )
+    }
+    val center = matched.centerPoint()
+      ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
+    tapOrLongPress(center.first, center.second, action.longPress)
+    return ExecutionResult(center.first, center.second)
   }
 
   private fun executeAssertVisible(action: IosDriverAction.AssertVisible): ExecutionResult {
@@ -819,7 +883,7 @@ class AxeDeviceManager(
     if (!success) error("axe $label failed (exit=$exitCode): ${stderr.trim()}")
   }
 
-  private fun SimctlCli.Result.throwIfError(label: String) {
+  private fun SimctlCommand.Result.throwIfError(label: String) {
     if (!success) error("simctl $label failed (exit=$exitCode): ${stderr.trim()}")
   }
 

@@ -60,4 +60,18 @@ class MaestroCommandConverterInputTextTest {
       "A selector-bearing inputText must name the field it will focus: $namedField",
     )
   }
+
+  @Test
+  fun `a text-bearing action's description never carries its text`() {
+    // The description is printed to logcat, which is uploaded in the session's device.log, so a
+    // typed password must not be in it.
+    val secret = "Typed-Secret-0451"
+    val descriptions = listOf(
+      AccessibilityAction.InputText(text = secret).description,
+      AccessibilityAction.InputText(text = secret, clearFirst = true).description,
+      AccessibilityAction.SetClipboard(secret).description,
+    )
+
+    descriptions.forEach { assertFalse(secret in it, "Description leaks the text: $it") }
+  }
 }

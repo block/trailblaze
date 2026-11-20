@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.coroutines.CompletableDeferred
@@ -25,6 +26,18 @@ class AccessibilityTrailRunnerLogUploadCountTest {
       uploadHeld.complete(Unit)
       AccessibilityTrailRunner.flushLogs()
     }
-    assertEquals(before, AccessibilityTrailRunner.logUploadsInFlight())
+    assertEquals(before, awaitUploadsInFlight(before), "the finished upload is still counted")
+  }
+
+  /**
+   * The count drops in the upload job's completion handler, which can run just after [flushLogs]'s
+   * join returns, so give it a moment rather than reading it once.
+   */
+  private fun awaitUploadsInFlight(expected: Int): Int {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (AccessibilityTrailRunner.logUploadsInFlight() != expected && System.nanoTime() < deadline) {
+      Thread.sleep(10)
+    }
+    return AccessibilityTrailRunner.logUploadsInFlight()
   }
 }

@@ -143,7 +143,7 @@ object SessionCleanups {
 
 /**
  * Stores a tool call to run when the trail ends. Called by `ctx.session.addCleanup`;
- * never offered to the LLM or recorded. Host-local: it runs in the runner's own process (the host
+ * never offered to the LLM or recorded, and refused from a trail step or a direct call. Host-local: it runs in the runner's own process (the host
  * on a host-driven lane, the device on an on-device one), which is where the trail-end run reads
  * the list.
  */
@@ -152,6 +152,8 @@ object SessionCleanups {
   name = RegisterCleanupTrailblazeTool.TOOL_NAME,
   surfaceToLlm = false,
   isRecordable = false,
+  // It runs any tool it is handed at trail end, `exec` included, so only another tool may call it.
+  callableOnlyFromTools = true,
 )
 @LLMDescription("Internal. Runs a tool call when the trail ends; use `ctx.session.addCleanup`.")
 data class RegisterCleanupTrailblazeTool(
@@ -197,16 +199,21 @@ data class RegisterCleanupTrailblazeTool(
     val callArgs = scrubSensitivePayload(call.args, context.memory) as JsonObject
     if (name.isBlank() || name == TOOL_NAME) return Result.failure(IllegalArgumentException("`$name` can't be a cleanup."))
     val repo = context.toolRepo
-    val resolved: TrailblazeTool = if (repo == null) {
-      // Resolved by the agent when it runs instead.
+    context.forwardedToolOnlyRefusal(name, repo)?.let { return Result.failure(IllegalArgumentException(it)) }
+    // With no repo here (a context built for a Compose RPC), the agent resolves the name when the
+    // undo runs. Its by-name lookup never finds a tool-only tool, so decode one of those now, from
+    // the global registry.
+    val lookup = repo ?: TrailblazeToolRepo(TrailblazeToolSet.DynamicTrailblazeToolSet("cleanup-lookup", emptySet()))
+      .takeIf { it.isCallableOnlyFromTools(name) }
+    val resolved: TrailblazeTool = if (lookup == null) {
       OtherTrailblazeTool(name, callArgs)
     } else {
       // The same unknown-key check `ctx.tools` applies, so a misspelled key fails here and not
       // at trail end, where the decoder would drop it and the undo would run without it.
-      JsScriptingCallbackArgumentValidator.validate(repo, name, callArgs.toString())
+      JsScriptingCallbackArgumentValidator.validate(lookup, name, callArgs.toString())
         ?.let { return Result.failure(IllegalArgumentException(it)) }
       try {
-        repo.toolCallToTrailblazeToolUnfiltered(name, callArgs.toString())
+        lookup.toolCallToTrailblazeToolUnfiltered(name, callArgs.toString())
       } catch (e: CancellationException) {
         throw e
       } catch (e: SerializationException) {
@@ -215,9 +222,11 @@ data class RegisterCleanupTrailblazeTool(
     }
     return Result.success(
       SessionCleanups.Cleanup(name, callArgs, resolved) {
-        context.nestedToolExecutor?.invoke(resolved)
-          ?: (resolved as? ExecutableTrailblazeTool)?.execute(context)
-          ?: TrailblazeToolResult.Error.UnknownTrailblazeTool(command = resolved)
+        context.callerArguments.callFromTool {
+          context.nestedToolExecutor?.invoke(resolved)
+            ?: (resolved as? ExecutableTrailblazeTool)?.execute(context)
+            ?: TrailblazeToolResult.Error.UnknownTrailblazeTool(command = resolved)
+        }
       },
     )
   }

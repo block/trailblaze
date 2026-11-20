@@ -11,8 +11,10 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.FakeHostAppTarget
+import xyz.block.trailblaze.host.lease.RemoteDevicePools
 import xyz.block.trailblaze.host.recording.DeviceConnectionService.Companion.connectionBinding
 import xyz.block.trailblaze.recording.DeviceScreenStream
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -73,6 +75,23 @@ class HostDeviceSessionManagerTest {
   /** The stream a [HostDeviceSessionManager.ConnectResult.Ready] handed back. */
   private fun HostDeviceSessionManager.ConnectResult.stream(): DeviceScreenStream =
     (this as HostDeviceSessionManager.ConnectResult.Ready).stream
+
+  @Test
+  fun `overlapping connects and disconnects leave no viewer counted once the session is gone`() {
+    val pools = RemoteDevicePools(poolUrls = { emptyList() })
+    val manager = HostDeviceSessionManager(pools)
+    val rounds = 20_000
+    val connecting = thread {
+      repeat(rounds) { runBlocking { manager.connectIfAbsent(deviceId) { ClosableStubStream() } } }
+    }
+    val attaching = thread { repeat(rounds) { manager.attach(deviceId, ClosableStubStream()); manager.detach(deviceId) } }
+    val removing = thread { repeat(rounds) { manager.remove(deviceId) } }
+    listOf(connecting, attaching, removing).forEach { it.join() }
+    manager.remove(deviceId)
+
+    // A viewer left counted would keep this machine's device from every borrower for good.
+    assertFalse(pools.isLocallyInUse(deviceId.toFullyQualifiedDeviceId()))
+  }
 
   @Test
   fun `attach makes the externally-owned stream visible`() {

@@ -90,6 +90,7 @@ internal suspend fun TrailblazeToolExecutionContext.invokeFrameworkToolByJson(
   toolName: String,
   argsJson: String,
 ): TrailblazeToolResult {
+  forwardedToolOnlyRefusal(toolName, repo)?.let { return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = it) }
   val tool = repo.toolCallToTrailblazeToolUnfiltered(toolName, argsJson)
     ?: error(
       "Unknown framework tool: \"$toolName\". The repo's unfiltered lookup searched " +
@@ -112,7 +113,7 @@ internal suspend fun TrailblazeToolExecutionContext.invokeFrameworkToolByJson(
     // Pass the un-cast `tool` so a `TrailblazeTool` that isn't an `ExecutableTrailblazeTool`
     // still gets a chance to dispatch via the executor — it may handle declarative-only
     // tools (e.g. wrapping them into a recorded trail entry without execute()-ing).
-    return nested.invoke(tool)
+    return callerArguments.callFromTool { nested.invoke(tool) }
   }
   val executable = tool as? ExecutableTrailblazeTool
     ?: error(
@@ -123,5 +124,5 @@ internal suspend fun TrailblazeToolExecutionContext.invokeFrameworkToolByJson(
         "(a) re-implement it as ExecutableTrailblazeTool, or (b) wire the context's " +
         "`nestedToolExecutor` (production agents already do this).",
     )
-  return executable.execute(this)
+  return callerArguments.callFromTool { executable.execute(this) }
 }

@@ -13,6 +13,70 @@ class CliMcpClientParsingTest {
   // ---------------------------------------------------------------------------
 
   @Test
+  fun `a bare platform or no device picks this machine's own device over borrowed ones`() {
+    val listed = CliMcpClient.parseDeviceList(
+      """
+      - emulator-5554 (Android) - Pixel
+      - emulator-5554@localhost:51001 (Android) - Pixel on a workstation
+      - emulator-5556@localhost:51002 (Android) - Pixel on another workstation
+      """.trimIndent(),
+    )
+
+    val picked = with(CliMcpClient) { listed.preferOwnDevices() }
+
+    assertEquals(listOf("emulator-5554"), picked.map { it.instanceId })
+  }
+
+  @Test
+  fun `borrowed devices are the candidates when this machine has none of its own`() {
+    val listed = CliMcpClient.parseDeviceList(
+      """
+      - emulator-5554@localhost:51001 (Android) - Pixel on a workstation
+      - emulator-5556@localhost:51002 (Android) - Pixel on another workstation
+      """.trimIndent(),
+    )
+
+    val picked = with(CliMcpClient) { listed.preferOwnDevices() }
+
+    assertEquals(2, picked.size, "with no device of its own, the choice among borrowed ones stays the user's")
+  }
+
+  @Test
+  fun `the default is this machine's own device, and a fan-out over every device still gets the borrowed ones`() {
+    val listed = CliMcpClient.parseDeviceList(
+      """
+      - emulator-5554 (Android) - Pixel
+      - ABC-123@localhost:51001 (iOS) - iPhone on a workstation
+      """.trimIndent(),
+    )
+
+    val result = classifyConnectedDevices(listed)
+
+    assertEquals(
+      DeviceAutodetectResult.Resolved(
+        deviceSpec = "android/emulator-5554",
+        connectedSpecs = listOf("android/emulator-5554", "ios/ABC-123@localhost:51001"),
+      ),
+      result,
+    )
+  }
+
+  @Test
+  fun `a driver for another platform chooses among every device instead of this machine's own`() {
+    val listed = CliMcpClient.parseDeviceList(
+      """
+      - emulator-5554 (Android) - Pixel
+      - ABC-123@localhost:51001 (iOS) - iPhone on a workstation
+      """.trimIndent(),
+    )
+    val result = classifyConnectedDevices(listed) as DeviceAutodetectResult.Resolved
+
+    assertEquals("android/emulator-5554", result.defaultFor(null))
+    assertEquals("android/emulator-5554", result.defaultFor(TrailblazeDevicePlatform.ANDROID))
+    assertNull(result.defaultFor(TrailblazeDevicePlatform.IOS), "an iOS driver must not be pinned to the Android emulator")
+  }
+
+  @Test
   fun `parseDeviceList parses single Android device`() {
     val content = "  - emulator-5554 (Android) - Google Pixel 6"
     val entries = CliMcpClient.parseDeviceList(content)

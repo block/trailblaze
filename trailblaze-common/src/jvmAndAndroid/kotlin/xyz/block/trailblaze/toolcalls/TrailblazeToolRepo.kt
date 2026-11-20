@@ -66,9 +66,36 @@ class TrailblazeToolRepo(
    */
   private val excludedScriptedToolNames: Set<ToolName> = emptySet(),
 ) {
-  val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
+  /**
+   * Never holds a [TrailblazeToolClass.callableOnlyFromTools] tool: everything that resolves a name
+   * against this set (the agent, MCP tool calls, recorded `OtherTrailblazeTool` steps) is a caller
+   * that is not a tool. A tool reaches one through [toolCallToTrailblazeToolUnfiltered], which also
+   * reads [composableOnlyToolClasses]. Private and only changed under its own lock; read it with
+   * [getRegisteredTrailblazeTools].
+   */
+  private val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
     .asTools()
+    .filterNot { it.isCallableOnlyFromTools() }
     .toMutableSet()
+
+  /**
+   * The [TrailblazeToolClass.callableOnlyFromTools] classes this repo was given. Only the
+   * composition lookups read them, so a tool can still call one a target supplies that the global
+   * registry lacks. Guarded by [registeredTrailblazeToolClasses].
+   */
+  private val composableOnlyToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
+    .asTools()
+    .filter { it.isCallableOnlyFromTools() }
+    .toMutableSet()
+
+  /** True when [name] resolves to a `@TrailblazeToolClass(callableOnlyFromTools = true)` tool. */
+  fun isCallableOnlyFromTools(name: String): Boolean =
+    composableToolClass(ToolName(name))?.isCallableOnlyFromTools() == true
+
+  /** A class-backed tool outside the session's registered set: one only tools may call, then global. */
+  private fun composableToolClass(name: ToolName): KClass<out TrailblazeTool>? =
+    synchronized(registeredTrailblazeToolClasses) { composableOnlyToolClasses.firstOrNull { it.toolName() == name } }
+      ?: TrailblazeSerializationInitializer.buildAllTools()[name]
 
   /** Added by [hideScriptedToolsFromLlm]; guarded by [registeredTrailblazeToolClasses]. */
   private val hiddenScriptedToolNames = mutableSetOf<ToolName>()
@@ -319,7 +346,9 @@ class TrailblazeToolRepo(
       if (!tool.hasSerializableAnnotation()) {
         throw IllegalArgumentException("Class ${tool.qualifiedName} is not serializable. Please add @Serializable from the Kotlin Serialization library.")
       }
-      if (tool.toKoogToolDescriptor() != null) {
+      if (tool.isCallableOnlyFromTools()) {
+        composableOnlyToolClasses.add(tool)
+      } else if (tool.toKoogToolDescriptor() != null) {
         registeredTrailblazeToolClasses.add(tool)
       } else {
         Console.log("Class ${tool.qualifiedName} (${tool.toolName().toolName}) cannot be used by the LLM.  It was not registered.")
@@ -378,6 +407,7 @@ class TrailblazeToolRepo(
 
   fun removeAllTrailblazeTools() = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.clear()
+    composableOnlyToolClasses.clear()
     registeredScriptedToolNames.clear()
     registeredDynamicTools.clear()
     hiddenScriptedToolNames.clear()
@@ -506,17 +536,16 @@ class TrailblazeToolRepo(
     } catch (_: IllegalStateException) {
       // Fall through to the unfiltered global class registry below. It extends the bypass to
       // tools that exist on the classpath but aren't in the session's registered set, which is
-      // the shape inline scripted-tool
-      // composition needs: an author calling `client.callTool("runCommand", …)` from inside
-      // a `.ts` body should reach the framework's `RunCommandTrailblazeTool` even when the
-      // session's target hasn't explicitly listed it in its custom tool classes.
+      // the shape inline scripted-tool composition needs: an author calling `ctx.tools.exec(…)`
+      // from inside a `.ts` body should reach the framework's `ExecTrailblazeTool` even though
+      // the session never registers it.
       val typedName = ToolName(toolName)
       // Global class-backed registry — any class annotated `@TrailblazeToolClass(name=...)`
       // that's been discovered at JVM init. The standard [toolCallToTrailblazeTool] only
       // searches the session's registered classes; this extends the search to every
       // class-backed tool the framework knows about. Required for scripted-tool composition
-      // of host-side helpers like `runCommand` that aren't part of every target's toolset.
-      val toolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName] ?: return null
+      // of host-side helpers like `exec` that aren't part of every target's toolset.
+      val toolClass = composableToolClass(typedName) ?: return null
       @OptIn(InternalSerializationApi::class)
       TrailblazeJsonInstance.decodeFromString(toolClass.serializer(), toolContent)
     }
@@ -584,9 +613,9 @@ class TrailblazeToolRepo(
 
     // Unfiltered fallback — covers [toolCallToTrailblazeToolUnfiltered]'s lookup of global
     // class-backed tools that aren't in the session's registered set. Keeps the unknown-key
-    // check live for scripted bundles that compose host-side helpers like `runCommand` which
+    // check live for scripted bundles that compose host-side helpers like `exec` which
     // intentionally aren't in every target's toolset.
-    val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
+    val globalToolClass = composableToolClass(typedName)
     if (globalToolClass != null) {
       return globalToolClass.serializer().descriptor.elementNames.toSet()
     }
@@ -647,7 +676,7 @@ class TrailblazeToolRepo(
       return classRequiredKeys(sessionClass)
     }
 
-    val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
+    val globalToolClass = composableToolClass(typedName)
     if (globalToolClass != null) {
       return classRequiredKeys(globalToolClass)
     }

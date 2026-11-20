@@ -194,6 +194,11 @@ data class TrailblazeServerState(
      * by setting this to true in their own desktop-app config subclass.
      */
     val requireSteps: Boolean = false,
+    /**
+     * Lend this machine's devices to other Trailblaze daemons, as `TRAILBLAZE_LEASE_DEVICES`
+     * does. Read when the daemon starts.
+     */
+    val lendDevices: Boolean = false,
   ) {
     /**
      * Materializes the user's effective [ScreenshotScalingConfig], substituting framework

@@ -17,9 +17,8 @@ import kotlinx.serialization.json.putJsonObject
  * - [toolCallItemSchema] is the registry-driven half, reused by [TrailYamlSchemaBuilder] for a trail's
  *   `recording:` → `tools:` blocks: one tool call keyed by a known tool id, with that tool's params
  *   offered for completion. Each tool's argument object is left open (`additionalProperties:true`,
- *   nothing required) because the catalog's per-tool `parameters` are lossy for the complex framework
- *   escape-hatches (e.g. `mobile_maestro` reports a single `yaml` param yet is authored with a
- *   `commands:` list) — completion is offered, a tool's body is never flagged.
+ *   nothing required) because the catalog's per-tool `parameters` can be lossy for framework tools
+ *   with custom serializers — completion is offered, a tool's body is never flagged.
  *
  * Pure (inputs in, schema-JSON string out) so it's unit-tested without a daemon — see
  * `ToolYamlSchemaBuilderTest`.
@@ -27,7 +26,7 @@ import kotlinx.serialization.json.putJsonObject
 object ToolYamlSchemaBuilder {
 
   /**
-   * The trailmap that holds framework/built-in tools (e.g. `mobile_maestro`), always in completion
+   * The trailmap that holds framework/built-in tools (e.g. `launchApp`), always in completion
    * scope for a trail. Must match the framework-wide id (`TrailblazeTrailmapManifestLoader.FRAMEWORK_TRAILMAP_ID`,
    * which is `private` there); duplicated as a local const to avoid taking a dependency on that loader
    * just for a string. If the framework trailmap id ever changes, update both.

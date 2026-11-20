@@ -140,6 +140,19 @@ data class FindSelectorMatchesTrailblazeTool(
    * point-in-time question; reach for `0` only to force a fresh capture on purpose.
    */
   val timeoutMs: Long? = null,
+  /**
+   * Opt-in early stop for a [timeoutMs] wait that is likely to come back empty. When `true`, a wait
+   * in which no selector has matched ends once the screen has settled — the same complete tree for
+   * [SettledScreen.DEFAULT_QUIET_WINDOW_MS] and the app idle — instead of running to [timeoutMs].
+   * The result is then all-empty, exactly as a timeout would have returned it.
+   *
+   * For checks for something that usually never appears (an optional prompt, a one-time sheet).
+   * The trade-off: a static loading screen also looks settled, so a slow screen can be answered
+   * "not here" early. Leave it off when the thing waited for appears only after a long, silent
+   * load. Ignored without a [timeoutMs], and a no-op on drivers with no app-idle signal (only the
+   * Android accessibility driver has one today).
+   */
+  val stopWhenSettled: Boolean = false,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
@@ -192,6 +205,7 @@ data class FindSelectorMatchesTrailblazeTool(
             traceTag = traceTag,
             logTag = LOG_TAG,
             describeAbsence = describeAbsence,
+            stopWhenSettled = stopWhenSettled,
             resolve = { tree -> resolveAll(tree, selectorDescs) },
           )
         }
@@ -250,7 +264,8 @@ data class FindSelectorMatchesTrailblazeTool(
     // against the selector count is exactly who needs it to be true.
     return TrailblazeToolResult.Success(
       message = "findSelectorMatches: $total match${if (total == 1) "" else "es"} across " +
-        "$matchedSelectors/${selectors.size} selector(s), from ${resolved.captures} capture(s)",
+        "$matchedSelectors/${selectors.size} selector(s), from ${resolved.captures} capture(s)" +
+        (resolved.settledAfterMs?.let { "; stopped after ${it}ms of ${timeoutMs}ms on a settled screen" } ?: ""),
       structuredContent = structured,
     )
   }

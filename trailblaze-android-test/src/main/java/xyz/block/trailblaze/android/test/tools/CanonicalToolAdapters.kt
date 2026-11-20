@@ -48,7 +48,6 @@ import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
@@ -188,9 +187,8 @@ internal object CanonicalToolAdapters {
     }
 
     is ScrollUntilTextIsVisibleTrailblazeTool -> CanonicalDispatch { target, context ->
-      // Which options this driver's scroll loop can carry out is decided in one place, shared with
-      // the Maestro interpreter's `scrollUntilVisible`, so the two entry points onto the same loop
-      // cannot answer differently. A non-default value refuses rather than being quietly dropped.
+      // Which options this driver's scroll loop can carry out is decided in [ScrollOptionSupport].
+      // A non-default value refuses rather than being quietly dropped.
       val refusal = ScrollOptionSupport.unsupportedDirection(tool.direction)
         ?: ScrollOptionSupport.unsupportedVisibilityPercentage(tool.visibilityPercentage)
       if (refusal != null) {
@@ -309,12 +307,6 @@ internal object CanonicalToolAdapters {
       )
       if (ForeignWindow.frontPackage() == null) target.waitForIdle()
       TrailblazeToolResult.Success(message = "Swiped from ${tool.startRelative} to ${tool.endRelative}.")
-    }
-
-    // Raw Maestro command lists — the shape scripted launch tools fall back to on
-    // every non-accessibility driver. Interpreted per-command; see [MaestroCommandAdapters].
-    is MaestroTrailblazeTool -> CanonicalDispatch { target, context ->
-      MaestroCommandAdapters.run(tool, target, context)
     }
 
     // `wait` is "settle until the UI goes quiet, up to a ceiling" — on Maestro drivers it maps to

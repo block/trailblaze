@@ -284,7 +284,7 @@ export function actionLabel(row: TraceStep): { label: string; detail?: string } 
   const text = selectorText(row, TYPING.test(name) ? ['text'] : TEXT_FIELDS);
   const quoted = text ? `"${text.text}"${text.more ? ` or ${text.more} more` : ''}` : null;
   const derived = quoted ? PHRASES.find(([tool]) => tool.test(name))?.[1](quoted) ?? null : null;
-  const plain = /^(mobile_maestro|_)/.test(name) && row.tool ? row.tool.replace(/^./, (c) => c.toUpperCase()) : humanizeTool(name);
+  const plain = /^_/.test(name) && row.tool ? row.tool.replace(/^./, (c) => c.toUpperCase()) : humanizeTool(name);
   const detail = note || (row.tool || undefined);
   if (note && note.length <= SHORT_NOTE_CHARS) return { label: note, ...(detail ? { detail } : {}) };
   return { label: derived || plain || note, ...(detail ? { detail } : {}) };

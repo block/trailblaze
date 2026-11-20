@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Marshals work from arbitrary threads onto the one thread that calls [drainUntilStopped] — for
@@ -116,4 +117,13 @@ class TestThreadWorkQueue {
 
   private fun stoppedException() =
     IllegalStateException("TestThreadWorkQueue stopped before this work ran")
+}
+
+/** Waits for any non-interruptible instrumentation work before installing replacement identity. */
+internal fun TestThreadWorkQueue.prepareRpcRequest(
+  loggingRule: AndroidTestLoggingRule,
+  request: xyz.block.trailblaze.llm.RunYamlRequest,
+) = kotlinx.coroutines.runBlocking {
+  val requester = currentCoroutineContext()
+  dispatch { loggingRule.prepareRpcRequest(request, beforeInstall = { requester.ensureActive() }) }
 }

@@ -309,7 +309,7 @@ type PlaybackDriveContext = {
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: Array<number | string>; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number; clipSeekAsync?: boolean; documentHead?: { children: any[]; appendChild(el: any): void } };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: Array<number | string>; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number; clipSeekAsync?: boolean; clipBox?: { videoWidth: number; videoHeight: number; clientWidth: number; clientHeight: number }; documentHead?: { children: any[]; appendChild(el: any): void } };
 
 // One viewer at a time. A viewer whose session chunk never lands keeps a 50ms hydration poll
 // running after its test returns, and `document` is a global the harness swaps per call — so that
@@ -342,7 +342,7 @@ afterAll(() => {
 
 function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
   retireEarlierViewers();
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; dlogdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void; tracksBtn?: () => void; track: Record<string, () => void>; rail: Record<string, (e: any) => void>; railKey: Record<string, (e: any) => void> } = { track: {}, rail: {}, railKey: {}, session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, dlogdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -496,6 +496,8 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   const shotWrap: any = {
     marks: [] as string[],
     querySelectorAll: () => shotWrap.marks.map(() => ({ remove: () => { shotWrap.marks = []; } })),
+    // No separate mark layer: a repaint's marks land on the wrap, where these tests read them.
+    querySelector: () => null,
     insertAdjacentHTML: (_position: string, html: string) => { shotWrap.marks.push(html); },
   };
   const shotImg: any = { src: "", alt: "", get complete() { return shotLoaded; }, addEventListener(_name: string, fn: () => void) { handlers.shotLoad = fn; } };
@@ -544,6 +546,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-vdev]") return [...this._h.matchAll(/data-vdev="(\d+)"/g)].map((m: any) => ({ dataset: { vdev: m[1] }, set onclick(fn: () => void) { handlers.vdev[m[1]] = fn; } }));
+      if (sel === "[data-dlogdev]") return [...this._h.matchAll(/data-dlogdev="(\d+)"/g)].map((m: any) => ({ dataset: { dlogdev: m[1] }, set onclick(fn: () => void) { handlers.dlogdev[m[1]] = fn; } }));
       if (sel === "[data-step]") return [...this._h.matchAll(/data-step="(\d+)"/g)].map((m: any) => {
         const el = stepEl(m[1]);
         Object.defineProperty(el, "onclick", { configurable: true, set(fn: () => void) { handlers.step.set(m[1], fn); el.click = fn; } });
@@ -760,6 +763,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   const makeClipNode = (): any => ({
     style: {}, attrs: {} as Record<string, string>, _t: 0, paused: true, playbackRate: 1, seeks: [] as number[], plays: 0, pauses: 0,
     seeking: false, listeners: {} as Record<string, Array<() => void>>,
+    // The element's box and the picture's own size (opts.clipBox), and the mark layer beside it in
+    // the pane, which the viewer fits to the picture letterboxed inside that box.
+    videoWidth: opts.clipBox?.videoWidth ?? 0, videoHeight: opts.clipBox?.videoHeight ?? 0,
+    clientWidth: opts.clipBox?.clientWidth ?? 0, clientHeight: opts.clipBox?.clientHeight ?? 0, offsetLeft: 0, offsetTop: 0,
+    markFrame: { style: {} as Record<string, string> },
+    get parentElement() { const node = this; return { querySelector: (sel: string) => (sel === ".markframe" ? node.markFrame : null) }; },
     get currentTime() { return this._t; },
     set currentTime(v: number) { this._t = v; this.seeks.push(v); if (opts.clipSeekAsync) this.seeking = true; },
     addEventListener(type: string, fn: () => void) { (this.listeners[type] ||= []).push(fn); },
@@ -1375,7 +1384,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickDeviceLog: (k: number) => handlers.dlogdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -1596,7 +1605,7 @@ describe("extractTrace", () => {
           { class: "Tool.Call", tool: "assertVisibleBySelector", args: '{"reasoning":"Check the end time"}' },
           { class: "Tool.Call", tool: "tapOnElementBySelector", args: '{"reasoning":"Open the end time"}' },
           { class: "Tool.Call", tool: "swipe", args: '{"reasoning":"Move to the desired minute"}' },
-          { class: "Tool.Call", tool: "mobile_maestro", args: '{"reasoning":"Confirm the choice"}' },
+          { class: "Tool.Call", tool: "tapOn", args: '{"reasoning":"Confirm the choice"}' },
         ] }],
         llmRequestUsageAndCost: { inputTokens: 10, outputTokens: 5, totalCost: 0.001 },
         durationMs: 100, timestamp: "2024-01-01T00:00:00.500Z",
@@ -1605,7 +1614,7 @@ describe("extractTrace", () => {
       { class: `${T}.MaestroDriverLog`, traceId: "obj8", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 2 }, deviceWidth: 10, deviceHeight: 20, timestamp: "2024-01-01T00:00:02Z" },
       tool("tapOnElementBySelector", { selector: { text: "End time" } }, 3),
       tool("swipe", { swipeOnElementText: "00 minutes" }, 4),
-      tool("mobile_maestro", { commands: "tapOn 50%,91%" }, 5),
+      tool("tapOn", { x: 540, y: 1820 }, 5),
     ];
     const trace = core.extractTrace(logs);
     // Still one folded row per traceId — this fix adds detail, it does not split the row.
@@ -1614,7 +1623,7 @@ describe("extractTrace", () => {
     expect(row.note).toBe("Check the end time");
     // The three calls that actually did the work are now followable.
     expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
-      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+      .toEqual(["tapOnElementBySelector", "swipe", "tapOn"]);
     expect((row.children as Array<Record<string, unknown>>).map((c) => c.note))
       .toEqual(["Open the end time", "Move to the desired minute", "Confirm the choice"]);
     // Device actions stay folded: the row already names the action, so they are not children.
@@ -1622,7 +1631,7 @@ describe("extractTrace", () => {
     // And they survive the share slimming — the standalone report renders from the slimmed shape.
     const slim = (core as any).slimTraceForShare(trace);
     expect(slim.find((r: any) => r.label === "assertVisibleBySelector").children.map((c: any) => c.label))
-      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+      .toEqual(["tapOnElementBySelector", "swipe", "tapOn"]);
     expect(slim.find((r: any) => r.label === "assertVisibleBySelector").children.map((c: any) => c.note))
       .toEqual(["Open the end time", "Move to the desired minute", "Confirm the choice"]);
   });
@@ -1914,8 +1923,8 @@ describe("extractTrace", () => {
     // and which dispatch failed; the fold keeps the list scannable, the per-child ms/ok keep it
     // dissectible, and a failed dispatch is never absorbed into a green ×N.
     const maestro = (s: number, extra: Record<string, unknown> = {}) => ({
-      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th1", successful: true,
-      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text: "Next" } }] } },
+      class: `${T}.TrailblazeToolLog`, toolName: "tapOn", traceId: "th1", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { selector: { text: "Next" } } },
       timestamp: `2024-01-01T00:00:0${s}Z`, ...extra,
     });
     const logs = [
@@ -1935,12 +1944,12 @@ describe("extractTrace", () => {
     const row = trace.find((r) => r.label === "demo_signedInToClientRoute");
     const kids = row.children as Array<Record<string, unknown>>;
     expect(kids.map((c) => [c.label, c.count, c.ms, c.ok])).toEqual([
-      ["mobile_maestro", 3, 300, true],
+      ["tapOn", 3, 300, true],
       ["exec", 1, 40, true],
-      ["mobile_maestro", 1, 900, false],
+      ["tapOn", 1, 900, false],
     ]);
-    // Structured payloads summarize instead of vanishing: maestro names its commands, exec its argv.
-    expect(kids.map((c) => c.tool)).toEqual(["tapOn", "adb shell am broadcast", "tapOn"]);
+    // Structured payloads summarize instead of vanishing: a selector names its target, exec its argv.
+    expect(kids.map((c) => c.tool)).toEqual(["text: Next", "adb shell am broadcast", "text: Next"]);
     // The failed dispatch keeps its error (the JVM log spells it exceptionMessage); passes carry none.
     expect(kids.map((c) => c.err)).toEqual([null, null, "Element not found: Next"]);
     // A structured errorPayload's top-level string `code` rides beside the message; passes carry none.
@@ -2173,12 +2182,11 @@ describe("extractTrace", () => {
   });
 
   test("dispatches whose display summaries collide but whose raw args differ do not fold", () => {
-    // The `tool` summary is lossy (a maestro command summarizes to just its command name), so the
-    // fold must compare the raw args — otherwise a tap on "Next" and a tap on "Back" collapse into
-    // a misleading ×2 of the first.
+    // The `tool` summary is lossy (long text is truncated), so the fold must compare the raw args —
+    // otherwise typing two texts that share a long prefix collapses into a misleading ×2 of the first.
     const tap = (s: number, text: string) => ({
-      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th2", successful: true,
-      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text } }] } },
+      class: `${T}.TrailblazeToolLog`, toolName: "inputText", traceId: "th2", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { text: `${"a shared prefix the summary truncates away ".repeat(2)}${text}` } },
       timestamp: `2024-01-01T00:00:0${s}Z`,
     });
     const logs = [
@@ -2190,7 +2198,9 @@ describe("extractTrace", () => {
       tap(2, "Next"), tap(3, "Back"), tap(4, "Back"),
     ];
     const row = core.extractTrace(logs).find((r) => r.label === "demo_signedInToClientRoute");
-    expect((row.children as Array<Record<string, unknown>>).map((c) => [c.tool, c.count])).toEqual([["tapOn", 1], ["tapOn", 2]]);
+    const kids = row.children as Array<Record<string, unknown>>;
+    expect(new Set(kids.map((c) => c.tool)).size).toBe(1);
+    expect(kids.map((c) => c.count)).toEqual([1, 2]);
   });
 
   test("only an object payload's top-level string `code` becomes a child code (Kotlin failureCodeOf twin)", () => {
@@ -2198,8 +2208,8 @@ describe("extractTrace", () => {
     // non-string `code` values (7, true) all yield null — the chip renders nothing rather
     // than a coerced value the CI classifier would never see.
     const failing = (s: number, errorPayload: unknown) => ({
-      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th3", successful: false,
-      durationMs: 100, errorMessage: "boom", trailblazeTool: { raw: { commands: [{ tapOn: { text: `s${s}` } }] } },
+      class: `${T}.TrailblazeToolLog`, toolName: "tapOn", traceId: "th3", successful: false,
+      durationMs: 100, errorMessage: "boom", trailblazeTool: { raw: { selector: { text: `s${s}` } } },
       timestamp: `2024-01-01T00:00:0${s}Z`, ...(errorPayload !== undefined ? { errorPayload } : {}),
     });
     const logs = [
@@ -4381,6 +4391,107 @@ describe("session recording (the playable clip)", () => {
     });
   });
 
+  test("the timeline pane shows the recording when the step's screenshot was taken, not when its tool started", () => {
+    // A busy device: the tap tool started at 1s, but its driver only captured the screen and
+    // tapped at 2.5s, and the tap took 0.8s. Drivers capture right BEFORE they act, so the
+    // screenshot (and the tap mark drawn over it) shows the screen at 2.5s. The tool's start is the
+    // screen before the step got going, and the tap's end is the screen the tap opened.
+    const busyLogs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open the item" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t1", trailblazeTool: { raw: { text: "Pizza" } }, successful: true, durationMs: 2500, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 270, y: 600 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "tap.png", durationMs: 800, timestamp: "2024-01-01T00:00:02.500Z" },
+    ];
+    const busyTrace = core.extractTrace(busyLogs);
+    const tap = busyTrace.find((t: any) => t.screenshotFile === "tap.png");
+    const busyHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Busy device", status: "passed" }, trace: busyTrace, llmLogs: [], shots: {}, video: recordingAt(T0 - 1000, T0 + 4000, CLIP_BASE64) }],
+    });
+    withObjectUrls(() => {
+      // A 5s window carrying a 5s file, started a second before the run: the capture at run time
+      // 2.5s is 3.5s into the recording. The tool's start would be 2.0s, the tap's end 4.3s.
+      const state = renderViewerState(null, { chunks: chunksOf(busyHtml), session: 0, step: tap.i });
+      state.clipProbes[0].fireMetadata(5);
+      expect(state.clipEl.seeks.at(-1)).toBeCloseTo(3.5, 5);
+    });
+  });
+
+  // A landscape tablet's step: a tap a tenth of the way down a 1920x1080 screen, under a recording.
+  const tabletRecordingHtml = () => {
+    const tabletLogs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open Banking" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t1", trailblazeTool: { raw: { text: "Banking" } }, successful: true, durationMs: 500, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 960, y: 108 }, deviceWidth: 1920, deviceHeight: 1080, screenshotFile: "tap.png", durationMs: 200, timestamp: "2024-01-01T00:00:01.200Z" },
+    ];
+    const tabletTrace = core.extractTrace(tabletLogs);
+    const tap = tabletTrace.find((t: any) => t.screenshotFile === "tap.png");
+    const tabletHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Tablet", status: "passed" }, trace: tabletTrace, llmLogs: [], shots: {}, video: recordingAt(T0 - 1000, T0 + 4000, CLIP_BASE64) }],
+    });
+    return { tabletHtml, tap };
+  };
+  // A stand-in ResizeObserver, so a test can resize the pane's element and see what refits.
+  const withResizeObservers = (fn: (observers: Array<{ fire: () => void; observed: any[]; disconnected: boolean }>) => void) => {
+    const g = globalThis as Record<string, unknown>;
+    const had = "ResizeObserver" in g;
+    const previous = g.ResizeObserver;
+    const observers: Array<{ fire: () => void; observed: any[]; disconnected: boolean }> = [];
+    g.ResizeObserver = class {
+      record: { fire: () => void; observed: any[]; disconnected: boolean };
+      constructor(callback: () => void) { this.record = { fire: () => callback(), observed: [], disconnected: false }; observers.push(this.record); }
+      observe(el: any) { this.record.observed.push(el); this.record.disconnected = false; }
+      disconnect() { this.record.observed = []; this.record.disconnected = true; }
+    };
+    try { fn(observers); } finally { if (had) g.ResizeObserver = previous; else delete g.ResizeObserver; }
+  };
+
+  test("a landscape recording letterboxed in the pane keeps its marks on the screen, not across the bars", () => {
+    // A landscape tablet: the 16:9 recording is clamped to a 641px-wide column but keeps the pane's
+    // 528px height, so object-fit letterboxes it with ~84px of black above and below. A tap a tenth
+    // of the way down the screen belongs a tenth of the way down the PICTURE, not the element.
+    const { tabletHtml, tap } = tabletRecordingHtml();
+    withObjectUrls(() => {
+      let pane = "";
+      const state = renderViewerState(null, {
+        chunks: chunksOf(tabletHtml), session: 0, step: tap.i,
+        clipBox: { videoWidth: 1920, videoHeight: 1080, clientWidth: 641, clientHeight: 528 },
+        drive: (ctx) => { ctx.clipProbes()[0].fireMetadata(5); pane = ctx.paneHtml(); },
+      });
+      // The mark keeps its place in the device's own coordinates, inside the layer...
+      expect(pane).toMatch(/<\/video><div class="markframe"><div class="mark tap" style="left:50%;top:10%">/);
+      // ...and the layer covers the picture: 641 x 1080/1920 = 360.5625px of it, centred in 528px.
+      expect(state.clipEl.markFrame.style).toEqual({ left: "0px", top: "83.719px", width: "641px", height: "360.563px" });
+    });
+  });
+
+  test("the mark layer refits when the recording's size arrives late and when the pane resizes", () => {
+    const { tabletHtml, tap } = tabletRecordingHtml();
+    withResizeObservers((observers) => withObjectUrls(() => {
+      const state = renderViewerState(null, {
+        chunks: chunksOf(tabletHtml), session: 0, step: tap.i,
+        clipBox: { videoWidth: 0, videoHeight: 0, clientWidth: 641, clientHeight: 528 },
+        drive: (ctx) => ctx.clipProbes()[0].fireMetadata(5),
+      });
+      const vid = state.clipEl;
+      const frame = vid.markFrame.style;
+      // The element's own metadata has not arrived: the layer covers the element until it does.
+      expect(frame).toEqual({ left: "", top: "", width: "", height: "" });
+      vid.videoWidth = 1920; vid.videoHeight = 1080;
+      vid.fire("loadedmetadata");
+      expect(frame).toEqual({ left: "0px", top: "83.719px", width: "641px", height: "360.563px" });
+      // A narrower, taller pane (a resized window): 507 x 1080/1920 = 285.1875px, centred in 578px.
+      const observer = observers.find((o) => o.observed.includes(vid))!;
+      vid.clientWidth = 507; vid.clientHeight = 578;
+      observer.fire();
+      expect(frame).toEqual({ left: "0px", top: "146.406px", width: "507px", height: "285.188px" });
+      // Tearing the report down lets go of the replaced report's element.
+      state.live()!.destroy();
+      expect(observer.disconnected).toBe(true);
+      expect(observer.observed).toEqual([]);
+    }));
+  });
+
   test("the Video tab plays the recording itself, and a run without one has no Video tab", () => {
     withObjectUrls(() => {
       const withRecording = renderViewerState(null, { chunks: chunksOf(html), session: 1, tab: "video" });
@@ -4561,6 +4672,56 @@ describe("session recording (the playable clip)", () => {
     const bytes = await Promise.all(played.map((src) => minted[Number(src.split("clip-").at(-1)) - 1].text()));
     // Step 2 ran before the unbind, step 4 after the rebind.
     expect(bytes).toEqual(["FIRSTBIND", "SECONDBIND"]);
+  });
+
+  test("playback picks a step's recording on the clock it plays on, even when its screenshot came after a restart", async () => {
+    // The buyer's step started inside its first recording and captured its screenshot inside the
+    // second. Paused, the pane shows the capture (the second file). Playing, the schedule runs on
+    // each step's start, so the pane has to hold the file that start falls in: the other one would
+    // be driven at its rate and seeked by the first file's timeline.
+    const restartHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" },
+        trace: [
+          { i: 1, label: "Open register", objective: true, ok: true, ts: T0, device: "seller" },
+          { i: 2, label: "Present card", tool: "tapOn", ok: true, ts: T0 + 1000, ms: 2500, device: "buyer", screenshotFile: "card.png", shotTs: T0 + 2800 },
+          { i: 3, label: "Tap Sale", tool: "tapOn", ok: true, ts: T0 + 4000, ms: 100, device: "seller" },
+        ],
+        llmLogs: [], shots: {},
+        video: {
+          ...recordingAt(T0 - 1000, T0 + 4500, SELLER_B64), device: "seller",
+          companions: [
+            { ...recordingAt(T0 + 2500, T0 + 3500, SECOND_BIND_B64), device: "buyer" },
+            { ...recordingAt(T0 + 500, T0 + 1500, FIRST_BIND_B64), device: "buyer" },
+          ],
+        },
+      }],
+    });
+    const clipOf = (paneHtml: string) => (paneHtml.match(/id="tlvclip"[^>]*? src="blob:[^"]*clip-(\d+)"/) || [])[1];
+    let paused = "";
+    let playing = "";
+    const minted = withObjectUrls((minted) => {
+      const still = renderViewerState(null, { chunks: chunksOf(restartHtml), session: 0, step: 2 });
+      still.clipProbes.at(-1)!.fireMetadata(1);
+      expect(still.clipEl.seeks.at(-1)).toBeCloseTo(0.3, 5);
+      paused = still.clipProbes.at(-1)!.src.split("clip-").at(-1)!;
+      renderViewerState(null, {
+        chunks: chunksOf(restartHtml), session: 0, step: 1,
+        drive: (ctx) => {
+          for (const probe of ctx.clipProbes()) probe.fireMetadata(probe.src.endsWith(paused) ? 1 : 5.5);
+          ctx.play();
+          ctx.advance(1100);
+          for (const probe of ctx.clipProbes()) probe.fireMetadata(probe.src.endsWith(paused) ? 1 : 5.5);
+          ctx.advance(16);
+          playing = clipOf(ctx.paneHtml()) ?? "";
+        },
+      });
+      return minted;
+    });
+    expect(await minted[Number(paused) - 1].text()).toBe("SECONDBIND");
+    expect(playing).not.toBe("");
+    expect(await minted[Number(playing) - 1].text()).toBe("FIRSTBIND");
   });
 
   test("a folded dispatch after the rebind plays the later recording, though its row began before", async () => {
@@ -6485,6 +6646,16 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain("tltracksbtn");
   });
 
+  test("an LLM token count that is not a number shows as a dash, never as its raw text", () => {
+    const trace = [{ i: 1, label: "LLM Request", tool: "llm · model", objective: false, ok: true, ts: 2, ms: 100, llm: 0 }];
+    const llm = [{ model: "model", inputTokens: "<b>9</b>", outputTokens: Number.NaN, cacheReadTokens: 0, totalCost: 0.001, promptCost: null, completionCost: null, cacheSavings: 0, comp: null, durationMs: 100, label: "LLM Request", instructions: null, response: [] }];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm, shots: {} }] }, { tab: "timeline" });
+    expect(out).toContain("model · in —");
+    expect(out).not.toContain("<b>9</b>");
+    expect(out).not.toContain("&lt;b&gt;9");
+    expect(out).not.toContain("NaN");
+  });
+
   test("the scrubber distinguishes neutral step landmarks from actual LLM calls", () => {
     const trace = [
       { i: 1, label: "Complete checkout", tool: "agent step", objective: true, ok: true, ts: 1, ms: 0 },
@@ -6628,8 +6799,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
   // an exec, and (optionally) one failed dispatch.
   const compositeToolLogs = (failLast: boolean) => {
     const maestro = (s: number, extra: Record<string, unknown> = {}) => ({
-      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "thv", successful: true,
-      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text: "Next" } }] } },
+      class: `${T}.TrailblazeToolLog`, toolName: "tapOn", traceId: "thv", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { selector: { text: "Next" } } },
       timestamp: `2024-01-01T00:00:${String(s).padStart(2, "0")}Z`, ...extra,
     });
     return [
@@ -6653,7 +6824,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     // names the slowest dispatch, and no child rows render until the reader expands.
     expect(out).toContain('data-open="0"');
     expect(out).toContain('7 tool dispatches · slowest <span class="mono">demo_signInViaUI</span> 6.0s');
-    expect(out).not.toContain('<span class="kt mono">tapOn</span>');
+    expect(out).not.toContain('<span class="kt mono">text: Next</span>');
     // The composite call itself stays fully legible: every parameter on its own line, not the
     // summarized three-key crop ordinary rows get.
     expect(out).toContain('<div class="tl-tool mono">startingClientRoute=/dl/view/activity</div>');
@@ -6674,7 +6845,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('1 failed</span><span class="kidcode">navigation</span>');
     expect(out).toContain('<div class="kiderr"><span class="kidcode">navigation</span>Deep link route crashed</div>');
     // The passing plumbing stays hidden.
-    expect(out).not.toContain('<span class="kt mono">tapOn</span>');
+    expect(out).not.toContain('<span class="kt mono">text: Next</span>');
   });
 
   test("toggling the dispatch list survives the re-render its own click causes", () => {
@@ -6688,7 +6859,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain(`data-kids="${Number(row.i)}" data-open="1"`);
     expect(out).toContain('<span class="kcount">×3</span>');
     expect(out).toContain('<span class="kms">300ms</span>');
-    expect(out).toContain('<span class="kt mono">tapOn</span>');
+    expect(out).toContain('<span class="kt mono">text: Next</span>');
     expect(out).toContain('<span class="kt mono">adb shell am broadcast</span>');
   });
 
@@ -7725,8 +7896,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     const row = (extra: Record<string, unknown>) => ({ note: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], err: null, ...extra });
     const trace = [
       row({ i: 1, label: "Launch signed in", tool: "agent step", ms: 0, ts: 1, ok: true, objective: true, trailhead: true }),
-      row({ i: 2, label: "mobile_maestro", tool: "", ms: 100, ts: 2, ok: false }),
-      row({ i: 3, label: "mobile_maestro", tool: "", ms: 100, ts: 3, ok: true }),
+      row({ i: 2, label: "tapOn", tool: "", ms: 100, ts: 2, ok: false }),
+      row({ i: 3, label: "tapOn", tool: "", ms: 100, ts: 3, ok: true }),
       row({ i: 4, label: "Verify the landing screen", tool: "agent step", ms: 0, ts: 4, ok: true, objective: true }),
       row({ i: 5, label: "assertVisibleBySelector", tool: "desc: Money", ms: 10, ts: 5, ok: true }),
       row({ i: 6, label: "Assert the login journey uploaded", tool: "agent step", ms: 0, ts: 6, ok: false, objective: true, err: "Error: Did not find any uploaded user journey named 'login'" }),
@@ -9501,6 +9672,12 @@ describe("formatted event streams (EventStream.rows)", () => {
 describe("named stream links (?stream=)", () => {
   const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
   const eventStream = (name: string) => ({ name, total: 1, truncated: false, events: [{ t: 1, d: "{}" }] });
+  const waitForStreams = async (state: ReturnType<typeof renderViewerState>) => {
+    for (let i = 0; i < 100 && !state.liveHtml().includes('data-tlstream="0"'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(state.liveHtml()).toContain('data-tlstream="0"');
+  };
   const payload = {
     generatedAt: "now",
     sessions: [{
@@ -9563,7 +9740,7 @@ describe("named stream links (?stream=)", () => {
       generatedAt: "now",
       sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsGz: gz([eventStream("analytics"), eventStream("com.example.plugin.network")]) }],
     }, { query: "?tab=timeline&stream=network" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForStreams(state);
     expect(state.liveHtml()).toContain('aria-label="Streams, 1 of 2 selected"');
     expect(state.liveHtml()).toContain('type="checkbox" data-tlstream="1" checked');
     expect(state.readRoute()).toContain("streams=1");
@@ -9575,13 +9752,12 @@ describe("named stream links (?stream=)", () => {
       generatedAt: "now",
       sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsGz: gz([eventStream("analytics"), eventStream("com.example.plugin.network")]) }],
     };
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
     test("the URL keeps stream=<name> until it resolves, then carries the resolved streams= index", async () => {
       const state = renderViewerState(compressed, { query: "?tab=timeline&stream=network" });
       expect(state.readRoute()).toContain("stream=network");
       expect(state.readRoute()).not.toContain("streams=");
-      await settle();
+      await waitForStreams(state);
       expect(state.readRoute()).toContain("streams=1");
       expect(state.readRoute()).not.toContain("stream=");
     });
@@ -9589,7 +9765,7 @@ describe("named stream links (?stream=)", () => {
     test("a later route with streams= wins over a name that resolves afterwards", async () => {
       const state = renderViewerState(compressed, { query: "?tab=timeline&stream=network" });
       state.firePopstate("?tab=timeline&streams=0");
-      await settle();
+      await waitForStreams(state);
       expect(state.readRoute()).toContain("streams=0");
       expect(state.readRoute()).not.toContain("stream=");
       expect(state.liveHtml()).toContain('type="checkbox" data-tlstream="0" checked');
@@ -15238,5 +15414,142 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     expect(out).toContain('data-cmp-side="base" data-cmp-run="1" aria-pressed="true"');
     expect(out).toContain('<span class="dl dl-del">− text: <mark class="dlhi">Bagel</mark></span><span class="dl dl-add">+ text: <mark class="dlhi">Coffee</mark></span>');
     expect(out).toContain('only in <span class="cmppairtag base"');
+  });
+});
+
+describe("companion device logs (SessionPayload.companionDeviceLogs)", () => {
+  const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
+  const gzText = (value: string) => require("zlib").gzipSync(value).toString("base64");
+  const session = (extra: Record<string, unknown>) => ({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Sale", status: "failed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, ...extra }],
+  });
+  const twoDevices = () => session({
+    deviceLog: "I/Seller: register ready",
+    deviceLogDevice: "seller",
+    companionDeviceLogs: [{ device: "buyer", deviceLog: "I/Buyer: display ready\nE/AndroidRuntime: FATAL EXCEPTION: main", deviceLogGz: null }],
+  });
+  const settled = async (read: () => string, needle: string): Promise<string> => {
+    for (let i = 0; i < 100 && !read().includes(needle); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    return read();
+  };
+
+  test("the Device logs tab opens on the start device's log and offers every device", () => {
+    const state = renderViewerState(twoDevices(), { tab: "device" });
+    const html = state.readHtml();
+    expect(html).toMatch(/<button class="btn dlogdev on"[^>]*>seller<\/button>/);
+    expect(html).toMatch(/<button class="btn dlogdev"[^>]*>buyer<\/button>/);
+    expect(html).toContain("Device log · seller");
+    expect(html).toContain("I/Seller: register ready");
+    expect(html).not.toContain("I/Buyer: display ready");
+  });
+
+  test("picking a companion shows that device's log, with severity coloring", () => {
+    const state = renderViewerState(twoDevices(), { tab: "device" });
+    (state as any).clickDeviceLog(1);
+    const html = state.readHtml();
+    expect(html).toMatch(/<button class="btn dlogdev on"[^>]*>buyer<\/button>/);
+    expect(html).toContain("Device log · buyer");
+    expect(html).toContain("I/Buyer: display ready");
+    expect(html).toContain('<div class="ln e">E/AndroidRuntime: FATAL EXCEPTION: main</div>');
+    expect(html).not.toContain("I/Seller: register ready");
+    expect(html).toContain("2 lines");
+  });
+
+  test("a compressed companion log inflates and shows once picked", async () => {
+    const buyer = Array.from({ length: 2000 }, (_, i) => `I/Buyer(${i}): line ${i}`).join("\n");
+    const state = renderViewerState(session({
+      deviceLog: "I/Seller: register ready",
+      deviceLogDevice: "seller",
+      companionDeviceLogs: [{ device: "buyer", deviceLog: null, deviceLogGz: gzText(buyer) }],
+    }), { tab: "device" });
+    (state as any).clickDeviceLog(1);
+    const html = await settled(state.readHtml, "line 1999");
+    expect(html).toContain("I/Buyer(0): line 0");
+    expect(html).toContain("2000 lines");
+  });
+
+  test("a device bound twice gets a button per log, and each opens its own", () => {
+    const state = renderViewerState(session({
+      deviceLog: "I/Seller: ready",
+      deviceLogDevice: "seller",
+      companionDeviceLogs: [
+        { device: "buyer", deviceLog: "I/Buyer: first bind", deviceLogGz: null },
+        { device: "buyer", deviceLog: "I/Buyer: second bind", deviceLogGz: null },
+      ],
+    }), { tab: "device" });
+    expect(state.readHtml()).toMatch(/data-dlogdev="2"[^>]*>buyer \(2\)<\/button>/);
+    (state as any).clickDeviceLog(2);
+    expect(state.readHtml()).toContain("I/Buyer: second bind");
+    (state as any).clickDeviceLog(1);
+    expect(state.readHtml()).toContain("I/Buyer: first bind");
+  });
+
+  test("a device literally named `buyer (2)` opens its own log, not the buyer's second bind", () => {
+    const state = renderViewerState(session({
+      deviceLog: "I/Seller: ready",
+      deviceLogDevice: "seller",
+      companionDeviceLogs: [
+        { device: "buyer", deviceLog: "I/Buyer: first bind", deviceLogGz: null },
+        { device: "buyer", deviceLog: "I/Buyer: second bind", deviceLogGz: null },
+        { device: "buyer (2)", deviceLog: "I/Other: its own device", deviceLogGz: null },
+      ],
+    }), { tab: "device" });
+    (state as any).clickDeviceLog(3);
+    expect(state.readHtml()).toContain("I/Other: its own device");
+    expect(state.readHtml()).toMatch(/<button class="btn dlogdev on"[^>]*data-dlogdev="3"/);
+    (state as any).clickDeviceLog(2);
+    expect(state.readHtml()).toContain("I/Buyer: second bind");
+  });
+
+  test("a session whose only log is a companion's still gets the Device logs tab", () => {
+    const html = renderViewer(session({
+      deviceLogDevice: "seller",
+      companionDeviceLogs: [{ device: "buyer", deviceLog: "I/Buyer: display ready", deviceLogGz: null }],
+    }));
+    expect(html).toContain(">Device logs<");
+  });
+
+  test("a single-device session's Device logs tab has no device picker", () => {
+    const html = renderViewerState(session({ deviceLog: "I/App: ready" }), { tab: "device" }).readHtml();
+    expect(html).toContain("I/App: ready");
+    expect(html).not.toContain("data-dlogdev");
+    expect(html).toContain('<h2 class="viewtitle">Device log</h2>');
+  });
+
+  test("buildMultiReportHtml carries the companion logs into the embedded payload", () => {
+    const companions = [{ device: "buyer", deviceLog: null, deviceLogGz: gzText("I/Buyer: ready") }];
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Sale", status: "passed" }, trace: [], llmLogs: [], shots: {}, deviceLog: "I/Seller: ready", deviceLogDevice: "seller", companionDeviceLogs: companions } as any],
+    });
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.deviceLogDevice).toBe("seller");
+    expect(embedded.companionDeviceLogs).toEqual(companions);
+    const single = payloadOf(core.buildMultiReportHtml({ generatedAt: "now", sessions: [{ meta: { title: "Run", status: "passed" }, trace: [], llmLogs: [], shots: {}, deviceLog: "x" }] })).sessions[0];
+    expect(single).not.toHaveProperty("companionDeviceLogs");
+  });
+
+  test("Export logs includes each companion's log, inflated", async () => {
+    const urlAny = URL as any;
+    const original = { create: urlAny.createObjectURL, revoke: urlAny.revokeObjectURL };
+    let downloaded: Blob | null = null;
+    urlAny.createObjectURL = (blob: Blob) => { downloaded = blob; return "blob:test"; };
+    urlAny.revokeObjectURL = () => {};
+    try {
+      renderViewerState(session({
+        deviceLog: "I/Seller: ready",
+        deviceLogDevice: "seller",
+        companionDeviceLogs: [{ device: "buyer", deviceLog: null, deviceLogGz: gzText("I/Buyer: ready") }],
+      }), { exportLogs: true });
+      for (let i = 0; i < 100 && !downloaded; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      const logs = JSON.parse(await downloaded!.text());
+      expect(logs.deviceLog).toBe("I/Seller: ready");
+      expect(logs.deviceLogDevice).toBe("seller");
+      expect(logs.companionDeviceLogs).toEqual([{ device: "buyer", deviceLog: "I/Buyer: ready" }]);
+    } finally {
+      urlAny.createObjectURL = original.create;
+      urlAny.revokeObjectURL = original.revoke;
+    }
   });
 });

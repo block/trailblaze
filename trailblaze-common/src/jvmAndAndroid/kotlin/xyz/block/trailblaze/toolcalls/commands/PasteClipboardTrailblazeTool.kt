@@ -6,6 +6,8 @@ import maestro.orchestra.InputTextCommand
 import maestro.orchestra.PasteTextCommand
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages.MOBILE_PLATFORMS
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -38,11 +40,22 @@ data object PasteClipboardTrailblazeTool : ExecutableTrailblazeTool {
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    val platform = toolExecutionContext.trailblazeDeviceInfo.platform
+    // Before the agent check: web and desktop contexts carry no Maestro agent, so checking it
+    // first would report a missing agent instead of naming the device and where the tool runs.
+    if (platform !in MOBILE_PLATFORMS) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = ToolAvailabilityMessages.unsupportedPlatform(
+          "mobile_pasteClipboard",
+          MOBILE_PLATFORMS,
+          toolExecutionContext.trailblazeDeviceInfo,
+        ),
+      )
+    }
     val maestroTrailblazeAgent = toolExecutionContext.maestroTrailblazeAgent
       ?: return TrailblazeToolResult.Error.ExceptionThrown(
         "mobile_pasteClipboard requires a Maestro agent but none is available.",
       )
-    val platform = toolExecutionContext.trailblazeDeviceInfo.platform
     return when (platform) {
       TrailblazeDevicePlatform.ANDROID -> {
         val executor = toolExecutionContext.androidDeviceCommandExecutor
@@ -79,15 +92,8 @@ data object PasteClipboardTrailblazeTool : ExecutableTrailblazeTool {
         )
       }
 
-      TrailblazeDevicePlatform.WEB ->
-        TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "mobile_pasteClipboard is not supported for web devices.",
-        )
-
-      TrailblazeDevicePlatform.DESKTOP ->
-        TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "mobile_pasteClipboard is not supported for the Compose desktop driver.",
-        )
+      TrailblazeDevicePlatform.WEB, TrailblazeDevicePlatform.DESKTOP ->
+        error("unreachable: non-mobile platforms return before the agent check")
     }
   }
 }

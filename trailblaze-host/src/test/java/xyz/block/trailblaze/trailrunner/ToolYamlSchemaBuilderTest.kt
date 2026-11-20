@@ -29,7 +29,7 @@ class ToolYamlSchemaBuilderTest {
     // The shared builder is reused by TrailYamlSchemaBuilder with closedToolNames=false; the ONLY
     // difference between the two must be additionalProperties (closed vs open) — the documented tool
     // properties stay identical. Locks that contract so a refactor can't silently flip the flag's effect.
-    val tools = listOf(entry("myapp_a", "myapp"), entry("mobile_maestro", "trailblaze"))
+    val tools = listOf(entry("myapp_a", "myapp"), entry("launchApp", "trailblaze"))
     val closed = ToolYamlSchemaBuilder.toolCallItemSchema(tools, closedToolNames = true)
     val open = ToolYamlSchemaBuilder.toolCallItemSchema(tools, closedToolNames = false)
     assertThat(closed["additionalProperties"]!!.jsonPrimitive.content).isEqualTo("false")

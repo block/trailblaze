@@ -16,11 +16,11 @@ object YamlJsonBridge {
    * @param coerceNumbers Whether a scalar that round-trips losslessly through `Long`/`Double` (see
    *   [scalarToJsonPrimitive]) should become a JSON number. Defaults to `true`, preserving behavior
    *   for every existing caller. Pass `false` when the scalar's content is known to ALWAYS be
-   *   free-form text at the schema level (e.g. Maestro's `InputTextCommand.text`) — there, a
-   *   "canonical number" string like a verification code (`"123123"`) or a numeric button label is
-   *   never actually a number, and the target reader (e.g. Maestro's own YAML parser) already
-   *   coerces a quoted numeric string into whatever numeric type it needs, so staying a string is
-   *   always safe and avoids the guess entirely. See [MaestroTrailblazeToolSerializer]'s use.
+   *   free-form text at the schema level (e.g. launch arguments) — there, a "canonical number"
+   *   string like a verification code (`"123123"`) or a numeric button label is never actually a
+   *   number, and the target reader (e.g. Maestro's own YAML parser) already coerces a quoted
+   *   numeric string into whatever numeric type it needs, so staying a string is always safe and
+   *   avoids the guess entirely.
    */
   fun yamlNodeToJsonElement(node: YamlNode, coerceNumbers: Boolean = true): JsonElement =
     when (node) {

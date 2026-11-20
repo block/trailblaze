@@ -138,6 +138,20 @@ describe("zip reader", () => {
     expect(new TextDecoder().decode(b)).toBe("stored bytes");
   });
 
+  test("an injected inflater sees the entry and the bound, so it can refuse a size the archive declares", async () => {
+    const zip = buildZip([{ name: "dir/a.json", text: '{"hello":"world"}', declaredSize: 4 }]);
+    const [entry] = Zip.parseZipEntries(zip);
+    const seen: Array<[string, number, number | undefined]> = [];
+    const strict = (raw: Uint8Array, e: { name: string; uncompressedSize: number }, maxBytes?: number) => {
+      seen.push([e.name, e.uncompressedSize, maxBytes]);
+      const out = inflateRaw(raw);
+      if (out.byteLength !== e.uncompressedSize) throw new Error("declared size mismatch");
+      return out;
+    };
+    await expect(Zip.readZipEntry(zip, entry, strict, 1024)).rejects.toThrow("declared size mismatch");
+    expect(seen).toEqual([["dir/a.json", 4, 1024]]);
+  });
+
   test("rejects bytes that are not a zip archive", () => {
     expect(() => Zip.parseZipEntries(encoder.encode("<html>not a zip</html>"))).toThrow();
   });
@@ -670,6 +684,51 @@ describe("loadZipSessions end-to-end", () => {
     expect(await Zip.sessionImageDataUri(zip, session, safe, { inflateRaw })).toBe(safe);
   });
 
+  test("looks up only image files in the archive, so a log cannot inline another archive file", async () => {
+    const zip = buildZip([
+      { name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: SESSION_ID + "/recording.trail.yaml", text: "- config:\n    id: test\n" },
+      { name: SESSION_ID + "/shot_1.png", data: new Uint8Array([1, 2]) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    expect(await Zip.sessionImageDataUri(zip, session, "001_Log.json", { inflateRaw })).toBeNull();
+    expect(await Zip.sessionImageDataUri(zip, session, "recording.trail.yaml", { inflateRaw })).toBeNull();
+    expect(await Zip.sessionImageDataUri(zip, session, "shot_1.png", { inflateRaw })).toBe("data:image/png;base64," + Buffer.from([1, 2]).toString("base64"));
+  });
+
+  test("a sessionPath reads only that session, without inflating another session's logs", async () => {
+    const zip = buildZip([
+      { name: "first/001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: "second/001_Log.json", text: JSON.stringify(startedLog()) },
+    ]);
+    const inflated: string[] = [];
+    const tracking = (raw: Uint8Array, entry?: { name: string }) => { inflated.push(entry!.name); return inflateRaw(raw); };
+    const sessions = await Zip.loadZipSessions(zip, { inflateRaw: tracking, sessionPath: "second" });
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["second"]);
+    expect(inflated).toEqual(["second/001_Log.json"]);
+    expect(await Zip.loadZipSessions(zip, { inflateRaw, sessionPath: "missing" })).toEqual([]);
+  });
+
+  test("the report pipeline passes a sessionPath through, so it assembles only that session", async () => {
+    const zip = buildZip([
+      { name: "first/001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: "second/001_Log.json", text: JSON.stringify(startedLog()) },
+    ]);
+    const inflated: string[] = [];
+    const tracking = (raw: Uint8Array, entry?: { name: string }) => { inflated.push(entry!.name); return inflateRaw(raw); };
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: REPORT_DERIVE, inflateRaw: tracking, generatedAt: "T", sessionPath: "second" });
+    expect(built.sessions.length).toBe(1);
+    expect(inflated.filter((name) => name.startsWith("first/"))).toEqual([]);
+  });
+
+  test("a screenshot reference that is not a string is skipped, not thrown on", async () => {
+    const zip = buildZip([{ name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) }]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    for (const bad of [123, {}, [], true]) {
+      expect(await Zip.sessionImageDataUri(zip, session, bad, { inflateRaw })).toBeNull();
+    }
+  });
+
   test("drops a log-named file that has no timestamp, so it cannot stretch the run to the epoch", async () => {
     // A hex-prefixed .json sidecar (a self-heal's diff, say) passes the log-file name rule but is
     // not a log; keeping it would sort it to 1970 and make the run look decades long.
@@ -757,6 +816,19 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
     expect(captured.input.trace.length).toBe(3);
     expect(captured.input.llmLogs).toEqual([{ id: "llm-1" }]);
     expect(built.sessions[0].meta.generatedAt).toBe("FIXED-TS");
+  });
+
+  test("a malformed screenshot reference in a log does not stop the report from assembling", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "shot_1.webp", data: new Uint8Array([1, 2]) },
+    ]);
+    const captured: { input?: any } = {};
+    const render = { ...fakeRenderer(captured), traceScreenshotFiles: () => [123, "shot_1.webp"] };
+    const built = await Zip.buildReportHtmlFromZipBytes(zip, { render, inflateRaw, generatedAt: "T" });
+    expect(built.html).toBe("<html>SINGLE</html>");
+    expect(Object.keys(captured.input.shots)).toEqual(["shot_1.webp"]);
   });
 
   test("rejects an archive with no session logs", async () => {

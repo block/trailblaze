@@ -39,15 +39,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /**
  * On-device contracts for the recorded-trail vocabulary the ANDROID_TEST driver interprets beyond
- * its own `androidTest_*` tools: Maestro's `optional`, and the canonical tools whose recorded body
- * is Maestro dispatch.
+ * its own `androidTest_*` tools: the canonical tools whose recorded body is Maestro dispatch.
  *
  * Everything is asserted through what the screen or the device then does, never through which
  * adapter ran — a trail cannot see the difference and neither should these tests.
@@ -78,32 +76,6 @@ class InProcessVocabularyOnDeviceTest {
   }
 
   /**
-   * The contract Maestro's `optional` carries on every driver: the step the screen refused is
-   * skipped, and the flow keeps going. The second tap landing is the proof — an `optional` that
-   * merely reported success while aborting the rest of the command list would look identical from
-   * the result alone.
-   */
-  @Test
-  fun anOptionalStepThatFindsNothingIsSkippedAndTheFlowContinues() {
-    val message = runReportingMessage(
-      maestro(
-        """
-        - tapOn:
-            text: "No Such Button"
-            optional: true
-        - tapOn:
-            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
-        """.trimIndent(),
-      ),
-    )
-    run(AndroidTestAssertVisibleTool(viewText(MixedUiFixtureActivity.VIEW_STATUS_CLICKED)))
-    assertTrue(
-      message.contains("Optional 'tapOn'"),
-      "The skip should be reported, not silent, got: $message",
-    )
-  }
-
-  /**
    * A recorded `tapOnPoint` touches the screen at its coordinates, as on every other driver. The
    * button's own click handler running is the proof that the touch reached it.
    */
@@ -118,123 +90,6 @@ class InProcessVocabularyOnDeviceTest {
     }
     run(TapOnPointTrailblazeTool(x = origin[0] + size.first / 2, y = origin[1] + size.second / 2))
     run(AndroidTestAssertVisibleTool(viewText(MixedUiFixtureActivity.VIEW_STATUS_CLICKED)))
-  }
-
-  /** The same step without `optional` is still fatal — that is what makes the flag mean anything. */
-  @Test
-  fun aStepThatFindsNothingStillFailsWhenItIsNotOptional() {
-    val error = runExpectingError(
-      maestro(
-        """
-        - tapOn:
-            text: "No Such Button"
-        - tapOn:
-            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(error.isNotBlank(), "A failed non-optional step must report why")
-    run(AndroidTestAssertVisibleTool(viewText(MixedUiFixtureActivity.VIEW_STATUS_INITIAL)))
-  }
-
-  /** `optional` is read where Maestro puts it on a wait — on the nested element selector. */
-  @Test
-  fun anOptionalNestedSelectorSkipsItsWaitAndTheFlowContinues() {
-    run(
-      maestro(
-        """
-        - extendedWaitUntil:
-            visible:
-              text: "No Such Thing"
-              optional: true
-            timeout: 1000
-        - tapOn:
-            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
-        """.trimIndent(),
-      ),
-    )
-    run(AndroidTestAssertVisibleTool(viewText(MixedUiFixtureActivity.VIEW_STATUS_CLICKED)))
-  }
-
-  /**
-   * A wait that runs out fails the way Maestro's does, with "Assertion is false". Callers of
-   * `mobile_maestro` read exactly that text as "not there" and treat anything else as a broken
-   * session, so a miss worded any other way turns a plain "no" into a failed launch.
-   */
-  @Test
-  fun aWaitThatRunsOutReportsMaestrosAssertionMiss() {
-    val visibleMiss = runExpectingError(
-      maestro(
-        """
-        - extendedWaitUntil:
-            visible: "No Such Thing"
-            timeout: 500
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(visibleMiss.contains("Assertion is false"), "got: $visibleMiss")
-    val notVisibleMiss = runExpectingError(
-      maestro(
-        """
-        - assertNotVisible:
-            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
-            timeout: 500
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(notVisibleMiss.contains("Assertion is false"), "got: $notVisibleMiss")
-  }
-
-  /**
-   * `optional` says what to do when the SCREEN refuses a step. A step this driver cannot interpret
-   * was never attempted, so skipping it would silently drop whatever the recording meant — the
-   * failure this driver exists to make loud.
-   */
-  @Test
-  fun anOptionalStepOutsideTheVocabularyStillFails() {
-    val error = runExpectingError(
-      maestro(
-        """
-        - tapOn:
-            point: "50%,50%"
-            optional: true
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(
-      error.contains("not supported") && error.contains("point"),
-      "A refusal must name what it refused, got: $error",
-    )
-  }
-
-  /**
-   * The recorded way to prove something is GONE. The positive assert cannot say it, so a trail that
-   * removes a thing and checks it left has no other step to use.
-   */
-  @Test
-  fun aRecordedAssertNotVisiblePassesForSomethingAbsentAndFailsForSomethingPresent() {
-    run(
-      maestro(
-        """
-        - assertNotVisible:
-            text: "No Such Label"
-            timeout: 1000
-        """.trimIndent(),
-      ),
-    )
-    val error = runExpectingError(
-      maestro(
-        """
-        - assertNotVisible:
-            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
-            timeout: 1000
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(
-      error.contains(MixedUiFixtureActivity.VIEW_BUTTON_LABEL),
-      "The failure must name what was still on screen, got: $error",
-    )
   }
 
   /**
@@ -419,26 +274,6 @@ class InProcessVocabularyOnDeviceTest {
     )
   }
 
-  /**
-   * A recorded `optional` this driver cannot read is refused, not quietly read as "not optional".
-   *
-   * Reading an unrecognised spelling as absent would flip the flag's whole meaning — a step the
-   * recording marked skippable would fail the trail — without saying anything.
-   */
-  @Test
-  fun anUnreadableOptionalIsRefusedRatherThanReadAsAbsent() {
-    val error = runExpectingError(
-      maestro(
-        """
-        - tapOn:
-            text: "No Such Button"
-            optional: "yes"
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(error.contains("optional"), "The refusal must name the flag it could not read, got: $error")
-  }
-
   /** A digit count that cannot produce a value is refused rather than typing the prefix alone. */
   @Test
   fun inputTextRandomRefusesADigitCountThatGeneratesNothing() {
@@ -579,39 +414,6 @@ class InProcessVocabularyOnDeviceTest {
       SystemClock.sleep(250)
     }
   }
-
-  /**
-   * Maestro's step-level metadata is not part of what `launchApp` is asking for.
-   *
-   * `label` and `optional` can be written on ANY recorded command — they name the step in a report
-   * and say whether it may be skipped — and every other command here reads them as such. Turning a
-   * recorded relaunch away over its own prose would refuse a trail for something that says nothing
-   * about the launch.
-   *
-   * Asserted through WHICH refusal comes back for a launch this driver genuinely cannot perform:
-   * one naming the app it was asked to launch, rather than one naming the label. A foreign app id
-   * is used so the assertion is about reading the command, and no app is actually relaunched out
-   * from under the fixture.
-   */
-  @Test
-  fun aRecordedLaunchAppKeepsItsStepMetadata() {
-    val error = runExpectingError(
-      maestro(
-        """
-        - launchApp:
-            appId: "com.example.not.the.app.under.test"
-            label: "Restart the app"
-            optional: false
-        """.trimIndent(),
-      ),
-    )
-    assertTrue(
-      error.contains("com.example.not.the.app.under.test"),
-      "Expected the refusal to name the app it cannot launch, not the step's own metadata: $error",
-    )
-  }
-
-  private fun maestro(yaml: String) = MaestroTrailblazeTool(yaml = yaml)
 
   private fun viewText(text: String) =
     TrailblazeNodeSelector(androidView = DriverNodeMatch.AndroidView(textRegex = text))

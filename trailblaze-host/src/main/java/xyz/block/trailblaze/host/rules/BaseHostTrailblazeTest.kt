@@ -20,6 +20,7 @@ import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
 import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -78,6 +79,7 @@ import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 abstract class BaseHostTrailblazeTest(
   private val trailblazeDriverType: TrailblazeDriverType,
@@ -109,6 +111,11 @@ abstract class BaseHostTrailblazeTest(
    * callers pass the run's `--no-logging` flag.
    */
   noLogging: Boolean = false,
+  /**
+   * Whether a session is recording the device's screen. An iOS AXe run logs each action without a
+   * screenshot while it is; see [xyz.block.trailblaze.host.ios.IosDriverTrailRunner.shouldScreenshotBeforeAction].
+   */
+  private val isRecordingVideo: (SessionId) -> Boolean = { false },
 ) {
 
   /**
@@ -159,7 +166,7 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
-      deviceClassifiers = trailblazeDeviceClassifiers,
+      deviceClassifiersProvider = { trailblazeDeviceClassifiers },
       // Tests deliberately pin to the resolved per-model config; live `EffectiveScreenshotScalingConfig`
       // re-reads aren't useful here because the test fixture's model isn't running through the
       // interactive desktop settings.
@@ -222,7 +229,25 @@ abstract class BaseHostTrailblazeTest(
       .onFailure { Console.log("Releasing the device connection failed — continuing: ${it.message}") }
   }
 
-  val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
+  private var recordingSessionId: SessionId? = null
+
+  internal fun prepareRecordingClassifiers(yaml: String) {
+    val sessionId = loggingRule.session?.sessionId
+    if (sessionId != null && sessionId != recordingSessionId) {
+      recordingClassifiers = null
+      recordingSessionId = sessionId
+    }
+    recordingClassifiers = trailblazeYaml.recordingClassifiersFor(
+      yaml, selectionClassifiers, current = recordingClassifiers, tolerateMalformedYaml = true,
+    )
+  }
+
+  private var recordingClassifiers: List<TrailblazeDeviceClassifier>? = null
+
+  val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier>
+    get() = recordingClassifiers ?: selectionClassifiers
+
+  private val selectionClassifiers: List<TrailblazeDeviceClassifier> by lazy {
     deviceClassifierOverride.ifEmpty {
       TrailblazeHostDeviceClassifier(
         trailblazeDriverType = trailblazeDriverType,
@@ -249,15 +274,16 @@ abstract class BaseHostTrailblazeTest(
     }
   }
 
-  val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
-    TrailblazeDeviceInfo(
+  val trailblazeDeviceInfo: TrailblazeDeviceInfo
+    get() = TrailblazeDeviceInfo(
       trailblazeDeviceId = trailblazeDeviceId,
       trailblazeDriverType = trailblazeDriverType,
       widthPixels = connectedDevice.deviceWidth,
       heightPixels = connectedDevice.deviceHeight,
       classifiers = trailblazeDeviceClassifiers,
+      metadata = mapOf(DeviceClassifierKey.EXECUTION_DEVICE_CLASS to selectionClassifiers.joinToString("-") { it.classifier }),
+      initialLocale = DeviceLocaleConfigurator.appliedLocale(trailblazeDeviceId),
     )
-  }
 
   /**
    * Driver-branched screen-state provider. Host-native iOS drivers build a fresh
@@ -383,6 +409,7 @@ abstract class BaseHostTrailblazeTest(
           resolvedTarget = resolvedTargetForSession,
           appId = resolvedAppIdForSession,
           sessionDirProvider = hostLoggingRule.logsRepo::getSessionDir,
+          isRecordingVideo = isRecordingVideo,
         )
       }
       else -> HostMaestroTrailblazeAgent(
@@ -687,12 +714,14 @@ abstract class BaseHostTrailblazeTest(
   ): HostYamlRunResult {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this device. v1 inputs ignore the list.
-    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = selectionClassifiers
+    prepareRecordingClassifiers(yaml)
+    val projected = recordingClassifiers ?: classifiers
 
     // Only a trail whose trailhead will take the reusable hand-off skips the clean start. A trail
     // that can't be read here keeps it; the decode below reports the error.
     val keepForReuse = TrailheadRuns.reuseEnabledFor(config.trailheadReuse) &&
-      runCatching { trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers) }
+      runCatching { trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers, recordingClassifiers = projected) }
         .getOrNull()?.let { TrailheadHandoffStore.holdsReusableFor(trailblazeDeviceId, it) } == true
     // Preserve the caller's cleanup contract even when decoding later resolves the trail to skip.
     val targetAppStopped = forceStopApp && !keepForReuse && stopTargetAppForCleanup()
@@ -701,7 +730,7 @@ abstract class BaseHostTrailblazeTest(
     // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch on host Maestro / iOS-host)
     // additionally decodes to one ToolTrailItem. Host-runner single-tool dispatch now sends the bare
     // envelope, not the legacy `- tools:` list shape.
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers)
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers, recordingClassifiers = projected)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
@@ -889,7 +918,7 @@ abstract class BaseHostTrailblazeTest(
   ) {
     val computedResourcePath: String = TrailRecordings.findBestTrailResourcePath(
       path = path,
-      deviceClassifiers = trailblazeDeviceClassifiers,
+      deviceClassifiers = selectionClassifiers,
       doesResourceExist = TemplatingUtil::doesResourceExist,
     ) ?: throw TrailblazeException("Resource not found: $path")
     Console.log("Running from resource: $computedResourcePath")

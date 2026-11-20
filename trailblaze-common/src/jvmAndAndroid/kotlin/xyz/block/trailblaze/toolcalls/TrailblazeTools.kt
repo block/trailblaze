@@ -7,12 +7,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import xyz.block.trailblaze.yaml.TrailArgTokens
-import xyz.block.trailblaze.maestro.withAuthoredMaestroLaunchArgumentsRedacted
-import xyz.block.trailblaze.maestro.maestroLaunchArgumentSecrets
-import xyz.block.trailblaze.maestro.maestroAuthoredLaunchLiterals
-import xyz.block.trailblaze.maestro.withKnownMaestroLaunchValuesRedacted
-import xyz.block.trailblaze.maestro.withMaestroLaunchArgumentsRedacted
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
@@ -126,12 +120,7 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
 fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted()
   .withCredentialArgsRedacted()
   .let { if (this is SensitiveArgsTrailblazeTool) it.withSensitiveArgsRedacted(sensitiveArgNames) else it }
-  .let {
-    if (this is MaestroTrailblazeTool) it.copy(raw = it.raw.withMaestroLaunchArgumentsRedacted()
-      .withKnownMaestroLaunchValuesRedacted(sensitiveValues, preserveReferences = false))
-    else if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues)
-    else it
-  }
+  .let { if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues) else it }
 
 /** Preserve only authored references that demonstrably changed in the executed payload. */
 internal fun TrailblazeTool.toAuthoredLogPayload(executed: TrailblazeTool): OtherTrailblazeTool {
@@ -188,16 +177,6 @@ fun isMemoryReference(value: String): Boolean =
   } == true
 
 private val MEMORY_PATH = Regex("""[A-Za-z_][A-Za-z0-9_.-]*""")
-
-/** The authored form keeps only references that actually changed during memory resolution. */
-internal fun TrailblazeTool.toAuthoredMaestroLogPayload(executed: MaestroTrailblazeTool): OtherTrailblazeTool {
-  val authored = toLogPayloadUnredacted()
-  val resolved = executed.toLogPayloadUnredacted()
-  return authored.copy(raw = authored.raw.withAuthoredMaestroLaunchArgumentsRedacted(resolved.raw)
-    .withKnownMaestroLaunchValuesRedacted(
-      maestroAuthoredLaunchLiterals(authored.raw, resolved.raw), preserveReferences = true, executed = resolved.raw,
-    ))
-}
 
 /**
  * The text of each arg a [SensitiveArgsTrailblazeTool] declares secret, for masking that value

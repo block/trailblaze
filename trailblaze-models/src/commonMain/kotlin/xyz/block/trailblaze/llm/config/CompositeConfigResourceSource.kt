@@ -25,4 +25,13 @@ class CompositeConfigResourceSource(
     sources.fold(emptyMap()) { acc, source ->
       acc + source.discoverAndLoadRecursive(directoryPath, suffix)
     }
+
+  // Later sources override earlier ones, same as discovery.
+  override fun readResource(path: String): String? =
+    sources.asReversed().firstNotNullOfOrNull { it.readResource(path) }
+
+  override fun resourceExists(path: String): Boolean = sources.any { it.resourceExists(path) }
+
+  override fun discoverFilenamesRecursive(directoryPath: String, suffix: String): Set<String> =
+    sources.flatMapTo(mutableSetOf()) { it.discoverFilenamesRecursive(directoryPath, suffix) }
 }

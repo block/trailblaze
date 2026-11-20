@@ -237,17 +237,46 @@ export const isNetworkLane = (id: string) => id === 'network' || id.startsWith('
 /** The default-lane entry a lane answers to: a device-scoped lane counts as its unscoped stream. */
 export const defaultLaneKey = (id: string): string => (isNetworkLane(id) ? 'network' : id);
 
-/** Any other stream becomes a lane named for its last dotted segment, in words. */
-export function laneIdentity(streamName: string): { id: string; name: string } {
+/** A dotted segment that introduces a stream's own name, so never the name itself. */
+const NAMESPACE_SEGMENTS = new Set(['plugin', 'extension', 'trailblaze']);
+
+/** A stream-name segment in words: `pageViews` → `Page views`. */
+function segmentWords(segment: string): string {
+  const name = segment.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[-_\s]+/).filter(Boolean).join(' ').toLowerCase();
+  return name ? name[0].toUpperCase() + name.slice(1) : segment;
+}
+
+/**
+ * Any other stream becomes a lane named for its last dotted segment, in words. In a multi-device
+ * session a companion's copy of a stream ends in that device's name (`<plugin>.logging.x2`), so
+ * when the last segment is one of [devices] the lane is named for the segment before it, with the
+ * device after: `Logging (x2)`, as the network lane already reads.
+ */
+export function laneIdentity(streamName: string, devices: ReadonlySet<string> = new Set()): { id: string; name: string } {
   const network = NETWORK_STREAM.exec(streamName);
   if (network) return network[1] ? { id: `network.${network[1]}`, name: `Network (${network[1]})` } : { id: 'network', name: 'Network' };
   for (const [pattern, id, name] of KNOWN_STREAMS) {
     if (pattern.test(streamName)) return { id, name };
   }
-  const last = streamName.split('.').filter(Boolean).pop() ?? streamName;
-  const words = last.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[-_\s]+/).filter(Boolean);
-  const name = words.join(' ').toLowerCase();
-  return { id: streamName, name: name ? name[0].toUpperCase() + name.slice(1) : streamName };
+  const segments = streamName.split('.').filter(Boolean);
+  const last = segments[segments.length - 1] ?? streamName;
+  const before = segments[segments.length - 2];
+  if (before && devices.has(last) && !NAMESPACE_SEGMENTS.has(before.toLowerCase())) {
+    return { id: streamName, name: `${segmentWords(before)} (${last})` };
+  }
+  return { id: streamName, name: segmentWords(last) };
+}
+
+/** The configuration names of the devices a multi-device session drove; empty for a single-device run. */
+function sessionDeviceNames(session: SessionPayload): Set<string> {
+  const names = [
+    session.video?.device,
+    ...(session.video?.companions ?? []).map((recording) => recording?.device),
+    ...(session.trace ?? []).map((row) => row?.device),
+    session.deviceLogDevice,
+    ...(session.companionDeviceLogs ?? []).map((log) => log?.device),
+  ];
+  return new Set(names.filter((name): name is string => typeof name === 'string' && name.length > 0));
 }
 
 // ─── Failure wording ──────────────────────────────────────────────────────────────────────────
@@ -709,7 +738,6 @@ const VERBS: Record<string, [verb: string, value: (args: Json) => string | undef
 
 /** A tool call worded as the verb and the value it exercises. */
 function action(tool: string, args: Json | undefined): Action {
-  if (tool === 'mobile_maestro') return maestro(args);
   const known = VERBS[tool];
   if (known) return { verb: known[0], value: args && known[1](args) };
   return { verb: fallbackVerb(tool), value: args && firstValue(args) };
@@ -738,42 +766,9 @@ function runIfCondition(args: Json): string | undefined {
   return value === undefined ? undefined : `${negated ? 'not ' : ''}${value}`;
 }
 
-function maestro(args: Json | undefined): Action {
-  const steps = Array.isArray(args?.commands) ? args.commands.map(maestroCommand) : [];
-  const [first, ...rest] = steps;
-  if (!first) return { verb: 'maestro' };
-  const value = [first.value, ...rest.map((step) => [step.verb, step.value].filter(Boolean).join(' '))].filter(Boolean).join(' · ');
-  return { verb: first.verb, ...(value ? { value } : {}) };
-}
-
-function maestroCommand(command: unknown): Action {
-  if (!isRecord(command)) return { verb: fallbackVerb(scalarText(command) ?? '') };
-  const [name = '', value] = Object.entries(command)[0] ?? [];
-  const element = (target: unknown): string | undefined => {
-    if (!isRecord(target)) return regexText(target);
-    const id = regexText(target.id);
-    return regexText(target.text) ?? (id === undefined ? str(target.point) : `id ${id}`);
-  };
-  const options = isRecord(value) ? value : {};
-  switch (name) {
-    case 'extendedWaitUntil':
-      return options.notVisible !== undefined ? { verb: 'wait not', value: element(options.notVisible) } : { verb: 'wait', value: element(options.visible) };
-    case 'inputText':
-      return { verb: 'type', value: quoted(value) };
-    case 'tapOn':
-      return { verb: 'tap', value: element(value) };
-    case 'launchApp':
-      return { verb: 'launch', value: str(options.appId) ?? str(value) };
-    case 'openLink':
-      return { verb: 'open', value: str(value) };
-    default:
-      return { verb: fallbackVerb(name), value: scalarText(value) };
-  }
-}
-
 /** A tool's verb alone, for lanes that name the tool but don't carry its arguments. */
 export function toolVerb(tool: string): string {
-  return tool === 'mobile_maestro' ? 'maestro' : VERBS[tool]?.[0] ?? fallbackVerb(tool);
+  return VERBS[tool]?.[0] ?? fallbackVerb(tool);
 }
 
 /** `android_adbShell` reads as "adb shell": the toolset prefix and platform go, camel case spaces out. */
@@ -1725,18 +1720,19 @@ export function buildSummaryModel(input: SummaryInput): StreamsModel {
   if (tools.length > 0) streams.set(TOOLS_LANE, { name: 'Tools', total: tools.length, notes: tools, fold: 'any' });
   if (llm.length > 0) streams.set(LLM_LANE, { name: 'LLM', total: llm.length, notes: llm, fold: 'any' });
   const rawStreams = ((input.events ?? []) as unknown[]).filter(isRecord);
+  const devices = sessionDeviceNames(input.session);
   // Trailblaze's own network capture (`network`, `network.<device>`) is a default. A stream the app
   // provides for the same lane (`<plugin>.network…`, from an HTTP interceptor, say) replaces it, so
   // the lane shows the app's view of its traffic, once.
   const providedLanes = new Set(rawStreams.flatMap((stream) => {
     const name = str(stream.name);
-    const id = name ? laneIdentity(name).id : undefined;
+    const id = name ? laneIdentity(name, devices).id : undefined;
     return name && id && name !== id && isNetworkLane(id) ? [id] : [];
   }));
   for (const stream of rawStreams) {
     const streamName = str(stream.name);
     if (!streamName) continue;
-    const named = laneIdentity(streamName);
+    const named = laneIdentity(streamName, devices);
     if (streamName === named.id && providedLanes.has(named.id)) continue;
     const identity = str(stream.title) ? { id: named.id, name: str(stream.title)! } : named;
     // A device-clock event has no offset to the run's clock, so it can't be placed beside the rest.

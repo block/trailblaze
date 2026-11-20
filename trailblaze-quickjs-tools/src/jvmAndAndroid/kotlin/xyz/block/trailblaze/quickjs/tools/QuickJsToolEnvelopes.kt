@@ -149,6 +149,14 @@ internal data class QuickJsDeviceContext(
    * session's log records, so a survey run mid-trail can branch on device type.
    */
   val classifiers: List<String> = emptyList(),
+  /**
+   * `TrailblazeDeviceInfo.initialLocale` — the language Trailblaze set the device to when the
+   * trail started (`es-US`), not a live reading. Omitted when unknown, never encoded as `null`,
+   * for the same reason as [trailblazePort].
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val initialLocale: String? = null,
 )
 
 /**

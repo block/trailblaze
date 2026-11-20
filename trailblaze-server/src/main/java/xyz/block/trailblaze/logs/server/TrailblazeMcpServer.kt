@@ -14,6 +14,7 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.request.uri
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.post
@@ -74,8 +75,9 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
-import xyz.block.trailblaze.mcp.DeviceBusyException
+import xyz.block.trailblaze.mcp.DeviceUnavailableException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
+import xyz.block.trailblaze.mcp.DeviceClaimHooks
 import xyz.block.trailblaze.mcp.HostLocalToolDispatchingBridge
 import xyz.block.trailblaze.mcp.HostLocalToolFailure
 import xyz.block.trailblaze.mcp.InFlightToolCall
@@ -249,6 +251,8 @@ class TrailblazeMcpServer(
    * `HostProbedDeviceClassifiers`); embedders without a host keep the platform-only default.
    */
   val deviceClassifiersProvider: DeviceClassifiersProvider = platformOnlyDeviceClassifiers,
+  /** Told as devices are claimed and released; a host uses it to lease remote devices. */
+  val deviceClaimHooks: DeviceClaimHooks? = null,
 ) {
   /**
    * Default operating mode for new MCP sessions.
@@ -272,6 +276,7 @@ class TrailblazeMcpServer(
         )
       }
     },
+    hooks = deviceClaimHooks,
   )
 
   companion object {
@@ -643,9 +648,6 @@ class TrailblazeMcpServer(
       emptySet()
     } else {
       val activeTarget = findCurrentTarget(activeDeviceId(sessionContext))
-      // Driver-specific replacement set (e.g. Playwright-native tools for WEB);
-      // empty for Android/iOS, where the trailmap-declared toolsets apply.
-      val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
       // Same scope every session repo resolves from, so what external MCP clients are offered
       // matches what the session can dispatch.
       // Accept the caller's scope only if it is for the target and driver this call just resolved.
@@ -656,15 +658,7 @@ class TrailblazeMcpServer(
       val scope = preResolvedScope
         ?.takeIf { it.targetId == activeTarget?.id && it.driverType == driverType }
         ?: activeTarget?.resolveToolScopeForDriver(driverType)
-      val resolved = if (bridgeToolClasses.isNotEmpty()) {
-        // Driver-specific replacement set (Playwright-native for WEB) stands in for the trailmap's
-        // class-backed tools; the target's own customs and exclusions still apply around it.
-        (scope?.customToolClasses.orEmpty() + bridgeToolClasses) - scope?.excluded?.toolClasses.orEmpty()
-      } else if (scope != null) {
-        scope.toolClasses
-      } else {
-        alwaysEnabledSurfaceForDriver(driverType).toolClasses
-      }
+      val resolved = targetToolClasses(driverType, scope, withExclusions = true)
       Console.log(
         "[TrailblazeMcpServer] Target-scoped MCP tool surface: ${resolved.size} tools " +
           "(driver=$driverType, target=${activeTarget?.id}, " +
@@ -679,6 +673,66 @@ class TrailblazeMcpServer(
     // tools is otherwise indistinguishable from a legitimately empty target.
     Console.log("[TrailblazeMcpServer] Target-scoped tool resolution failed, advertising no target-scoped tools: $e")
     emptySet()
+  }
+
+  /**
+   * Every tool name a direct call may run on this session's device: what the current target and
+   * driver register, with neither the `surfaceToLlm` filter nor the target's `excluded_tools:`
+   * applied. Both of those trim only the LLM's menu; recordings, `ctx.tools` and direct calls
+   * (`step(tools=…)`, `trailblaze tool`) still run the tools they hide.
+   *
+   * Same resolution as [resolveTargetScopedToolClasses], read before exclusions, plus whatever the
+   * session's tool repo has registered (its scripted and dynamic tools). Empty when no driver is
+   * bound. A [xyz.block.trailblaze.toolcalls.TrailblazeToolClass.callableOnlyFromTools] tool may appear here when a target lists
+   * it; trail YAML refuses it at decode, before this set is read.
+   */
+  internal fun resolveDirectlyCallableToolNames(
+    sessionContext: TrailblazeMcpSessionContext,
+    sessionToolRepo: TrailblazeToolRepo?,
+  ): Set<String> = try {
+    val driverType = mcpBridge.getDriverType()
+    if (driverType == null) {
+      emptySet()
+    } else {
+      val scope = findCurrentTarget(activeDeviceId(sessionContext))?.resolveToolScopeForDriver(driverType)
+      buildSet {
+        targetToolClasses(driverType, scope, withExclusions = false).mapTo(this) { it.toolName().toolName }
+        // Excluded scripted tools stay out: the session never launches them, so they could not run.
+        scope?.let {
+          (it.fromTrailmap.scriptedToolNames + it.customScriptedToolNames - it.excluded.scriptedToolNames)
+            .mapTo(this) { name -> name.toolName }
+        }
+        sessionToolRepo?.let { repo ->
+          repo.getRegisteredTrailblazeTools().mapTo(this) { it.toolName().toolName }
+          repo.getRegisteredDynamicTools().keys.mapTo(this) { it.toolName }
+        }
+      }
+    }
+  } catch (e: Exception) {
+    // The step gate also accepts the LLM's menu, so a failure here only loses the hidden tools.
+    Console.log("[TrailblazeMcpServer] Directly-callable tool resolution failed: $e")
+    emptySet()
+  }
+
+  /**
+   * The class-backed tools [scope] gives [driverType], with or without the target's
+   * `excluded_tools:`. A driver-specific replacement set (Playwright-native for WEB) stands in for
+   * the trailmap's class-backed tools; the target's own customs still apply around it.
+   */
+  private fun targetToolClasses(
+    driverType: TrailblazeDriverType,
+    scope: ResolvedTargetToolScope?,
+    withExclusions: Boolean,
+  ): Set<KClass<out TrailblazeTool>> {
+    // Empty for Android/iOS, where the trailmap-declared toolsets apply.
+    val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
+    return when {
+      bridgeToolClasses.isNotEmpty() -> (scope?.customToolClasses.orEmpty() + bridgeToolClasses) -
+        (if (withExclusions) scope?.excluded?.toolClasses.orEmpty() else emptySet())
+      scope == null -> alwaysEnabledSurfaceForDriver(driverType).toolClasses
+      withExclusions -> scope.toolClasses
+      else -> scope.fromTrailmap.toolClasses + scope.customToolClasses
+    }
   }
 
   private fun buildSyntheticDeviceInfo(
@@ -696,6 +750,7 @@ class TrailblazeMcpServer(
       widthPixels = width,
       heightPixels = height,
       classifiers = classifiers,
+      initialLocale = (mcpBridge as? HostLocalToolDispatchingBridge)?.initialLocale(deviceId),
     )
   }
 
@@ -1645,8 +1700,8 @@ class TrailblazeMcpServer(
     // makes one) just refreshes the timestamp.
     try {
       deviceClaimRegistry.claim(resolvedDeviceId, winnerId)
-    } catch (e: DeviceBusyException) {
-      // Another session is actively driving this device. Roll back the
+    } catch (e: DeviceUnavailableException) {
+      // Another session is actively driving this device, or it can't be claimed. Roll back the
       // pin we just wrote — leaving associatedDeviceId set would route the
       // pinned client's next tool call to a device it doesn't own.
       synchronized(winnerCtx) {
@@ -1655,7 +1710,7 @@ class TrailblazeMcpServer(
         }
       }
       Console.log(
-        "[MCP PIN] Rolled back pin: device ${resolvedDeviceId.instanceId} is busy on session ${e.owningSessionId.take(8)}…"
+        "[MCP PIN] Rolled back pin: device ${resolvedDeviceId.instanceId} can't be claimed: ${e.message}"
       )
       return PinResult.DeviceNotFound(deviceSpec)
     }
@@ -2103,10 +2158,22 @@ class TrailblazeMcpServer(
      * module than this one. Invoked inside the routing block, before the catchall.
      */
     additionalRouteRegistration: (io.ktor.server.routing.Routing.() -> Unit)? = null,
+    /** [LendingPort], when this daemon also serves its device leases on one. */
+    lendingPort: Int? = null,
   ): EmbeddedServer<*, *> {
     // Refuse a port a device could be allocated. `adb forward` would take it from us silently,
     // and the daemon would go unreachable rather than fail loudly here.
     TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(port, httpsPort)
+    if (lendingPort != null) {
+      check(lendingPort != port && lendingPort != httpsPort) {
+        "${LendingPort.ENV_VAR} ($lendingPort) must differ from the daemon's HTTP and HTTPS ports"
+      }
+      check(lendingPort !in TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE) {
+        "${LendingPort.ENV_VAR} ($lendingPort) is inside the device port range " +
+          "${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.first}-${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.last}, " +
+          "where a device's adb forward would take it"
+      }
+    }
     // Before the first client connects: its `initialize` lists LLM providers, and the Ollama one
     // is a PATH search the CLI's handshake bound should not wait on.
     JvmLLMProvidersUtil.warmUpInBackground()
@@ -2299,9 +2366,23 @@ class TrailblazeMcpServer(
         configureForSelfSignedSsl(
           requestedHttpPort = port,
           requestedHttpsPort = httpsPort,
+          lendingPort = lendingPort,
         )
       },
     ) {
+      if (lendingPort != null) {
+        // Ahead of every route: a call on the lending port reaches the lease routes or nothing.
+        intercept(io.ktor.server.application.ApplicationCallPipeline.Setup) {
+          val call = context
+          if (call.request.local.localPort == lendingPort && !LendingPort.serves(call.request.uri)) {
+            call.respondText(
+              "port $lendingPort serves only device leases",
+              status = io.ktor.http.HttpStatusCode.NotFound,
+            )
+            finish()
+          }
+        }
+      }
       // Install ContentNegotiation with McpJson for MCP type serialization
       install(ContentNegotiation) {
         json(McpJson)
@@ -2880,6 +2961,10 @@ class TrailblazeMcpServer(
           },
           sessionContext = sessionContext,
           availableToolsProvider = innerAgentToolsProvider,
+          registeredToolNamesProvider = {
+            val sessionToolRepo = runBlocking { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) }?.toolRepo
+            resolveDirectlyCallableToolNames(sessionContext, sessionToolRepo)
+          },
           logEmitter = trailLogEmitter,
           sessionIdProvider = activeSessionIdProvider,
           driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
@@ -2908,6 +2993,13 @@ class TrailblazeMcpServer(
           },
           customToolClassesProvider = customToolClassesProvider,
           dynamicToolRepoProvider = dynamicToolRepoProvider,
+          // Driver and device both come from this session's own device, never the bridge's
+          // daemon-wide selection, which another session may have moved.
+          currentDeviceProvider = {
+            activeDeviceId(sessionContext)?.let { deviceId ->
+              resolveDriverTypeForDevice(deviceId)?.let { driverType -> driverType to deviceId }
+            }
+          },
         ).asTools()
       // Both step() and ask() are always advertised — neither requires the daemon LLM.
       // step()'s direct-execution mode (`tools:` arg) drives the device without an LLM, and

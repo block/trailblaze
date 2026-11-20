@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
+import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
 
@@ -65,6 +66,10 @@ class CaptureSession internal constructor(
       Console.log("Started ${streams.joinToString { it.type.name }} capture in ${System.currentTimeMillis() - startedAtMs}ms")
     }
   }
+
+  /** True when one of this session's video streams is recording right now. */
+  fun isRecordingVideo(): Boolean =
+    streams.any { (it.type == CaptureType.VIDEO || it.type == CaptureType.VIDEO_WEBM) && it.isRecording }
 
   /**
    * Tells every [ToolCallAwareCaptureStream] that a top-level tool is about to run / has just

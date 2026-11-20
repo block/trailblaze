@@ -21,7 +21,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import maestro.orchestra.ElementSelector
-import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.After
 import org.junit.Before
@@ -41,6 +40,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -185,28 +186,50 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       screenStateLogger = ScreenStateLogger { "" },
     )
 
-  @Test
-  fun `runMaestroCommands with empty list returns success without RPC call`() {
-    val result = runBlocking { createAgent().runMaestroCommands(emptyList(), null) }
-    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+  /** A recorded step the host sends to the device as one RunYamlRequest. */
+  private val stepTool = TapOnPointTrailblazeTool(x = 540, y = 960)
+
+  /**
+   * Dispatches [tool] the way a trail step reaches this agent, through `executeTool`, which sends
+   * any tool that is not host-local to the device over RPC.
+   */
+  private fun HostOnDeviceRpcTrailblazeAgent.sendStep(
+    traceId: TraceId? = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+    tool: xyz.block.trailblaze.toolcalls.TrailblazeTool = stepTool,
+  ): TrailblazeToolResult {
+    val executeTool = javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+    val context = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      sessionProvider = sessionProvider,
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      memory = memory,
+      maestroTrailblazeAgent = this,
+    )
+    return try {
+      executeTool.invoke(this, tool, context, mutableListOf<Any>()) as TrailblazeToolResult
+    } catch (e: java.lang.reflect.InvocationTargetException) {
+      throw e.cause ?: e
+    }
   }
 
   @Test
-  fun `runMaestroCommands with commands attempts RPC call instead of silently succeeding`() {
-    // Server returns 500 — the key assertion is that we get an Error, not Success.
-    // Before the fix, executeMaestroCommands was a no-op that returned Success().
-    mockServer.responseStatus = HttpStatusCode.InternalServerError
-    mockServer.responseBody =
-      """{"errorType":"UNKNOWN_ERROR","message":"device crash","details":"NPE at Line 42"}"""
+  fun `raw Maestro commands are refused instead of reaching the device`() {
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
 
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*Allow Full Access.*")))
     val result = runBlocking {
-      createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      createAgent().runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat((result as TrailblazeToolResult.Error).errorMessage).contains("TapOnElementCommand")
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
   }
 
   @Test
@@ -216,11 +239,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     mockServer.responseBody =
       """{"errorType":"UNKNOWN_ERROR","message":"execution failed","details":"$deviceErrorDetails"}"""
 
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
@@ -240,11 +261,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
 
     val agent = createAgent()
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
       repeat(2) {
-        agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
       }
     }
 
@@ -268,10 +287,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
 
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
-      createAgent().runMaestroCommands(commands, traceId)
+      createAgent().sendStep(traceId)
     }
 
     val requestJson = Json.parseToJsonElement(
@@ -303,11 +320,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         """.trimIndent()
     }
 
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -322,15 +337,13 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
     }
     val trail = Job()
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val started = System.nanoTime()
     Thread { Thread.sleep(300); trail.cancel() }.start()
 
     val thrown = runCatching {
       DispatchCancellation.withTrailJob(trail) {
         runBlocking {
-          createAgent().runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+          createAgent().sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
         }
       }
     }.exceptionOrNull()
@@ -351,11 +364,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       HttpStatusCode.OK to """{"sessionId":"test-session"}"""
     }
 
-    val commands =
-      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
@@ -389,10 +400,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     rpcClient.close()
     rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
 
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
@@ -411,10 +421,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     rpcClient.close()
     rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
 
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     // Not fatal: an ordinary on-device failure keeps its retryable ExceptionThrown shape so
@@ -447,10 +456,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     rpcClient.close()
     rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
 
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
@@ -488,10 +496,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     rpcClient.close()
     rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
 
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
       createAgent()
-        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+        .sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
@@ -582,42 +589,6 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
-   * `executeMaestroCommands` wraps raw maestro YAML into a `MaestroTrailblazeTool(yaml = ...)`
-   * and dispatches it like any other tool: RAW. A `{{var}}` inside the maestro YAML (e.g. in a
-   * `textRegex`) reaches the device still token-bearing, with the memory snapshot alongside —
-   * the on-device dispatch boundary interpolates `MaestroTrailblazeTool.yaml` as an ordinary
-   * string field, exactly once. Protects trails whose maestro fallback path carries tokens.
-   */
-  @Test
-  fun `maestro YAML carrying memory tokens dispatches raw with the snapshot`() {
-    mockServer.onPost("/rpc/RunYamlRequest") {
-      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
-    }
-
-    val agent = createAgent()
-    agent.memory.remember("greeting", "hello-world")
-
-    // TapOnElementCommand serialized to maestro YAML carries the textRegex verbatim, so a
-    // remembered token inside textRegex will appear as a string scalar in the resulting YAML.
-    val commands = listOf(
-      TapOnElementCommand(selector = ElementSelector(textRegex = ".*{{greeting}}.*")),
-    )
-    val result = runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
-    }
-
-    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
-    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val request = Json.parseToJsonElement(body).jsonObject
-    val yaml = request["yaml"]!!.jsonPrimitive.content
-    // Raw token in the dispatched YAML; no host-side pre-resolve.
-    assertThat(yaml).contains("{{greeting}}")
-    assertThat(yaml).doesNotContain("hello-world")
-    assertThat(request["memorySnapshot"]!!.jsonObject["greeting"]!!.jsonPrimitive.content)
-      .isEqualTo("hello-world")
-  }
-
-  /**
    * Bidirectional memory sync — outbound: the agent's `memory` is serialized into the
    * `RunYamlRequest.memorySnapshot` field on every per-tool dispatch.
    */
@@ -629,9 +600,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     val agent = createAgent()
     agent.memory.remember("merchantToken", "tok_abc123")
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
@@ -657,9 +627,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     // A host-only key the device's snapshot does NOT carry back, plus a key the device also writes.
     agent.memory.remember("hostOnly", "kept")
     agent.memory.remember("shared", "from-host")
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     // Device write appears; host-only key survives (not clobbered by an omitting snapshot);
@@ -687,9 +656,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     val agent = createAgent()
     agent.memory.remember("explicitlyDeleted", "stale")
     agent.memory.remember("omittedButKept", "survives")
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(agent.memory.variables["explicitlyDeleted"]).isNull()
@@ -1520,10 +1488,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     runBlocking {
       agent.runTrailblazeTools(tools = listOf(FakeHostLocalTool(AtomicBoolean())), elementComparator = NoopElementComparator)
     }
-    return runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+    return runBlocking { agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
   }
 
-  private val tapCommand = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
 
   @Test
   fun `a step after a host-side tool stopped the app restarts the runner first and is still sent`() {
@@ -1570,7 +1537,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       appProcessId = { events += "pid read"; "" },
     )
 
-    runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+    runBlocking { agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
 
     assertThat(events).isEqualTo(listOf("step sent"))
   }
@@ -1603,7 +1570,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       )
     }
     events += "adb tool done"
-    runBlocking { agent.runMaestroCommands(tapCommand, traceId()) }
+    runBlocking { agent.sendStep(traceId()) }
 
     assertThat(relaunch).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
@@ -1626,10 +1593,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     )
 
     val result = runBlocking {
-      agent.runMaestroCommands(
-        listOf(LaunchAppCommand(appId = "com.example.app")),
-        TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
-      )
+      agent.sendStep(tool = LaunchAppTrailblazeTool(appId = "com.example.app"))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
@@ -1645,7 +1609,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       appProcessId = { "" },
     )
 
-    val result = runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+    val result = runBlocking { agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(1)
@@ -1670,7 +1634,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       appProcessId = { "123" },
     )
 
-    val result = runBlocking { agent.runMaestroCommands(tapCommand, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
+    val result = runBlocking { agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)) }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
@@ -1715,9 +1679,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     val captured = mutableListOf<TrailblazeLog>()
     val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -1736,9 +1699,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     val captured = mutableListOf<TrailblazeLog>()
     val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -1757,9 +1719,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     val captured = mutableListOf<TrailblazeLog>()
     val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).hasSize(1)
@@ -1791,9 +1752,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       trailblazeLogger = capturingLogger(captured),
       reWarmTimeoutMs = 5_000L,
     )
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     val result = runBlocking {
-      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      agent.sendStep(TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -1813,8 +1773,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     val captured = mutableListOf<TrailblazeLog>()
     val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
-    val result = runBlocking { agent.runMaestroCommands(commands, traceId = null) }
+    val result = runBlocking { agent.sendStep(traceId = null) }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).isEmpty()

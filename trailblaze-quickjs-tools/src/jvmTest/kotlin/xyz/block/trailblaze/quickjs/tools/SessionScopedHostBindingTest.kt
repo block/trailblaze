@@ -37,6 +37,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.RegisterCleanupTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ExecTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 
 /**
@@ -61,7 +63,7 @@ class SessionScopedHostBindingTest {
 
   /**
    * Hidden-from-LLM, host-only tool — proves the binding bypasses the `surfaceToLlm` filter
-   * that hides `runCommand`-shaped building-block tools from the LLM descriptor list.
+   * that hides building-block tools from the LLM descriptor list.
    */
   @Serializable
   @TrailblazeToolClass(name = "test_host_only", surfaceToLlm = false, requiresHost = true)
@@ -173,7 +175,7 @@ class SessionScopedHostBindingTest {
   @Test
   fun `callFromBundle reaches a tool with surfaceToLlm=false and requiresHost=true`() = runBlocking {
     // This is the load-bearing claim of Sub-PR-A2: tools annotated `surfaceToLlm = false`
-    // (e.g. `runCommand`, `mobile_clearAppData`) must remain reachable through scripted-tool
+    // (e.g. `mobile_clearAppData`) must remain reachable through scripted-tool
     // composition even though they're hidden from the LLM. The repo's
     // `toolCallToTrailblazeTool` already handles this for class-backed tools — pin the
     // contract so a future change that re-introduces the filter at the binding layer is
@@ -434,6 +436,50 @@ class SessionScopedHostBindingTest {
       )
     } finally {
       SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  @Test
+  fun `ctx session addCleanup still reaches registerCleanup, which only another tool may call`() = runBlocking {
+    // `addCleanup` calls `trailblaze_registerCleanup` through `ctx.tools`; trail YAML and direct
+    // calls refuse it because it would run `exec` at trail end.
+    val binding = SessionScopedHostBinding(newRepoWith(), sessionId)
+    val dispatched = mutableListOf<TrailblazeTool>()
+    SessionScopedHostBinding.installContext(
+      buildContext(nestedToolExecutor = { tool -> dispatched += tool; TrailblazeToolResult.Success(message = "intercepted") }),
+    )
+    try {
+      val resultJson = binding.callFromBundle(RegisterCleanupTrailblazeTool.TOOL_NAME, """{"tool":"inputText","args":{"text":"x"}}""")
+      assertEquals(null, (Json.parseToJsonElement(resultJson) as JsonObject)["isError"], resultJson)
+      assertTrue(dispatched.single() is RegisterCleanupTrailblazeTool, "got $dispatched")
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  @Test
+  fun `ctx tools exec still reaches exec, which only another tool may call`() = runBlocking {
+    // `exec` is `callableOnlyFromTools`: the session repo never registers it and trail YAML
+    // refuses it, so a scripted tool's `ctx.tools.exec(...)` is the one way in. Whether or not a
+    // target lists the class, this call has to resolve.
+    for (repo in listOf(newRepoWith(), newRepoWith(ExecTrailblazeTool::class))) {
+      val binding = SessionScopedHostBinding(repo, sessionId)
+      val dispatched = mutableListOf<TrailblazeTool>()
+      SessionScopedHostBinding.installContext(
+        buildContext(
+          nestedToolExecutor = { tool ->
+            dispatched += tool
+            TrailblazeToolResult.Success(message = "intercepted")
+          },
+        ),
+      )
+      try {
+        val resultJson = binding.callFromBundle("exec", """{"argv":["printf","hi"]}""")
+        assertEquals(null, (Json.parseToJsonElement(resultJson) as JsonObject)["isError"], resultJson)
+        assertEquals(listOf<TrailblazeTool>(ExecTrailblazeTool(argv = listOf("printf", "hi"))), dispatched)
+      } finally {
+        SessionScopedHostBinding.clearContext()
+      }
     }
   }
 

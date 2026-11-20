@@ -24,4 +24,9 @@ data class ToolSetYamlConfig(
   val drivers: List<String>? = null,
   @SerialName("always_enabled") val alwaysEnabled: Boolean = false,
   val tools: List<String> = emptyList(),
+  /**
+   * Memory keys this toolset's tools read or write, by name. Every trailmap that lists the toolset
+   * in its `tool_sets:` sees them in its typed surface. Descriptive only — see [MemoryKeyDeclaration].
+   */
+  val memory: Map<String, MemoryKeyDeclaration> = emptyMap(),
 )

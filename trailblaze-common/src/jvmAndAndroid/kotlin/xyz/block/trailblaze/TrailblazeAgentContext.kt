@@ -13,9 +13,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
-import xyz.block.trailblaze.maestro.maestroLaunchArgumentSecrets
-import xyz.block.trailblaze.maestro.withKnownMaestroLaunchValuesRedacted
-import xyz.block.trailblaze.maestro.withMaestroLaunchArgumentsRedacted
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.logs.client.SessionSecrets
@@ -37,8 +34,6 @@ import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.toAuthoredLogPayload
 import xyz.block.trailblaze.toolcalls.toLogPayloads
-import xyz.block.trailblaze.toolcalls.toAuthoredMaestroLogPayload
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -112,10 +107,7 @@ fun TrailblazeAgentContext.logToolExecution(
   val sensitiveLogMemories = listOfNotNull(memory, sensitiveMemoryBeforeExecution)
   val rawPayload =
     if (recordedToolOverride == null) {
-        rawTool?.let { authored ->
-          if (tool is MaestroTrailblazeTool) authored.toAuthoredMaestroLogPayload(tool)
-          else authored.toAuthoredLogPayload(tool)
-        }
+        rawTool?.toAuthoredLogPayload(tool)
       } else {
         null
       }
@@ -131,11 +123,9 @@ fun TrailblazeAgentContext.logToolExecution(
   // arrived via memory out of the persisted log.
   val resolvedPayload =
     if (rawPayload != null) {
-      buildLogSafeResolvedPayload(rawPayload, memory, context.trailblazeDeviceInfo).let { resolved ->
-        if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
-          .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
-        else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
-      }.withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
+      buildLogSafeResolvedPayload(rawPayload, memory, context.trailblazeDeviceInfo)
+        .withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
+        .withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
     } else {
       val payload = recordedTool.toLogPayload()
       // Nested arguments may already be resolved; use both snapshots in one scrub.
@@ -290,17 +280,12 @@ fun TrailblazeAgentContext.logToolExecution(
   val session = sessionProvider.invoke()
   // Same masking rationale as the context-carrying overload: the authored wrapper doesn't
   // implement [SensitiveArgsTrailblazeTool], so apply the executed instance's declared args.
-  val rawPayload = rawTool?.let { authored ->
-    if (tool is MaestroTrailblazeTool) authored.toAuthoredMaestroLogPayload(tool)
-    else authored.toAuthoredLogPayload(tool)
-  }
+  val rawPayload = rawTool?.toAuthoredLogPayload(tool)
   // Same post-resolution value masking as the context-carrying overload, for the same reason.
   val resolvedPayload = if (rawPayload != null) {
-    buildLogSafeResolvedPayload(rawPayload, memory, device = null).let { resolved ->
-      if (tool is MaestroTrailblazeTool) resolved.copy(raw = resolved.raw.withMaestroLaunchArgumentsRedacted()
-        .withKnownMaestroLaunchValuesRedacted(maestroLaunchArgumentSecrets(tool.yaml), preserveReferences = false))
-      else resolved.withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
-    }.withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
+    buildLogSafeResolvedPayload(rawPayload, memory, device = null)
+      .withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
+      .withCredentialArgsRedacted().withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
   } else {
     tool.toLogPayload()
   }

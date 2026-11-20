@@ -216,7 +216,7 @@ data class AndroidTestAssertVisibleTool(
 
   /**
    * The check itself, throwing on failure. A wait that ran out is a [SelectorWaitMissException],
-   * which is how the Maestro interpreter tells "the screen said no" from a broken check.
+   * so "the screen said no" can be told apart from a broken check.
    */
   internal fun verify(
     target: AndroidTestTarget,
@@ -1130,8 +1130,7 @@ private fun TrailblazeNode.isPlaced(): Boolean {
  * A wait that ran out with the screen still saying no: the selector never matched a placed element
  * (or, for a not-visible check, never stopped matching one) before its deadline.
  *
- * Its own type so the Maestro interpreter can tell the screen's answer apart from every other
- * failure, and report it the way Maestro does. See [MaestroCommandAdapters].
+ * Its own type so a caller can tell the screen's answer apart from every other failure.
  */
 internal class SelectorWaitMissException(message: String) : RuntimeException(message)
 

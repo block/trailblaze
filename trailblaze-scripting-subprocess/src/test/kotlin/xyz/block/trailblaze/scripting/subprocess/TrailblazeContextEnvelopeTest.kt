@@ -66,6 +66,14 @@ class TrailblazeContextEnvelopeTest {
     assertThat(bare["classifiers"]!!.jsonArray.size).isEqualTo(0)
   }
 
+  @Test fun `device block carries the initial locale, omitted when unknown`() {
+    val spanish = deviceInfo.copy(initialLocale = "es-US")
+    val device = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), spanish)["device"]!!.jsonObject
+    assertThat(device["initialLocale"]!!.jsonPrimitive.content).isEqualTo("es-US")
+    val bare = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), deviceInfo)["device"]!!.jsonObject
+    assertThat(bare.containsKey("initialLocale")).isEqualTo(false)
+  }
+
   @Test fun `memory block mirrors AgentMemory variables as JSON string primitives`() {
     val memory = AgentMemory().apply {
       remember("email", "user@example.com")

@@ -11,8 +11,10 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -61,12 +63,19 @@ class IosDriverTrailRunnerLoggingTest {
   // the forcing, the async log job would evaluate them post-action and this fake fails the run.
   private class FakeScreenState(
     private val isStale: () -> Boolean = { false },
+    private val withTree: Boolean = false,
   ) : ScreenState {
     override val screenshotBytes: ByteArray by lazy {
       check(!isStale()) {
         "screenshotBytes first evaluated after a later action executed — pre-action forcing is broken"
       }
       byteArrayOf(1, 2, 3, 4, 5)
+    }
+    override val trailblazeNodeTree: TrailblazeNode? by lazy {
+      check(!isStale()) {
+        "trailblazeNodeTree first evaluated after a later action executed — pre-action forcing is broken"
+      }
+      if (withTree) TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe()) else null
     }
     override val deviceWidth: Int = 390
     override val deviceHeight: Int = 844
@@ -81,6 +90,7 @@ class IosDriverTrailRunnerLoggingTest {
     private val screenStateProvider: (() -> ScreenState)? = null,
     private val executionResult: IosDeviceManager.ExecutionResult = IosDeviceManager.ExecutionResult(),
     private val failWith: Exception? = null,
+    private val withTree: Boolean = false,
   ) : IosDeviceManager {
     val executedActions = mutableListOf<IosDriverAction>()
     var screenStateCaptures = 0
@@ -89,7 +99,7 @@ class IosDriverTrailRunnerLoggingTest {
       screenStateCaptures++
       screenStateProvider?.let { return it() }
       val executedAtCapture = executedActions.size
-      return FakeScreenState(isStale = { executedActions.size != executedAtCapture })
+      return FakeScreenState(isStale = { executedActions.size != executedAtCapture }, withTree = withTree)
     }
 
     override fun execute(action: IosDriverAction): IosDeviceManager.ExecutionResult {
@@ -144,6 +154,24 @@ class IosDriverTrailRunnerLoggingTest {
     assertThat(logs[0].action).isEqualTo(AgentDriverAction.TapPoint(x = 10, y = 20))
     assertThat(logs[1].action).isEqualTo(AgentDriverAction.EnterText(text = "hello"))
     assertThat(persistedScreenshotFiles).hasSize(2)
+  }
+
+  @Test
+  fun `a screenshot capture still reads the tree before the action runs`() {
+    val result = IosDriverTrailRunner.runActions(
+      actions = listOf(IosDriverAction.Tap(x = 10, y = 20), IosDriverAction.InputText("hello")),
+      traceId = null,
+      deviceManager = FakeIosDeviceManager(withTree = true),
+      trailblazeLogger = capturingLogger,
+      sessionProvider = sessionProvider,
+      screenshotBeforeAction = true,
+    )
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // A tree first read on the logging thread fails FakeScreenState's check, which drops the log.
+    val logs = driverLogs()
+    assertThat(logs).hasSize(2)
+    logs.forEach { assertThat(it.screenshotFile).isNotNull() }
   }
 
   @Test
@@ -216,6 +244,62 @@ class IosDriverTrailRunnerLoggingTest {
     val logs = driverLogs()
     assertThat(logs).hasSize(1)
     assertThat(logs.single().action).isEqualTo(AgentDriverAction.TapPoint(x = 1, y = 2))
+  }
+
+  @Test
+  fun `a tree-only capture logs each action without taking a screenshot`() {
+    var screenshotsTaken = 0
+    val deviceManager = FakeIosDeviceManager(
+      screenStateProvider = {
+        object : ScreenState by FakeScreenState() {
+          override val screenshotBytes: ByteArray get() = byteArrayOf(1, 2, 3, 4, 5).also { screenshotsTaken++ }
+          override val trailblazeNodeTree: TrailblazeNode = TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe())
+        }
+      },
+    )
+
+    val result = IosDriverTrailRunner.runActions(
+      actions = listOf(IosDriverAction.Tap(x = 10, y = 20), IosDriverAction.InputText("hello")),
+      traceId = null,
+      deviceManager = deviceManager,
+      trailblazeLogger = capturingLogger,
+      sessionProvider = sessionProvider,
+      screenshotBeforeAction = false,
+    )
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val logs = driverLogs()
+    assertThat(logs).hasSize(2)
+    logs.forEach { assertThat(it.screenshotFile).isNull() }
+    // Not on this thread, and not on the logging thread after the action either.
+    assertThat(screenshotsTaken).isEqualTo(0)
+    assertThat(persistedScreenshotFiles).isEmpty()
+  }
+
+  @Test
+  fun `a tree-only capture keeps the screenshot when the tree is unavailable`() {
+    // FakeScreenState has no tree, as when describe-ui fails; without a tree the log gets no
+    // capture id, so the video cannot stand in for the picture.
+    val result = IosDriverTrailRunner.runActions(
+      actions = listOf(IosDriverAction.Tap(x = 10, y = 20)),
+      traceId = null,
+      deviceManager = FakeIosDeviceManager(),
+      trailblazeLogger = capturingLogger,
+      sessionProvider = sessionProvider,
+      screenshotBeforeAction = false,
+    )
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(driverLogs().single().screenshotFile).isNotNull()
+  }
+
+  @Test
+  fun `a recording session skips the pre-action screenshot unless the env says otherwise`() {
+    assertThat(IosDriverTrailRunner.shouldScreenshotBeforeAction(recordingVideo = false, override = null)).isTrue()
+    assertThat(IosDriverTrailRunner.shouldScreenshotBeforeAction(recordingVideo = true, override = null)).isFalse()
+    assertThat(IosDriverTrailRunner.shouldScreenshotBeforeAction(recordingVideo = false, override = " Tree ")).isFalse()
+    assertThat(IosDriverTrailRunner.shouldScreenshotBeforeAction(recordingVideo = true, override = "screenshot")).isTrue()
+    assertThat(IosDriverTrailRunner.shouldScreenshotBeforeAction(recordingVideo = true, override = "off")).isFalse()
   }
 
   @Test

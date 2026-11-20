@@ -24,7 +24,7 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
  * Launch tools whose logged arguments are masked by value: a recorded `<redacted>` would replay as a
  * real launch argument, so a launch with literal arguments can't be recorded.
  */
-private val LITERAL_LAUNCH_TOOL_NAMES = setOf("mobile_maestro", "ios_openApp")
+private val LITERAL_LAUNCH_TOOL_NAMES = setOf("ios_openApp")
 
 private fun JsonElement.hasRedactionMarker(): Boolean = when (this) {
   is JsonArray -> any { it.hasRedactionMarker() }
@@ -551,8 +551,8 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           // Skip — MaestroCommandLog entries are raw Maestro commands logged by
           // OrchestraRunner during tool execution. They are implementation details
           // of higher-level tools (e.g., TapOnByElementSelector) and should not
-          // appear in recordings. The proper MaestroTrailblazeTool (which IS
-          // recordable) is logged as a TrailblazeToolLog and handled above.
+          // appear in recordings; the tool itself is logged as a TrailblazeToolLog
+          // and handled above.
         }
 
         else -> {
@@ -874,13 +874,7 @@ private fun selectDirectToolLogs(
       selected += dropNestedToolCalls(inner.filterNot { it.isVerification }, offsets)
       continue
     }
-    val safeMaestro = if (outer.toolName == "mobile_maestro" &&
-      outer.authoredTrailblazeTool.raw.hasRedactionMarker()) {
-      inner.lastOrNull { it.toolName == "mobile_maestro" && it.rawTrailblazeTool != null &&
-        !it.authoredTrailblazeTool.raw.hasRedactionMarker() }
-      } else null
     when {
-      safeMaestro != null -> selected += safeMaestro
       outer.isRecordable -> selected += outer
       else -> selected += dropNestedToolCalls(inner, offsets)
     }

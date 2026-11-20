@@ -24,6 +24,7 @@ import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -33,6 +34,7 @@ import xyz.block.trailblaze.host.android.InProcessTrailheadReset
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
+import xyz.block.trailblaze.host.devices.TargetDeviceClassifier
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.devices.TrailDeviceLocale
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
@@ -169,6 +171,13 @@ class DesktopYamlRunner(
       }
       throw fatalFailure
     }
+
+    /**
+     * The locale [yaml] declares for a device with [classifiers]; null when it declares none. A
+     * trail that doesn't read is left to the run's own decode, which reports it.
+     */
+    internal fun declaredLocale(yaml: String, classifiers: List<TrailblazeDeviceClassifier>): String? =
+      runCatching { createTrailblazeYaml().extractTrailConfig(yaml = yaml, deviceClassifiers = classifiers)?.locale }.getOrNull()
 
     /**
      * The language a trail runs in: its `locale:`, or the default when it declares none. Null — no
@@ -507,6 +516,57 @@ class DesktopYamlRunner(
 
     /** How often [replyOrSessionEnd] looks for the end status; it reads only status logs. */
     private const val SESSION_END_POLL_MS = 250L
+
+    /**
+     * Refuses a run whose target's device classifier computed [key] on a driver that picks
+     * recordings with a fixed key of its own (Compose, Electron, Revyl): it would replay and save
+     * under that fixed key instead, with nothing saying so.
+     */
+    internal fun deviceClassifierIgnoredByDriverRejection(
+      driverType: TrailblazeDriverType,
+      key: List<TrailblazeDeviceClassifier>,
+    ): String? {
+      if (driverType in driversReplayingHostClassification) return null
+      return "this target's device classifier computed the device key " +
+        "'${key.joinToString("-") { it.classifier }}', but the $driverType driver picks recordings " +
+        "with a fixed key of its own and would ignore it"
+    }
+
+    /**
+     * What a run on a borrowed device says when its target has a device classifier: the classifier
+     * reads facts from a device on this machine, so it is skipped and the lender's key decides, as
+     * for a target without one. Null when the target has none.
+     */
+    internal fun borrowedDeviceClassifierSkipped(
+      deviceId: String,
+      classifier: xyz.block.trailblaze.config.TargetDeviceClassifierConfig?,
+    ): String? = classifier?.let {
+      "Device classifier ${it.name} skipped: $deviceId is borrowed from another machine, so the run " +
+        "uses the device key its lender reports."
+    }
+
+    /**
+     * What a multi-device run says when its target has a device classifier: each member may name
+     * its own target, so the classifier is skipped and every device keeps the framework's key, as
+     * for a target without one. Null for a single-device run or a target without a classifier.
+     */
+    internal fun multiDeviceClassifierSkipped(
+      configurationName: String?,
+      classifier: xyz.block.trailblaze.config.TargetDeviceClassifierConfig?,
+    ): String? = classifier?.takeIf { configurationName != null }?.let {
+      "Device classifier ${it.name} skipped: multi-device configuration '$configurationName' keeps " +
+        "each device's framework key."
+    }
+
+    /**
+     * The key a run on a borrowed device uses: [requested] when it refines the lender's [detected]
+     * key, which a device family's key never does there, since a borrowed device runs no target
+     * classifier. Throws when it doesn't; null when the lender's key isn't known.
+     */
+    internal fun borrowedRunKey(
+      detected: List<TrailblazeDeviceClassifier>?,
+      requested: List<TrailblazeDeviceClassifier>,
+    ): List<TrailblazeDeviceClassifier>? = detected?.let { DeviceClassifierResolver.resolveOverride(it, requested) }
 
     /** Refuses a classifier-qualified run when the installed runner would discard its override. */
     internal fun deviceClassifierOverrideCapabilityRejection(
@@ -1021,8 +1081,9 @@ class DesktopYamlRunner(
     val targetTestApp = desktopAppRunYamlParams.targetTestApp
     val trailblazeDeviceId = desktopAppRunYamlParams.runYamlRequest.trailblazeDeviceId
     val forceStopTargetApp = desktopAppRunYamlParams.forceStopTargetApp
-    // Carried on the request so an on-device runner keeps the device's language too.
-    val runYamlRequest = desktopAppRunYamlParams.runYamlRequest.let { request ->
+    // Carried on the request so an on-device runner keeps the device's language too. A `var` so
+    // the target's device classifier can put the key it computed on the request, below.
+    var runYamlRequest = desktopAppRunYamlParams.runYamlRequest.let { request ->
       if (desktopAppRunYamlParams.keepDeviceLanguage) request.copy(keepDeviceLanguage = true) else request
     }
     val onProgressMessage = desktopAppRunYamlParams.onProgressMessage
@@ -1091,6 +1152,25 @@ class DesktopYamlRunner(
         onProgressMessage("$devicePrefix $message")
       }
 
+      // A device borrowed from another machine: the agent runs here and its lender runs each tool,
+      // so none of the local-device preparation below applies to it.
+      if (trailblazeDeviceManager.remoteDevicePools.isRemote(trailblazeDeviceId)) {
+        executionResult = runOnBorrowedDevice(
+          device = connectedTrailblazeDevice,
+          runYamlRequest = runYamlRequest,
+          targetTestApp = targetTestApp,
+          onProgressMessage = prefixedProgressMessage,
+          noLogging = desktopAppRunYamlParams.noLogging,
+          findTargetById = desktopAppRunYamlParams.findTargetById,
+        )
+        Console.log("🏁 COROUTINE FINISHED (borrowed device) for device: ${trailblazeDeviceId.instanceId}")
+        onComplete?.invoke(executionResult)
+        if (executionResult is TrailExecutionResult.Cancelled) {
+          throw CancellationException("Test cancelled for device ${trailblazeDeviceId.instanceId}")
+        }
+        return@launch
+      }
+
       // Ahead of the force-stop below, and ahead of dispatch routing, because both of those act on
       // the device: force-stopping falls back to the session-default app whenever the selection
       // resolves to nothing, so validating afterwards would kill an unrelated app on behalf of a
@@ -1121,16 +1201,37 @@ class DesktopYamlRunner(
       // False when the host's hardware probe came back incomplete, so the device itself may pick
       // recordings the host can't see.
       var classificationDefinitive = true
+      // The key the target's device classifier computed, when it differs from the framework's.
+      var classifierComputedKey: List<TrailblazeDeviceClassifier>? = null
       val deviceClassifiers = try {
         val classification = DeviceClassifierResolver.classificationFor(
           platform = connectedTrailblazeDevice.platform,
           instanceId = connectedTrailblazeDevice.instanceId,
         )
         classificationDefinitive = classification.definitive
-        DeviceClassifierResolver.resolveOverride(
+        val targetClassifier = (targetTestApp ?: trailblazeHostAppTargetProvider()).getDeviceClassifierConfig()
+        multiDeviceClassifierSkipped(selectedConfigurationName, targetClassifier)?.let(prefixedProgressMessage)
+        val runKey = TargetDeviceClassifier.forRun(
+          config = targetClassifier.takeIf { selectedConfigurationName == null },
+          definitive = classification.definitive,
+          platform = connectedTrailblazeDevice.platform,
           detected = DeviceClassifierResolver.trustedForBehavior(classification),
           requested = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
+          facts = { TargetDeviceClassifier.factsFor(connectedTrailblazeDevice.trailblazeDeviceId) },
         )
+        runKey.message?.let(prefixedProgressMessage)
+        // Sent as the requested key, so the device, the host runner and the saved recording all use
+        // the key the classifier computed, the same way a `--device-classifier` key travels.
+        runKey.override?.let { key ->
+          classifierComputedKey = key
+          runYamlRequest = runYamlRequest.copy(deviceClassifierOverride = key.map { it.classifier })
+        }
+        runKey.key
+      } catch (e: CancellationException) {
+        // Stopped while the classifier ran: callers waiting on onComplete still need an answer.
+        executionResult = TrailExecutionResult.Cancelled
+        onComplete?.invoke(executionResult)
+        throw e
       } catch (e: IllegalArgumentException) {
         val message = e.message ?: "This run's device classifier is not valid"
         prefixedProgressMessage(message)
@@ -1148,6 +1249,23 @@ class DesktopYamlRunner(
           selectedDeviceConfiguration = selectedConfigurationName,
         )
       }
+      // Validate the declaration against the original lane before any device/app mutation.
+      val recordingClassifiers =
+        try {
+          if (selectedConfigurationName != null) deviceClassifiers
+          else
+            DeviceClassifierKey.withDeclaredLocale(
+              deviceClassifiers,
+              resolvedTrailConfigResult.getOrNull()?.locale,
+            )
+        } catch (e: IllegalArgumentException) {
+          val message =
+            e.message ?: "This run's declared locale is not valid for its device classifier"
+          prefixedProgressMessage(message)
+          executionResult = TrailExecutionResult.Failed(message, misuse = true)
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
       // The trail as THIS device will run it: which steps replay a recording and which go to the
       // AI. Null when the document does not decode as a trail here; the run's own decode owns that.
       val trailItemsForDevice = runCatching {
@@ -1155,6 +1273,7 @@ class DesktopYamlRunner(
           yaml = runYamlRequest.yaml,
           deviceClassifiers = deviceClassifiers,
           selectedDeviceConfiguration = selectedConfigurationName,
+          recordingClassifiers = recordingClassifiers,
         )
       }.getOrNull()
       val requestedLocale = requestedDeviceLocale(
@@ -1234,12 +1353,20 @@ class DesktopYamlRunner(
       // `runYamlRequest.copy(driverType = …)`. The swap is same-platform (resolution is
       // platform-scoped), so instanceId / platform / deviceId are unchanged.
       val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
+      classifierComputedKey?.let { key ->
+        deviceClassifierIgnoredByDriverRejection(trailblazeDriverType, key)?.let { message ->
+          prefixedProgressMessage(message)
+          executionResult = TrailExecutionResult.Failed(message, misuse = true)
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
+      }
       // Visible on every run, unlike the lowering's own log line: a step whose recordings are keyed
       // for other devices otherwise turns into an AI step with nothing saying why. Only where the
       // runner picks recordings with these same classifiers, or the warning would name a miss the
       // runner doesn't make (Compose replays as `desktop-compose`, not the host's `desktop`).
       if (classificationDefinitive && trailblazeDriverType in driversReplayingHostClassification) {
-        unmatchedRecordingWarnings(runYamlRequest.yaml, deviceClassifiers, selectedConfigurationName)
+        unmatchedRecordingWarnings(runYamlRequest.yaml, recordingClassifiers, selectedConfigurationName)
           .forEach(prefixedProgressMessage)
       }
       val deviceLocale = systemLocaleToApply(driverType = trailblazeDriverType, locale = requestedLocale)
@@ -1443,6 +1570,7 @@ class DesktopYamlRunner(
             yaml = runYamlRequest.yaml,
             deviceClassifiers = deviceClassifiers,
             selectedDeviceConfiguration = selectedConfigurationName,
+            recordingClassifiers = recordingClassifiers,
           )
         }.getOrNull()
         // The on-device path never receives the reuse request and sets up from scratch, so a hand-off
@@ -2269,6 +2397,20 @@ class DesktopYamlRunner(
       // multi-device run would otherwise accumulate for the daemon's lifetime.
       val companionRpcClients = mutableListOf<OnDeviceRpcClient>()
       val boundIosDevices = mutableListOf<TrailblazeConnectedDevice>()
+      // Borrowed companions held for the whole run, like the launch device; ended in the finally.
+      val borrowedCompanionRuns = mutableListOf<TrailblazeDeviceId>()
+      val pools = trailblazeDeviceManager.remoteDevicePools
+
+      fun borrowedDevice(
+        deviceId: TrailblazeDeviceId,
+        driverType: TrailblazeDriverType,
+        target: TrailblazeHostAppTarget?,
+      ) = TrailblazeHostYamlRunner.DeviceConnection.Remote(
+        trailblazeDeviceId = deviceId,
+        driverType = driverType,
+        call = { request -> pools.call(deviceId, request) },
+        targetTestApp = target,
+      )
 
       suspend fun connectAndroid(
         deviceId: TrailblazeDeviceId,
@@ -2363,13 +2505,17 @@ class DesktopYamlRunner(
         }
         val launchTarget = resolvedConfiguration?.let { memberTargets?.get(it.startDeviceName) } ?: targetTestApp
         val launchName = resolvedConfiguration?.startDeviceName ?: launchDeviceId.instanceId
-        inProcessStartDeviceTargetRefusal(
-          driverType = launchDriver,
-          configurationName = resolvedConfiguration?.configurationName,
-          startDeviceName = launchName,
-          startDeviceTarget = launchTarget,
-          runTargetApp = runTargetApp,
-        )?.let { throw TrailblazeException(it) }
+        // Only a start device this machine instruments runs the run's target. A borrowed one's
+        // lender runs whatever target each tool request names, so its own `target:` is fine.
+        if (!pools.isRemote(launchDeviceId)) {
+          inProcessStartDeviceTargetRefusal(
+            driverType = launchDriver,
+            configurationName = resolvedConfiguration?.configurationName,
+            startDeviceName = launchName,
+            startDeviceTarget = launchTarget,
+            runTargetApp = runTargetApp,
+          )?.let { throw TrailblazeException(it) }
+        }
 
         val androidLaunch = trailblazeOnDeviceInstrumentationTarget?.let { instrumentationTarget ->
           val (connected, startedEarly) = connectWhileRecordingStarts(
@@ -2409,6 +2555,8 @@ class DesktopYamlRunner(
             },
             sessionReconnector = androidLaunch.sessionReconnector,
           )
+          // Borrowed from another machine: its lender runs each tool, on the lender's own driver.
+          pools.isRemote(launchDeviceId) -> borrowedDevice(launchDeviceId, launchDriver, launchTarget)
           launchDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB ->
             TrailblazeHostYamlRunner.DeviceConnection.WebBrowser(
               trailblazeDeviceId = launchDeviceId,
@@ -2441,6 +2589,18 @@ class DesktopYamlRunner(
           val unsupportedCompanions = resolved.companionDeviceIds.filterValues {
             it.trailblazeDevicePlatform !in COMPANION_PLATFORMS
           }
+          // A run started on a borrowed device skips this machine's preparation and capture for its
+          // own devices (animations, app compile, video, logs), so one of them would run unprepared.
+          val localCompanions = resolved.companionDeviceIds.filterKeys { it !in resolved.borrowedCompanionNames }
+          if (pools.isRemote(launchDeviceId) && localCompanions.isNotEmpty()) {
+            throw TrailblazeException(
+              "Configuration '${resolved.configurationName}' starts on ${launchDeviceId.instanceId}, which is " +
+                "borrowed, and binds this machine's own " +
+                localCompanions.entries.joinToString { (name, id) -> "'$name' (${id.instanceId})" } +
+                ". A run started on a borrowed device can only use borrowed devices: borrow those too, " +
+                "or start the run on a device of this machine's.",
+            )
+          }
           if (unsupportedCompanions.isNotEmpty()) {
             throw TrailblazeException(
               "Configuration '${resolved.configurationName}' casts companion devices on platforms " +
@@ -2462,14 +2622,22 @@ class DesktopYamlRunner(
                 "Binding device '$name' to ${companionDeviceId.instanceId}" +
                   (companionTarget?.id?.let { " (target '$it')" } ?: ""),
               )
-              when (companionDeviceId.trailblazeDevicePlatform) {
-                TrailblazeDevicePlatform.WEB -> TrailblazeHostYamlRunner.DeviceConnection.WebBrowser(
+              when {
+                // Borrowed from another machine: its lender runs each tool with its own driver, so
+                // nothing here connects to or warms up the device. Leased for the whole run, so a
+                // long stretch on another device can't hand it back mid-trail.
+                name in resolved.borrowedCompanionNames -> {
+                  pools.runStarted(companionDeviceId)
+                  borrowedCompanionRuns += companionDeviceId
+                  borrowedDevice(companionDeviceId, companionDriver, companionTarget)
+                }
+                companionDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB -> TrailblazeHostYamlRunner.DeviceConnection.WebBrowser(
                   trailblazeDeviceId = companionDeviceId,
                   pageManager = bindWebBrowser(companionDeviceId, name, runYamlRequest.config.browserHeadless, onProgressMessage),
                   // A browser installs no app, so this only scopes the tools its agent resolves.
                   targetTestApp = companionTarget,
                 )
-                TrailblazeDevicePlatform.IOS -> TrailblazeHostYamlRunner.DeviceConnection.IosSimulator(
+                companionDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS -> TrailblazeHostYamlRunner.DeviceConnection.IosSimulator(
                   trailblazeDeviceId = companionDeviceId,
                   connectedDevice = connectIos(name, companionDeviceId, companionDriver, companionTarget),
                   targetTestApp = companionTarget,
@@ -2548,7 +2716,11 @@ class DesktopYamlRunner(
           // about whose it is. Only a declaration makes it this device's own.
           val declaredMemberTargetIds = resolvedConfiguration?.memberTargetIds.orEmpty()
           onCaptureDeviceBindingsResolved(
-            (mapOf(session.startDeviceName to launchDevice) + session.companions).map { (name, device) ->
+            // Not a borrowed device: this machine can't record its screen or read its logs, and
+            // its screenshots reach the session through each tool call anyway.
+            (mapOf(session.startDeviceName to launchDevice) + session.companions)
+              .filterValues { it !is TrailblazeHostYamlRunner.DeviceConnection.Remote }
+              .map { (name, device) ->
               CaptureDeviceBinding(
                 name = name,
                 deviceId = device.trailblazeDeviceId,
@@ -2587,6 +2759,7 @@ class DesktopYamlRunner(
               multiDeviceSession = multiDeviceSession,
               logsDir = logsDirProvider(),
               noLogging = noLogging,
+              isRecordingVideo = trailblazeDeviceManager.sessionCaptureCoordinator::isRecordingVideo,
             )
           } finally {
             val androidDevices = (listOf(launchDevice) + multiDeviceSession?.companions?.values.orEmpty())
@@ -2616,10 +2789,133 @@ class DesktopYamlRunner(
               .onFailure { Console.log("[runHostAgentWithOnDeviceRpc] stopping capture for $sid threw: ${it.message}") }
           }
         }
+        // First: it can't throw, and a cleanup below that does must not leave a lender's device held.
+        borrowedCompanionRuns.forEach(pools::runEnded)
         closeCompanionRpcClients(companionRpcClients)
         releaseBoundIosDevices(boundIosDevices)
       }
     }
+  }
+
+  /**
+   * Runs a trail on a device borrowed from another machine ([RemoteDevicePools]): the agent, logs
+   * and report stay here, and each tool runs on the lender with its own driver for the device. A
+   * run that binds companions runs the trail's multi-device configuration with this device as its
+   * start device; each companion must be borrowed too, from any lender.
+   */
+  private suspend fun runOnBorrowedDevice(
+    device: TrailblazeConnectedDeviceSummary,
+    runYamlRequest: RunYamlRequest,
+    targetTestApp: TrailblazeHostAppTarget?,
+    onProgressMessage: (String) -> Unit,
+    noLogging: Boolean,
+    findTargetById: ((String) -> TrailblazeHostAppTarget?)?,
+  ): TrailExecutionResult {
+    borrowedDeviceClassifierSkipped(
+      deviceId = device.trailblazeDeviceId.toFullyQualifiedDeviceId(),
+      classifier = (targetTestApp ?: trailblazeHostAppTargetProvider()).getDeviceClassifierConfig(),
+    )?.let(onProgressMessage)
+    // A borrowed device runs no target classifier, so a requested key that doesn't fit the lender's
+    // classification of it fails here rather than replay another device's recordings.
+    val borrowedKey = try {
+      borrowedDeviceKey(device, runYamlRequest)
+    } catch (e: IllegalArgumentException) {
+      val message = e.message ?: "This run's device classifier doesn't match the borrowed device"
+      onProgressMessage(message)
+      return TrailExecutionResult.Failed(message, misuse = true)
+    }
+    // The lender is sent one tool at a time, never the trail, so it can't switch the device's
+    // language first; refused rather than run in whatever language the device is in.
+    borrowedKey?.let { declaredLocale(runYamlRequest.yaml, it) }?.let { locale ->
+      val message = "${device.trailblazeDeviceId.toFullyQualifiedDeviceId()} is borrowed from another machine, " +
+        "and a borrowed device can't be switched to this trail's locale ('$locale') yet."
+      onProgressMessage(message)
+      return TrailExecutionResult.Failed(message, misuse = true)
+    }
+    val pools = trailblazeDeviceManager.remoteDevicePools
+    val deviceId = device.trailblazeDeviceId
+    // Selected as for a local launch device, so a trail that declares only a configuration is
+    // refused up front when its devices aren't bound, rather than run on this device alone.
+    val selectedConfigurationName = try {
+      MultiDeviceConfigurationResolver.selectConfigurationName(
+        yaml = runYamlRequest.yaml,
+        requestConfigurationName = runYamlRequest.deviceConfiguration,
+        environmentConfigurationName = System.getenv(MultiDeviceConfigurationResolver.DEVICE_CONFIGURATION_ENV_VAR),
+        requestDeviceBindingNames = runYamlRequest.deviceBindings.keys,
+        rawDeviceBindings = System.getenv(MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR),
+      )
+    } catch (e: TrailblazeException) {
+      val message = e.message ?: "This run's device configuration is not valid"
+      onProgressMessage(message)
+      return TrailExecutionResult.Failed(message, misuse = true)
+    }
+    MultiDeviceConfigurationResolver.singleDeviceFallbackMessage(runYamlRequest.yaml, selectedConfigurationName)
+      ?.let(onProgressMessage)
+    return try {
+      val sessionId = if (selectedConfigurationName != null) {
+        // The multi-device path every cast takes, with this device as its start device.
+        runHostAgentWithOnDeviceRpc(
+          dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+          runYamlRequest = runYamlRequest.copy(driverType = device.trailblazeDriverType),
+          connectedTrailblazeDevice = device,
+          trailblazeOnDeviceInstrumentationTarget = null,
+          onProgressMessage = onProgressMessage,
+          onConnectionStatus = {},
+          additionalInstrumentationArgs = emptyMap(),
+          targetTestApp = targetTestApp,
+          runTargetApp = targetTestApp ?: trailblazeHostAppTargetProvider(),
+          findTargetById = findTargetById,
+          noLogging = noLogging,
+        )
+      } else withContext(Dispatchers.IO) {
+        TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
+          dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+          launchDevice = TrailblazeHostYamlRunner.DeviceConnection.Remote(
+            trailblazeDeviceId = deviceId,
+            driverType = device.trailblazeDriverType,
+            call = { request -> pools.call(deviceId, request) },
+            targetTestApp = targetTestApp,
+          ),
+          runYamlRequest = runYamlRequest.copy(driverType = device.trailblazeDriverType),
+          onProgressMessage = onProgressMessage,
+          logsDir = logsDirProvider(),
+          noLogging = noLogging,
+        )
+      }
+      if (sessionId == null) {
+        TrailExecutionResult.Failed("Test execution did not produce a session id (see daemon log for details)")
+      } else {
+        TrailExecutionResult.Success()
+      }
+    } catch (e: CancellationException) {
+      TrailExecutionResult.Cancelled
+    } catch (e: TrailblazeSessionCancelledException) {
+      onProgressMessage("Test session cancelled")
+      TrailExecutionResult.Cancelled
+    } catch (e: Exception) {
+      val message = e.message ?: e::class.java.simpleName
+      Console.log("⚠️ EXCEPTION on borrowed device ${deviceId.instanceId}: ${e::class.java.simpleName} - $message")
+      Console.log(e.stackTraceToString())
+      onProgressMessage("Error: $message")
+      TrailExecutionResult.Failed(message)
+    }
+  }
+
+  /**
+   * The key a run on borrowed [device] uses: the requested key, which must refine the lender's
+   * ([DeviceClassifierResolver.resolveOverride] throws when it doesn't), else the lender's. Null
+   * when the device can't be classified here, so nothing can be checked.
+   */
+  private fun borrowedDeviceKey(
+    device: TrailblazeConnectedDeviceSummary,
+    runYamlRequest: RunYamlRequest,
+  ): List<TrailblazeDeviceClassifier>? {
+    val detected = runCatching {
+      DeviceClassifierResolver.trustedForBehavior(
+        DeviceClassifierResolver.classificationFor(platform = device.platform, instanceId = device.instanceId),
+      )
+    }.getOrNull()
+    return borrowedRunKey(detected, runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier))
   }
 
   /**
@@ -2731,13 +3027,13 @@ class DesktopYamlRunner(
     val rawDeviceBindings = System.getenv(MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR)
     // Only a run that binds companions can select a configuration, so a single-device run skips
     // the device discovery this needs.
-    val boundDevicePlatforms =
+    val boundDevices =
       if (rawDeviceBindings.isNullOrBlank() && runYamlRequest.deviceBindings.isEmpty()) {
-        emptyMap()
+        emptyList()
       } else {
         trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false)
-          .associate { it.instanceId to it.platform }
       }
+    val pools = trailblazeDeviceManager.remoteDevicePools
     return MultiDeviceConfigurationResolver.resolve(
       yaml = runYamlRequest.yaml,
       primaryDeviceId = primaryDeviceId,
@@ -2751,7 +3047,10 @@ class DesktopYamlRunner(
       // (`copy(driverType = trailblazeDriverType)`), so a member pinning anything else is rejected
       // here rather than silently ignored.
       sessionDriverType = runYamlRequest.driverType,
-      boundDevicePlatforms = boundDevicePlatforms,
+      boundDevicePlatforms = boundDevices.associate { it.instanceId to it.platform },
+      // The listing just asked every lender, so a borrowed device is known without asking again.
+      borrowedDeviceDrivers = boundDevices.filter { pools.isRemote(it.trailblazeDeviceId) }
+        .associate { it.instanceId to it.trailblazeDriverType },
     )
   }
 

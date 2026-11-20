@@ -10,6 +10,7 @@ import java.nio.file.Path
 import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.bundle.HostFunctionDts
+import xyz.block.trailblaze.bundle.MemoryKeyDts
 import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.codegen.SerialDescriptorTsCodegen
@@ -189,6 +190,7 @@ object PerTrailmapClientDtsEmitter {
         extraParamsByToolName = kotlinTools.selectorParamsByName,
         hostFunctions = hostFunctionDtsFor(dependencyClosureIds(trailmap, trailmapsById), hostFunctions),
         surveys = midTrailSurveys(trailmapDir),
+        memoryKeys = memoryKeysFor(trailmap, trailmapsById, catalog),
       )
       // Emit the machine-readable arg-type sidecar next to the .d.ts so the trail-recording
       // validator can coerce recorded args to their declared types (see
@@ -400,6 +402,24 @@ object PerTrailmapClientDtsEmitter {
         .filterNot { it.requiresFinishedSession }
         .map { SurveyDts(name = it.name, feature = it.feature, file = relative) }
     }
+
+  /**
+   * Every memory key [trailmap]'s scripts can meet, flattened into one list — see
+   * [TrailmapMemoryKeys.inReach]. A key declared twice keeps its nearest declaration here; the
+   * duplicate itself is reported by `trailblaze check`, so the typed surface still generates.
+   */
+  internal fun memoryKeysFor(
+    trailmap: ResolvedTrailmap,
+    trailmapsById: Map<String, ResolvedTrailmap>,
+    catalog: List<ToolSetCatalogEntry>,
+  ): List<MemoryKeyDts> = TrailmapMemoryKeys.inReach(trailmap, trailmapsById, catalog).keys.map { key ->
+    MemoryKeyDts(
+      name = key.name,
+      description = key.declaration.description,
+      declaredBy = key.declaredBy,
+      trailmap = key.trailmap,
+    )
+  }
 
   /** [trailmap]'s id plus every id reachable through `dependencies:`, resolved or not. */
   private fun dependencyClosureIds(

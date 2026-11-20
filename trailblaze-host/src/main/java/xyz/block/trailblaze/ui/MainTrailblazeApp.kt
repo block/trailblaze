@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.cli.DaemonClient
+import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.cli.TrailblazeExitCode
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -80,14 +81,29 @@ class MainTrailblazeApp(
         wait = true,
         trailRunnerPath = trailRunnerPath,
         additionalRouteRegistration = {
-          allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
+          allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager, trailblazeMcpServer).invoke(this)
           extraDaemonRoutes?.invoke(this)
         },
+        lendingPort = lendingPortIfLending(portManager.httpPort, trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig.lendDevices),
       )
     } catch (e: Exception) {
       exitOnPortBindFailure(port = portManager.httpPort, cause = e)
     }
   }
+}
+
+/**
+ * The [xyz.block.trailblaze.logs.server.LendingPort] a lending daemon on [httpPort] opens, or null
+ * when it doesn't lend. A port something else already holds is left out, with a warning: lending
+ * still works on the daemon's own port, and the daemon must not fail to start over it.
+ */
+private fun lendingPortIfLending(httpPort: Int, savedLendDevices: Boolean): Int? {
+  if (!xyz.block.trailblaze.host.lease.DeviceLeaseEndpoint.decideLending(saved = savedLendDevices)) return null
+  val port = xyz.block.trailblaze.logs.server.LendingPort.forDaemon(httpPort)
+  val usable = port !in xyz.block.trailblaze.devices.TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE &&
+    runCatching { java.net.ServerSocket().use { it.bind(java.net.InetSocketAddress("127.0.0.1", port)) } }.isSuccess
+  if (!usable) Console.log("[lending] can't open lending port $port; tunnels that lend this machine's devices will not reach it")
+  return port.takeIf { usable }
 }
 
 /**
@@ -136,11 +152,15 @@ private fun exitOnPortBindFailure(port: Int, cause: Exception): Nothing {
  *  - Waypoint graph endpoints (`/waypoints/graph`, `/waypoints/graph.json`)
  *  - Device API RPC endpoints (`/rpc/GetConnectedDevicesRequest`, etc.)
  *  - Device reachability health signal (`/health/device`)
+ *  - App installs from the CLI (`/cli/device-install`), on own and borrowed devices
+ *  - Device leasing (`/leases`), only when `TRAILBLAZE_LEASE_DEVICES` or the `lend-devices`
+ *    setting asks for it
  */
 private fun allRouteRegistrations(
   settingsRepo: TrailblazeSettingsRepo,
   deviceManager: TrailblazeDeviceManager,
   sessionManager: xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager,
+  mcpServer: TrailblazeMcpServer,
 ): (io.ktor.server.routing.Routing.() -> Unit) = {
   xyz.block.trailblaze.graph.WaypointGraphEndpoint.register(
     routing = this,
@@ -156,4 +176,38 @@ private fun allRouteRegistrations(
   )
   xyz.block.trailblaze.host.recording.rpc.DevicesPageEndpoint.register(routing = this)
   xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
+  xyz.block.trailblaze.host.install.DeviceInstallEndpoint.register(
+    routing = this,
+    findDevice = { spec ->
+      xyz.block.trailblaze.host.install.DeviceInstallEndpoint.pick(
+        deviceManager.loadDevicesSuspend(applyDriverFilter = false).map { it.trailblazeDeviceId },
+        spec,
+      )
+    },
+    installer = xyz.block.trailblaze.host.install.DeviceAppInstaller(),
+  )
+  val lendDevices = settingsRepo.serverStateFlow.value.appConfig.lendDevices
+  if (xyz.block.trailblaze.host.lease.DeviceLeaseEndpoint.decideLending(saved = lendDevices)) {
+    xyz.block.trailblaze.host.lease.DeviceLeaseEndpoint.register(
+      routing = this,
+      // This daemon's own devices, as its drivers run them; never ones it borrows, and found
+      // without asking the pools it borrows from, which may be asking this one.
+      attachedDevices = {
+        val own = deviceManager.loadOwnDevicesSuspend()
+        // Measured here, so a borrower's CLI can pick the right recordings without probing a device
+        // it can't reach. Only a definitive measurement is sent.
+        DeviceClassifierResolver.warmCache(own.map { it.platform to it.instanceId })
+        own.map {
+          val classification = DeviceClassifierResolver.classificationFor(it.platform, it.instanceId)
+          xyz.block.trailblaze.host.lease.LeasableDevice(
+            id = it.trailblazeDeviceId.toFullyQualifiedDeviceId(),
+            driverType = it.trailblazeDriverType,
+            description = it.description,
+            classifiers = if (classification.definitive) classification.classifiers.map { c -> c.classifier } else emptyList(),
+          )
+        }
+      },
+      calls = xyz.block.trailblaze.host.lease.BridgeLeasedDeviceCalls { mcpServer.mcpBridge },
+    )
+  }
 }

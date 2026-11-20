@@ -158,6 +158,16 @@ class CheckCommand : Callable<Int> {
   var testsOnly: Boolean = false
 
   @Option(
+    names = ["--no-tests"],
+    description = [
+      "Skip the trailmaps' `*.test.ts` unit tests; every other phase still runs. For CI that " +
+        "runs those tests itself (in parallel, or with its own timeouts), so `check` does not " +
+        "run them a second time.",
+    ],
+  )
+  var noTests: Boolean = false
+
+  @Option(
     names = ["--show-typed-tools"],
     description = [
       "Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each " +
@@ -180,6 +190,10 @@ class CheckCommand : Callable<Int> {
   internal var compileCommandFactory: () -> CompileCommand = { CompileCommand() }
 
   override fun call(): Int {
+    if (noTests && testsOnly) {
+      Console.error("trailblaze check: --no-tests and --tests-only are mutually exclusive.")
+      return TrailblazeExitCode.MISUSE.code
+    }
     if (checkAll && trailmapId != null) {
       Console.error("trailblaze check: --all and <trailmap-id> are mutually exclusive.")
       return TrailblazeExitCode.MISUSE.code
@@ -205,13 +219,15 @@ class CheckCommand : Callable<Int> {
     // Step 1: materialize. CompileCommand discovers the workspace via the same walk-up
     // shape we just used, so setting `inputDir` explicitly keeps it from re-walking
     // (and gives a stable anchor when --workspace was passed).
-    val compileExit = CliCallerContext.withCallerCwd(resolved.workspaceRoot.toPath()) {
-      compileCommandFactory().apply {
-        inputDir = CliPathUtils.workspaceConfigDir(resolved.workspaceRoot.toPath()).toFile()
-        commandLabel = "check"
-      }.call()
+    val compile = compileCommandFactory().apply {
+      inputDir = CliPathUtils.workspaceConfigDir(resolved.workspaceRoot.toPath()).toFile()
+      commandLabel = "check"
     }
+    val compileExit = CliCallerContext.withCallerCwd(resolved.workspaceRoot.toPath()) { compile.call() }
     if (compileExit != 0) return compileExit
+    // A memory key declared twice in one trailmap's reach: compile already printed each one.
+    val memoryKeyExit =
+      if (compile.memoryKeyConflicts.isEmpty() && compile.malformedMemoryToolSets.isEmpty()) EXIT_OK else EXIT_TYPE_ERROR
 
     // Dispatch shape shared by both the typecheck and unit-test phases below — keeps
     // them targeting the same trailmap set whether the user pinned `--all`, a single trailmap,
@@ -255,7 +271,12 @@ class CheckCommand : Callable<Int> {
     // in one run" so an author iterating doesn't have to fix one signal, rerun, fix
     // the next, rerun. The aggregate exit code below picks the worst of the two
     // phases.
-    val testExit = TrailmapUnitTestRunner.run(trailmaps = trailmapsToValidate, requireTests = testsOnly)
+    // `--no-tests` skips only this phase, for a caller that runs the same tests itself.
+    val testExit = if (noTests) {
+      0
+    } else {
+      TrailmapUnitTestRunner.run(trailmaps = trailmapsToValidate, requireTests = testsOnly)
+    }
 
     // Opt-in diagnostic: print the typed scripted tools
     // (`trailblaze.tool<I, O>({...})`) discovered in each trailmap. Off by default
@@ -344,7 +365,7 @@ class CheckCommand : Callable<Int> {
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
-    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, trailLintExit, surveyExit)
+    return maxOf(memoryKeyExit, typecheckExit, testExit, validationExit, argTokenExit, trailLintExit, surveyExit)
   }
 
   /**

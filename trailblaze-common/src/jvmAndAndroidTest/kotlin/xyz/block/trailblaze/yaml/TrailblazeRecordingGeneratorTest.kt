@@ -49,7 +49,6 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblaze
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
@@ -478,23 +477,6 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun literalMaestroLaunchRefusesTheWholeObjectiveInsteadOfSavingLaterActions() {
-    val step = DirectionStep(step = "Open app and tap login")
-    val logs = listOf(
-      objectiveStart(step),
-      toolLog(MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"), "mobile_maestro"),
-      toolLog(InputTextTrailblazeTool(text = "login"), "inputText"),
-      objectiveComplete(step),
-    )
-
-    assertThat((logs[1] as TrailblazeLog.TrailblazeToolLog).trailblazeTool.raw.toString()).contains("<redacted>")
-
-    val failure = kotlin.test.assertFailsWith<IllegalStateException> { logs.generateRecordedTrailItems(trailblazeYaml) }
-    assertThat(failure.message.orEmpty()).contains("Cannot record mobile_maestro with literal launch arguments")
-    assertThat(logs.recordedYaml()).isEqualTo("")
-  }
-
-  @Test
   fun literalIosOpenAppLaunchArgumentsRefuseRecording() {
     val step = DirectionStep(step = "Open the app in Spanish")
     val logs = listOf(
@@ -592,40 +574,20 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun embeddedLaunchMarkerAlsoRefusesRecording() {
-    val step = DirectionStep(step = "Launch with a mixed argument")
-    val authored = OtherTrailblazeTool("mobile_maestro", buildJsonObject {
-      putJsonArray("commands") { addJsonObject {
-        putJsonObject("launchApp") {
-          put("appId", "com.example.app")
-          putJsonObject("arguments") { put("credential", "<redacted>-{{args.suffix}}") }
-        }
-      } }
-    })
-    val launch = toolLog(
-      MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-      "mobile_maestro", rawTool = authored,
-    )
-    val logs = listOf(objectiveStart(step), launch, objectiveComplete(step))
-
-    kotlin.test.assertFailsWith<IllegalStateException> { logs.generateRecordedTrailItems(trailblazeYaml) }
-  }
-
-  @Test
   fun failedLiteralLaunchStillRefusesRecordingOfLaterActions() {
     val step = DirectionStep(step = "Try launch, then continue")
     val logs = listOf(
       objectiveStart(step),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", successful = false,
       ),
       toolLog(InputTextTrailblazeTool(text = "later action"), "inputText"),
       objectiveComplete(step),
     )
 
     val failure = kotlin.test.assertFailsWith<IllegalStateException> { logs.generateRecordedTrailItems(trailblazeYaml) }
-    assertThat(failure.message.orEmpty()).contains("Cannot record a failed mobile_maestro launch")
+    assertThat(failure.message.orEmpty()).contains("Cannot record a failed ios_openApp launch")
   }
 
   @Test
@@ -636,8 +598,8 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step, timestamp = at(0)),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         timestamp = at(1_100), durationMs = 100,
       ),
       toolLog(OtherTrailblazeTool("myapp_signIn"), "myapp_signIn",
@@ -658,8 +620,8 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step, timestamp = at(0)),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         timestamp = at(1_100), durationMs = 100,
       ),
       toolLog(OtherTrailblazeTool("myapp_signIn"), "myapp_signIn",
@@ -669,7 +631,7 @@ class TrailblazeRecordingGeneratorTest {
     )
 
     val failure = kotlin.test.assertFailsWith<IllegalStateException> { logs.generateRecordedTrailItems(trailblazeYaml) }
-    assertThat(failure.message.orEmpty()).contains("Cannot record a failed mobile_maestro launch")
+    assertThat(failure.message.orEmpty()).contains("Cannot record a failed ios_openApp launch")
   }
 
   @Test
@@ -1024,8 +986,8 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step, timestamp = at(0)),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         traceId = trace, clock = TrailblazeClockDomain.DEVICE,
         timestamp = at(200), durationMs = 100,
       ),
@@ -1048,8 +1010,8 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step, timestamp = at(0)),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         traceId = trace, clock = TrailblazeClockDomain.DEVICE,
         timestamp = at(200), durationMs = 100,
       ),
@@ -1076,8 +1038,8 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(OtherTrailblazeTool("myapp_previousAction"), "myapp_previousAction",
         traceId = trace, timestamp = at(1_000), durationMs = 1_000),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         traceId = trace, clock = TrailblazeClockDomain.DEVICE,
         timestamp = at(200), durationMs = 100,
       ),
@@ -1099,8 +1061,8 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step, timestamp = at(0)),
       toolLog(
-        MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-        "mobile_maestro", isRecordable = false, successful = false,
+        iosOpenApp("fixture-secret"),
+        "ios_openApp", isRecordable = false, successful = false,
         traceId = trace, clock = TrailblazeClockDomain.DEVICE,
         timestamp = at(200), durationMs = 100,
       ),
@@ -1117,70 +1079,10 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun repeatedDirectMaestroLaunchesMatchWithADeviceClockBehindTheHost() {
-    val step = DirectionStep(step = "Launch two apps")
-    val base = now.toEpochMilliseconds()
-    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
-    fun launch(value: String) = MaestroTrailblazeTool(
-      "- launchApp: {appId: com.example.app, arguments: {credential: $value}}",
-    )
-    fun authored(value: String) = OtherTrailblazeTool("mobile_maestro", buildJsonObject {
-      putJsonArray("commands") { addJsonObject {
-        putJsonObject("launchApp") {
-          put("appId", "com.example.app")
-          putJsonObject("arguments") { put("credential", "{{${value}}}") }
-        }
-      } }
-    })
-    val logs = listOf(
-      objectiveStart(step, timestamp = at(0)),
-      toolLog(launch("fixture-secret-a"), "mobile_maestro", isTopLevelToolCall = true,
-        timestamp = at(1_000), durationMs = 100),
-      toolLog(launch("fixture-secret-a"), "mobile_maestro", rawTool = authored("token_a"),
-        timestamp = at(995), durationMs = 1),
-      toolLog(launch("fixture-secret-b"), "mobile_maestro", isTopLevelToolCall = true,
-        timestamp = at(2_000), durationMs = 100),
-      toolLog(launch("fixture-secret-b"), "mobile_maestro", rawTool = authored("token_b"),
-        timestamp = at(1_995), durationMs = 1),
-      objectiveComplete(step, timestamp = at(3_000)),
-    )
-
-    val recorded = logs.generateRecordedTrailItems(trailblazeYaml)
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording!!.tools
-    assertThat(recorded.map { it.name }).isEqualTo(listOf("mobile_maestro", "mobile_maestro"))
-    assertThat(recorded.toString()).contains("{{token_a}}")
-    assertThat(recorded.toString()).contains("{{token_b}}")
-  }
-
-  @Test
-  fun redactedLaterMaestroCommandAlsoRefusesRecording() {
-    val step = DirectionStep(step = "Launch and tap")
-    val authored = OtherTrailblazeTool("mobile_maestro", buildJsonObject {
-      putJsonArray("commands") {
-        addJsonObject {
-          putJsonObject("launchApp") {
-            put("appId", "com.example.app")
-            putJsonObject("arguments") { put("token", "{{args.token}}") }
-          }
-        }
-        addJsonObject { putJsonObject("tapOn") { put("text", "<redacted> action") } }
-      }
-    })
-    val log = toolLog(
-      MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {token: fixture-secret}}"),
-      "mobile_maestro", rawTool = authored,
-    )
-
-    kotlin.test.assertFailsWith<IllegalStateException> {
-      listOf(objectiveStart(step), log, objectiveComplete(step)).generateRecordedTrailItems(trailblazeYaml)
-    }
-  }
-
-  @Test
-  fun orphanedLiteralMaestroLaunchCannotBeRecorded() {
+  fun orphanedLiteralLaunchCannotBeRecorded() {
     val launch = toolLog(
-      MaestroTrailblazeTool("- launchApp: {appId: com.example.app, arguments: {credential: fixture-secret}}"),
-      "mobile_maestro",
+      iosOpenApp("fixture-secret"),
+      "ios_openApp",
     )
 
     kotlin.test.assertFailsWith<IllegalStateException> {
@@ -1832,7 +1734,7 @@ class TrailblazeRecordingGeneratorTest {
   /**
    * MaestroCommandLog entries are raw Maestro commands logged by OrchestraRunner
    * during tool execution. They should NOT appear in recordings — only the
-   * proper MaestroTrailblazeTool (logged as TrailblazeToolLog) should.
+   * Trailblaze tool that issued them (logged as TrailblazeToolLog) should.
    */
   @Test
   fun maestroCommandLogIsExcludedFromRecording() {
@@ -3270,10 +3172,10 @@ class TrailblazeRecordingGeneratorTest {
   @Test
   fun compositeInternalsStampedNonRecordableAreDroppedRegardlessOfSpan() {
     // Regression for the recording-generation leak: regenerating a recordable
-    // launch/sign-in orchestrator emitted the parent call AND its `mobile_maestro` internals. The
+    // launch/sign-in orchestrator emitted the parent call AND its `launchApp` internals. The
     // runtime now stamps nested `ctx.tools.*` dispatches `isRecordable = false`, so the generator's
     // `isRecordable` filter drops them. This models that log shape with SPAN-DEFEATING timing: the
-    // nested `mobile_maestro` spans are LARGER than and CONTAIN the parent `myapp_launchAppSignedIn`
+    // nested `launchApp` spans are LARGER than and CONTAIN the parent `myapp_launchAppSignedIn`
     // span, so the old span-containment heuristic would have inverted — kept the internals, dropped
     // the parent. The `isRecordable = false` stamp makes the outcome independent of span math.
     val step = DirectionStep(step = "Launch the app signed in")
@@ -3286,8 +3188,8 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(OtherTrailblazeTool("myapp_launchAppSignedIn"), "myapp_launchAppSignedIn", timestamp = at(200), durationMs = 2_000),
       // Nested internals: non-recordable, and deliberately given spans that CONTAIN the parent's
       // (200..2200 ⊂ 200..5200 / 300..60300) so span-containment alone would drop the wrong rows.
-      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(200), durationMs = 5_000),
-      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(300), durationMs = 60_000),
+      toolLog(OtherTrailblazeTool("launchApp"), "launchApp", isRecordable = false, timestamp = at(200), durationMs = 5_000),
+      toolLog(OtherTrailblazeTool("launchApp"), "launchApp", isRecordable = false, timestamp = at(300), durationMs = 60_000),
       objectiveComplete(step),
     )
 
@@ -3303,7 +3205,7 @@ class TrailblazeRecordingGeneratorTest {
   fun orphanedNonRecordableInternalsDoNotLeakIntoThePrecedingStep() {
     // The orphaned-log path (a tool log landing outside any objective window in the sorted log list)
     // attaches to the last prompt step's recording. Before the fix it applied NO nested filter, so
-    // a composite's `mobile_maestro` internals that sorted after the objective window leaked into the
+    // a composite's `launchApp` internals that sorted after the objective window leaked into the
     // step. They're now stamped `isRecordable = false`, and the orphaned path already honors that —
     // proving the deterministic stamp closes the orphaned hole, not just the in-window path.
     val step = DirectionStep(step = "Launch the app signed in")
@@ -3314,8 +3216,8 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(OtherTrailblazeTool("myapp_launchAppSignedIn"), "myapp_launchAppSignedIn", timestamp = at(0), durationMs = 2_000),
       objectiveComplete(step),
       // Orphaned internals, after the window: non-recordable, must not attach to the step.
-      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(2_100), durationMs = 500),
-      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(2_700), durationMs = 500),
+      toolLog(OtherTrailblazeTool("launchApp"), "launchApp", isRecordable = false, timestamp = at(2_100), durationMs = 500),
+      toolLog(OtherTrailblazeTool("launchApp"), "launchApp", isRecordable = false, timestamp = at(2_700), durationMs = 500),
     )
 
     val yaml = logs.recordedYaml()

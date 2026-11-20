@@ -54,6 +54,17 @@ class TrailblazeHostYamlRunnerBoundDeviceRequestTest {
   }
 
   @Test
+  fun `per tool launch requests carry projected runtime identity without changing companions`() {
+    val runtime = listOf("android", "phone", "es", "mx")
+    for (launch in listOf(true, false)) {
+      val request = launchRequest(deviceClassifierOverride = listOf("android", "phone", "es"))
+        .forBoundAndroidDevice(companionId, TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          null, launch, runtimeClassifiers = runtime)
+      assertThat(request.deviceClassifierOverride).isEqualTo(if (launch) runtime else emptyList())
+    }
+  }
+
+  @Test
   fun `a device's own target names the app, else the session's`() {
     val ownTarget = launchRequest().forBoundAndroidDevice(
       trailblazeDeviceId = companionId,

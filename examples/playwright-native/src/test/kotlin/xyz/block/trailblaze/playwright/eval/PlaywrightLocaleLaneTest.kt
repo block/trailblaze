@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.RegisterExtension
 import org.junit.jupiter.api.io.TempDir
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -17,9 +18,9 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import kotlin.test.assertEquals
 
 /**
- * A Spanish web lane (`web-browser-es`) runs a trail's `web-browser-es` leg in a browser whose
- * language is Spanish. The page below prints `navigator.language`, so each leg's
- * paragraph check proves both which leg ran and what language the site saw: the English leg
+ * A Spanish web lane (`web-browser-es`) selects the trail's Spanish leg while its declared locale
+ * sets the browser language and refines recording classifiers. The page prints `navigator.language`,
+ * so each leg's paragraph check proves both which leg ran and what language the site saw: the English leg
  * asserts a paragraph that never appears, so selecting it fails the run.
  */
 class PlaywrightLocaleLaneTest {
@@ -73,7 +74,7 @@ class PlaywrightLocaleLaneTest {
   }
 
   @Test
-  fun `the Spanish leg runs in the locale its device entry declares, over the lane's`() {
+  fun `the original Spanish lane selects its leg and the declared region refines its classifiers`() {
     run(
       """
         config:
@@ -93,8 +94,15 @@ class PlaywrightLocaleLaneTest {
       """.trimIndent(),
     )
 
-    // What the report groups and labels the session by.
-    assertEquals(listOf("web", "browser", "es"), playwrightTest.trailblazeDeviceInfo.classifiers.map { it.classifier })
+    // Recording classifiers carry the declared region; the execution lane remains the original key.
+    assertEquals(
+      listOf("web", "browser", "es", "us"),
+      playwrightTest.trailblazeDeviceInfo.classifiers.map { it.classifier },
+    )
+    assertEquals(
+      "web-browser-es",
+      playwrightTest.trailblazeDeviceInfo.metadata[DeviceClassifierKey.EXECUTION_DEVICE_CLASS],
+    )
     assertEquals("es-US", playwrightTest.trailblazeDeviceInfo.locale)
   }
 

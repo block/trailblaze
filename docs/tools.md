@@ -112,9 +112,57 @@ instead: it can be named, tested, and reused. `runIf` has no `else if` or `switc
 
 `runIf` is available on every target for Android, iOS and web sessions. It is not available on
 Compose or Revyl sessions, and a `selector` condition needs a view hierarchy, so drivers that only
-capture screenshots must use a `tool` condition. The agent never sees `runIf`, so it is missing from
-`trailblaze toolbox` and you write it into recordings yourself. Scripted tools can call it too,
-via `ctx.tools.runIf(...)`.
+capture screenshots must use a `tool` condition. The agent never sees `runIf`, so `trailblaze
+toolbox` lists it only with `--all`. Write it into trail steps yourself, or call it with
+`trailblaze tool runIf`. Scripted tools can call it too, via `ctx.tools.runIf(...)`.
+
+## Checking what an element looks like: `assertRegionColor`
+
+The accessibility tree says what is on screen, not what it looks like. "Dark is selected" and "the
+app draws dark" are separate claims. `assertRegionColor` checks the second from the screen's pixels,
+with no model call, so it works in AI-off replays:
+
+```yaml
+- verify: The settings screen renders dark
+  recording:
+    ios-ipad:
+      - assertRegionColor:
+          name: settings_main_pane
+          selector:
+            iosMaestro:
+              resourceIdRegex: ^settings_detail$
+          color: "#1C1C1E"
+          maxColorDifference: 6
+          minMatchPercent: 70
+```
+
+- `selector` names the region: the element's on-screen rectangle. Pick a container, not a label
+  inside it. It must match exactly one element.
+- It passes when at least `minMatchPercent` (default 60) of the region's pixels are within
+  `maxColorDifference` (default 3) of `color`. Every threshold is yours: a theme check is a colour
+  check with your app's own background colour.
+- `maxColorDifference` is how far a pixel's colour may be from `color` and still match, on the
+  CIEDE2000 colour-difference scale where 0 is identical. About 2 is the smallest difference a
+  person notices, 3 looks like the same colour, and about 6 also absorbs the drift in a compressed
+  screenshot. Black against a dark grey like `#2A2A2A` is about 17, and black against white is 100.
+  The result says when a read was compressed.
+- `maxMatchPercent` turns it into an absence check: at most that share of the region may match.
+  `maxMatchPercent: 0` with no `minMatchPercent` means none of the pixels read is that colour,
+  e.g. a sticker that was dragged to the trash is gone. A region is read at most 1024 pixels on
+  its longer side, so a mark thinner than that sampling step can fall between samples. Set both
+  for a band.
+- It re-reads the screen until it passes or `timeoutMs` (default 10000) runs out, so a repaint
+  needs no sleep.
+- A region it can't read fails the step as "can't check", never as a pass: no match or several,
+  an element with no bounds, or a screen that is black everywhere.
+- Every run saves a screenshot named after the tool and `name` when the driver can take one (the
+  result says when it could not). The result lists the region's bounds, the measured percentage
+  against its threshold, and the most common colours found, which is where to read your app's
+  colour from the first time.
+
+The agent never sees this tool; write it into trail steps yourself, or call it with `trailblaze tool`. Scripted tools build their own
+checks from the same building blocks: `ctx.screen.image`, the SDK's colour helpers and `checkRegion`
+(see [checking pixels](scripted-tools-typed-authoring.md#checking-pixels-via-ctxscreenimage)).
 
 ## Launch arguments
 
@@ -144,7 +192,9 @@ sees:
 
 - **From the CLI:** `trailblaze toolbox -d <platform> --target <trailmap-id>` lists
   every tool the agent sees for that target, with descriptions. Add `--search <substring>`
-  to filter (substring match on tool name and description).
+  to filter (substring match on tool name and description). Add `--all` to also list tools
+  the agent is not offered (`surfaceToLlm: false`, or dropped by `excluded_tools:`), which
+  hand-written trail steps and `ctx.tools.<name>` can still call.
 - **In your IDE:** open any `.ts` file under `<trailmap>/tools/` and start typing
   `ctx.tools.` — autocomplete pulls from the per-trailmap declaration rollup at
   `<trailmap>/tools/trailblaze-client.d.ts`. That file is emitted by

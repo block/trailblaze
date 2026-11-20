@@ -81,6 +81,7 @@ toolsets:                                     # trailmap-level file refs
 | `target` | optional | Embeds an `AppTargetYamlConfig` (id is inherited from the trailmap id when omitted). A trailmap without `target:` is treated as a library trailmap — it contributes via `defaults:` / `toolsets:` / `tools:` / `waypoints:` but isn't surfaced as a runnable target. Every scripted tool under `<trailmap>/tools/` is on the target; `target.tools:` may still list them by bare export name, but no longer has to. |
 | `target.icon` | optional | Workspace-relative path to an icon (Android launcher icon / web favicon) shown beside this target in the TrailRunner UI. When omitted, the UI falls back to a filename convention under a shared `assets/icons/` folder relative to the workspace's `trails/config/` directory: `assets/icons/android_<app_id>.png` for an Android target, `assets/icons/favicon_<host>.png` for a web target. Drop matching files into that folder and every target lights up with no per-target authoring; set `target.icon` to override. |
 | `target.system_prompt_file` | optional | Trailmap-relative path to a markdown / text file containing the target's system-prompt template. The trailmap loader (and the build-time generator) reads the file and inlines its content into the generated target YAML's `system_prompt:` field. Lets authors keep multi-paragraph prompts in a standalone editable file rather than an unwieldy YAML string. Inline `system_prompt:` is not supported on `target` — a trailmap manifest declaring it fails the load with a migration message. The file-only shape leaves room for future per-device or per-classifier prompt selection (e.g. `app-tablet.prompt.md`) without an authoring schema change. |
+| `target.device_classifier` | optional | Name of an `export const <name> = trailblaze.deviceClassifier(...)` in a `.ts` under `tools/` of this trailmap or of one in its `dependencies:` closure. It computes the device key that picks which recording replays and where a new one is saved, such as `android-tablet` → `acme-k2` for a line of dedicated hardware. See [Device classifiers](#device-classifiers). |
 | `dependencies` | optional | Trailmap ids this trailmap depends on. Transitive — depending on a trailmap pulls in its dependencies too. Resolves via closest-to-root-wins inheritance from each dep's `defaults:` (see below). |
 | `defaults` | optional | Per-platform defaults this trailmap contributes to consumers via dependency resolution. Same shape as `target.platforms`. Consumers with `dependencies: [<this trailmap>]` inherit any field they leave null. |
 | `toolsets` | optional | List of trailmap-relative paths to `ToolSetYamlConfig` files. |
@@ -88,6 +89,7 @@ toolsets:                                     # trailmap-level file refs
 | `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. This is how a TypeScript tool is shared across trailmaps: list it in this trailmap's `target.tools:` or `target.platforms.<p>.tools:`, export it, and every trailmap with this one in its `dependencies:` gets it on the platforms the tool supports. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
 | `waypoints` | deprecated / ignored | Waypoints auto-discover from any `*.waypoint.yaml` under `<trailmap>/waypoints/` (any depth). The field survives in the schema only so legacy manifests still parse — leave it absent. |
 | `trail_validation` | optional | `trail_validation.exempt: "<reason>"` opts this target's `.trail.yaml` recordings out of the default-fatal trail-recording type-validation phase of `trailblaze check` — findings are reported but never fail the build. Blank reason = not exempt. |
+| `memory` | optional | The memory keys this trailmap's tools, trails or run setup share, by name — see [Declaring memory keys](#declaring-memory-keys). A toolset YAML takes the same block. Descriptive only: it never gates a key. |
 | `trails` | reserved | First-class artifact loading deferred. |
 
 > The legacy reserved-slot fields `use:` / `extend:` / `replace:` were removed in favour
@@ -135,6 +137,41 @@ rules:
 The repo's `contacts` demo trailmap is a worked example — see
 `trails/config/trailmaps/contacts/trailmap.yaml` in the OSS repo (a workspace trailmap
 loaded from the repo's own `trails/config/`, not bundled into the framework JAR).
+
+### Declaring memory keys
+
+When several tools, trails or a run's setup share a memory key, declare it once so every
+author who depends on it can see it. A `memory:` block goes in `trailmap.yaml`, or in a
+toolset YAML for the keys that toolset's tools read and write:
+
+```yaml
+memory:
+  appearance:
+    description: The run's appearance (dark, light or system), applied at sign-in.
+  account_email:
+    description: The email of the account a setup tool created.
+```
+
+Memory is one flat namespace: a tool reads a key by name and can't tell who declared it. So each
+trailmap's generated `tools/trailblaze-client.d.ts` lists every key in its reach in one flat list:
+its own, those of the trailmaps in its `dependencies:` closure, and those of every toolset that
+closure loads. A trailmap relying on another's tools sees the keys they use. The resolved-target
+report (`dist/targets/<id>.report.md`) lists the same keys under **Memory keys**. In scripts,
+`memoryKeys.<trailmap>.<key>` lists the declared keys by the trailmap each belongs to (a toolset's
+keys sit under the trailmap that ships it), and `ctx.memory.get(...)` autocompletes them too (see
+[Scripted Tools](scripted-tools-typed-authoring.md#sharing-a-memory-key-memorykeys)).
+A source file another trailmap also imports is type-checked in that trailmap's reach too, so it
+can name only keys every importer reaches.
+
+**A key is declared once.** A second declaration can only describe the key differently from the
+tools that already use it, so a key declared twice in one trailmap's reach fails `trailblaze
+check`, naming both places: delete the copy, or move the declaration into a dependency both share.
+`trailblaze compile` and the daemon only warn about it.
+
+Declarations never gate a run. Memory takes any key at run time, a trail never declares the keys
+it uses, and one-off trail variables stay undeclared. A malformed block (a name that isn't letters,
+digits and underscores, or a blank `description`) fails a trailmap's load. In a
+toolset its keys are ignored and `trailblaze check` fails, but the toolset's tools still load.
 
 ## Tool flavors: which kind do I write?
 
@@ -447,6 +484,61 @@ functions: `await ctx.surveys.checkoutDone({ waitMs: 15_000 })` returns `{ passe
 Write a trailhead as a TypeScript tool (declare `trailhead: { to: ... }` in its
 `trailblaze.tool(...)` spec) or as a `*.trailhead.yaml` with `class:` pointing at Kotlin. A
 shortcut is a `*.shortcut.yaml` with `class:`. See [Tool flavors](#tool-flavors-which-kind-do-i-write).
+
+## Device classifiers
+
+A recording is saved and found under a device key, such as `android-phone` or `ios-ipad`. The
+framework builds that key from the platform and form factor. A target can name a device classifier
+that computes its own key from what the device reports, so dedicated hardware gets recordings of
+its own. Name the classifier on the target:
+
+```yaml
+# trails/config/trailmaps/acme/trailmap.yaml
+id: acme
+target:
+  display_name: Acme
+  device_classifier: acme_deviceClassifier
+```
+
+and declare it in a `.ts` under the trailmap's `tools/`:
+
+```ts
+// trails/config/trailmaps/acme/tools/acme_deviceClassifier.ts
+import { trailblaze } from "@trailblaze/scripting";
+
+export const Acme = { Family: "acme", K2: "k2" } as const;
+
+export const acme_deviceClassifier = trailblaze.deviceClassifier((device) =>
+  device.manufacturer === "Acme" && device.model?.startsWith("Acme Kiosk 2") ? [Acme.Family, Acme.K2] : device.key,
+);
+```
+
+The classifier returns the whole key, broadest first. Here an Acme Kiosk 2 is `acme-k2` and every
+other device keeps the framework's key. A recording falls back by dropping the last value first.
+
+A classifier gets:
+
+- `platform` and `key`: the platform and the framework's own key, broadest first (`["android", "phone"]`);
+- `manufacturer` and `model`: what the device reports (on Android, `ro.product.manufacturer` and
+  `ro.product.model`).
+
+It runs on the host before the device session starts, with no tools, app or device access, and
+its answer is reused for the same input, so keep it a pure, synchronous function of what it gets.
+The key either starts with the framework's key and adds no platform or form factor, or names a
+device family the framework doesn't know (such as `acme-k2`) with no platform or form factor in it
+at all. A family key falls back only within the family, never to `android-...` recordings. Every
+value is lowercase letters, digits and `_`. A run may ask for a key with `--device-classifier` in
+the framework's terms (`android-tablet-es`) or the family's (`acme-k2-es`); the rest of it, such as
+a locale, goes on the end of the classifier's key.
+
+The Android device still checks the key it is sent against the key it reports for itself, and
+refuses the run when they differ. So a family key reaches an Android run only on a device that
+reports that family itself; on any other device the run fails rather than replay another device's
+recordings.
+
+A target may name a classifier declared by its own trailmap or by any trailmap in its
+`dependencies:` closure, so one classifier can serve several targets. A target that names none
+uses the framework's key.
 
 ## Discovery and precedence
 

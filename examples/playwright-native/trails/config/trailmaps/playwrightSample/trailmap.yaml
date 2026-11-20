@@ -16,3 +16,8 @@ target:
         - web_core
         - web_verification
         - memory
+# Memory keys this trailmap's tools leave for later steps. Each one shows up in the generated
+# typings as `memoryKeys.playwrightSample.<key>`; see "Declaring memory keys" in docs/trailmaps.md.
+memory:
+  contact_form_email:
+    description: The email playwrightSample_web_submitContactForm submitted, for later steps to check.

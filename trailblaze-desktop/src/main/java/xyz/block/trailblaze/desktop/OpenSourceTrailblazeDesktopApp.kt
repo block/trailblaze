@@ -19,6 +19,7 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.host.lease.RemoteDevicePools
 
 /**
  * The Open Source Trailblaze Desktop App
@@ -147,6 +148,8 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       deviceClassifiersProvider = { deviceId ->
         deviceId?.let { HostProbedDeviceClassifiers.forDevice(it) } ?: emptyList()
       },
+      // Leases a borrowed emulator when a session claims it and returns it after.
+      deviceClaimHooks = RemoteDevicePools.shared,
     )
   }
 

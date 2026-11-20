@@ -176,6 +176,16 @@ class AgentMemory {
   }
 
   /**
+   * Seed a trail's `config.memory:` defaults into memory something else already seeded (a host
+   * snapshot, a lane's setup tools), filling only keys it lacks. Absent-keys-only keeps the earlier
+   * seeder authoritative: a value it set, or a key a tool deleted this run, is never overwritten
+   * or revived.
+   */
+  fun seedDefaults(defaults: Map<String, String>?) {
+    defaults?.forEach { (key, value) -> if (!has(key) && key !in _deletedKeys) remember(key, value) }
+  }
+
+  /**
    * Seed the `args.` namespace from a caller's already-bound, typed values (the output of
    * [xyz.block.trailblaze.yaml.TrailArgBinder]). Bound once at run start; tools never mutate args.
    *

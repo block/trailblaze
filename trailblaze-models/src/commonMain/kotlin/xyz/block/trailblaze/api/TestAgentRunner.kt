@@ -33,6 +33,11 @@ interface TestAgentRunner {
     recordingResult: PromptRecordingResult.Failure,
   ): AgentTaskStatus = recover(promptStep, recordingResult)
 
+  /**
+   * Adds a trail's `config.context` to the system prompt for every step: what the whole trail sets
+   * out to accomplish, and rules for handling the app. It is context, not an instruction; the
+   * step's objective stays the task.
+   */
   fun appendToSystemPrompt(context: String)
 
   /**

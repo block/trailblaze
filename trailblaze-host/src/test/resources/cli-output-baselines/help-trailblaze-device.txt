@@ -17,3 +17,8 @@ Commands:
   disconnect  Disconnect a device and clear this terminal's pin
   create      Provision a device with a configured profile (web today; iOS /
                 Android future).
+  install     Install an app on a device, including one borrowed from another
+                machine
+  pair        Use another machine's devices: pair with a Trailblaze daemon that
+                lends them
+  unpair      Stop using a paired daemon's devices

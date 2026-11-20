@@ -56,9 +56,8 @@ class YamlJsonBridgeScalarCoercionTest {
     // Regression for a real login-flow CI failure: a verification code like "123123" is a
     // clean, zero-padding-free numeric string, so the round-trip check above intentionally still
     // treats it as a number by default. A caller whose scalar is ALWAYS free-form text at the
-    // schema level (e.g. MaestroTrailblazeToolSerializer, whose fields are Maestro command
-    // arguments that Maestro's own lenient parser will coerce back to a number if it actually
-    // needs one) must opt out entirely rather than rely on the round-trip guess.
+    // schema level (e.g. launch arguments, which the app reads as text and coerces itself if it
+    // needs a number) must opt out entirely rather than rely on the round-trip guess.
     for (raw in listOf("5", "0", "123123", "-4", "3.5")) {
       val p =
         YamlJsonBridge.yamlNodeToJsonElement(

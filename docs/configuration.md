@@ -12,6 +12,19 @@ Related pages:
 - [CLI reference](CLI.md) — the generated command reference, including the authoritative `trailblaze config` key table.
 - [Trailmaps](trailmaps.md) and [Project Layout](project_layout.md) — per-target workspace configuration (`trails/config/`).
 
+A selected device entry's `locale:` requests the full language and region (for example `es-MX`).
+Definition, driver, skip and configuration selection use the original execution classifiers. On
+`android-phone`, `ios-iphone` and `web-browser`, an explicit Spanish declaration projects recording
+and session identity to `es`, `es-us` or `es-mx`. A bare base can gain that suffix and a language-only
+`es` suffix can refine to its declared region. Conflicting regional pins and unknown trailing
+variants fail before locale setup. Undeclared locales leave classifiers unchanged; other existing locale
+paths keep their established behavior. Generic recordings remain available through normal lineage.
+
+iOS Simulator setup verifies both `AppleLanguages` (such as `es-MX`) and `AppleLocale` (`es_MX`).
+A language match with a different region still requires setup and a fresh target process. Android
+and browser contexts retain the full BCP-47 tag. Device UI locale is independent of account market
+and the app's translation resources.
+
 ## The configuration surfaces
 
 | Surface | Use it for | Where it lives |
@@ -69,7 +82,7 @@ The full generated table (valid values, defaults) lives in the [CLI reference](C
 | Group | Keys |
 |---|---|
 | LLM | `llm` (shorthand `provider/model`), `llm-provider`, `llm-model` — see [LLM Configuration](llm_configuration.md) |
-| Devices & drivers | `device`, `android-driver`, `ios-driver`, `web-headless`, `target` |
+| Devices & drivers | `device`, `android-driver`, `ios-driver`, `web-headless`, `target`, `lend-devices` (`true`/`false`, default off — the saved twin of `TRAILBLAZE_LEASE_DEVICES`, read when the daemon starts) |
 | Agent & runs | `agent`, `mode`, `max-llm-calls`, `self-heal`, `require-steps` |
 | Screenshots | `screenshot-format`, `screenshot-max-dimensions`, `screenshot-quality` |
 | Capture | `capture-video` (`true`/`false`, default off — the persistent opt-in for video in interactive sessions; `trailblaze run` records video regardless, `--no-capture-video` skips it; env twin `TRAILBLAZE_CAPTURE_VIDEO`) |
@@ -294,6 +307,9 @@ The accessibility-driver switches below are read inside the Android app/service 
 |---|---|---|---|
 | `ADB_SERVER_SOCKET` | unset | launch | Point at a remote adb server (`tcp:<host>:<port>`), same semantics as the upstream `adb` binary. Wins over `ANDROID_ADB_SERVER_PORT`. |
 | `ANDROID_ADB_SERVER_PORT` | `5037` | launch | Port-only adb server override (host stays `localhost`). |
+| `TRAILBLAZE_LEASE_DEVICES` | unset | launch | Set to `1` or `true` (or save `trailblaze config lend-devices true`) to have this daemon lend its devices; `0` or `false` keeps it from lending even when the saved setting is on. A lending daemon runs only device actions for a borrower, never host tools such as shell commands, so a borrower needs the target whose own tools it runs. It lends its devices, of any platform, to other Trailblaze daemons (`/leases`). Leasing has no authentication, so it answers only this machine's loopback: another machine brings this daemon's lending port ([`TRAILBLAZE_LEND_PORT`](#android-devices), its HTTP port − 5 by default) over an ssh tunnel (`ssh -N -L 31900:localhost:<lending port> <host>`) and pairs with `trailblaze device pair http://localhost:31900`. Never tunnel the daemon's own HTTP port: a tunnel ends on loopback, where its other routes trust the caller as this machine's user. The borrower runs the agent and keeps the logs and report; each tool call and screen capture goes to this daemon, which runs it on the device with its own driver, so nothing but that port needs to be reachable. Viewing a borrowed device in the device viewer is not supported yet. To lend from a machine that also runs Trailblaze for yourself, run the lending daemon on its own `TRAILBLAZE_PORT` and `TRAILBLAZE_HOME`. |
+| `TRAILBLAZE_LEND_PORT` | daemon port − 5 | launch | The loopback-only port a lending daemon also opens, serving its device leases (`/leases`) and nothing else. Point a tunnel that lends this machine's devices at it, rather than at the daemon's own port: a tunnel ends on loopback, where the daemon's other routes trust the caller. Left closed, with a warning, when the port is taken. |
+| `TRAILBLAZE_DEVICE_POOLS` | unset | launch | Comma-separated URLs of lending daemons (`http://<host>:<port>`) to use alongside those paired with `trailblaze device pair`, for machines such as CI where pairing by hand doesn't fit. A paired or listed daemon's devices appear in `trailblaze device list` and the MCP device list as `<platform>/<device>@<host>:<port>`, beside your own devices, and follow the same rule as a local device another session holds: using one takes it from a holder that is idle, and fails with a busy error naming the holder while they are using it. Using one leases it; it is kept while a run or session is on it and goes back two minutes after its last use, so back-to-back commands keep the same device. A lease not renewed for 30 s expires, so a daemon that crashes or loses the network gives its devices back. |
 | `TRAILBLAZE_ADB_TIMEOUT_MS` | `10000` | launch | Bound for short-lived host-side adb shell calls. Streaming paths (`logcat -f`, `screenrecord`) are exempt. Bump for slow CI emulators. |
 | `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE` | unset | use | Kill-switch: force every selector-resolved tap back to coordinate gestures instead of accessibility `ACTION_CLICK`. |
 | `TRAILBLAZE_DISABLE_TAP_OCCLUSION_WARN` | unset | use | Suppress warn-only diagnostics when another visible node covers the selector-resolved tap point; dispatch is unchanged. |
@@ -489,6 +505,7 @@ See [Performance Profiling](profiling.md#choosing-how-much-to-record).
 | `MAX_PLAYBACK_WAIT_MS` | `600000` | command | Playback ceiling for MP4, GIF, and WebP report exports. Non-numeric or non-positive values fall back to the default; an overrun still writes a best-effort truncated artifact. |
 | `TRAILBLAZE_REPORT_IMAGE_COMPRESSION_PARALLELISM` | `min(cores, 4)` | command | Thread count for report image compression. |
 | `TRAILBLAZE_REPORT_TIMEOUT_SECONDS` | `max(120, 2 × sessions)` | command | Seconds the run report and performance-analysis report may spend rendering before they are stopped and the report fails. The default grows with the number of sessions in the report. A positive whole number replaces it, in either direction; anything else falls back to the default. |
+| `TRAILBLAZE_VISIBLE_STRINGS_OCR` | unset | command | `true` or `1` to check each iOS AXe capture's labels against its screenshot with macOS Vision OCR when `visible-strings.ndjson` is written, marking checked captures `ocrChecked`. Off by default: it adds about 40 s to a typical AXe run, and every string is in the tree either way. OCR only refiles labels it doesn't see drawn, such as icon-only buttons, from `text` to `contentDescription`. |
 | `TRAILBLAZE_RESULTS_REPO` | unset | command | `owner/name` of the results-index repository when `--repo` isn't passed to `trailblaze results`. |
 
 CI systems additionally stamp report metadata via `TRAILBLAZE_TARGET_APP`, `TRAILBLAZE_DEVICES`, `TRAILBLAZE_BUILD_TYPE`, `TRAILBLAZE_TEST_RETRY_COUNT`, `TRAILBLAZE_AI_ENABLED`, and `TRAILBLAZE_PARALLEL_EXECUTION`. The report generator reads them all as labels, but CI pipelines commonly bridge `TRAILBLAZE_AI_ENABLED` (disables the LLM for the run) and `TRAILBLAZE_TEST_RETRY_COUNT` (drives retry loops) into real run behavior — don't treat those two as cosmetic.

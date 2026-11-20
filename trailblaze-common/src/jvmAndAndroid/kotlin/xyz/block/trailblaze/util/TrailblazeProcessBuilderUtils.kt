@@ -138,10 +138,8 @@ object TrailblazeProcessBuilderUtils {
    *   path so callers can construct a per-tool timeout error message without re-checking
    *   the exit code.
    *
-   * Used by [xyz.block.trailblaze.toolcalls.commands.RunCommandTrailblazeTool] (shell
-   * `sh -c` form) and [xyz.block.trailblaze.toolcalls.commands.ExecTrailblazeTool] (argv
-   * form). Both tools want identical subprocess-lifecycle behaviour; only the per-tool
-   * error-message construction differs and lives in their `execute` method.
+   * Used by [xyz.block.trailblaze.toolcalls.commands.ExecTrailblazeTool], whose per-tool
+   * error-message construction lives in its `execute` method.
    */
   suspend fun ProcessBuilder.runProcessWithTimeout(
     timeoutSeconds: Long? = null,

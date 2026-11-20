@@ -1,0 +1,2 @@
+id: setCameraImage
+class: xyz.block.trailblaze.toolcalls.commands.camera.SetCameraImageTrailblazeTool

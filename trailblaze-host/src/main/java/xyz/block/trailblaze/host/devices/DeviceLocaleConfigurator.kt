@@ -5,6 +5,7 @@ import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailDeviceLocale
@@ -12,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.ios.SimctlCli
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.SimctlCommand
 
 /** Applies a trail's resolved per-device locale before the target app is launched. */
 internal object DeviceLocaleConfigurator {
@@ -43,15 +45,31 @@ internal object DeviceLocaleConfigurator {
       TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> true
       TrailblazeDevicePlatform.WEB, TrailblazeDevicePlatform.DESKTOP -> false
     }
+    // Forget the last language first: an attempt that fails leaves the device's language unknown.
+    appliedLocales.remove(deviceId)
     if (!request.declared && !hasDeviceLanguage) return false
     return TrailDeviceLocale.changeNeedingCleanup(deviceId.toString()) {
       TrailDeviceLocale.applyBestEffort(
         request = request,
         deviceLabel = "${deviceId.trailblazeDevicePlatform.displayName} device ${deviceId.instanceId}",
-        apply = applyLocale,
+        apply = { locale ->
+          applyLocale(locale).also { appliedLocales[deviceId] = runCatching { normalizedLocale(locale) }.getOrDefault(locale) }
+        },
       )
     }
   }
+
+  /** The language [applyForTrail] last put each device in, which tools read as `ctx.device.initialLocale`. */
+  private val appliedLocales = ConcurrentHashMap<TrailblazeDeviceId, String>()
+
+  /**
+   * The language [applyForTrail] last put [deviceId] in: the trail's `locale:`, or
+   * [TrailDeviceLocale.DEFAULT] for a trail that declares none. A run that continues a session
+   * applies nothing, so it keeps the session's language. Not a reading of the device: a step that
+   * changes the language mid-run is not reflected. Null when no trail has set this device's
+   * language on this host, or the last attempt failed.
+   */
+  fun appliedLocale(deviceId: TrailblazeDeviceId): String? = appliedLocales[deviceId]
 
   /** The target app on [deviceId] was restarted after a change [applyForTrail] reported. */
   fun cleanupDone(deviceId: TrailblazeDeviceId) = TrailDeviceLocale.cleanupDone(deviceId.toString())
@@ -156,6 +174,9 @@ internal object DeviceLocaleConfigurator {
 
   internal fun iosSetLanguageCommand(locale: String): List<String> =
     listOf("defaults", "write", "-g", "AppleLanguages", "-array", locale)
+
+  internal fun iosSetRegionCommand(locale: String): List<String> =
+    listOf("defaults", "write", "-g", "AppleLocale", "-string", normalizedLocale(locale).replace('-', '_'))
 
   internal fun iosGetLanguagesCommand(): List<String> = listOf("defaults", "read", "-g", "AppleLanguages")
 
@@ -265,47 +286,75 @@ internal object DeviceLocaleConfigurator {
     locale: String,
     simulator: IosSimulatorHost = IosSimulatorHost.Live,
   ): Boolean {
-    val previousLanguage = simulator.primaryLanguage(udid)
+    val previousLanguages = simulator.preferredLanguages(udid)
+    val previousLanguage = previousLanguages?.firstOrNull()
+    val previousRegion = simulator.regionLocale(udid)
+    val region = normalizedLocale(locale).replace('-', '_')
+    val preferencesMatch = iosLanguageMatches(locale, previousLanguage) &&
+      iosLanguageMatches(region, previousRegion)
     val restartOwed = udid in springBoardRestartOwed
-    if (iosLanguageMatches(locale, previousLanguage) && !restartOwed) return false
+    if (preferencesMatch && !restartOwed) return false
     val startedAt = simulator.nanoTime()
-    // Before the write: a guess here would restart an iPad's SpringBoard and leave it sideways.
     val ipad = checkNotNull(simulator.isIpad(udid)) {
       "Could not tell whether iOS Simulator `$udid` is an iPad, so device locale `$locale` was not applied."
     }
 
-    // From the write on, a failure is partial: the language may have changed while SpringBoard and
-    // the app still show the old one. Put the old one back, or the next attempt would find the
-    // language already set and skip the restart for good.
     fun partial(reason: String, restartMayHaveRun: Boolean = false): Nothing {
-      val restored = previousLanguage?.let { simulator.spawn(udid, iosSetLanguageCommand(it)).success } == true
-      // Back in the language SpringBoard is showing, so nothing is owed, unless it already was or a
-      // reboot that failed partway may have started SpringBoard in the new one.
+      // Restore both snapshots, including missing preferences and secondary languages.
+      val restoreLanguages = if (previousLanguages == null) listOf("defaults", "delete", "-g", "AppleLanguages")
+        else listOf("defaults", "write", "-g", "AppleLanguages", "-array") + previousLanguages
+      val restoreRegion = if (previousRegion == null) listOf("defaults", "delete", "-g", "AppleLocale")
+        else listOf("defaults", "write", "-g", "AppleLocale", "-string", previousRegion)
+      fun restore(command: List<String>) {
+        try {
+          simulator.spawn(udid, command)
+        } catch (e: Exception) {
+          if (e is java.util.concurrent.CancellationException || e is InterruptedException) throw e
+          // Still attempt the other preference, then verify the complete snapshot below.
+        }
+      }
+      restore(restoreLanguages)
+      restore(restoreRegion)
+      val restored = try {
+        simulator.preferredLanguages(udid) == previousLanguages && simulator.regionLocale(udid) == previousRegion
+      } catch (e: Exception) {
+        if (e is java.util.concurrent.CancellationException || e is InterruptedException) throw e
+        false
+      }
       if (restored && !restartOwed && !restartMayHaveRun) springBoardRestartOwed.remove(udid)
       throw TrailDeviceLocale.PartiallyAppliedException(
-        "$reason " + if (restored) "Restored `$previousLanguage`." else "Could not restore the previous language.",
+        "$reason " + if (restored) "Restored `${previousLanguage.orEmpty()}` and the previous region."
+        else "Could not restore the previous language and region.",
       )
     }
-    if (!iosLanguageMatches(locale, previousLanguage)) {
-      // Owed until SpringBoard is back, so a cancel before then leaves the restart to the next run.
+    if (!preferencesMatch) {
+      // Cancellation propagates with debt retained; a retry must finish the restart.
       springBoardRestartOwed.add(udid)
-      val setLanguage = simulator.spawn(udid, iosSetLanguageCommand(locale))
-      check(setLanguage.success) {
-        "Could not apply device locale `$locale` to iOS Simulator `$udid`: " +
-          setLanguage.stderr.trim().ifBlank { "exit ${setLanguage.exitCode}" }
-      }
-      val updatedLanguage = simulator.primaryLanguage(udid)
-      if (!iosLanguageMatches(locale, updatedLanguage)) {
-        partial(
+      try {
+        val setLanguage = simulator.spawn(udid, iosSetLanguageCommand(locale))
+        check(setLanguage.success) {
+          "Could not apply device locale `$locale` to iOS Simulator `$udid`: ${setLanguage.stderr.trim()}"
+        }
+        val setRegion = simulator.spawn(udid, iosSetRegionCommand(locale))
+        check(setRegion.success) {
+          "Could not apply device region `$region` to iOS Simulator `$udid`: ${setRegion.stderr.trim()}"
+        }
+        val updatedLanguage = simulator.primaryLanguage(udid)
+        val updatedRegion = simulator.regionLocale(udid)
+        check(iosLanguageMatches(locale, updatedLanguage) && iosLanguageMatches(region, updatedRegion)) {
           "Could not verify device locale `$locale` on iOS Simulator `$udid`: the first preferred " +
-            "language reads `${updatedLanguage.orEmpty()}`.",
-        )
+            "language reads `${updatedLanguage.orEmpty()}`, region reads `${updatedRegion.orEmpty()}`."
+        }
+      } catch (e: Exception) {
+        if (e is java.util.concurrent.CancellationException || e is InterruptedException) throw e
+        partial(e.message.orEmpty())
       }
     }
     val restartedMs =
       try {
         if (ipad) rebootSimulator(udid, simulator) else restartSpringBoard(udid, simulator)
-      } catch (e: IllegalStateException) {
+      } catch (e: Exception) {
+        if (e is java.util.concurrent.CancellationException || e is InterruptedException) throw e
         partial(e.message.orEmpty(), restartMayHaveRun = ipad)
       }
     springBoardRestartOwed.remove(udid)
@@ -422,25 +471,28 @@ internal object DeviceLocaleConfigurator {
 
   /** This UDID's global preferences file in the default simulator device set. */
   internal fun iosGlobalPreferencesFile(udid: String, userHome: String): File =
-    File(userHome, "Library/Developer/CoreSimulator/Devices/$udid/data/Library/Preferences/.GlobalPreferences.plist")
+    File(SimctlCli.deviceDirectory(udid, File(userHome)), "data/Library/Preferences/.GlobalPreferences.plist")
 
   internal fun iosPrimaryLanguageFromPlistCommand(file: File): List<String> =
     listOf("plutil", "-extract", "AppleLanguages.0", "raw", "-o", "-", file.path)
 
-  /** This UDID's device description in the default simulator device set; its `deviceType` names the model. */
   /** True for a `deviceType` such as `com.apple.CoreSimulator.SimDeviceType.iPad-A16`. */
   internal fun isIpadDeviceType(deviceType: String?): Boolean =
     deviceType?.trim()?.substringAfterLast('.')?.startsWith("iPad") == true
 
   /** The simulator as [applyIosSimulator] sees it, so tests can stand in for the Mac and the device. */
   internal interface IosSimulatorHost {
-    fun spawn(udid: String, command: List<String>): SimctlCli.Result
+    fun spawn(udid: String, command: List<String>): SimctlCommand.Result
 
     /**
      * The simulator's first preferred language, read from the host where the preferences file is
      * readable, else with `defaults read` inside the simulator; null when neither answers.
      */
     fun primaryLanguage(udid: String): String?
+
+    fun preferredLanguages(udid: String): List<String>? = primaryLanguage(udid)?.let(::listOf)
+
+    fun regionLocale(udid: String): String? = null
 
     /** The process id of [udid]'s SpringBoard, or null when the host cannot find it. */
     fun springBoardPid(udid: String): Long?
@@ -449,7 +501,7 @@ internal object DeviceLocaleConfigurator {
     fun isIpad(udid: String): Boolean?
 
     /** Closes [udid]'s cached driver, shuts the simulator down and boots it again. */
-    fun reboot(udid: String): SimctlCli.Result
+    fun reboot(udid: String): SimctlCommand.Result
 
     /** Sends SIGTERM to [pid]; false when the process is already gone. */
     fun terminate(pid: Long): Boolean
@@ -459,21 +511,44 @@ internal object DeviceLocaleConfigurator {
     fun sleep(ms: Long) = Thread.sleep(ms)
 
     object Live : IosSimulatorHost {
-      override fun spawn(udid: String, command: List<String>): SimctlCli.Result = SimctlCli.spawn(udid, command)
+      override fun spawn(udid: String, command: List<String>): SimctlCommand.Result = SimctlCli.spawn(udid, command)
 
-      override fun primaryLanguage(udid: String): String? {
+      override fun primaryLanguage(udid: String): String? = preferredLanguages(udid)?.firstOrNull()
+
+      override fun preferredLanguages(udid: String): List<String>? {
         val file = iosGlobalPreferencesFile(udid, System.getProperty("user.home"))
         if (file.isFile) {
-          host(iosPrimaryLanguageFromPlistCommand(file))?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+          host(listOf("plutil", "-extract", "AppleLanguages", "json", "-o", "-", file.path))
+            ?.let { output -> runCatching { Json.decodeFromString<List<String>>(output) }.getOrNull() }
+            ?.let { return it }
         }
         val defaults = spawn(udid, iosGetLanguagesCommand())
-        return defaults.stdout.takeIf { defaults.success }?.let(::iosFirstLanguage)
+        if (!defaults.success) {
+          check(defaults.stderr.contains("does not exist")) { "Could not snapshot AppleLanguages on iOS Simulator `$udid`: ${defaults.stderr.trim()}" }
+          return null
+        }
+        return defaults.stdout.lineSequence().map { it.trim().trim('(', ')', ',', '"') }
+          .filter { it.isNotBlank() }.toList()
+      }
+
+      override fun regionLocale(udid: String): String? {
+        val file = iosGlobalPreferencesFile(udid, System.getProperty("user.home"))
+        if (file.isFile) {
+          host(listOf("plutil", "-extract", "AppleLocale", "raw", "-o", "-", file.path))
+            ?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        val defaults = spawn(udid, listOf("defaults", "read", "-g", "AppleLocale"))
+        if (!defaults.success) {
+          check(defaults.stderr.contains("does not exist")) { "Could not snapshot AppleLocale on iOS Simulator `$udid`: ${defaults.stderr.trim()}" }
+          return null
+        }
+        return defaults.stdout.trim().takeIf { it.isNotEmpty() }
       }
 
       override fun isIpad(udid: String): Boolean? =
         (SimctlCli.deviceTypeIdentifier(udid) ?: SimctlCli.deviceTypeIdentifier(udid))?.let(::isIpadDeviceType)
 
-      override fun reboot(udid: String): SimctlCli.Result {
+      override fun reboot(udid: String): SimctlCommand.Result {
         HostIosDriverFactory.discard(udid)
         // Also after a boot a Stop left to the background, so the next trail still has its location.
         return SimctlCli.reboot(udid, afterBoot = { restoreLocation(udid) })
@@ -504,7 +579,7 @@ internal object DeviceLocaleConfigurator {
       private fun host(command: List<String>): String? = try {
         val process = ProcessBuilder(command).redirectErrorStream(false).start()
         process.outputStream.close()
-        if (!SimctlCli.waitForOrKill(process, HOST_COMMAND_TIMEOUT_SECONDS)) {
+        if (!SimctlCommand.waitForOrKill(process, HOST_COMMAND_TIMEOUT_SECONDS)) {
           process.destroyForcibly()
           null
         } else {

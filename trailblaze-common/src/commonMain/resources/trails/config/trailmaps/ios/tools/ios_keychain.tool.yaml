@@ -1,0 +1,2 @@
+id: ios_keychain
+class: xyz.block.trailblaze.ios.tools.IosKeychainTrailblazeTool

@@ -46,6 +46,13 @@ class BarcodeDecoderTest {
   }
 
   @Test
+  fun `decodes light modules on a dark background in a driver encoded screenshot`() {
+    val source = screenshotBytesToLuminanceSource(BarcodeTestImages.invertedDriverEncodedScreenshotBytes())
+
+    assertThat(BarcodeDecoder.decode(source)).isEqualTo(QR_CODE_CONTENT)
+  }
+
+  @Test
   fun `linear symbologies read a wrong value off a lossy screenshot, so they are opt-in`() {
     // The reason BarcodeDecoder allow-lists formats instead of letting every ZXing reader
     // participate. On a JPEG capture at the default scale, the 1D readers find a barcode in the
@@ -206,6 +213,13 @@ internal object BarcodeTestImages {
    */
   fun driverEncodedScreenshotBytes(): ByteArray =
     readResource("screenshot_with_qr_code_driver_encoded.webp")
+
+  /**
+   * The sanitized screenshot inverted before driver scaling and lossy encoding. Regenerate with
+   * `ffmpeg -i screenshot_with_qr_code.png -vf negate,scale=768:-1 -quality 80 <out>.webp`.
+   */
+  fun invertedDriverEncodedScreenshotBytes(): ByteArray =
+    readResource("screenshot_with_inverted_qr_code_driver_encoded.webp")
 
   fun screenshotSource(): LuminanceSource = screenshotBytesToLuminanceSource(screenshotBytes())
 

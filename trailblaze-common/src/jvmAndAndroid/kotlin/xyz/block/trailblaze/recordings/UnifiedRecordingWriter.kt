@@ -3,7 +3,10 @@ package xyz.block.trailblaze.recordings
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
+import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.TrailLabel
@@ -278,32 +281,32 @@ object UnifiedRecordingWriter {
   }
 
   /**
-   * The raw Maestro tool's name. It replays but is never recorded, so a save-back that would rewrite
-   * a recording holding it has to refuse rather than drop the step.
+   * What a run replayed, for a save that must change only what the AI drove.
+   *
+   * A replayed step's capture is not the recording it replayed: calls that can't be recorded are
+   * missing, masked secrets come back masked, and arguments come back retyped. Saving that capture
+   * as this device's leg forks the trail into a lossy copy of the leg the device already reads. So
+   * [mergeIntoUnified] writes this device's tools only where the run had nothing to replay (no leg
+   * resolves on [deviceClassifiers]' chain), or replayed and failed and the AI repaired it
+   * ([healedSteps]). A run that drove every `trail:` step itself (`--no-use-recorded-steps`) sets
+   * [stepsReRecorded]: all its steps are written, but the trailhead still replays what resolves,
+   * so it is kept like any other replayed part.
+   *
+   * @param deviceClassifiers the broad-first segments the device reports (`[android, phone]`).
+   * @param healedSteps the 0-based `trail:` positions that self-healed, as the run's self-heal logs
+   *   number them. By position, because a templated step's log holds its expanded prose. A trailhead
+   *   never heals: its failure ends the run.
+   * @param trailheadToolsInFirstStep how many tools at the front of the recording's first step the
+   *   recording generator moved there from the trailhead, which holds one tool. They belong to the
+   *   trailhead: saved with it when the AI drove it, and left out when it replayed.
+   * @param stepsReRecorded every `trail:` step was AI-driven, whatever resolved for it.
    */
-  const val RAW_MAESTRO_TOOL_NAME = "mobile_maestro"
-
-  /**
-   * Names of every tool a replay on this device runs from [trailFileOrDir]'s unified trail: for the
-   * trailhead and each step, the tools of the recording the device's chain resolves to (the same
-   * resolution [unifiedTrailFullyRecordedForDevice] uses). [trailheadOnly] narrows it to the
-   * trailhead's tools. Empty when the file is absent or unreadable.
-   */
-  fun replayedToolNamesForDevice(
-    trailFileOrDir: File,
-    deviceClassifiers: List<String>,
-    selectedDeviceConfiguration: String?,
-    trailheadOnly: Boolean = false,
-  ): Set<String> {
-    val unifiedFile = unifiedRecordingTarget(trailFileOrDir)?.takeIf { it.isFile } ?: return emptySet()
-    return runCatching {
-      UnifiedTrailAdapter.describeRecordingResolution(
-        createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()),
-        deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
-        selectedDeviceConfiguration,
-      ).steps.filter { !trailheadOnly || it.stepIndex == null }.flatMap { it.toolNames.orEmpty() }.toSet()
-    }.getOrDefault(emptySet())
-  }
+  data class ReplayedRun(
+    val deviceClassifiers: List<String>,
+    val healedSteps: Set<Int> = emptySet(),
+    val trailheadToolsInFirstStep: Int = 0,
+    val stepsReRecorded: Boolean = false,
+  )
 
   /** Outcome of a [mergeIntoUnified] read-merge-write. */
   sealed interface MergeOutcome {
@@ -467,6 +470,16 @@ object UnifiedRecordingWriter {
    * This classifier's driver pin is deliberately NOT an expectation: re-pinning it is the recording's
    * own documented output, so comparing it would refuse every ordinary save-back.
    *
+   * Pass [replayedRun] when the run replayed recordings: only the steps it did not replay, or
+   * replayed and healed, take this device's fresh tools (see [ReplayedRun]). Every other step and the
+   * trailhead keep exactly what the file holds. A step that had a broader leg to replay is saved over
+   * that leg when no other device the trail declares reads it, and beside it otherwise.
+   *
+   * The write changes only the entries the merge changed, in the file's own text, so comments,
+   * quoting and every untouched value keep their bytes ([UnifiedTrailTextSplice]). It encodes the
+   * whole document only when the change can't be made that way (a step's prose changed, a step was
+   * added, a first write).
+   *
    * No user-facing logging — the caller maps the returned [MergeOutcome] to its own output/return so
    * each surface keeps its own UX (CLI console lines, MCP/desktop result objects).
    */
@@ -478,6 +491,7 @@ object UnifiedRecordingWriter {
     castToDeclare: TrailblazeDeviceDefinition? = null,
     stepWindow: IntRange? = null,
     expectedDispatched: UnifiedTrail? = null,
+    replayedRun: ReplayedRun? = null,
   ): MergeOutcome {
     val unifiedFile = unifiedRecordingTarget(trailFileOrDir) ?: return MergeOutcome.NoTarget
 
@@ -630,13 +644,36 @@ object UnifiedRecordingWriter {
         }
       }
 
-      val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      // What this run's AI drove, when it replayed the rest. Null writes every step it recorded.
+      val aiDriven = if (replayedRun != null && existing != null && stepWindow == null) {
+        aiDrivenParts(existing, recordedItems, replayedRun, selectedDeviceConfiguration)
+      } else {
+        null
+      }
+      val itemsToMerge = aiDriven?.items ?: recordedItems
+      val mergedAll = UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = existing,
-        recordedItems = recordedItems,
+        recordedItems = itemsToMerge,
         classifier = classifier,
         selectedDeviceConfiguration = selectedDeviceConfiguration,
         stepWindow = stepWindow,
       )
+      val forked = if (aiDriven != null && existing != null) {
+        mergedAll.copy(
+          trailhead = if (aiDriven.trailhead) mergedAll.trailhead else existing.trailhead,
+          trail = mergedAll.trail.mapIndexed { i, step ->
+            if (i in aiDriven.steps) step else existing.trail.getOrNull(i) ?: step
+          },
+        )
+      } else {
+        mergedAll
+      }
+      // A configuration's legs are keyed by its name, never by a lineage, so there is nothing broader to rewrite.
+      val merged = if (aiDriven != null && existing != null && selectedDeviceConfiguration == null) {
+        forked.rehomedOntoSoleReaders(existing, aiDriven.replayedLegs, classifier)
+      } else {
+        forked
+      }
       // Declare the synthesized cast so the configuration-keyed legs written above are resolvable
       // at replay. Only for the no-declared-cast case gated above — when the target already
       // declares the configuration, its authored cast is canon and stays untouched.
@@ -654,10 +691,177 @@ object UnifiedRecordingWriter {
       if (withCast.trail.isEmpty()) {
         MergeOutcome.SkippedEmpty
       } else {
-        writeFileAtomically(unifiedFile, yaml.encodeUnifiedTrailToString(withCast))
+        writeFileAtomically(unifiedFile, renderKeepingUntouchedText(unifiedFile, existing, withCast))
         MergeOutcome.Merged(unifiedFile)
       }
     }
+  }
+
+  /**
+   * The trailhead and `trail:` step indices this run's AI drove, and the recorded [items] to merge
+   * for them.
+   */
+  private data class AiDrivenParts(
+    val trailhead: Boolean,
+    val steps: Set<Int>,
+    val items: List<TrailYamlItem>,
+    /** The leg each AI-driven step would have replayed, by step index, where one resolved. */
+    val replayedLegs: Map<Int, String>,
+  )
+
+  /**
+   * This trail with each step the AI drove, on a leg this device would otherwise have replayed, saved
+   * over that leg rather than beside it, when no other device the trail declares reads that leg.
+   *
+   * The merge writes fresh tools under [classifier], this device's own key. When the step resolved
+   * to a broader leg (`ios` for an `ios-iphone`) that key is new, and the trail now carries two
+   * recordings of one step for one device. That is right when another declared device still reads
+   * the broader one (an `ios-ipad` beside the iPhone), and a stale fork otherwise: the old leg is
+   * kept for no device. So the fresh tools replace the broader leg instead.
+   *
+   * Declared devices are the trail's single-device `config.devices` entries. A trail that declares
+   * none (legs only) keeps the fork: there a broad leg means any device of that kind. So does an
+   * `all` leg, which every platform reads, and a trail that declares a multi-device configuration,
+   * whose start device also falls back to classifier legs.
+   *
+   * Another declared device reads a leg when its key resolves to it, or when the leg's words appear
+   * side by side in its key. The second case covers a device that reports a segment spanning a
+   * hyphen (`[ios, revyl-cloud]` reads `revyl-cloud`), which its key alone can't show.
+   */
+  private fun UnifiedTrail.rehomedOntoSoleReaders(
+    before: UnifiedTrail,
+    replayedLegs: Map<Int, String>,
+    classifier: String,
+  ): UnifiedTrail {
+    val declaredDevices = before.config.devices.orEmpty().filterValues { !it.isConfiguration }.keys
+    if (replayedLegs.isEmpty() || declaredDevices.isEmpty()) return this
+    if (before.config.multiDeviceConfigurationNames.isNotEmpty()) return this
+    val otherReaders = declaredDevices.filterNot { device ->
+      // This device, and any device under it, reads this device's own leg once it is written.
+      TrailblazeClassifierLineage.chainFor(TrailblazeDeviceClassifier(device)).any { it.classifier == classifier }
+    }.map { device ->
+      val words = device.split("-")
+      val resolved = UnifiedTrailAdapter.describeRecordingResolution(before, words.map { TrailblazeDeviceClassifier(it) })
+        .steps.mapNotNull { r -> r.stepIndex?.let { it to r.resolvedClassifier } }.toMap()
+      fun reads(i: Int, leg: String): Boolean =
+        resolved[i] == leg || java.util.Collections.indexOfSubList(words, leg.split("-")) >= 0
+      ::reads
+    }
+    return copy(
+      trail = trail.mapIndexed { i, step ->
+        val replayed = replayedLegs[i]
+        val fresh = step.recordings[classifier]
+        // `all` is read by every platform, declared or not, so it is never one device's to rewrite.
+        val shared = replayed == TrailblazeClassifierLineage.UNIVERSAL_ROOT || otherReaders.any { replayed != null && it(i, replayed) }
+        if (replayed == null || replayed == classifier || fresh == null || shared) {
+          step
+        } else {
+          step.copy(recordings = step.recordings.mapNotNull { (key, leg) ->
+            when (key) {
+              classifier -> null
+              replayed -> key to fresh
+              else -> key to leg
+            }
+          }.toMap())
+        }
+      },
+    )
+  }
+
+  /**
+   * Which parts of [existing] the AI drove in a run that replayed whatever resolved for its device:
+   * a part with no leg on the device's chain, or a step that healed.
+   *
+   * The trailhead's tools after its first sit at the front of [recordedItems]' first step (see
+   * [ReplayedRun.trailheadToolsInFirstStep]). A replayed trailhead keeps what the file holds, so its
+   * capture is left out, those tools included. A trailhead the AI drove keeps them in the first
+   * step, so that step is saved too; when it replayed, its saved leg is those tools ahead of the leg
+   * it replayed, rather than its own capture.
+   */
+  private fun aiDrivenParts(
+    existing: UnifiedTrail,
+    recordedItems: List<TrailYamlItem>,
+    run: ReplayedRun,
+    selectedDeviceConfiguration: String?,
+  ): AiDrivenParts {
+    val resolution = UnifiedTrailAdapter.describeRecordingResolution(
+      existing,
+      run.deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
+      selectedDeviceConfiguration,
+    )
+    val unresolved = resolution.steps.filter { it.resolvedClassifier == null }
+    val trailhead = existing.trailhead != null && unresolved.any { it.stepIndex == null }
+    val ownSteps = if (run.stepsReRecorded) {
+      existing.trail.indices.toSet()
+    } else {
+      unresolved.mapNotNull { it.stepIndex }.toSet() + run.healedSteps.filter { it in existing.trail.indices }
+    }
+    val replayedLegs = resolution.steps.mapNotNull { r ->
+      val i = r.stepIndex ?: return@mapNotNull null
+      val key = r.resolvedClassifier ?: return@mapNotNull null
+      i to key
+    }.toMap()
+    fun parts(steps: Set<Int>, items: List<TrailYamlItem>) =
+      AiDrivenParts(trailhead, steps, items, replayedLegs.filterKeys { it in steps })
+    val moved = run.trailheadToolsInFirstStep
+    if (moved == 0) {
+      val items = if (trailhead) recordedItems else recordedItems.filterNot { it is TrailYamlItem.TrailheadTrailItem }
+      return parts(ownSteps, items)
+    }
+    // The leg step 1 replayed, when it did.
+    val replayedFirstLeg = if (0 in ownSteps) {
+      null
+    } else {
+      resolution.steps.firstOrNull { it.stepIndex == 0 }?.resolvedClassifier
+        ?.let { existing.trail.getOrNull(0)?.recordings?.get(it) }
+    }
+    val firstSteps = recordedItems.indexOfFirst { it is TrailYamlItem.PromptsTrailItem }
+    val items = recordedItems.mapIndexedNotNull { i, item ->
+      when {
+        item is TrailYamlItem.TrailheadTrailItem -> item.takeIf { trailhead }
+        i == firstSteps -> (item as TrailYamlItem.PromptsTrailItem).withFirstStepTools { tools ->
+            when {
+              !trailhead -> tools.drop(moved)
+              replayedFirstLeg != null -> tools.take(moved) + replayedFirstLeg
+              else -> tools
+            }
+          }
+        else -> item
+      }
+    }
+    return parts(if (trailhead) ownSteps + 0 else ownSteps, items)
+  }
+
+  /** This item with its first step's recorded tools replaced by [change] of them. */
+  private fun TrailYamlItem.PromptsTrailItem.withFirstStepTools(
+    change: (List<TrailblazeToolYamlWrapper>) -> List<TrailblazeToolYamlWrapper>,
+  ): TrailYamlItem.PromptsTrailItem {
+    val first = promptSteps.firstOrNull() ?: return this
+    val recording = first.recording ?: return this
+    val changed = recording.copy(tools = change(recording.tools))
+    val step = when (first) {
+      is DirectionStep -> first.copy(recording = changed)
+      is VerificationStep -> first.copy(recording = changed)
+    }
+    return copy(promptSteps = listOf(step) + promptSteps.drop(1))
+  }
+
+  /**
+   * [merged] as the text to write over [target], whose current content decoded to [existing].
+   * Spliced into the file's own text when the merge only changed legs and device entries, so the
+   * rest keeps its bytes; the whole document is encoded otherwise. A splice is kept only if it
+   * decodes back to [merged] itself. Not to the full encoding: that rewrites the untouched values the
+   * splice exists to keep (a quoted `'true'` decodes to a boolean once re-emitted unquoted), and it
+   * orders map keys its own way.
+   */
+  private fun renderKeepingUntouchedText(target: File, existing: UnifiedTrail?, merged: UnifiedTrail): String {
+    val yaml = createTrailblazeYaml()
+    val encoded = yaml.encodeUnifiedTrailToString(merged)
+    if (existing == null) return encoded
+    val original = runCatching { target.readText() }.getOrNull() ?: return encoded
+    val spliced = UnifiedTrailTextSplice.splice(original, existing, merged) { encoded } ?: return encoded
+    val faithful = runCatching { yaml.decodeUnifiedTrail(spliced) == merged }.getOrDefault(false)
+    return if (faithful) spliced else encoded
   }
 
   /**

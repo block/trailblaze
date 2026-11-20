@@ -21,6 +21,7 @@ import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
@@ -155,6 +156,26 @@ class TrailblazeMcpServerTargetScopedToolsTest {
       FakeSeedDataTool::class in resolved,
       "The active target's excluded_tools opt-outs must be removed from the surface.",
     )
+  }
+
+  @Test
+  fun `a direct call can name the target's excluded and hidden tools, which the LLM is not offered`() {
+    val target = TestAppTarget(
+      id = "sampleapp",
+      customTools = setOf(NamedVisibleTool::class, NamedHiddenTool::class, NamedExcludedTool::class),
+      excludedTools = setOf(NamedExcludedTool::class),
+    )
+    val server = newServer(
+      ToolSurfaceBridge(driverType = androidDriver, availableTargets = setOf(target), daemonWideTargetId = target.id),
+    )
+
+    val callable = server.resolveDirectlyCallableToolNames(newSessionContext(), sessionToolRepo = null)
+
+    assertTrue(
+      callable.containsAll(listOf("fakeVisible", "fakeHidden", "fakeExcluded")),
+      "Keeping a tool off the LLM's menu must not stop a caller that names it. Got: $callable",
+    )
+    assertFalse("exec" in callable, "exec is only reachable from another tool. Got: $callable")
   }
 
   @Test
@@ -316,6 +337,15 @@ class TrailblazeMcpServerTargetScopedToolsTest {
   private class FakeSignInTool : TrailblazeTool
   private class FakeSeedDataTool : TrailblazeTool
   private class FakeDriverNativeTool : TrailblazeTool
+
+  @TrailblazeToolClass("fakeVisible")
+  private class NamedVisibleTool : TrailblazeTool
+
+  @TrailblazeToolClass("fakeHidden", surfaceToLlm = false)
+  private class NamedHiddenTool : TrailblazeTool
+
+  @TrailblazeToolClass("fakeExcluded")
+  private class NamedExcludedTool : TrailblazeTool
 
   private class TestAppTarget(
     id: String,

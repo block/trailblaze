@@ -5,6 +5,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
@@ -298,6 +299,71 @@ class CompileCommandTest {
       typedSurface.readText().contains("web_requestDetails"),
       "The tool carried by the workspace-authored toolset should be declared in alpha's typed " +
         "surface; got:\n${typedSurface.readText()}",
+    )
+  }
+
+  @Test
+  fun `compile lists the memory keys in reach and reports a key declared twice`() {
+    // `alpha` reaches `account_email` through its own toolset and `theme` through its own block.
+    // Declaring `account_email` again on `alpha` is a duplicate: memory is one flat namespace, so
+    // the second declaration can't change what the toolset's tools write. Compile still succeeds
+    // (and so would a run); it records the conflict for `trailblaze check` to fail on.
+    val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/alpha").apply { mkdirs() }
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "toolsets").mkdirs()
+    File(trailmapDir, "toolsets/alpha_accounts.yaml").writeText(
+      """
+      id: alpha_accounts
+      description: "Account setup."
+      tools:
+        - web_requestDetails
+      memory:
+        account_email:
+          description: The email of the account a setup tool created.
+      """.trimIndent(),
+    )
+    val manifest = """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+            tool_sets: [alpha_accounts]
+      memory:
+        theme:
+          description: The run's theme.
+    """.trimIndent()
+    val redeclared = """
+      |
+      |  account_email:
+      |    description: Alpha's account.
+    """.trimMargin()
+    fun writeManifest(redeclare: Boolean) =
+      File(trailmapDir, "trailmap.yaml").writeText(if (redeclare) manifest + redeclared else manifest)
+
+    writeManifest(redeclare = false)
+    val clean = CompileCommand().apply { inputDir = File(workspaceRoot, "trails/config") }
+    assertEquals(0, clean.call())
+    assertEquals(emptyList(), clean.memoryKeyConflicts)
+    val typedSurface = File(trailmapDir, "tools/trailblaze-client.d.ts").readText()
+    assertTrue(typedSurface.contains("\"theme\": \"theme\";"), typedSurface)
+    // `memoryKeys.alpha.account_email`: the toolset's key is grouped under the trailmap that ships it.
+    val byTrailmap = typedSurface.substringAfter("interface TrailblazeMemoryKeysByTrailmap {")
+    val alphaGroup = byTrailmap.substringAfter("\"alpha\": {", missingDelimiterValue = "").substringBefore("};")
+    assertTrue(alphaGroup.contains("\"account_email\": \"account_email\";"), typedSurface)
+    assertFalse(byTrailmap.contains("\"alpha_accounts\": {"), typedSurface)
+    val report = File(workspaceRoot, "trails/config/dist/targets/alpha.report.md").readText()
+    assertTrue(report.contains("| `account_email` | toolset `alpha_accounts` |"), report)
+    assertTrue(report.contains("| `theme` | trailmap `alpha` |"), report)
+
+    writeManifest(redeclare = true)
+    val duplicated = CompileCommand().apply { inputDir = File(workspaceRoot, "trails/config") }
+    assertEquals(0, duplicated.call(), "A duplicate declaration never stops compile")
+    assertEquals(
+      listOf(listOf("trailmap `alpha`", "toolset `alpha_accounts`")),
+      duplicated.memoryKeyConflicts.map { it.declaredBy },
     )
   }
 

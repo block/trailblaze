@@ -1,0 +1,6 @@
+config:
+  skip: {ios: offline selection test}
+  devices:
+    ios-iphone: {driver: IOS_AXE, locale: es-MX}
+trail:
+  - step: Open app

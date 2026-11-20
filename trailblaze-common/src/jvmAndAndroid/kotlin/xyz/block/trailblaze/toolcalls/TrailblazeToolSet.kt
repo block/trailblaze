@@ -10,7 +10,6 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTex
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
@@ -43,9 +42,6 @@ abstract class TrailblazeToolSet(
   companion object {
 
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
-      // Raw Maestro command passthrough - not for LLM, only for legacy/escape-hatch usage
-      MaestroTrailblazeTool::class,
-
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,
       AssertNotVisibleBySelectorTrailblazeTool::class,

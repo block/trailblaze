@@ -19,11 +19,14 @@ data class TakeSnapshotTool(
   val description: String? = null,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
   companion object {
-    private const val NO_SCREEN_STATE_PROVIDER_MESSAGE =
+    // Scripted tools read these messages, since the result carries no structured field: the region
+    // checks (`sdks/typescript/src/region-check.ts`) count a snapshot as saved only when the
+    // message contains " saved as ". TakeSnapshotToolMessagesTest pins that split.
+    internal const val NO_SCREEN_STATE_PROVIDER_MESSAGE =
       "Snapshot '%s' not saved: no screen state provider available."
-    private const val NO_SCREENSHOT_AVAILABLE_MESSAGE =
+    internal const val NO_SCREENSHOT_AVAILABLE_MESSAGE =
       "Snapshot '%s' captured (no screenshot available)."
-    private const val SNAPSHOT_SAVED_MESSAGE = "Snapshot '%s' saved as %s."
+    internal const val SNAPSHOT_SAVED_MESSAGE = "Snapshot '%s' saved as %s."
   }
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {

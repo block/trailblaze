@@ -21,6 +21,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
@@ -34,6 +35,7 @@ import xyz.block.trailblaze.mcp.handlers.ListActiveSessionsRequestHandler
 import xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler
 import xyz.block.trailblaze.mcp.handlers.SubscribeToProgressRequestHandler
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
+import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.registerRpcHandler
 import xyz.block.trailblaze.mcp.respondRpcError
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
@@ -82,7 +84,27 @@ class OnDeviceRpcServer(
    * log uploads it left pending.
    */
   private val onDrain: () -> Int = { 0 },
-) {
+) : RpcHandler<RunYamlRequest, RunYamlResponse> {
+
+  private var prepareRunYamlRequest: ((RunYamlRequest) -> Unit)? = null
+
+  /** Installs driver identity preparation without changing the existing server constructor. */
+  constructor(
+    loggingRule: TrailblazeLoggingRule,
+    runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
+    trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
+    screenStateCaptor: OnDeviceScreenStateCaptor,
+    waitForSettled: suspend () -> Unit,
+    progressManager: ProgressSessionManager = ProgressSessionManager(),
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    onDrain: () -> Int = { 0 },
+    prepareRunYamlRequest: (RunYamlRequest) -> Unit,
+  ) : this(
+    loggingRule, runTrailblazeYaml, trailblazeDeviceInfoProvider, screenStateCaptor,
+    waitForSettled, progressManager, deviceClassifiers, onDrain,
+  ) {
+    this.prepareRunYamlRequest = prepareRunYamlRequest
+  }
 
   // Use a dedicated coroutine scope for background jobs
   // Trailblaze-owned threads, never Dispatchers.IO: in-process that is the app's pool. Every
@@ -90,6 +112,20 @@ class OnDeviceRpcServer(
   // Dispatchers.IO is CIO's own accept and frame-parse loop, which Ktor does not let a caller move;
   // that is short non-blocking work, so it only waits for a free worker, never for a whole upload.
   private val backgroundScope = CoroutineScope(TrailblazeDispatchers.IO)
+
+  private val runYamlHandler by lazy {
+    RunYamlRequestHandler(
+      loggingRule = loggingRule,
+      backgroundScope = backgroundScope,
+      runTrailblazeYaml = runTrailblazeYaml,
+      trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
+      progressManager = progressManager,
+      waitForSettled = waitForSettled,
+    ).also { it.prepareRunYamlRequest = prepareRunYamlRequest }
+  }
+
+  override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> =
+    runYamlHandler.handle(request)
 
   fun startServer(port: Int, wait: Boolean = true) {
     val server = embeddedServer(
@@ -105,14 +141,6 @@ class OnDeviceRpcServer(
         json(TrailblazeJsonInstance)
       }
 
-      val runYamlHandler = RunYamlRequestHandler(
-        loggingRule = loggingRule,
-        backgroundScope = backgroundScope,
-        runTrailblazeYaml = runTrailblazeYaml,
-        trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
-        progressManager = progressManager,
-        waitForSettled = waitForSettled,
-      )
       val screenStateHandler = GetScreenStateRequestHandler(deviceClassifiers, screenStateCaptor)
       val drainSessionHandler = DrainSessionRequestHandler(onDrain)
       val subscribeToProgressHandler = SubscribeToProgressRequestHandler(progressManager)
@@ -126,7 +154,7 @@ class OnDeviceRpcServer(
         }
 
         // Register the trail-execution request handler
-        registerRpcHandler(runYamlHandler)
+        registerRpcHandler(this@OnDeviceRpcServer)
 
         // Register GetScreenState handler for MCP subagent screen state queries.
         // Host readiness polling via OnDeviceRpcClient.waitForReady uses this endpoint —
@@ -141,7 +169,7 @@ class OnDeviceRpcServer(
         registerOnDeviceRpcWebSocket(
           handlers = OnDeviceProtoRpcHandlers(
             getScreenState = screenStateHandler::handleBinary,
-            runYaml = runYamlHandler::handle,
+            runYaml = this@OnDeviceRpcServer::handle,
             drainSession = drainSessionHandler::handle,
             subscribeToProgress = subscribeToProgressHandler::handle,
             getExecutionStatus = getExecutionStatusHandler::handle,

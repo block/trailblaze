@@ -465,7 +465,7 @@ surface deliberately omits a generic `callTool` so authors can't bypass type-che
 The three bullets above describe the **typed** surface — what the generated
 `trailblaze-client.d.ts` will let you write. Dispatch at runtime resolves against the
 wider global tool registry, so a framework tool that exists on the classpath but is in no
-toolset (a hidden selector tool, `runCommand`) is dispatchable even though it won't
+toolset (a hidden selector tool) is dispatchable even though it won't
 autocomplete. Prefer listing what you use so the types match what runs.
 
 ### Worked composition example
@@ -681,6 +681,55 @@ await ctx.session!.addCleanup((tools) => tools.android_adbShell({ command: ["sh"
   `{ tool, args }` for one call, or `{ calls: [{ tool, args }, ...] }` for a list; stub or assert
   on that call.
 
+## Checking pixels via `ctx.screen.image`
+
+`await ctx.screen.image({ bounds })` returns one rectangle of the screen as RGBA pixels, captured
+fresh, for checks the accessibility tree can't answer ("the pane draws dark", "the badge is red").
+Throws on a screen that is black everywhere, so a check never passes on pixels that weren't there.
+
+The SDK exports the building blocks `assertRegionColor` is made of, so a pixel check of your own
+writes only its rule:
+
+- **Colours**: `parseHex("#006AFF")` and `rgbHex` convert to and from `0xRRGGBB`; `colorCounts(image)`
+  counts pixels per colour; `rgbToLab` and `deltaE2000` measure how different two colours look,
+  where about 2 is the smallest difference a person notices; `topColorShares` and `percent` format
+  evidence.
+- **The harness**: `checkRegion(ctx, input, rule, { toolName })` resolves `input.selector` to exactly
+  one element, reads its rectangle, applies your `RegionRule` (one image in, a `RuleVerdict` out),
+  re-reads until it passes or `input.timeoutMs` runs out, and saves a named screenshot with the
+  numbers. "Can't check" (no match, several, an unreadable screen, or a rule returning
+  `cantCheckVerdict(...)`) always fails. A failure is a `ToolError` whose `data.code` is a
+  `RegionFailureCode`.
+
+```ts
+import { checkRegion, percent, RegionOutcome, trailblaze, type TrailblazeNodeSelector } from "@trailblaze/scripting";
+
+interface AssertMostlyBlackInput {
+  /** The element whose rectangle is checked. It must match exactly one element. */
+  selector: TrailblazeNodeSelector;
+  /** Names the evidence screenshot. */
+  name?: string;
+  /** Keep re-reading until this many milliseconds pass. Default 10000. */
+  timeoutMs?: number;
+}
+
+export const assertMostlyBlack = trailblaze.tool<AssertMostlyBlackInput>({ surfaceToLlm: false }, (input, ctx) =>
+  checkRegion(ctx, input, (image) => {
+    const share = image.count((r, g, b) => r < 16 && g < 16 && b < 16) / (image.width * image.height);
+    return {
+      outcome: share >= 0.9 ? RegionOutcome.Passed : RegionOutcome.Failed,
+      detail: `${percent(share)} near black (needs ≥ 90%)`,
+      measured: { nearBlackPercent: share * 100 },
+      thresholds: { minNearBlackPercent: 90 },
+    };
+  }, { toolName: "assertMostlyBlack" }),
+);
+```
+
+Declare the input's `selector`, `name` and `timeoutMs` in your tool's own file, as above, rather
+than `extends RegionCheckInput`: the tool-definition extractor reads only that file and fails on an
+input type imported from the SDK. Passing the input to `checkRegion` still type-checks it.
+
 ## Worked examples
 
 ### Wikipedia: a typed web tool with conditional UI
@@ -848,6 +897,26 @@ primitives. Set the path on `target.system_prompt_file:` in `trailmap.yaml` — 
 [`wikipedia-system-prompt.md`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/trails/config/trailmaps/wikipedia/wikipedia-system-prompt.md),
 [`contacts-ios-system-prompt.md`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/contacts-ios-system-prompt.md).
 
+## Sharing a memory key — `memoryKeys`
+
+A key that several tools share is declared once in a trailmap's or toolset's `memory:` block
+(see [Trailmaps — Declaring memory keys](trailmaps.md#declaring-memory-keys)). Reference it
+through `memoryKeys`, grouped by the trailmap the key belongs to, rather than repeating the string:
+
+```ts
+import { memoryKeys } from "@trailblaze/scripting";
+
+const appearance = ctx.memory.get(memoryKeys.myapp.appearance); // the key "appearance"
+```
+
+Typing `memoryKeys.` lists the trailmaps in reach, then each one's keys, with the declaration on
+hover. A toolset's keys sit under the trailmap that ships it. The trailmap only says whose key it
+is: memory stays one flat namespace, and `memoryKeys.myapp.appearance` is just `"appearance"`.
+
+A key nobody in reach declares is a compile error, so a typo can't fail silently at run time. The
+value is the name unchanged, so it costs nothing at run time. `ctx.memory` still takes any string,
+so a key nobody declared keeps working.
+
 ## IDE typings — `trailblaze check`
 
 Trailblaze emits per-trailmap typings so `ctx.tools.<name>(args)` autocompletes in your
@@ -922,6 +991,8 @@ The mock helpers satisfy the handler signature:
   shapes against that array. `client.stub(toolName, { textContent, errorMessage })`
   registers a canned response — a non-empty `errorMessage` makes the call throw with
   production's wording, which exercises `try/catch` recovery branches.
+  `client.stubSequence(toolName, [response, ...])` answers calls in order, the last one
+  repeating, for a tool that re-reads a screen until it changes.
 - **`client.stubHost(name, { value } | { error })`** sets what `ctx.host.<name>(...)` resolves
   to or rejects with. Calls are recorded in `client.hostCalls`. A host call with no stub
   rejects, so a test never silently runs against an `undefined` credential.

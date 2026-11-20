@@ -1,0 +1,27 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze device pair [-hV] [URL]
+Use another machine's devices: pair with a Trailblaze daemon that lends them
+      [URL]       The lending daemon, as http://<host>:<port>
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+
+The other daemon must run with TRAILBLAZE_LEASE_DEVICES=1. Its
+devices then show in 'trailblaze device list' as
+<platform>/<device>@<host>:<port> and run trails and tools like your own;
+using one leases it until you are done. With no URL, lists the paired
+daemons.
+
+A lending daemon answers only its own machine, so bring its lending
+port here over an ssh tunnel first: its daemon port minus 5 (52520 for
+the default 52525), or its TRAILBLAZE_LEND_PORT. Never tunnel the
+daemon port itself, which trusts whatever reaches it over loopback.
+
+Example (lender on the default port):
+  ssh -N -L 31900:localhost:52520 build-box &
+  trailblaze device pair http://localhost:31900

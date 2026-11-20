@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.MemoryKeyDeclaration
 import xyz.block.trailblaze.config.PlatformConfig
 
 /**
@@ -204,6 +205,12 @@ data class TrailblazeTrailmapManifest(
    * (component1..N) and binary-compatibility baselines for earlier fields stay stable.
    */
   @SerialName("trail_validation") val trailValidation: TrailValidationConfig? = null,
+  /**
+   * Memory keys this trailmap's tools, trails or run setup share, by name. Consumers see them in
+   * their typed surface through `dependencies:`. Descriptive only — see [MemoryKeyDeclaration].
+   */
+  // Last, so adding it shifts no existing constructor or componentN position.
+  @SerialName("memory") val memory: Map<String, MemoryKeyDeclaration> = emptyMap(),
 )
 
 /**
@@ -303,6 +310,12 @@ data class TrailmapTargetConfig(
    * resolved [AppTargetYamlConfig] by [toAppTargetYamlConfig].
    */
   @SerialName("android_test") val androidTest: xyz.block.trailblaze.config.AndroidTestInstrumentationConfig? = null,
+  /**
+   * The name of this target's device classifier: an `export const <name> = trailblaze.deviceClassifier(...)`
+   * in a `.ts` file under `tools/` of this trailmap or of a trailmap in its dependency closure.
+   * The loader resolves it to [AppTargetYamlConfig.deviceClassifier].
+   */
+  @SerialName("device_classifier") val deviceClassifier: String? = null,
 ) {
   fun toAppTargetYamlConfig(
     defaultId: String,

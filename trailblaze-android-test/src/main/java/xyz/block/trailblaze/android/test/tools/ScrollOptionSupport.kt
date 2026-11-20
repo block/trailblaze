@@ -7,11 +7,9 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 /**
  * The one place that decides which scroll-until-visible options this driver can carry out.
  *
- * A recorded scroll reaches the in-process driver two ways — as the canonical
- * `scrollUntilTextIsVisible` tool, and as a raw Maestro `scrollUntilVisible` command — and both
- * land on the same [AndroidTestScrollUntilVisibleTool] loop. Answering the question at each entry
- * point is how the two answers drift, so both ask here, and the defaults are read from Maestro's
- * own command rather than copied as literals.
+ * A recorded `scrollUntilTextIsVisible` lands on the [AndroidTestScrollUntilVisibleTool] loop, and
+ * its defaults are read from Maestro's own command rather than copied as literals, so an unwritten
+ * option means the same thing here as on the Maestro-backed drivers.
  *
  * Each function returns null when the option can be honored, or the reason it cannot. Refusing is
  * the point: the loop stops the moment the element is laid out on screen — the same stop condition
@@ -60,8 +58,7 @@ internal object ScrollOptionSupport {
   /**
    * Whether to centre the found element. `null` means the recording left `centerElement`
    * unwritten, which hands the decision to the driver: read from
-   * [TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault]. Only the canonical tool reads
-   * it; the Maestro command adapter defaults to Maestro's own `centerElement`.
+   * [TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault].
    */
   fun centerElement(centerElement: Boolean?): Boolean =
     centerElement ?: TrailblazeDriverType.ANDROID_TEST.centersScrollTargetByDefault

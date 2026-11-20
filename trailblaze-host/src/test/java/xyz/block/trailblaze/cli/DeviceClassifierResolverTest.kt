@@ -24,6 +24,35 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 class DeviceClassifierResolverTest {
 
   @Test
+  fun `declared Spanish locale refines only closed catalog tails`() {
+    val keys = xyz.block.trailblaze.devices.DeviceClassifierKey
+    for (base in listOf("android-phone", "ios-iphone", "web-browser")) {
+      for (input in listOf(base, "$base-es", "$base-es-mx")) {
+        assertEquals(keys.parse("$base-es-mx"), keys.withDeclaredLocale(keys.parse(input), "es-MX"))
+      }
+      assertFailsWith<IllegalArgumentException> { keys.withDeclaredLocale(keys.parse("$base-es-us"), "es-MX") }
+      assertFailsWith<IllegalArgumentException> { keys.withDeclaredLocale(keys.parse("$base-es-custom"), "es-MX") }
+    }
+  }
+
+  @Test
+  fun `existing explicit non Spanish locale behavior keeps its classifier identity`() {
+    val keys = xyz.block.trailblaze.devices.DeviceClassifierKey
+    val input = keys.parse("android-phone-jp")
+    assertEquals(input, keys.withDeclaredLocale(input, "ja"))
+    assertEquals(keys.parse("ios-iphone"), keys.withDeclaredLocale(keys.parse("ios-iphone"), "fr-CA"))
+  }
+
+  @Test
+  fun `undeclared locale preserves custom and English classifiers`() {
+    val keys = xyz.block.trailblaze.devices.DeviceClassifierKey
+    for (input in listOf("android-phone-es-custom", "ios-iphone-en-us", "android-custom-model")) {
+      assertEquals(keys.parse(input), keys.withDeclaredLocale(keys.parse(input), null))
+    }
+  }
+
+
+  @Test
   fun `locale-qualified classifier refines the detected device`() {
     val detected = listOf("ios", "iphone").map(::TrailblazeDeviceClassifier)
     val requested = DeviceClassifierResolver.parseClassifierKey("ios-iphone-es")
@@ -293,7 +322,7 @@ class DeviceClassifierResolverTest {
   @Test
   fun `repeated lookups for the same device hit the cache - probe runs exactly once`() {
     // Without the cache, every plan-time resolution and every `device list` invocation
-    // pays the simctl-screenshot / adb-shell cost. Pin that the resolver dedups the probe
+    // pays the plutil / adb-shell cost. Pin that the resolver dedups the probe
     // by (platform, instanceId) so the daemon's long-lived lifecycle doesn't multiply that
     // cost across calls.
     val callCount = AtomicInteger(0)
@@ -363,8 +392,7 @@ class DeviceClassifierResolverTest {
   @Test
   fun `an override scoped to Android leaves iOS answers cached - the simulator is probed once`() {
     // An override that only recognizes Android hardware declines every iOS device, and a decline
-    // is never cached. Unscoped, every iOS tool call re-ran the screen-size probe (a
-    // `simctl io screenshot`, ~0.4s).
+    // is never cached. Unscoped, every iOS tool call re-ran the screen-size probe.
     val overrideCalls = AtomicInteger(0)
     DeviceClassifierResolver.installOverride(
       platforms = setOf(TrailblazeDevicePlatform.ANDROID),
@@ -754,52 +782,6 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
-  fun `parsePngHeader validates signature plus IHDR chunk type`() {
-    // Valid PNG header for a 1206x2622 iPhone screenshot.
-    val valid = pngHeader(width = 1206, height = 2622)
-    assertEquals(
-      DeviceClassifierResolver.DeviceProbe(1206, 2622),
-      DeviceClassifierResolver.parsePngHeader(valid),
-    )
-    // Wrong signature → null. Without this guard, the parser would happily read garbage
-    // dims from any 24-byte buffer.
-    val wrongSig = valid.copyOf().also { it[0] = 0x00 }
-    kotlin.test.assertNull(DeviceClassifierResolver.parsePngHeader(wrongSig))
-    // Right signature, but the chunk type isn't "IHDR" — pinned by PR review (lead-dev
-    // finding #7). A non-PNG file that happens to share the 8-byte signature must not
-    // parse to garbage.
-    val wrongChunkType = valid.copyOf().also {
-      it[12] = 0x00; it[13] = 0x00; it[14] = 0x00; it[15] = 0x00
-    }
-    kotlin.test.assertNull(DeviceClassifierResolver.parsePngHeader(wrongChunkType))
-    // Header too short.
-    kotlin.test.assertNull(DeviceClassifierResolver.parsePngHeader(ByteArray(10)))
-    // Zero dimensions — defensive.
-    val zeroWidth = pngHeader(width = 0, height = 100)
-    kotlin.test.assertNull(DeviceClassifierResolver.parsePngHeader(zeroWidth))
-  }
-
-  /**
-   * Builds a 24-byte buffer matching the leading bytes of a real PNG: 8-byte signature, the
-   * IHDR chunk-length field (always 13 for IHDR but we don't validate it), the 4-byte
-   * "IHDR" type, and the 4-byte big-endian width + height. The full chunk would include
-   * bit depth/color type/CRC after this, but [DeviceClassifierResolver.parsePngHeader]
-   * only reads the first 24 bytes.
-   */
-  private fun pngHeader(width: Int, height: Int): ByteArray {
-    val signature = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
-    val length = intArrayOf(0, 0, 0, 13).map { it.toByte() }.toByteArray()
-    val ihdrType = byteArrayOf(0x49, 0x48, 0x44, 0x52)
-    val widthBytes = byteArrayOf(
-      (width ushr 24).toByte(), (width ushr 16).toByte(), (width ushr 8).toByte(), width.toByte(),
-    )
-    val heightBytes = byteArrayOf(
-      (height ushr 24).toByte(), (height ushr 16).toByte(), (height ushr 8).toByte(), height.toByte(),
-    )
-    return signature + length + ihdrType + widthBytes + heightBytes
-  }
-
-  @Test
   fun `findPlatformForInstanceId matches iOS, Android, neither, and both with iOS-first determinism`() {
     // Pins the cross-platform lookup branches that `resolveFromSpec` falls back to when
     // the user passes a bare instance id (no `<platform>/` prefix) — the documented CLI
@@ -967,7 +949,7 @@ class DeviceClassifierResolverTest {
       ),
     )
     assertEquals(listOf("ios", "iphone"), classification.classifiers.map { it.classifier })
-    assertTrue(classification.definitive, "the screenshot probe measured the dims; nothing was guessed")
+    assertTrue(classification.definitive, "the probe measured the dims; nothing was guessed")
   }
 
   @Test

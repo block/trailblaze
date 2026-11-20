@@ -63,6 +63,7 @@ internal suspend fun runIosSimulatorYaml(
     deviceClassifierOverride = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
     logsDir = logsDir,
     noLogging = runOnHostParams.noLogging,
+    isRecordingVideo = deviceManager.sessionCaptureCoordinator::isRecordingVideo,
   ) {
     override fun ensureTargetAppIsStopped() {
       stopTargetAppForCleanup()
@@ -81,6 +82,8 @@ internal suspend fun runIosSimulatorYaml(
       )
     }
   }
+
+  hostTbRunner.prepareRecordingClassifiers(runYamlRequest.yaml)
 
   // Store the test instance for forceful shutdown on cancellation. Host-native iOS drivers
   // have no Maestro driver — and dereferencing hostTbRunner.hostRunner would construct one —

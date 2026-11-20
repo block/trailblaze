@@ -37,6 +37,7 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.config.McpServerConfig
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -78,6 +79,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 /** Which screen-state implementation [AndroidTrailblazeRule] should build for a given run. */
 internal enum class ScreenStateKind { UIAUTOMATOR, ACCESSIBILITY }
@@ -661,6 +663,9 @@ open class AndroidTrailblazeRule(
    */
   protected open fun onTrailConfigResolved(trailConfig: TrailConfig?) = Unit
 
+  /** Seeds runner-owned memory after each reset, before trail defaults and any tools execute. */
+  protected open fun seedAgentMemory(memory: AgentMemory) = Unit
+
   /**
    * Self-heal setting applied to every prompt step in [runSuspend]. Default honors the
    * run's [config]; subclasses may layer an environment-level override on top.
@@ -798,13 +803,16 @@ open class AndroidTrailblazeRule(
     // right closest-wins recording for this on-device runner. v1 inputs ignore
     // the list. The guard in decodeTrail throws if we ever lose classifiers and
     // a v3 file has recordings, so the silent-LLM-fallback can't happen here.
-    val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = trailblazeLoggingRule.selectionClassifiers()
+    trailblazeLoggingRule.recordingClassifiers = trailblazeYaml.recordingClassifiersFor(
+      testYaml, classifiers, current = trailblazeLoggingRule.recordingClassifiers,
+    )
     // `testYaml` is either a full trail document (CLI/desktop "run this trail on device") or a
     // per-tool dispatch envelope (host-drives-the-loop RPC). decodeTrailOrToolEnvelope decodes the
     // per-tool envelope via decodeTools, so a single-tool RPC never depends on the legacy
     // list-shape trail parser; a trail document still lowers via decodeTrail.
     val trailItems =
-      trailblazeYaml.decodeTrailOrToolEnvelope(testYaml, deviceClassifiers = classifiers)
+      trailblazeYaml.decodeTrailOrToolEnvelope(testYaml, deviceClassifiers = classifiers, recordingClassifiers = trailblazeLoggingRule.recordingClassifiers ?: classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     ActionTrace.mark(ActionTrace.Boundary.TRAIL_DECODED)
 
@@ -879,7 +887,13 @@ open class AndroidTrailblazeRule(
         agentMemory,
         InstrumentationArgUtil.getInstrumentationArg(DeviceSetupToolsInstrumentationArg.KEY),
       )
+      seedAgentMemory(agentMemory)
     }
+    // Then the trail's `config: memory:` defaults, filling only absent keys so the lane's seeds and
+    // a host snapshot both outrank them. Outside the guard: a whole-document on-device RPC hands
+    // this rule the device handler's memory, built from the host snapshot alone, so nothing else
+    // seeds the document's defaults on that path.
+    agentMemory.seedDefaults(trailConfig?.memory)
 
     requireActionableSteps(trailItems, trailConfig, trailFilePath)
 
@@ -1095,7 +1109,7 @@ open class AndroidTrailblazeRule(
     // restarts the app, as [runFromAsset] does, or a running process keeps strings it cached.
     val localeChanged = applyTrailLocale(
       runCatching {
-        trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers)
+        trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = trailblazeLoggingRule.selectionClassifiers())
       }.getOrNull(),
       trailFilePath,
     )
@@ -1133,6 +1147,7 @@ open class AndroidTrailblazeRule(
       forcedDriver = InstrumentationArgUtil.driverType(),
     )?.let { refusal -> throw TrailblazeException(refusal) }
     requireActionableSteps(runnable, trailConfig, trailFilePath)
+    DeviceClassifierKey.withDeclaredLocale(trailblazeLoggingRule.selectionClassifiers(), trailConfig?.locale)
     val changed = TrailDeviceLocale.changeNeedingCleanup(localeCleanupKey()) {
       AndroidDeviceLocale.applyForTrail(trailConfig?.locale)
     }
@@ -1161,7 +1176,7 @@ open class AndroidTrailblazeRule(
   private fun refuseIfRequiresHostExecution(yaml: String, trailName: String?) {
     trailblazeYaml.hostExecutionRefusal(
       yaml,
-      trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+      trailblazeLoggingRule.selectionClassifiers(),
       trailName,
     )?.let { throw TrailblazeException(it) }
   }
@@ -1354,7 +1369,7 @@ open class AndroidTrailblazeRule(
   ) {
     val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
-      deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+      deviceClassifiers = trailblazeLoggingRule.selectionClassifiers(),
       doesResourceExist = AndroidAssetsUtil::assetExists,
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
@@ -1368,10 +1383,13 @@ open class AndroidTrailblazeRule(
     // declares none, and for the clean-start decision: a reusable hand-off can skip the ordinary
     // force-stop, but never a locale change. A trail that can't be read keeps its clean start; the
     // run's own decode reports the error.
-    val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = trailblazeLoggingRule.selectionClassifiers()
+    val projected = trailblazeYaml.recordingClassifiersFor(
+      yamlContent, classifiers, tolerateMalformedYaml = forceStopApp,
+    ) ?: classifiers
     val trailItems = when {
-      !forceStopApp -> trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
-      else -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers) }.getOrNull()
+      !forceStopApp -> trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers, recordingClassifiers = projected)
+      else -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers, recordingClassifiers = projected) }.getOrNull()
     }
     // The language is applied before the clean-start decision because only a change needs a fresh
     // process; the same language leaves a running app, and a reusable hand-off, alone.

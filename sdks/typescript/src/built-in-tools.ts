@@ -19,7 +19,7 @@
 //
 //  - **Non-recordable author utilities** (`isRecordable = false`, never in a recording): the
 //    selector query tools `findSelectorMatches` / `waitUntilNotVisible` (rich `MatchDescriptor[][]`
-//    / `boolean` results), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
+//    / `boolean` results), `readScreenImage` (pixels for `ctx.screen.image`), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
 //    `android_adbShell`, `android_sendBroadcast`, `android_writeFileToDownloads`,
 //    `android_reconnectSession`.
 //  - **Recordable tools the generator can't fully model** — `mobile_listInstalledApps` /
@@ -47,6 +47,7 @@
 // `index.ts`. The `findSelectorMatches` / `waitUntilNotVisible` entries below reference them; this file
 // imports the type names locally for the declaration-merging block.
 import type {
+  Bounds,
   MatchDescriptor,
   TrailblazeNodeSelector,
 } from "./generated/selectors.js";
@@ -55,7 +56,10 @@ import type {
 import type {
   InstalledApp,
   ListInstalledAppsDetailedResult,
+  IosKeychainResult,
+  IosSimctlResult,
   ListInstalledAppsResult,
+  ReadScreenImageResult,
 } from "./generated/built-in-tool-results.js";
 
 // Pins the imported shapes so `tsc` catches drift. Needed because `bun:test` never type-checks
@@ -63,6 +67,72 @@ import type {
 const _installedAppShape: InstalledApp = { appId: "com.example.app", isSystemApp: false };
 const _listResultShape: ListInstalledAppsResult = { appIds: [_installedAppShape.appId] };
 const _detailedResultShape: ListInstalledAppsDetailedResult = { apps: [_installedAppShape] };
+const _iosSimctlResultShape: IosSimctlResult = { exitCode: 0, stdout: "com.example.app: 4242\n", stderr: "", timedOut: false };
+const _iosKeychainResultShape: IosKeychainResult = {
+  action: "LIST",
+  found: true,
+  memoryKey: null,
+  items: [{ service: "svc", account: "acct", accessGroup: "TEAM.com.example.app", itemClass: "genericPassword" }],
+};
+
+/** Arguments of `ios_simctl`. Source: `IosSimctlTrailblazeTool.kt`. */
+export interface IosSimctlArgs {
+  /**
+   * `simctl` arguments without `xcrun simctl`, checked against the allowlist before anything runs:
+   * `terminate`, `launch`, `openurl`, `privacy`, `get_app_container`, `keychain <device> reset`,
+   * `location <device> list|clear|set|run|start`, `ui <device> appearance|content_size|increase_contrast`,
+   * `status_bar <device> list|clear|override`, `push <device> <appId>` (payload in {@link stdin}),
+   * `pbcopy` (text in {@link stdin}), `pbpaste`, `listapps`, `appinfo <device> <appId>`, and
+   * `spawn <device>` with `defaults`, `notifyutil -p|-s` or `log show` (deprecated: read app
+   * signals with `ctx.events` instead).
+   * `booted` or an omitted device is the session's simulator; other UDIDs are refused.
+   * Write an app's preferences while it is terminated: terminate, write, then launch.
+   */
+  argv: string[];
+  /** Not supported yet: any value is refused, until an allowlist is added for a real caller. */
+  launchEnvironment?: { name: string; value: string }[];
+  /**
+   * Input for `push` (a JSON object with an `aps` key, at most 4096 bytes) or `pbcopy` (at most
+   * 64KB). Refused for every other subcommand. Never logged.
+   */
+  stdin?: string;
+  /** Kill the command after this many seconds. Default 10 (30 for `log show`), at most 300. */
+  timeoutSeconds?: number;
+}
+
+/** Arguments of `ios_keychain`. Source: `IosKeychainTrailblazeTool.kt`. */
+export interface IosKeychainArgs {
+  /**
+   * `set` stores (updating any item at service/account in place), `get` reads one item's value into
+   * sensitive memory under {@link memoryKey}, `delete` removes, `list` names every item in the group.
+   */
+  action: "set" | "get" | "delete" | "list";
+  /** Bundle id of the installed app whose keychain group to use. */
+  appId: string;
+  /** `kSecAttrService`. Required for `set`, `get` and `delete`; a filter for `list`. */
+  service?: string;
+  /** `kSecAttrAccount`. Required for `set` and `get`; a filter for `delete` and `list`. */
+  account?: string;
+  /** `set` only: the password. Never logged, never on argv, never returned. */
+  value?: string;
+  /**
+   * `get` only, and required there: the memory key to store the value in, marked sensitive. Later
+   * steps use it as `{{key}}`; the value itself is never returned.
+   */
+  memoryKey?: string;
+  /** `set` only: `kSecAttrAccessible`, in any case. Default `WHEN_UNLOCKED`. */
+  accessible?:
+    | "WHEN_UNLOCKED"
+    | "WHEN_UNLOCKED_THIS_DEVICE_ONLY"
+    | "AFTER_FIRST_UNLOCK"
+    | "AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY"
+    | "WHEN_PASSCODE_SET_THIS_DEVICE_ONLY"
+    | (string & {});
+  /** Defaults to the app's `application-identifier` entitlement. */
+  accessGroup?: string;
+  /** Per-step timeout. Default 10, at most 300; the first helper build per host gets 180s. */
+  timeoutSeconds?: number;
+}
 
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
@@ -161,8 +231,47 @@ declare module "@trailblaze/scripting" {
          * retry-less throw into your loop's normal control flow — let the tool own the wait.
          */
         timeoutMs?: number;
+        /**
+         * Opt-in early stop for a `timeoutMs` wait that usually comes back empty. When `true`, a
+         * wait in which nothing has matched ends once the screen has settled (the same screen for
+         * 1.5s and the app idle) instead of running to `timeoutMs`; the result is all-empty, as a
+         * timeout would have returned it.
+         *
+         * Use it for checks for something that usually never appears — an optional prompt, a
+         * one-time sheet:
+         *
+         * ```ts
+         * const [prompt] = await client.tools.findSelectorMatches({
+         *   selectors: [{ androidAccessibility: { textRegex: ".*[Ss]tarting balance.*" } }],
+         *   timeoutMs: 15_000,
+         *   stopWhenSettled: true,
+         * });
+         * ```
+         *
+         * Leave it off when the thing waited for appears only after a long, silent load: a static
+         * loading screen also looks settled. There is no counterpart for waits on something to go
+         * away. Ignored without `timeoutMs`; a no-op on drivers with no app-idle signal (only the
+         * Android accessibility driver has one today).
+         */
+        stopWhenSettled?: boolean;
       };
       result: MatchDescriptor[][];
+    };
+
+    /**
+     * Pixels of one rectangle of the screen, or the whole screen, as base64 RGBA. Prefer
+     * `ctx.screen.image({ bounds })`, which calls this and decodes the result into a `ScreenImage`.
+     * `bounds` is in the driver's coordinates, the same space as `MatchDescriptor.bounds`.
+     *
+     * Source: `ReadScreenImageTrailblazeTool.kt` (`readScreenImage`).
+     */
+    readScreenImage: {
+      args: {
+        bounds?: Bounds;
+        /** Longest side of the returned image, in pixels. Default 512. */
+        maxDimension?: number;
+      };
+      result: ReadScreenImageResult;
     };
 
     /**
@@ -205,8 +314,8 @@ declare module "@trailblaze/scripting" {
     /**
      * Run a process on the **host** JVM via argv (no shell). Host-only (`requiresHost = true`) — for
      * **tool authors**, not the LLM (`surfaceToLlm = false`). The escape hatch for composing host
-     * CLIs from a scripted tool: iOS `xcrun simctl …` (pair with `ctx.device.instanceId` for the
-     * simulator UDID), `adb` host subcommands, build steps, etc.
+     * CLIs from a scripted tool: `adb` host subcommands, build steps, etc. For the iOS simulator use
+     * `ios_simctl`, which covers the simctl calls tools make without a host process of your own.
      *
      * Each `argv` element is passed verbatim to `ProcessBuilder` — no shell metacharacter
      * interpretation, so an interpolated value can't be re-read as `;`/`&&`/quotes. Opt into a shell
@@ -234,6 +343,53 @@ declare module "@trailblaze/scripting" {
         timeoutSeconds?: number;
       };
       result: string;
+    };
+
+    /**
+     * Runs `xcrun simctl` on the session's iOS simulator: the iOS counterpart of `android_adbShell`.
+     * Use it instead of `exec` of `xcrun simctl`. `argv` is plain simctl arguments, checked against an
+     * allowlist (see {@link IosSimctlArgs.argv}); anything else fails with the list of what's allowed.
+     * A `defaults` domain that is a bundle id is rewritten to that app's container plist, the only
+     * way to reach a sandboxed app's preferences.
+     *
+     * ```ts
+     * await ctx.tools.ios_simctl({ argv: ["terminate", "booted", appId] });
+     * await ctx.tools.ios_simctl({ argv: ["spawn", "booted", "defaults", "write", appId, "Seen", "-bool", "YES"] });
+     * const { exitCode, stdout } = await ctx.tools.ios_simctl({ argv: ["spawn", "booted", "defaults", "read", "-g", "AppleLanguages"] });
+     * ```
+     *
+     * Returns `{ exitCode, stdout, stderr, timedOut }`. A refused argv throws; a command that exits
+     * non-zero or times out does NOT, so check `exitCode`, or call `simctlOrThrow(ctx.tools, argv)` (from `@trailblaze/scripting`) to throw on
+     * any failure. iOS simulators only.
+     *
+     * Source: `IosSimctlTrailblazeTool.kt` (`ios_simctl`).
+     */
+    ios_simctl: {
+      args: IosSimctlArgs;
+      result: IosSimctlResult;
+    };
+
+    /**
+     * The keychain primitive: sets, gets, deletes or lists passwords in an installed app's keychain
+     * group on the session's simulator, the one thing simctl can't do. `set` updates any existing
+     * item in place and reads the value back.
+     *
+     * ```ts
+     * await ctx.tools.ios_keychain({ action: "set", appId, service, account: "SessionToken", value: token, accessible: "afterFirstUnlockThisDeviceOnly" });
+     * const { found } = await ctx.tools.ios_keychain({ action: "get", appId, service, account: "SessionToken", memoryKey: "sessionToken" });
+     * const { items } = await ctx.tools.ios_keychain({ action: "list", appId, service });
+     * await ctx.tools.ios_keychain({ action: "delete", appId, service });
+     * ```
+     *
+     * Returns `{ action, found, memoryKey?, items? }`: `get` sets `memoryKey` when it stored the
+     * value, `list` sets `items` (names only). A value is never returned and never logged; `get`
+     * puts it in sensitive memory for `{{memoryKey}}`. iOS simulators only.
+     *
+     * Source: `IosKeychainTrailblazeTool.kt` (`ios_keychain`).
+     */
+    ios_keychain: {
+      args: IosKeychainArgs;
+      result: IosKeychainResult;
     };
 
     /**

@@ -168,10 +168,15 @@ matching the app you're driving to see its tools alongside the
 built-in primitives. Use `--target default` for generic device
 control without an app-specific vocabulary.
 
-The result is every tool that platform-target combination supports —
-built-in primitives plus any custom typed tools the user's team has
-shipped via a trailmap. **Run this when you need a verb you don't
-already know.**
+The result is every tool the LLM is offered for that platform-target
+combination — built-in primitives plus any custom typed tools the
+user's team has shipped via a trailmap. **Run this when you need a
+verb you don't already know.** Tools that hide themselves
+(`surfaceToLlm: false`) or that the target drops (`excluded_tools:`)
+are left out, and the listing ends with a note counting them; add
+`--all` to list them, marked. Naming one still runs it: `trailblaze
+tool <name>`, a trail step, or a TS tool's `ctx.tools.<name>`. An
+excluded scripted tool is the exception: the session never launches it.
 
 The output is markdown-shaped for downstream LLM consumers. The first
 line is a banner naming the resolved `(target, platform)` so an agent

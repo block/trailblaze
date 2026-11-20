@@ -642,4 +642,17 @@ class AgentMemoryTest {
     )
     assertFalse(memory.has("k"))
   }
+
+  @Test
+  fun `seedDefaults fills only keys that are absent and not deleted`() {
+    val memory = AgentMemory().apply {
+      remember("seeded", "lane")
+      remember("gone", "x")
+      delete("gone")
+    }
+    memory.seedDefaults(mapOf("seeded" to "trail", "gone" to "trail", "fresh" to "trail"))
+    assertEquals("lane", memory.variables["seeded"])
+    assertFalse(memory.has("gone"))
+    assertEquals("trail", memory.variables["fresh"])
+  }
 }

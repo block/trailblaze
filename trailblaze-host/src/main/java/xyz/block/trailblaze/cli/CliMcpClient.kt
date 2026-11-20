@@ -658,6 +658,7 @@ class CliMcpClient(
 
     val mobileDevices = parseDeviceList(listResult.content)
       .filter { it.platform != TrailblazeDevicePlatform.WEB }
+      .preferOwnDevices()
 
     return when {
       mobileDevices.size == 1 -> connectToDevice(mobileDevices[0].platform)
@@ -781,9 +782,15 @@ class CliMcpClient(
       // valid shorthand for the singleton playwright-native browser, and additional
       // named instances are provisioned on demand, so multiple-running entries
       // should not block an unqualified `web` selection.
-      if (instanceId == null && platformDevices.size > 1 && platform != TrailblazeDevicePlatform.WEB) {
+      val candidates = platformDevices.preferOwnDevices()
+      if (instanceId == null && candidates.size > 1 && platform != TrailblazeDevicePlatform.WEB) {
         return "Multiple ${platform.displayName} devices found. Specify which one:\n" +
           platformDevices.joinToString("\n") { "  --device ${it.toFullyQualifiedDeviceId()}" }
+      }
+      // Borrowed devices set aside left one of this machine's own: name it, so the daemon doesn't
+      // have to choose among them all.
+      if (instanceId == null && platformDevices.size > 1 && platform != TrailblazeDevicePlatform.WEB) {
+        return connectToDevice(platform, candidates.single().instanceId, webHeadless)
       }
 
       // Validate the instance ID against available devices — policy is per-platform.
@@ -1776,6 +1783,18 @@ class CliMcpClient(
         it.platform == TrailblazeDevicePlatform.WEB &&
           it.instanceId == WebInstanceIds.PLAYWRIGHT_NATIVE
       }
+
+    /**
+     * This machine's own devices among these, or all of them when it has none. A device borrowed
+     * from another machine (`<instance>@<host:port>`) is picked by name, or when nothing else is
+     * there: pairing a workstation must not make `--device android`, or a run that names no device,
+     * ambiguous on a machine that has an emulator of its own.
+     */
+    internal fun List<DeviceListEntry>.preferOwnDevices(): List<DeviceListEntry> =
+      filterNot { isBorrowedInstanceId(it.instanceId) }.ifEmpty { this }
+
+    /** A borrowed device's instance id: `<lender's instance>@<lender host:port>`. */
+    internal fun isBorrowedInstanceId(instanceId: String): Boolean = instanceId.lastIndexOf('@') > 0
 
     /** Extracts the connected instance ID from device tool response text. */
     internal fun parseConnectedInstanceId(text: String): String? {

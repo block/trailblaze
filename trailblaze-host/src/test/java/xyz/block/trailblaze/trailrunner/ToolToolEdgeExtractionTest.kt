@@ -20,12 +20,12 @@ class ToolToolEdgeExtractionTest {
       export const myapp_ios_signInViaUI = trailblaze.tool(SPEC, async (args, ctx) => {
         const appId = (ctx.target?.resolveAppId() ?? "").trim();
         await ctx.tools.myapp_ios_prepareEventCaptureIfEnabled({ appId });
-        await ctx.tools.mobile_maestro({ commands: [] });
+        await ctx.tools.launchApp({ appId: "com.example.app" });
       });
       """.trimIndent()
     val edges = ToolCatalogBuilder.referencedToolIdsIn(ToolFlavor.SCRIPTED, source, "myapp_ios_signInViaUI")
     assertEquals(
-      setOf("myapp_ios_prepareEventCaptureIfEnabled", "mobile_maestro"),
+      setOf("myapp_ios_prepareEventCaptureIfEnabled", "launchApp"),
       edges,
     )
   }
@@ -55,7 +55,7 @@ class ToolToolEdgeExtractionTest {
   @Test
   fun `dispatches mentioned only in comments or docstrings are not edges`() {
     // Mirrors openUrl.ts: a `//` comment and a block comment each mention a ctx.tools dispatch the
-    // implementation never makes; only the real call (mobile_maestro) is an edge.
+    // implementation never makes; only the real call (launchApp) is an edge.
     val source =
       """
       /**
@@ -63,11 +63,11 @@ class ToolToolEdgeExtractionTest {
        */
       export const openUrl = trailblaze.tool(SPEC, async (args, ctx) => {
         // NOTE: we no longer call ctx.tools.android_grantPermissions(...) here.
-        await ctx.tools.mobile_maestro({ commands: [] });
+        await ctx.tools.launchApp({ appId: "com.example.app" });
       });
       """.trimIndent()
     val edges = ToolCatalogBuilder.referencedToolIdsIn(ToolFlavor.SCRIPTED, source, "openUrl")
-    assertEquals(setOf("mobile_maestro"), edges)
+    assertEquals(setOf("launchApp"), edges)
   }
 
   @Test

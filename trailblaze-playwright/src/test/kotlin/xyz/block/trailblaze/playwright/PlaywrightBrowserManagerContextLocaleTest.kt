@@ -43,9 +43,12 @@ class PlaywrightBrowserManagerContextLocaleTest {
     manager.applyContextLocale("es-US")
     assertEquals("es-US" to "es-US", whatTheSiteSees())
 
+    manager.applyContextLocale("es-MX")
+    assertEquals("es-MX" to "es-MX", whatTheSiteSees())
+
     // A new session inside the same locale lane must not fall back to English.
     withContext(manager.playwrightDispatcher) { manager.resetSession() }
-    assertEquals("es-US" to "es-US", whatTheSiteSees())
+    assertEquals("es-MX" to "es-MX", whatTheSiteSees())
   }
 
   @Test

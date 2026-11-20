@@ -238,6 +238,7 @@ target:
 ```bash
 trailblaze toolbox --target myapp --device android        # full toolset for myapp on Android
 trailblaze toolbox --target myapp --name myapp_login      # detail for one tool
+trailblaze toolbox --target myapp --device android --all  # also tools hidden from or excluded for the LLM
 trailblaze waypoint list                                  # all waypoints from active trailmaps
 ```
 

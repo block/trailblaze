@@ -7,6 +7,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
+import xyz.block.trailblaze.host.lease.RemoteDeviceCall
+import xyz.block.trailblaze.host.lease.RemoteDeviceReply
+import xyz.block.trailblaze.host.lease.RemoteTrailblazeAgent
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.DeviceSetupToolsMemory
@@ -17,6 +22,7 @@ import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.KoogRunnableAgent
 import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -57,6 +63,7 @@ import xyz.block.trailblaze.host.devices.HostDeviceProfile
 import xyz.block.trailblaze.host.devices.HostProbedDeviceClassifiers
 import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
+import xyz.block.trailblaze.host.ios.IosDriverTrailRunner
 import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -97,6 +104,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.report.otel.SessionOtelExport
 import xyz.block.trailblaze.report.trace.SessionTraceFile
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 object TrailblazeHostYamlRunner {
 
@@ -424,11 +432,12 @@ object TrailblazeHostYamlRunner {
     driverType: TrailblazeDriverType,
     targetAppId: String?,
     isLaunchDevice: Boolean,
+    runtimeClassifiers: List<String>? = null,
   ): RunYamlRequest = copy(
     trailblazeDeviceId = trailblazeDeviceId,
     driverType = driverType,
     targetAppName = targetAppId ?: targetAppName,
-    deviceClassifierOverride = if (isLaunchDevice) deviceClassifierOverride else emptyList(),
+    deviceClassifierOverride = if (isLaunchDevice) runtimeClassifiers ?: deviceClassifierOverride else emptyList(),
   )
 
   /**
@@ -485,6 +494,11 @@ object TrailblazeHostYamlRunner {
     logsDir: File? = null,
     /** The run's `--no-logging` flag: no session files, no trace export. See [runHostYaml]. */
     noLogging: Boolean = false,
+    /**
+     * Whether a session is recording its launch device's screen. An iOS AXe launch device logs
+     * each action without a screenshot while it is; see [IosDriverTrailRunner.shouldScreenshotBeforeAction].
+     */
+    isRecordingVideo: (SessionId) -> Boolean = { false },
   ): SessionId? {
     val driverType = launchDevice.driverType
 
@@ -530,18 +544,24 @@ object TrailblazeHostYamlRunner {
 
     // Probe the launch device up-front so a v3 trail can be lowered with the right closest-wins
     // recording for THIS device. v1 trails ignore the list.
-    val launchProbe = probeDevice(
+    val selectionProbe = probeDevice(
       device = launchDevice,
       classifierOverride = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
     )
-    val classifiers = launchProbe.classifiers
+    val classifiers = selectionProbe.classifiers
+    val recordingClassifiers: List<TrailblazeDeviceClassifier>
 
     // Envelope-tolerant decode: single-tool MCP dispatch decodes via decodeTools, not the legacy
     // list-shape parser; trail documents are unaffected.
     val trailItems = try {
+      recordingClassifiers = trailblazeYaml.recordingClassifiersFor(
+        runYamlRequest.yaml, classifiers,
+        selectedDeviceConfiguration = multiDeviceSession?.configurationName,
+      ) ?: classifiers
       trailblazeYaml.decodeTrailOrToolEnvelope(
         runYamlRequest.yaml,
         deviceClassifiers = classifiers,
+        recordingClassifiers = recordingClassifiers,
         // A selected configuration's recording legs are keyed by its NAME and match exactly —
         // configuration names are invisible to the launch device's classifier chain.
         selectedDeviceConfiguration = multiDeviceSession?.configurationName,
@@ -553,6 +573,8 @@ object TrailblazeHostYamlRunner {
       // Returning null was the silent-failure pattern previously fixed for executeTrailSession.
       throw e
     }
+    val launchProbe = ProbedDevice(selectionProbe.device, selectionProbe.profile, recordingClassifiers,
+      selectionProbe.resolvedTarget, selectionProbe.appId, classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     // Honor `config.skip:` before opening any session — matches the CLI's pre-flight
@@ -685,6 +707,8 @@ object TrailblazeHostYamlRunner {
               driverType = device.driverType,
               targetAppId = device.targetTestApp?.id,
               isLaunchDevice = probe === launchProbe,
+              runtimeClassifiers = recordingClassifiers.takeIf { it != classifiers }
+                ?.map { it.classifier },
             ),
             trailblazeLogger = loggingRule.logger,
             trailblazeDeviceInfoProvider = probe::deviceInfo,
@@ -747,6 +771,29 @@ object TrailblazeHostYamlRunner {
             closeStreamScreenshotSource = {},
           )
         }
+        is DeviceConnection.Remote -> {
+          val remoteAgent = RemoteTrailblazeAgent(
+            device = device.trailblazeDeviceId,
+            driverType = device.driverType,
+            call = device.call,
+            trailblazeLogger = loggingRule.logger,
+            trailblazeDeviceInfoProvider = probe::deviceInfo,
+            sessionProvider = sessionProvider,
+            customToolClasses = MultiDeviceTargetBinding.customToolClasses(boundTargets, device.driverType),
+            trailblazeToolRepo = toolRepo,
+            resolvedTarget = probe.resolvedTarget,
+            appId = probe.appId,
+            sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+            workingDirectory = runYamlRequest.trailDirectory(),
+            memory = memory,
+          )
+          BoundSessionAgent(
+            agent = remoteAgent,
+            screenStateProvider = remoteAgent.screenStateProvider,
+            captureScreenState = { withContext(Dispatchers.IO) { runCatching { remoteAgent.screenStateProvider() }.getOrNull() } },
+            closeStreamScreenshotSource = {},
+          )
+        }
         is DeviceConnection.IosSimulator -> when (val iosDevice = device.connectedDevice) {
           is IosNativeConnectedDevice -> {
             val iosAgent = IosDriverTrailblazeAgent(
@@ -761,6 +808,8 @@ object TrailblazeHostYamlRunner {
               resolvedTarget = probe.resolvedTarget,
               appId = probe.appId,
               sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+              // The session's recording is the launch device's; a companion's step is not in it.
+              isRecordingVideo = if (probe === launchProbe) isRecordingVideo else { _ -> false },
               memory = memory,
             ).apply { workingDirectory = runYamlRequest.trailDirectory() }
             BoundSessionAgent(
@@ -1371,6 +1420,18 @@ object TrailblazeHostYamlRunner {
     ) : DeviceConnection {
       override val driverType: TrailblazeDriverType get() = connectedDevice.trailblazeDriverType
     }
+
+    /**
+     * A device borrowed from another machine, of any platform, which runs each of its tools with
+     * [driverType] there; see [RemoteTrailblazeAgent]. The caller holds the lease.
+     */
+    data class Remote(
+      override val trailblazeDeviceId: TrailblazeDeviceId,
+      override val driverType: TrailblazeDriverType,
+      /** Sends one call to the device's lender. */
+      val call: (RemoteDeviceCall) -> RemoteDeviceReply,
+      override val targetTestApp: TrailblazeHostAppTarget? = null,
+    ) : DeviceConnection
   }
 
   /**
@@ -1386,6 +1447,7 @@ object TrailblazeHostYamlRunner {
     /** This device's own target and installed app id, which a tool reads as `ctx.target`. */
     val resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget?,
     val appId: String?,
+    val selectionClassifiers: List<TrailblazeDeviceClassifier> = classifiers,
   ) {
     fun deviceInfo(): TrailblazeDeviceInfo {
       val size = profile.get()
@@ -1395,6 +1457,8 @@ object TrailblazeHostYamlRunner {
         widthPixels = size.widthPixels,
         heightPixels = size.heightPixels,
         classifiers = classifiers,
+        metadata = mapOf(DeviceClassifierKey.EXECUTION_DEVICE_CLASS to selectionClassifiers.joinToString("-") { it.classifier }),
+        initialLocale = DeviceLocaleConfigurator.appliedLocale(device.trailblazeDeviceId),
       )
     }
   }
@@ -1417,6 +1481,18 @@ object TrailblazeHostYamlRunner {
         widthPixels = HostDeviceProfile.UNMEASURED,
         heightPixels = HostDeviceProfile.UNMEASURED,
       )
+      // Measured and classified by its lender, which knows the device.
+      is DeviceConnection.Remote -> {
+        val state = withContext(Dispatchers.IO) {
+          device.call(RemoteDeviceCall(device.trailblazeDeviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.SCREEN_STATE))
+        }.screenState
+        HostDeviceProfile(
+          classifiers = state?.classifiers.orEmpty().map(::TrailblazeDeviceClassifier)
+            .ifEmpty { listOf(device.trailblazeDeviceId.trailblazeDevicePlatform.asTrailblazeDeviceClassifier()) },
+          widthPixels = state?.deviceWidth ?: HostDeviceProfile.UNMEASURED,
+          heightPixels = state?.deviceHeight ?: HostDeviceProfile.UNMEASURED,
+        )
+      }
     }
     // A browser installs no app, so its target only selects a tool scope.
     val resolvedTarget = if (device is DeviceConnection.WebBrowser) {
@@ -1431,8 +1507,25 @@ object TrailblazeHostYamlRunner {
         .ifEmpty { profile.classifiers }
         .ifEmpty { HostProbedDeviceClassifiers.forDevice(device.trailblazeDeviceId) },
       resolvedTarget = resolvedTarget,
-      appId = resolvedTarget?.let { resolveInstalledAppId(it) },
+      appId = resolvedTarget?.let { target ->
+        if (device is DeviceConnection.Remote) resolveRemoteAppId(target, device) else resolveInstalledAppId(target)
+      },
     )
+  }
+
+  /** [resolveInstalledAppId] for a borrowed device, whose apps its lender lists. */
+  private suspend fun resolveRemoteAppId(
+    resolved: xyz.block.trailblaze.model.ResolvedTarget,
+    device: DeviceConnection.Remote,
+  ): String? = withContext(Dispatchers.IO) {
+    runCatching {
+      MobileDeviceUtils.installedAppIdForTarget(resolved.target, resolved.deviceId) {
+        device.call(RemoteDeviceCall(device.trailblazeDeviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.INSTALLED_APPS))
+          .installedAppIds.orEmpty()
+      }
+    }.onFailure { e ->
+      Console.log("[TrailblazeHostYamlRunner] listing apps on ${resolved.deviceId} through its lender failed: ${e.message}")
+    }.getOrNull()
   }
 
   /**

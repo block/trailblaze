@@ -208,29 +208,16 @@ class OnDeviceRpcDeviceScreenStream(
   }
 
   /**
-   * Public fast dispatch for arbitrary trail YAML — used by the recording UI's per-card
-   * Replay button so a manual replay feels as immediate as the user's own tap on the
-   * device. Same direct rpc path the live tap dispatch uses (no `deviceManager.runYaml`
-   * session bookkeeping, no awaitCompletion polling); the on-device handler accepts the
-   * request and the next frame poll picks up the result. [useRecordedSteps] replays a step's
-   * recording instead of handing its prose to the AI.
+   * Runs arbitrary trail YAML on the device and returns when the on-device runner finishes it —
+   * the recording UI's per-card Replay. Same direct rpc path the live tap dispatch uses (no
+   * `deviceManager.runYaml` session bookkeeping), but awaited, so the caller knows the outcome
+   * and how long the device was in use. [useRecordedSteps] replays a step's recording instead of
+   * handing its prose to the AI.
    */
-  suspend fun dispatchYaml(yaml: String, useRecordedSteps: Boolean = false) {
-    val request = runYamlRequestTemplate.copy(
-      yaml = yaml,
-      useRecordedSteps = useRecordedSteps,
-      awaitCompletion = false,
+  suspend fun runYaml(yaml: String, useRecordedSteps: Boolean = false): RpcResult<RunYamlResponse> =
+    rpc.rpcCall(
+      runYamlRequestTemplate.copy(yaml = yaml, useRecordedSteps = useRecordedSteps, awaitCompletion = true),
     )
-    when (val result: RpcResult<RunYamlResponse> = rpc.rpcCall(request)) {
-      is RpcResult.Success -> Unit
-      is RpcResult.Failure -> {
-        Console.log(
-          "[OnDeviceRpcDeviceScreenStream] dispatchYaml failed (${result.errorType}): " +
-            "${result.message}" + (result.details?.let { " | $it" } ?: ""),
-        )
-      }
-    }
-  }
 
   override fun close() {
     rpc.close()

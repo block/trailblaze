@@ -292,6 +292,9 @@ object TrailblazeContextEnvelope {
       // The same list a finished session's log records, so a survey run mid-trail can branch on
       // device type (phone vs tablet) the way it does over the finished session.
       putJsonArray("classifiers") { device.classifiers.forEach { add(it.classifier) } }
+      // The language Trailblaze set the device to when the trail started (`es-US`), so a tool can
+      // match an app setting to it. A snapshot from the start, not a live reading.
+      device.initialLocale?.let { put("initialLocale", it) }
       // The port the device's Trailblaze server (the Android runner, or an iOS app's in-app
       // server) is bridged on. Host-only: it hashes in the host's ADB server port, which a process
       // on the device doesn't have. Web devices have no such server.

@@ -146,6 +146,15 @@ data class AppTargetYamlConfig(
    * baselines for earlier fields stay stable.
    */
   @SerialName("allow_runtime_tool_source") val allowRuntimeToolSource: Boolean = false,
+  /**
+   * The target's device classifier, resolved from the trailmap's `target.device_classifier:` — see
+   * [TargetDeviceClassifierConfig]. Null keeps the framework's own key.
+   *
+   * Never serialized: it holds this machine's paths and is resolved again wherever the trailmap
+   * loads. Appended at the end so existing positional component accessors and
+   * binary-compatibility baselines for earlier fields stay stable.
+   */
+  @kotlinx.serialization.Transient val deviceClassifier: TargetDeviceClassifierConfig? = null,
 )
 
 /**

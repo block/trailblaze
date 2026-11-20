@@ -7,13 +7,12 @@ import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.ios.tools.IosOpenAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /** The session-start copy of a submitted trail, which is persisted and shown in reports. */
 class SensitiveTrailYamlTest {
 
-  private val trailblazeYaml = createTrailblazeYaml(setOf(IosOpenAppTrailblazeTool::class, MaestroTrailblazeTool::class))
+  private val trailblazeYaml = createTrailblazeYaml(setOf(IosOpenAppTrailblazeTool::class))
 
   private fun persistedCopy(yaml: String): String {
     val items = trailblazeYaml.decodeTrailOrToolEnvelope(
@@ -148,7 +147,7 @@ class SensitiveTrailYamlTest {
   }
 
   @Test
-  fun `a maestro launch argument that is a memory reference is kept, a literal one is masked`() {
+  fun `a launch argument that is a memory reference is kept, a literal one is masked`() {
     val copy = persistedCopy(
       """
       config: {}
@@ -156,13 +155,11 @@ class SensitiveTrailYamlTest {
         - step: Open the app signed in
           recording:
             ios:
-              - mobile_maestro:
-                  commands:
-                    - launchApp:
-                        appId: com.example.app
-                        arguments:
-                          SessionToken: "{{session_token}}"
-                          DeviceToken: fixture-device-token-4d1e
+              - ios_openApp:
+                  appId: com.example.app
+                  arguments:
+                    SessionToken: "{{session_token}}"
+                    DeviceToken: fixture-device-token-4d1e
       """.trimIndent(),
     )
 

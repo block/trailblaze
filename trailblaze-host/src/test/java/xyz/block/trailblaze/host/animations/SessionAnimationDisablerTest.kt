@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler.IosReadOutcome
 import xyz.block.trailblaze.host.ios.SimctlCli
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * The pure decision seams behind [SessionAnimationDisabler]:
@@ -53,7 +54,7 @@ class SessionAnimationDisablerTest {
   fun `a successful ios read yields the trimmed previous value`() {
     assertEquals(
       IosReadOutcome.Value("1.0"),
-      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCli.Result(0, "1.0\n", "")),
+      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCommand.Result(0, "1.0\n", "")),
     )
   }
 
@@ -65,7 +66,7 @@ class SessionAnimationDisablerTest {
         "The domain/default pair of (kCFPreferencesAnyApplication, UIAnimationDragCoefficient) does not exist"
     assertEquals(
       IosReadOutcome.Unset,
-      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCli.Result(1, "", stderr)),
+      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCommand.Result(1, "", stderr)),
     )
   }
 
@@ -74,7 +75,7 @@ class SessionAnimationDisablerTest {
     assertEquals(
       IosReadOutcome.Unknown,
       SessionAnimationDisabler.classifyIosCoefficientRead(
-        SimctlCli.Result(-1, "", "simctl timed out after 10s"),
+        SimctlCommand.Result(-1, "", "simctl timed out after 10s"),
       ),
     )
   }
@@ -83,7 +84,7 @@ class SessionAnimationDisablerTest {
   fun `an unexplained ios read failure is unknown, not unset`() {
     assertEquals(
       IosReadOutcome.Unknown,
-      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCli.Result(1, "", "")),
+      SessionAnimationDisabler.classifyIosCoefficientRead(SimctlCommand.Result(1, "", "")),
     )
   }
 }

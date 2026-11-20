@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.config
 
+import com.charleskorn.kaml.YamlMap
+import com.charleskorn.kaml.YamlNode
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -22,6 +24,10 @@ data class ResolvedToolSet(
   val resolvedToolClasses: Set<KClass<out TrailblazeTool>>,
   val compatibleDriverTypes: Set<TrailblazeDriverType>,
   val resolvedScriptedToolNames: Set<ToolName> = emptySet(),
+  /** The trailmap whose `toolsets/` folder holds this toolset, when it was discovered from one. */
+  val trailmapId: String? = null,
+  /** What is wrong with [config]'s `memory:` block; non-empty means its keys are ignored. */
+  val memoryProblems: List<String> = emptyList(),
 ) : TrailblazeToolSurface {
   // The interface uses unprefixed names; this loader-local type prefixes them with `resolved*`.
   // Alias overrides let it satisfy [TrailblazeToolSurface] (and so expose `allToolNames`) without
@@ -39,6 +45,9 @@ data class ResolvedToolSet(
     scriptedToolNames = resolvedScriptedToolNames,
     alwaysEnabled = config.alwaysEnabled,
     compatibleDriverTypes = compatibleDriverTypes,
+    memoryKeys = if (memoryProblems.isEmpty()) config.memory else emptyMap(),
+    trailmapId = trailmapId,
+    memoryProblems = memoryProblems,
   )
 }
 
@@ -54,9 +63,27 @@ object ToolSetYamlLoader {
     yamlString: String,
     toolNameResolver: ToolNameResolver,
   ): ResolvedToolSet {
-    val config =
-      TrailblazeConfigYaml.instance.decodeFromString(ToolSetYamlConfig.serializer(), yamlString)
+    val yaml = TrailblazeConfigYaml.instance
+    val config = try {
+      yaml.decodeFromString(ToolSetYamlConfig.serializer(), yamlString)
+    } catch (e: Exception) {
+      // A `memory:` block the decoder can't read at all (a list, or a key mapped to a bare string)
+      // must not drop the toolset either: load it without the block and report the block instead.
+      val withoutMemory = withoutMemoryBlock(yamlString) ?: throw e
+      val config = runCatching { yaml.decodeFromYamlNode(ToolSetYamlConfig.serializer(), withoutMemory) }
+        .getOrElse { throw e }
+      val problem = "`memory:` maps each key name to `{ description: … }`, but it couldn't be read: ${e.message}"
+      return resolve(config, toolNameResolver, extraMemoryProblems = listOf(problem))
+    }
     return resolve(config, toolNameResolver)
+  }
+
+  /** [yamlString]'s root map without its `memory` entry, or null when it has none or isn't a map. */
+  private fun withoutMemoryBlock(yamlString: String): YamlNode? {
+    val root = runCatching { TrailblazeConfigYaml.instance.parseToYamlNode(yamlString) }.getOrNull() as? YamlMap
+      ?: return null
+    val kept = root.entries.filterKeys { it.content != "memory" }
+    return if (kept.size == root.entries.size) null else YamlMap(kept, root.path)
   }
 
   /**
@@ -66,8 +93,10 @@ object ToolSetYamlLoader {
     yamlContents: Map<String, String>,
     toolNameResolver: ToolNameResolver,
   ): Map<String, ResolvedToolSet> {
-    return loadAllYamlWithErrorHandling(yamlContents, "ToolSet") { _, content ->
-      val resolved = loadFromYaml(content, toolNameResolver)
+    return loadAllYamlWithErrorHandling(yamlContents, "ToolSet") { path, content ->
+      // A `<trailmap>/toolsets/<name>.yaml` path names the trailmap that ships the toolset.
+      val trailmapId = path.split('/').takeIf { it.size >= 3 && it[1] == "toolsets" }?.first()
+      val resolved = loadFromYaml(content, toolNameResolver).copy(trailmapId = trailmapId)
       resolved.config.id to resolved
     }.toMap()
   }
@@ -142,7 +171,17 @@ object ToolSetYamlLoader {
   private fun resolve(
     config: ToolSetYamlConfig,
     toolNameResolver: ToolNameResolver,
+    extraMemoryProblems: List<String> = emptyList(),
   ): ResolvedToolSet {
+    // A malformed `memory:` block is descriptive data gone wrong, never a reason to drop the
+    // toolset's tools: its keys are ignored and `trailblaze check` reports it.
+    val memoryProblems = extraMemoryProblems + MemoryKeyDeclaration.problems(config.memory)
+    if (memoryProblems.isNotEmpty()) {
+      Console.log(
+        "ToolSetYamlLoader: WARNING: ignoring the invalid memory: block in toolset '${config.id}': " +
+          memoryProblems.joinToString("; "),
+      )
+    }
     val partitioned =
       toolNameResolver.partitionLenient(config.tools, context = "toolset '${config.id}'")
     val driverTypes = buildSet {
@@ -154,6 +193,7 @@ object ToolSetYamlLoader {
       resolvedToolClasses = partitioned.classBacked,
       compatibleDriverTypes = driverTypes,
       resolvedScriptedToolNames = partitioned.scriptedToolNames,
+      memoryProblems = memoryProblems,
     )
   }
 }

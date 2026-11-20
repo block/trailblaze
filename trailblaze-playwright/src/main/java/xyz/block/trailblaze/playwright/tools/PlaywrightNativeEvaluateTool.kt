@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * Carries `surfaceToLlm = false` and `isRecordable = false` at the class level — same
  * as the other arbitrary-string-execution utilities (`android_adbShell`,
- * `android_sendBroadcast`, `RunCommandTrailblazeTool`, `ExecTrailblazeTool`,
+ * `android_sendBroadcast`, `ExecTrailblazeTool`,
  * `ScriptTrailblazeTool`). The LLM never sees this in its tool catalog and the trail
  * recorder never captures it as a step. It exists for host-side composition when
  * nothing else fits — something the framework exposes as a utility under the tool

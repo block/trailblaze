@@ -58,6 +58,8 @@ object MultiDeviceConfigurationResolver {
     val memberDescriptions: Map<String, String?>,
     /** The driver each companion is driven by, keyed like [companionDeviceIds] — see [effectiveMemberDriver]. */
     val companionDriverTypes: Map<String, TrailblazeDriverType>,
+    /** Companions bound to a device borrowed from another machine, which its lender drives. */
+    val borrowedCompanionNames: Set<String> = emptySet(),
   )
 
   /**
@@ -144,6 +146,10 @@ object MultiDeviceConfigurationResolver {
    * [boundDevicePlatforms] maps a connected device's instance id to its platform, for a member
    * whose classifier names no platform (see [memberPlatform]).
    *
+   * [borrowedDeviceDrivers] maps the instance id of each device borrowed from another machine to the
+   * driver its lender runs it with. A companion bound to one runs on that driver, so its `driver:`
+   * pin is checked against the lender's driver instead of this session's.
+   *
    * Every rejection throws [TrailblazeException] with the offending names, because each one is a
    * misconfiguration that would otherwise run the trail against the wrong device set.
    */
@@ -156,6 +162,7 @@ object MultiDeviceConfigurationResolver {
     environmentConfigurationName: String? = null,
     sessionDriverType: TrailblazeDriverType?,
     boundDevicePlatforms: Map<String, TrailblazeDevicePlatform> = emptyMap(),
+    borrowedDeviceDrivers: Map<String, TrailblazeDriverType> = emptyMap(),
   ): ResolvedMultiDeviceConfiguration? {
     // A non-unified (v1) trail declares no configuration rather than short-circuiting before
     // selection: returning null here would drop a per-request selection or binding silently, which
@@ -174,6 +181,20 @@ object MultiDeviceConfigurationResolver {
     // the session's own and it never gets a companion connection. Computed before the validation
     // walk because `rejectUnhonorableDriver` has to tell the two apart.
     val startDeviceNameForValidation = members.keys.firstOrNull()
+    val bindingsSource = if (requestDeviceBindings.isNotEmpty()) {
+      DEVICE_BINDINGS_REQUEST_FIELD
+    } else {
+      DEVICE_BINDINGS_ENV_VAR
+    }
+    val bindings = if (requestDeviceBindings.isNotEmpty()) {
+      validateRequestDeviceBindings(requestDeviceBindings)
+    } else {
+      parseDeviceBindings(rawDeviceBindings)
+    }.mapValues { (_, deviceId) -> withoutPlatformPrefix(deviceId) }
+    // The lender's driver for each companion bound to a borrowed device; the start device never is.
+    val borrowedDrivers = members.keys.filter { it != startDeviceNameForValidation }
+      .mapNotNull { name -> bindings[name]?.let(borrowedDeviceDrivers::get)?.let { name to it } }
+      .toMap()
     members.forEach { (name, member) ->
       val driverPlatform = member.driver?.platform
       val classifierPlatform = member.classifier?.let { UnifiedTrailTargets.platformFor(it) }
@@ -185,6 +206,17 @@ object MultiDeviceConfigurationResolver {
             "dropped. Fix whichever one is wrong.",
         )
       }
+      borrowedDrivers[name]?.let { lenderDriver ->
+        if (member.driver != null && member.driver != lenderDriver) {
+          throw TrailblazeException(
+            "Device '$name' in configuration '$configurationName' declares driver " +
+              "'${member.driver?.name}', but it is bound to a device borrowed from another machine, " +
+              "whose lender drives it with '${lenderDriver.name}'. Remove the per-device `driver:`, " +
+              "or bind a device that runs '${member.driver?.name}'.",
+          )
+        }
+        return@forEach
+      }
       rejectUnhonorableDriver(
         name = name,
         configurationName = configurationName,
@@ -195,16 +227,6 @@ object MultiDeviceConfigurationResolver {
       )
     }
     val startDeviceName = members.keys.first()
-    val bindingsSource = if (requestDeviceBindings.isNotEmpty()) {
-      DEVICE_BINDINGS_REQUEST_FIELD
-    } else {
-      DEVICE_BINDINGS_ENV_VAR
-    }
-    val bindings = if (requestDeviceBindings.isNotEmpty()) {
-      validateRequestDeviceBindings(requestDeviceBindings)
-    } else {
-      parseDeviceBindings(rawDeviceBindings)
-    }
 
     val undeclaredNames = bindings.keys - members.keys
     if (undeclaredNames.isNotEmpty()) {
@@ -263,13 +285,14 @@ object MultiDeviceConfigurationResolver {
       memberDescriptions = members.mapValues { (_, member) -> member.description },
       // A path that resolved no session driver has always run its Android companions on the default.
       companionDriverTypes = companionDeviceIds.mapValues { (name, deviceId) ->
-        effectiveMemberDriver(
+        borrowedDrivers[name] ?: effectiveMemberDriver(
           memberPlatform = deviceId.trailblazeDevicePlatform,
           declaredDriver = members.getValue(name).driver,
           isStartDevice = false,
           sessionDriverType = sessionDriverType,
         ) ?: TrailblazeDriverType.DEFAULT_ANDROID
       },
+      borrowedCompanionNames = borrowedDrivers.keys,
     )
   }
 
@@ -487,6 +510,15 @@ object MultiDeviceConfigurationResolver {
     }
     return bindings
   }
+
+  /**
+   * `device list` prints ids as `<platform>/<instanceId>`, the form `--device` takes; a binding is
+   * the bare instance id, so the platform segment is dropped rather than kept inside the id.
+   */
+  private fun withoutPlatformPrefix(deviceId: String): String =
+    deviceId.substringAfter('/', missingDelimiterValue = "")
+      .takeIf { it.isNotBlank() && TrailblazeDevicePlatform.fromString(deviceId) != null }
+      ?: deviceId
 
   /**
    * The driver a named device is ACTUALLY driven by. A session resolves ONE driver for its whole

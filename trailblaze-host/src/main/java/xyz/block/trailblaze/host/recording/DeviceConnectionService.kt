@@ -46,6 +46,23 @@ import java.io.IOException
 class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager) {
 
   /**
+   * Runs [connectAndPublish], a viewer's or recorder's connect to [device] and the publishing of its
+   * session, as a use of the device. An Android emulator lent from here is taken from a borrower idle
+   * on it, and a borrowed one is leased; either is refused with the busy error while someone is
+   * using it. The device counts as a run until [connectAndPublish] returns, by which time the
+   * published session holds it, so no one can take it while setup is under way or in between.
+   */
+  suspend fun <T> whileConnecting(
+    device: TrailblazeConnectedDeviceSummary,
+    connectAndPublish: suspend () -> T,
+  ): Result<T> =
+    if (device.platform == TrailblazeDevicePlatform.ANDROID) {
+      deviceManager.remoteDevicePools.whileConnecting(device.trailblazeDeviceId, connectAndPublish)
+    } else {
+      Result.success(connectAndPublish())
+    }
+
+  /**
    * Connects to [device] and returns the appropriate screen stream + tool factory wrapped
    * in a [ConnectionState]. Runs device creation on the IO dispatcher.
    *
@@ -90,6 +107,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
         WebConnectStrategy.ATTACH_ELECTRON -> connectElectron(device)
         WebConnectStrategy.LAUNCH_CHROMIUM -> connectWeb(device, targetApp)
       }
+      // A caller connects through [whileConnecting], which keeps the emulator busy to borrowers.
       TrailblazeDevicePlatform.ANDROID -> connectAndroid(device, targetApp)
       TrailblazeDevicePlatform.IOS -> connectIos(device, targetApp)
       TrailblazeDevicePlatform.DESKTOP -> ConnectionState.Error(

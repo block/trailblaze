@@ -32,10 +32,11 @@ data class PlaywrightNativeTypeTool(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
-    // before execution, so `text` arrives resolved here.
+    // before execution, so `text` arrives resolved here — and is kept out of the console, which is
+    // uploaded with the session.
     val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
-    Console.log("### Typing into $description: $text")
+    Console.log("### Typing into $description")
     return try {
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)

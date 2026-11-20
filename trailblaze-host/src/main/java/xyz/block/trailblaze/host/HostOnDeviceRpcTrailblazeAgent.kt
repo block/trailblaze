@@ -23,10 +23,8 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.device.withDeviceCommandSecretsRedacted
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.sensitiveLiteralValues
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
-import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -745,19 +743,14 @@ class HostOnDeviceRpcTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult {
     if (commands.isEmpty()) return TrailblazeToolResult.Success()
-    // Forward maestro commands to the device via RPC by wrapping them in a MaestroTrailblazeTool.
-    // This can be reached when recorded tools contain raw maestro commands or when the
-    // nodeSelector tap path falls back to the maestro command path.
-    Console.log(
-      "[HostOnDeviceRpcAgent] Forwarding ${commands.size} maestro command(s) to device via RPC",
+    // Every tool that lowers to Maestro commands is sent to the device as itself and lowered
+    // there, so the host never holds raw commands for this device. A host-side tool that tries
+    // fails here, naming the commands, rather than reaching the device in some other shape.
+    return TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "Maestro commands can't be sent to the device from the host " +
+        "(${commands.joinToString { it::class.simpleName.orEmpty() }}). Run the tool on the " +
+        "device instead.",
     )
-    val maestroTool = MaestroTrailblazeTool(
-      yaml = MaestroYamlSerializer.toYaml(commands, includeConfiguration = false),
-    )
-    // Sent as-is: the commands were built by a tool that already passed a memory boundary, and
-    // any residual token resolves on the device (its dispatch loop interpolates the yaml string
-    // against the seeded memory snapshot).
-    return executeToolViaRpc(maestroTool, traceId)
   }
 
   override suspend fun executeNodeSelectorTap(
@@ -803,9 +796,8 @@ class HostOnDeviceRpcTrailblazeAgent(
       }
       return executeToolViaRpc(tool = tool, traceId = traceId)
     }
-    // Non-accessibility-shaped selectors (Maestro-shaped, etc.) — let the caller fall
-    // through to [executeMaestroCommands] via [super.execute]. Same behavior as before
-    // for the instrumentation/Maestro flows.
+    // Non-accessibility-shaped selectors (Maestro-shaped, etc.) — let the caller fall back to
+    // its Maestro commands, which [executeMaestroCommands] refuses on this host.
     return null
   }
 

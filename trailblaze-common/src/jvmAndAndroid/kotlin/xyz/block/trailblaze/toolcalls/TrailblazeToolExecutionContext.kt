@@ -185,6 +185,17 @@ class TrailblazeToolExecutionContext(
   val deviceBindings: SessionDeviceBindings? = null,
   /** Whole-execution custody, retained by nested and scripted cleanup calls. */
   val trailExecution: TrailExecution? = TrailExecution.current(),
+  /**
+   * A fresh capture that always includes a screenshot, for tools that read pixels
+   * (`readScreenImage`). Set by drivers whose [screenStateProvider] skips the screenshot to keep
+   * tool dispatch fast; null means [screenStateProvider] already includes one.
+   */
+  val screenshotStateProvider: (() -> ScreenState)? = null,
+  /**
+   * The arguments callers outside any tool passed, shared with the contexts nested calls build so a
+   * forwarded `callableOnlyFromTools` name is refused wherever it lands. See [CallerArguments].
+   */
+  val callerArguments: CallerArguments = CallerArguments(),
 ) {
   /**
    * The screen state tools act against. Reading this always yields a *current* state:
@@ -244,7 +255,7 @@ class TrailblazeToolExecutionContext(
    * A tool's log is stamped `isRecordable = false` whenever this is `> 0` (see
    * [xyz.block.trailblaze.logToolExecution]), so a composite's internals never enter a recording:
    * a one-call trailhead like `myapp_launchAppSignedIn` records as that single call, not as the
-   * `mobile_maestro` / `tapOn` / `inputText` internals it happens to run — deterministically,
+   * `launchApp` / `tapOn` / `inputText` internals it happens to run — deterministically,
    * regardless of how the parent's logged span lines up with its children's (the fragile signal the
    * generator's span-containment heuristic relied on, which drifts across drivers and the
    * shared-execution batch).
@@ -263,7 +274,7 @@ class TrailblazeToolExecutionContext(
    * follow-up.
    *
    * A depth counter, not a boolean: nesting is N-deep (e.g. `launchAppSignedIn` →
-   * `clearLaunchAndSignIn` → `mobile_maestro`), so unwinding one level must not un-mark the level
+   * `clearLaunchAndSignIn` → `launchApp`), so unwinding one level must not un-mark the level
    * still running above it.
    *
    * [AtomicInteger], not a plain `Int`: a single composite tool can issue **parallel** nested
@@ -285,6 +296,13 @@ class TrailblazeToolExecutionContext(
    * a supported one.
    */
   val nestedDispatchDepth: AtomicInteger = AtomicInteger(0)
+
+  /**
+   * Why a call a tool is making to [toolName] must be refused, or null when it may run. See
+   * [CallerArguments.forwardedToolOnlyRefusal].
+   */
+  fun forwardedToolOnlyRefusal(toolName: String, repo: TrailblazeToolRepo? = toolRepo): String? =
+    callerArguments.forwardedToolOnlyRefusal(toolName, repo)
 
   @Deprecated("Use maestroTrailblazeAgent, trailblazeLogger, or memory directly")
   val trailblazeAgent: MaestroTrailblazeAgent

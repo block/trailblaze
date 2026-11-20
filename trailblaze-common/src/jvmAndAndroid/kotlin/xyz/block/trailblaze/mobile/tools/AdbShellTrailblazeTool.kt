@@ -256,7 +256,7 @@ data class AdbShellTrailblazeTool(
         }
       } catch (e: CancellationException) {
         // Propagate cancellation so structured-concurrency teardown isn't silently swallowed.
-        // Precedent: ListInstalledAppsTrailblazeTool.execute and RunCommandTrailblazeTool.execute
+        // Precedent: ListInstalledAppsTrailblazeTool.execute and ExecTrailblazeTool.execute
         // catch the same trap explicitly.
         throw e
       } catch (e: Exception) {

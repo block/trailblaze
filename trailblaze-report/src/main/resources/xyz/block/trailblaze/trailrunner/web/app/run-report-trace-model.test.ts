@@ -83,6 +83,25 @@ describe("buildReportTraceModel", () => {
     expect(model.callMap.steps).toEqual([]);
   });
 
+  test("timeline entries know when their screenshot was taken, apart from when their tool started", () => {
+    // The driver captured row 1's frame at 1800 and acted until 1900; a dispatch's own instant is
+    // already its driver record's.
+    const batch = row(1, {
+      screenshotFile: "a.png",
+      ts: 1000,
+      shotTs: 1800,
+      shotEndTs: 1900,
+      children: [{ label: "tapOn", tool: "tapOn keypad", ms: 40, ts: 2000, screenshotFile: "b.png", shotEndTs: 2040 }],
+    });
+    const unrecorded = row(2, { screenshotFile: "c.png", ts: 3000 });
+
+    const model = buildReportTraceModel([batch, unrecorded], 0);
+
+    // Playback and the rail keep each entry's start; a recording matches the screenshot at the
+    // capture, which is before the action ran, not after.
+    expect(model.entries.map((e) => [e.ts, e.capturedTs])).toEqual([[1000, 1800], [2000, 2000], [3000, 3000]]);
+  });
+
   test("timeline entries follow each row with the dispatches it absorbed that captured a frame", () => {
     const header = row(1, { objective: true, label: "Open the transaction" });
     // A folded batch: the row's own frame, then three dispatches — one with its own frame, one

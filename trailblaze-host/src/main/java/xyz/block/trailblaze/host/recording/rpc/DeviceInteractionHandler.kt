@@ -28,6 +28,9 @@ class DeviceInteractionHandler(
       )
 
     return try {
+      sessionManager.beforeGesture(request.trailblazeDeviceId)?.let { refusal ->
+        return RpcResult.Success(DeviceInteractionResponse(success = false, errorMessage = refusal))
+      }
       when (val interaction = request.interaction) {
         is DeviceInteraction.Tap -> stream.tap(interaction.x, interaction.y)
         is DeviceInteraction.LongPress -> stream.longPress(interaction.x, interaction.y)

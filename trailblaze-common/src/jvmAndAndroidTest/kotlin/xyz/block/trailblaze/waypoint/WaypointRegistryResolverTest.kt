@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.waypoint
 
 import java.io.File
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
+import xyz.block.trailblaze.testing.ClasspathFixture
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.assertEquals
@@ -19,8 +21,11 @@ import kotlin.test.assertSame
  */
 class WaypointRegistryResolverTest {
 
+  private val classpath = ClasspathFixture()
+
   @AfterTest
   fun tearDown() {
+    classpath.cleanup()
     // Don't leak the cached resolver or a test-installed provider into other tests in this JVM.
     WaypointRegistryResolver.clearCache()
     WaypointRegistryResolver.workspaceConfigDirProvider = { null }
@@ -85,6 +90,26 @@ class WaypointRegistryResolverTest {
       )
     } finally {
       root.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `resolves a classpath-bundled app waypoint with no workspace anchor`() {
+    // Classpath-only tier: the trailmap's waypoint is found through its resource source (the
+    // classpath on the JVM, the APK's assets on device).
+    val root = classpath.newTempDir(prefix = "wp-registry-classpath-")
+    val trailmapDir = File(root, "trails/config/trailmaps/bundledapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText("id: bundledapp\ntarget:\n  display_name: Bundled App\n")
+    File(File(trailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml")
+      .writeText("id: \"bundledapp/home\"\ndescription: \"Bundled with the app.\"\n")
+    val unrelatedWorkingDir = createTempDirectory(prefix = "wp-registry-classpath-cwd-").toFile()
+    try {
+      TrailblazeTrailmapManifestLoader.clearClasspathTrailmapCacheForTesting()
+      val resolver = classpath.withClasspathRoot(root) { WaypointRegistryResolver.build(unrelatedWorkingDir) }
+      assertNotNull(resolver("bundledapp/home"))
+    } finally {
+      TrailblazeTrailmapManifestLoader.clearClasspathTrailmapCacheForTesting()
+      unrelatedWorkingDir.deleteRecursively()
     }
   }
 

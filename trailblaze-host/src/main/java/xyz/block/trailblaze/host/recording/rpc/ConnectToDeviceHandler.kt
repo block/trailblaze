@@ -83,15 +83,22 @@ class ConnectToDeviceHandler(
     )
 
     var connectErrorMessage: String? = null
-    val result = sessionManager.connectIfAbsent(deviceId, binding) {
-      when (val state = connectionService.connectToDevice(device, bound)) {
-        is ConnectionState.Connected -> state.connection.stream
-        is ConnectionState.Error -> {
-          connectErrorMessage = state.message
-          null
+    val result = connectionService.whileConnecting(device) {
+      sessionManager.connectIfAbsent(deviceId, binding) {
+        when (val state = connectionService.connectToDevice(device, bound)) {
+          is ConnectionState.Connected -> state.connection.stream
+          is ConnectionState.Error -> {
+            connectErrorMessage = state.message
+            null
+          }
+          else -> null
         }
-        else -> null
       }
+    }.getOrElse {
+      return RpcResult.Failure(
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        message = it.message ?: "${deviceId.toFullyQualifiedDeviceId()} can't be used right now",
+      )
     }
 
     return when (result) {

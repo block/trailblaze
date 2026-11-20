@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.device.PmClearOutcome
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages.MOBILE_PLATFORMS
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -66,12 +68,12 @@ data class ClearAppDataTrailblazeTool(
 
         TrailblazeDevicePlatform.WEB ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "mobile_clearAppData is not supported for web devices.",
+            errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_clearAppData", MOBILE_PLATFORMS, deviceInfo),
           )
 
         TrailblazeDevicePlatform.DESKTOP ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "mobile_clearAppData is not supported for the Compose desktop driver.",
+            errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_clearAppData", MOBILE_PLATFORMS, deviceInfo),
           )
       }
       TrailblazeToolResult.Success(

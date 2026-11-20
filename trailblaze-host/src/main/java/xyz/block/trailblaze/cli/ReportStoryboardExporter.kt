@@ -94,6 +94,7 @@ object ReportStoryboardExporter {
     maxBytesStrict: Boolean = true,
   ): File {
     val logs = logsRepo.getLogsForSession(sessionId)
+    logsRepo.saveVideoFrames(sessionId, logs)
     // Resolve sections, pick the column count, auto-fit cell width, run the memory +
     // dimension preflights, and build the HTML — all the Playwright-free layout work,
     // shared with the report server's on-demand `/storyboard` endpoint.

@@ -31,6 +31,8 @@ import {
   budgetedClipValue,
   newMediaBudget,
   readAttachments,
+  readCompanionDeviceLogs,
+  readDeviceLog,
   readEvents,
   readNetworkLog,
   readRunWarnings,
@@ -957,5 +959,76 @@ describe("root-level network capture (readEvents)", () => {
     const streams = readEvents(sessionDir, [], ctx);
     expect(streams?.map((s) => s.name)).toEqual(["network"]);
     expect(JSON.parse(streams![0].events[0].d).id).toBe("e1");
+  });
+});
+
+describe("readCompanionDeviceLogs", () => {
+  function sessionOf(files: Record<string, string>, artifacts?: unknown[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "tb-report-devlog-test-"));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+    Object.entries(files).forEach(([name, text]) => writeFileSync(join(dir, name), text));
+    if (artifacts) writeFileSync(join(dir, "capture_metadata.json"), JSON.stringify({ artifacts }));
+    return dir;
+  }
+  const logcat = (filename: string, deviceName: string) => ({ filename, type: "LOGCAT", startTimestampMs: 1, deviceName });
+
+  test("each companion's log is named by the device capture stamped on it, in capture order", () => {
+    const dir = sessionOf(
+      { "device.log": "I/Seller: ready", "device-kiosk_front.log": "I/Kiosk: ready", "device-buyer.log": "I/Buyer: ready" },
+      [logcat("device.log", "seller"), logcat("device-kiosk_front.log", "kiosk/front"), logcat("device-buyer.log", "buyer")],
+    );
+    expect(readCompanionDeviceLogs(dir)).toEqual({
+      startDevice: "seller",
+      companions: [{ device: "kiosk/front", text: "I/Kiosk: ready" }, { device: "buyer", text: "I/Buyer: ready" }],
+    });
+  });
+
+  test("a device bound twice keeps its logs in bind order, whatever order capture listed them", () => {
+    const dir = sessionOf(
+      { "device.log": "I/Seller", "device-buyer.log": "I/Buyer: first bind", "device-buyer-2.log": "I/Buyer: second bind" },
+      [logcat("device.log", "seller"), logcat("device-buyer-2.log", "buyer"), logcat("device-buyer.log", "buyer")],
+    );
+    expect(readCompanionDeviceLogs(dir).companions).toEqual([
+      { device: "buyer", text: "I/Buyer: first bind" },
+      { device: "buyer", text: "I/Buyer: second bind" },
+    ]);
+  });
+
+  test("without capture metadata a companion is named from its file", () => {
+    const dir = sessionOf({ "device.log": "I/Seller: ready", "device-buyer.log": "I/Buyer: ready" });
+    expect(readCompanionDeviceLogs(dir)).toEqual({ startDevice: null, companions: [{ device: "buyer", text: "I/Buyer: ready" }] });
+  });
+
+  test("an empty companion log is skipped, and a single-device session has no companions", () => {
+    const dir = sessionOf({ "device.log": "I/App: ready", "device-buyer.log": "" }, [logcat("device.log", "seller")]);
+    expect(readCompanionDeviceLogs(dir).companions).toEqual([]);
+    expect(readCompanionDeviceLogs(sessionOf({ "device.log": "I/App: ready" })).companions).toEqual([]);
+  });
+
+  test("a companion log is cut to its tail like the start device's", () => {
+    const lines = Array.from({ length: 5003 }, (_, i) => `I/Buyer: line ${i}`);
+    const dir = sessionOf({ "device-buyer.log": lines.join("\n") });
+    const [buyer] = readCompanionDeviceLogs(dir).companions;
+    expect(buyer.text.split("\n")).toEqual(lines.slice(-5000));
+  });
+
+  test("a companion named logcat is never read as the start device's log", () => {
+    const dir = sessionOf(
+      { "device.log": "I/Seller: ready", "device-logcat.log": "I/Logcat: ready" },
+      [logcat("device.log", "seller"), logcat("device-logcat.log", "logcat")],
+    );
+    expect(readDeviceLog(dir)).toBe("I/Seller: ready");
+    expect(readCompanionDeviceLogs(dir)).toEqual({ startDevice: "seller", companions: [{ device: "logcat", text: "I/Logcat: ready" }] });
+    const noStartLog = sessionOf({ "device-logcat.log": "I/Logcat: ready" });
+    expect(readDeviceLog(noStartLog)).toBeNull();
+    expect(readCompanionDeviceLogs(noStartLog).companions).toEqual([{ device: "logcat", text: "I/Logcat: ready" }]);
+    expect(readDeviceLog(sessionOf({ "logcat.txt": "I/Legacy: ready" }))).toBe("I/Legacy: ready");
+  });
+
+  test("a companion log that links out of the session is not read", () => {
+    const outside = sessionOf({ "secret.log": "host secret" });
+    const dir = sessionOf({ "device.log": "I/App: ready" });
+    symlinkSync(join(outside, "secret.log"), join(dir, "device-buyer.log"));
+    expect(readCompanionDeviceLogs(dir).companions).toEqual([]);
   });
 });

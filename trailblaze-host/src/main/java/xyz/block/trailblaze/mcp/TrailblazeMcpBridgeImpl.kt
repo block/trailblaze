@@ -3,8 +3,11 @@ package xyz.block.trailblaze.mcp
 import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.history.ToolCallHistory
 import xyz.block.trailblaze.history.recordExecution
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.util.BufferedImageUtils
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withTimeout
@@ -18,6 +21,8 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.host.lease.LeasedCall
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.host.mergeDeviceMemory
 import xyz.block.trailblaze.host.yamlWithSecretsMasked
 import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
@@ -66,6 +71,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.DispatchCancellation
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.CallerArguments
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.toolcalls.toLogPayload
@@ -81,6 +87,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.host.lease.RemoteDeviceCall
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
@@ -371,6 +378,12 @@ class TrailblazeMcpBridgeImpl(
 
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary {
     assertDeviceIsSelected(trailblazeDeviceId)
+
+    // A borrowed device's driver lives on its lender, which sets it up on the first call.
+    if (isBorrowed(trailblazeDeviceId)) {
+      return trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
+        ?: error("Device $trailblazeDeviceId is not available.")
+    }
 
     // For WEB devices, kick off async Playwright browser initialization so that blaze()
     // can capture screen state once it completes — without blocking this device() call.
@@ -746,6 +759,8 @@ class TrailblazeMcpBridgeImpl(
       trailblazeLlmModel: TrailblazeLlmModel,
       sessionResolution: DeviceSessionResolution,
       captureNetworkTraffic: Boolean,
+      /** What the tool runs against on the device; its sensitive keys stay redacted in the device's logs. */
+      memory: AgentMemory? = null,
     ): RunYamlRequest = RunYamlRequest(
       yaml = yaml,
       testName = "tool_${tool::class.simpleName}",
@@ -758,6 +773,10 @@ class TrailblazeMcpBridgeImpl(
       traceId = traceId,
       driverType = driverType,
       awaitCompletion = true,
+      memorySnapshot = memory?.variables?.toMap().orEmpty(),
+      sensitiveMemoryKeys = memory?.sensitiveKeys?.toList().orEmpty(),
+      argsSnapshot = memory?.let { TrailArgBinder.encodeProvided(it.args) }.orEmpty(),
+      sensitiveArgNames = memory?.sensitiveArgNames?.toList().orEmpty(),
       config = TrailblazeConfig(
         overrideSessionId = sessionResolution.sessionId,
         // Emit start only when this call created the session. This preserves host-managed
@@ -1019,6 +1038,7 @@ class TrailblazeMcpBridgeImpl(
       trailblazeDriverType = driverType,
       widthPixels = driverDimensions?.first ?: DEFAULT_DEVICE_WIDTH,
       heightPixels = driverDimensions?.second ?: DEFAULT_DEVICE_HEIGHT,
+      initialLocale = DeviceLocaleConfigurator.appliedLocale(deviceId),
     )
 
     /**
@@ -1111,6 +1131,7 @@ class TrailblazeMcpBridgeImpl(
       appId: String?,
       toolRepo: TrailblazeToolRepo,
       sessionDirProvider: ((SessionId) -> java.io.File)?,
+      callerArguments: CallerArguments = CallerArguments(),
       dispatchNested: suspend (TrailblazeTool, TraceId?) -> TrailblazeToolResult,
     ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
       screenState = null,
@@ -1136,6 +1157,7 @@ class TrailblazeMcpBridgeImpl(
       // checkout, while trail runs continue to supply their trail-file directory instead.
       workingDirectory = java.io.File(System.getProperty("user.dir")),
       sessionDirProvider = sessionDirProvider,
+      callerArguments = callerArguments,
     )
 
     /**
@@ -1830,6 +1852,11 @@ class TrailblazeMcpBridgeImpl(
         sessionIdPrefix = "yaml",
         callerRun = dispatching,
       ).also { resolution ->
+        // A borrower's call runs against the borrower's memory. This runner keeps its own, so
+        // what a tool remembers here does not go back (see [LeasedCall]).
+        val leased = LeasedCall.current()
+        leased?.registerSecrets(resolution.sessionId)
+        val (memorySeeds, sensitiveMemorySeeds) = leased?.memorySeeds() ?: (emptyMap<String, String>() to emptyMap())
         trailblazeDeviceManager.runYaml(
           yamlToRun = yaml,
           trailblazeDeviceId = deviceId,
@@ -1839,6 +1866,8 @@ class TrailblazeMcpBridgeImpl(
           existingSessionId = resolution.sessionId,
           referrer = TrailblazeReferrer.MCP,
           traceId = traceId,
+          initialMemorySeeds = memorySeeds,
+          initialMemorySensitiveSeeds = sensitiveMemorySeeds,
           onComplete = onComplete,
           // A prompt or tool driving the device by hand, even one that opens a session, runs in the
           // language the device is already in; only a declared `locale:` changes it.
@@ -1880,6 +1909,8 @@ class TrailblazeMcpBridgeImpl(
   override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? {
     val deviceId = getEffectiveDeviceId() ?: return null
     val key = deviceId.instanceId
+
+    if (isBorrowed(deviceId)) return { _ -> remoteScreenState(deviceId) }
 
     // Use persistent device connection if available (preferred - always ready)
     persistentDevices[key]?.let { device ->
@@ -1976,6 +2007,8 @@ class TrailblazeMcpBridgeImpl(
    */
   override fun isOnDeviceInstrumentation(): Boolean {
     val deviceId = getEffectiveDeviceId() ?: return false
+    // Whatever the lender runs it with, nothing here talks to the device directly.
+    if (isBorrowed(deviceId)) return false
     // Use the CONFIGURED driver type, not the device state's driver type.
     // The device state map is keyed by TrailblazeDeviceId (instanceId + platform) which
     // doesn't include driver type, so all three Android driver variants map to the same key
@@ -1989,6 +2022,8 @@ class TrailblazeMcpBridgeImpl(
   override fun getDriverConnectionStatus(deviceId: TrailblazeDeviceId?): String? {
     val id = deviceId ?: getEffectiveDeviceId() ?: return null
     val key = id.instanceId
+    // Its lender reports any trouble with it on the call that meets it.
+    if (isBorrowed(id)) return null
 
     // Session-scoped INFO uses this status to decide whether an Android association is safe to
     // reuse without full device discovery. Querying adb's host:devices service checks the exact
@@ -2060,6 +2095,42 @@ class TrailblazeMcpBridgeImpl(
     val deviceId = getEffectiveDeviceId() ?: return null
     return trailblazeDeviceManager.getDeviceState(deviceId)?.device?.trailblazeDriverType
       ?: getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
+  }
+
+  private fun isBorrowed(deviceId: TrailblazeDeviceId): Boolean =
+    trailblazeDeviceManager.remoteDevicePools.isRemote(deviceId)
+
+  private fun remoteScreenState(deviceId: TrailblazeDeviceId): ScreenState =
+    trailblazeDeviceManager.remoteDevicePools.call(
+      deviceId,
+      RemoteDeviceCall(deviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.SCREEN_STATE),
+    ).screenState?.toScreenState() ?: error("${deviceId.toFullyQualifiedDeviceId()}'s lender sent no screen state")
+
+  private fun remoteInstalledAppIds(deviceId: TrailblazeDeviceId): Set<String> =
+    trailblazeDeviceManager.remoteDevicePools.call(
+      deviceId,
+      RemoteDeviceCall(deviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.INSTALLED_APPS),
+    ).installedAppIds.orEmpty()
+
+  /** Throws on a failed tool, as every other route here does. */
+  private suspend fun executeOnLender(tool: TrailblazeTool, deviceId: TrailblazeDeviceId): TrailblazeToolResult {
+    val reply = withContext(Dispatchers.IO) {
+      trailblazeDeviceManager.remoteDevicePools.call(
+        deviceId,
+        RemoteDeviceCall(
+          device = deviceId.toFullyQualifiedDeviceId(),
+          op = RemoteDeviceCall.Op.RUN_TOOL,
+          toolYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool))),
+          // The session's target, as a borrowed trail run sends it, so the lender runs the tool
+          // under it rather than under its own default.
+          target = getSessionTargetAppIdForDevice(deviceId),
+        ),
+      )
+    }
+    val result = reply.toolResult?.toToolResult()
+      ?: error("${deviceId.toFullyQualifiedDeviceId()}'s lender sent no tool result")
+    if (result is TrailblazeToolResult.Error) error(result.errorMessage)
+    return result
   }
 
   /**
@@ -2300,6 +2371,15 @@ class TrailblazeMcpBridgeImpl(
       ToolDispatchRoute.DEVICE -> Unit
     }
 
+    // A borrowed device runs the tool on its lender, with the lender's driver.
+    if (isBorrowed(trailblazeDeviceId)) {
+      val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool) {
+        executeOnLender(tool, trailblazeDeviceId)
+      }
+      cachedScreenStates.remove(trailblazeDeviceId.instanceId)
+      return result
+    }
+
     // Use custom executor if provided, otherwise convert to YAML and run
     if (trailblazeToolExecutor != null) {
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
@@ -2336,8 +2416,10 @@ class TrailblazeMcpBridgeImpl(
     // still doesn't (see warnIosNativeSessionLoggingGapOnce below).
     if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType?.hostNativeSimulatorDriver == true) {
       // That driver's agent runs the tool without the dispatch loop that records calls. The record
-      // diffs the memory the tool runs against, so both get the same one.
-      val toolMemory = AgentMemory()
+      // diffs the memory the tool runs against, so both get the same one: a borrower's, for its call.
+      val leased = LeasedCall.current()
+      leased?.registerSecrets(historySessionId(trailblazeDeviceId))
+      val toolMemory = leased?.memory ?: AgentMemory()
       val result = ToolCallHistory.recordExecution(historySessionId(trailblazeDeviceId), tool, memory = toolMemory) {
         executeToolViaIosNativeDriver(tool, trailblazeDeviceId, toolMemory)
       }
@@ -2358,10 +2440,12 @@ class TrailblazeMcpBridgeImpl(
       // script that sent it here sees it among its calls. The session is resolved first, so the
       // call that creates it is recorded in it rather than under the per-device fallback. The
       // daemon keeps no memory between direct calls, so [deviceMemory] only collects what the
-      // device changed, for that record.
+      // device changed, for that record; a borrower's call brings the borrower's memory instead.
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       val sessionResolution = openOnDeviceSession(trailblazeDeviceId, driverType)
-      val deviceMemory = AgentMemory()
+      val leased = LeasedCall.current()
+      leased?.registerSecrets(sessionResolution.sessionId)
+      val deviceMemory = leased?.memory ?: AgentMemory()
       val result = ToolCallHistory.recordExecution(sessionResolution.sessionId, tool, memory = deviceMemory) {
         executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, driverType, sessionResolution, traceId, deviceMemory)
       }
@@ -2400,6 +2484,9 @@ class TrailblazeMcpBridgeImpl(
     )
   }
 
+  override fun initialLocale(deviceId: TrailblazeDeviceId): String? =
+    DeviceLocaleConfigurator.appliedLocale(deviceId)
+
   override suspend fun executeHostLocalTool(
     tool: TrailblazeTool,
     toolRepo: TrailblazeToolRepo,
@@ -2430,6 +2517,9 @@ class TrailblazeMcpBridgeImpl(
   ): TrailblazeToolResult.Success? {
     if (tool !is HostLocalExecutableTrailblazeTool) return null
     val deviceId = getEffectiveDeviceId() ?: return null
+    // A borrowed browser lives on its lender, so the generic host context, reading the lender's
+    // screen, runs the tool instead of this machine's Playwright agent.
+    if (isBorrowed(deviceId)) return null
     return when (getDriverType()) {
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> executeHostLocalPlaywrightTool(
@@ -2527,6 +2617,9 @@ class TrailblazeMcpBridgeImpl(
       appId = resolvedTarget?.let { installedAppIdOrNull(it) },
       toolRepo = toolRepo,
       sessionDirProvider = logsRepo?.let { repo -> repo::getSessionDir },
+      // A nested call a host-local tool makes lands here with a fresh context; it keeps the
+      // origin of the call that tool is running under, so a forwarded tool-only name stays refused.
+      callerArguments = CallerArguments.current() ?: CallerArguments(),
     ) { nested, nestedTraceId ->
       // The typed dispatch, deliberately: the string-rendering twin serializes a nested tool's
       // `structuredContent` to JSON text, which then can't be handed back as a typed value (#6653).
@@ -2559,7 +2652,13 @@ class TrailblazeMcpBridgeImpl(
    */
   private fun installedAppIdOrNull(resolved: ResolvedTarget): String? = resolveHostLocalAppId(
     declaredAppIds = resolved.target.getPossibleAppIdsForPlatform(resolved.platform),
-    probeInstalledAppIds = { MobileDeviceUtils.getInstalledAppIds(resolved.deviceId) },
+    probeInstalledAppIds = {
+      if (isBorrowed(resolved.deviceId)) {
+        remoteInstalledAppIds(resolved.deviceId)
+      } else {
+        MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
+      }
+    },
     pickInstalledAppId = { installed ->
       resolved.target.getAppIdIfInstalled(platform = resolved.platform, installedAppIds = installed)
     },
@@ -2771,6 +2870,7 @@ class TrailblazeMcpBridgeImpl(
     trailblazeDriverType = device.trailblazeDriverType,
     widthPixels = device.deviceWidth,
     heightPixels = device.deviceHeight,
+    initialLocale = DeviceLocaleConfigurator.appliedLocale(device.trailblazeDeviceId),
   )
 
   private fun iosNativeSession(): TrailblazeSession =
@@ -3053,6 +3153,7 @@ class TrailblazeMcpBridgeImpl(
         trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         sessionResolution = sessionResolution,
         captureNetworkTraffic = captureNetworkTraffic,
+        memory = deviceMemory,
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")

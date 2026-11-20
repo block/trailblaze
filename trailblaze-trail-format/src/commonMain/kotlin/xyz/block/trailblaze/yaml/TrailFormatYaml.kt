@@ -278,6 +278,14 @@ open class TrailFormatYaml(
      */
     selectedDeviceConfiguration: String? = null,
   ): List<TrailYamlItem> =
+    decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration, deviceClassifiers)
+
+  fun decodeTrail(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
+    recordingClassifiers: List<TrailblazeDeviceClassifier>,
+  ): List<TrailYamlItem> =
     when (val doc = decodeTrailDocument(yaml)) {
       is TrailDocument.Unified -> {
         if (deviceClassifiers.isEmpty()) {
@@ -300,6 +308,7 @@ open class TrailFormatYaml(
           doc.trail,
           deviceClassifiers,
           selectedDeviceConfiguration,
+          recordingClassifiers,
         )
       }
     }
@@ -332,10 +341,23 @@ open class TrailFormatYaml(
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     selectedDeviceConfiguration: String? = null,
   ): List<TrailYamlItem> =
+    decodeTrailOrToolEnvelope(
+      yaml,
+      deviceClassifiers,
+      selectedDeviceConfiguration,
+      deviceClassifiers,
+    )
+
+  fun decodeTrailOrToolEnvelope(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
+    recordingClassifiers: List<TrailblazeDeviceClassifier>,
+  ): List<TrailYamlItem> =
     if (isBareToolEnvelope(yaml)) {
       listOf(TrailYamlItem.ToolTrailItem(decodeTools(yaml)))
     } else {
-      decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration)
+      decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration, recordingClassifiers)
     }
 
   /**

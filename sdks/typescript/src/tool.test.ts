@@ -536,7 +536,7 @@ describe("tool() overload — typed authoring surface", () => {
     // likewise undefined here). Order matches the order the adapter constructs the
     // object literal in `defineTypedTool` — the test pins all five keys present
     // (an explicitly-set key is enumerable even when its value is `undefined`).
-    expect(observedCtxShape).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
+    expect(observedCtxShape).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history", "screen"]);
 
     // Nothing was queued for MCP registration — the typed form is declarative, not imperative.
     // Verify by running registerPendingTools and asserting the capturing server saw no tools.
@@ -901,7 +901,7 @@ describe("tool() overload — typed authoring surface", () => {
     const result = await definition({ x: "hello" }, undefined, { tools: {} } as never);
     expect(result).toEqual({ y: 5 });
     expect(observed.input).toEqual({ x: "hello" });
-    expect(observed.ctxKeys).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history"]);
+    expect(observed.ctxKeys).toEqual(["tools", "host", "memory", "device", "target", "session", "previousRun", "events", "surveys", "history", "screen"]);
   });
 
   test("typed tool(handler) with NO type arguments — bare function + defaults", async () => {

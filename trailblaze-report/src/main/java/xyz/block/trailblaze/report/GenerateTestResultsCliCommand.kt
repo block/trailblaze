@@ -22,6 +22,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.capture.logcat.LogcatParser
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
@@ -337,8 +338,10 @@ open class GenerateTestResultsCliCommand(
               recordingInfo = sessionRecordingInfo,
             ),
             trail_source = determineTrailSource(sessionInfo.trailConfig),
-            device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
-              ?.joinToString("-") { it.classifier },
+            locale = sessionInfo.trailConfig?.locale,
+            device_classifier = sessionInfo.trailblazeDeviceInfo?.metadata
+              ?.get(DeviceClassifierKey.EXECUTION_DEVICE_CLASS)
+              ?: sessionInfo.trailblazeDeviceInfo?.classifiers?.joinToString("-") { it.classifier },
             app_id = sessionInfo.targetAppInfo?.appId,
             app_version_name = sessionInfo.targetAppInfo?.versionName,
             app_version_code = sessionInfo.targetAppInfo?.versionCode,

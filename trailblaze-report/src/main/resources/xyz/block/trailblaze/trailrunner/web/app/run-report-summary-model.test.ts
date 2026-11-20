@@ -322,6 +322,29 @@ describe('lane identity', () => {
     expect(laneIdentity('acme.plugin.pageViews')).toEqual({ id: 'acme.plugin.pageViews', name: 'Page views' });
     expect(laneIdentity('push_notifications')).toEqual({ id: 'push_notifications', name: 'Push notifications' });
   });
+
+  test("a companion's copy of a stream is named for the stream, with its device after", () => {
+    const devices = new Set(['ipad', 'x2']);
+    expect(laneIdentity('com.acme.plugin.logging.x2', devices)).toEqual({ id: 'com.acme.plugin.logging.x2', name: 'Logging (x2)' });
+    expect(laneIdentity('com.acme.plugin.keyValueStore.x2', devices)).toEqual({ id: 'com.acme.plugin.keyValueStore.x2', name: 'Key value store (x2)' });
+    expect(laneIdentity('com.acme.plugin.logging', devices)).toEqual({ id: 'com.acme.plugin.logging', name: 'Logging' });
+    // A plugin that happens to share a device's name is still named for itself.
+    expect(laneIdentity('com.acme.plugin.x2', devices)).toEqual({ id: 'com.acme.plugin.x2', name: 'X2' });
+    // Without the session's devices, a trailing segment is the stream's own name.
+    expect(laneIdentity('com.acme.plugin.logging.x2')).toEqual({ id: 'com.acme.plugin.logging.x2', name: 'X2' });
+  });
+
+  test("a multi-device session's Summary lanes tell each device's copy of a stream apart", () => {
+    const model = build(
+      { trace: [], video: { device: 'ipad', companions: [{ device: 'x2' }] } },
+      [
+        stream('com.acme.plugin.logging', [{ t: 50, d: '{"name":"ipad line"}' }]),
+        stream('com.acme.plugin.logging.x2', [{ t: 60, d: '{"name":"x2 line"}' }]),
+        stream('com.acme.plugin.vitals.x2', [{ t: 70, d: '{"name":"x2 metric"}' }]),
+      ],
+    );
+    expect(model.lanes.map((lane) => lane.name)).toEqual(['Logging', 'Logging (x2)', 'Vitals (x2)']);
+  });
 });
 
 describe('tools and LLM lanes', () => {

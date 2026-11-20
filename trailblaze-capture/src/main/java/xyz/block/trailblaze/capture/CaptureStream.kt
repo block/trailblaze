@@ -39,6 +39,13 @@ interface CaptureStream {
   fun confirmRecording() {}
 
   /**
+   * Whether this stream is recording right now. A stream that cannot tell says true; one that can
+   * says false once its recorder failed to start or has exited, so a caller relying on the
+   * recording can fall back.
+   */
+  val isRecording: Boolean get() = true
+
+  /**
    * Called once the device has rebooted mid-session and the host has reconnected to it. A stream
    * that was fed over the device's transport ended with the old boot; one that can resume picks up
    * where it stopped so the session's recording covers what the rebooted device does next.

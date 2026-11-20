@@ -58,8 +58,6 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
     // Propagate the runtime driver type so session logs reflect the actual driver
     runYamlRequest.driverType?.let { trailblazeLoggingRule.driverTypeOverride = it }
-    trailblazeLoggingRule.deviceClassifiersOverride =
-      runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier)
     val androidTrailblazeRule = AndroidTrailblazeRule(
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
@@ -154,11 +152,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     val onDeviceRpcServer = OnDeviceRpcServer(
       loggingRule = trailblazeLoggingRule,
       runTrailblazeYaml = createRunTrailblazeYamlCallback(),
-      trailblazeDeviceInfoProvider = { deviceId ->
-        // Set the lateinit property early so the logging rule's provider can access it
-        this.trailblazeDeviceId = deviceId
-        trailblazeLoggingRule.trailblazeDeviceInfoProvider()
-      },
+      prepareRunYamlRequest = ::prepareRunYamlRequest,
+      trailblazeDeviceInfoProvider = { _ -> preparedRpcDeviceInfo() },
       // This runner IS the accessibility harness, so it wires the accessibility driver's
       // implementations into the server's driver seams.
       screenStateCaptor = AccessibilityScreenStateCaptor,

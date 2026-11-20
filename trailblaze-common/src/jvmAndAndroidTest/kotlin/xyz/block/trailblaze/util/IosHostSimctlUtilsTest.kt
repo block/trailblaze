@@ -493,6 +493,32 @@ class IosHostSimctlUtilsTest {
   }
 
   @Test
+  fun `clearing a container keeps the record that the app owns it`() {
+    val container = Files.createTempDirectory("data-container-owned")
+    val metadata = container.resolve(IosHostSimctlUtils.CONTAINER_METADATA_FILE)
+    metadata.toFile().writeText("owner record")
+    Files.createDirectories(container.resolve("Library/Caches"))
+    container.resolve("Library/Caches/eventing_proxy_store").toFile().writeText("stale")
+
+    assertEquals(emptyList(), IosHostSimctlUtils.resetAppDataContainer(container))
+
+    assertEquals("owner record", metadata.toFile().readText())
+    assertEquals(emptyList(), Files.list(container.resolve("Library/Caches")).use { it.toList() })
+  }
+
+  @Test
+  fun `only a third-party app missing its owner record is repaired by reinstall`() {
+    val orphaned = Files.createTempDirectory("data-container-orphaned")
+    val owned = Files.createTempDirectory("data-container-owned")
+    owned.resolve(IosHostSimctlUtils.CONTAINER_METADATA_FILE).toFile().writeText("owner record")
+
+    assertTrue(IosHostSimctlUtils.needsContainerRepair("com.example.app", orphaned))
+    assertFalse(IosHostSimctlUtils.needsContainerRepair("com.example.app", owned))
+    // The OS refuses to uninstall a system app, so it never takes the reinstall path.
+    assertFalse(IosHostSimctlUtils.needsContainerRepair("com.apple.Preferences", orphaned))
+  }
+
+  @Test
   fun `a reset container has the stock empty layout and no stale data`() {
     val container = Files.createTempDirectory("data-container-reset")
     Files.createDirectories(container.resolve("tmp"))

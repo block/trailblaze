@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -34,7 +35,7 @@ class TrailblazeMcpBridgeOnDeviceDispatchTest {
     trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
   )
 
-  private fun buildRequest(isNewSession: Boolean = true) =
+  private fun buildRequest(isNewSession: Boolean = true, memory: AgentMemory? = null) =
     TrailblazeMcpBridgeImpl.buildOnDeviceToolRunYamlRequest(
       tool = TapOnPointTrailblazeTool(x = 10, y = 20),
       yaml = "- tapOnPoint:\n    x: 10\n    y: 20\n",
@@ -48,6 +49,7 @@ class TrailblazeMcpBridgeOnDeviceDispatchTest {
         isNewSession = isNewSession,
       ),
       captureNetworkTraffic = false,
+      memory = memory,
     )
 
   /**
@@ -61,6 +63,24 @@ class TrailblazeMcpBridgeOnDeviceDispatchTest {
       "Direct-MCP dispatchers use blocking=false; without awaitCompletion the response carries " +
         "no terminal state and a UiAutomation wedge can never be armed",
     )
+  }
+
+  /**
+   * A borrower's tool runs on the lender against the borrower's memory, so the device gets that
+   * memory, its secrets still marked: unmarked, the device would log them in cleartext.
+   */
+  @Test
+  fun `a dispatch carries the memory it runs against, secrets marked`() {
+    val memory = AgentMemory().apply {
+      remember("user", "sam")
+      rememberSensitive("pin", "4921")
+    }
+
+    val request = buildRequest(memory = memory)
+
+    assertEquals(mapOf("user" to "sam", "pin" to "4921"), request.memorySnapshot)
+    assertEquals(listOf("pin"), request.sensitiveMemoryKeys)
+    assertTrue(buildRequest().memorySnapshot.isEmpty(), "a daemon's own direct call has no memory to send")
   }
 
   /**

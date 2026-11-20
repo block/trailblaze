@@ -8,21 +8,24 @@
 // and `./run.js` carries the `@modelcontextprotocol/sdk` stdio server. The result is the heavy
 // (~1 MB) bundle — built ONLY for subprocess tools that actually need the MCP server.
 
+import { deviceClassifier } from "./device-classifier.js";
 import { run } from "./run.js";
 import { tool, trailhead } from "./tool.js";
 
 /**
  * Namespace bundle authors import as `trailblaze` on the subprocess path. `tool` is the full
  * dispatcher (typed + imperative forms, ajv-validated); `trailhead` is a typed tool that is also a
- * trailhead; `run` starts the MCP stdio server.
+ * trailhead; `deviceClassifier` declares a target's device classifier; `run` starts the MCP stdio
+ * server.
  */
 export const trailblaze = {
   tool,
   trailhead,
+  deviceClassifier,
   run,
 };
 
-export { run, tool, trailhead };
+export { deviceClassifier, run, tool, trailhead };
 
 // Re-export the runtime-relevant authoring + spec types so subprocess tool authors get the full
 // type surface from this entry directly.

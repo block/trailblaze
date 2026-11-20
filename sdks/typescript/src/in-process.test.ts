@@ -10,4 +10,8 @@ describe("in-process entry", () => {
     expect(inProcess.TRAILBLAZE_HOST_OS).toEqual(full.TRAILBLAZE_HOST_OS);
     expect(inProcess.TRAILBLAZE_HOST_ARCH).toEqual(full.TRAILBLAZE_HOST_ARCH);
   });
+
+  test("carries simctlOrThrow, which iOS tools import", () => {
+    expect(inProcess.simctlOrThrow).toBe(full.simctlOrThrow);
+  });
 });

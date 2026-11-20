@@ -56,9 +56,7 @@ object OrchestraRunner {
     commands.forEach { maestroCommand ->
       val rawCommandJson = maestroCommand.asJsonObject()
       val maestroCommandJsonObj = rawCommandJson.withMaestroLaunchArgumentsRedacted()
-        .withKnownMaestroLaunchValuesRedacted(
-          batchLaunchSecrets, preserveReferences = false,
-        )
+        .withKnownMaestroLaunchValuesRedacted(batchLaunchSecrets)
       val startTime = Clock.System.now()
       var result: TrailblazeToolResult = TrailblazeToolResult.Success()
 

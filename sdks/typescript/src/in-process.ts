@@ -43,6 +43,8 @@ export { z } from "zod";
 // Dependency-free (its own module precisely so this entry can carry it) — the structured-error
 // authoring surface works identically for in-process and subprocess tools.
 export { ToolError } from "./tool-error.js";
+export { simctlOrThrow } from "./ios-simctl.js";
+export type { IosSimctlTools } from "./ios-simctl.js";
 export {
   fromMeta,
   TRAILBLAZE_HOST_ARCH,
@@ -58,8 +60,45 @@ export {
   type TrailblazeTarget,
 } from "./context.js";
 export type { TrailblazeCleanupCalls, TrailblazeToolCall, TrailblazeToolSession } from "./session-undo.js";
+export {
+  memoryKeys,
+  type TrailblazeMemoryKey,
+  type TrailblazeMemoryKeyArg,
+  type TrailblazeMemoryKeysByTrailmap,
+} from "./memory-keys.js";
 export type { HistorySection, ToolCall, ToolHistory } from "./history.js";
 export { formatToolCalls } from "./history.js";
+export type {
+  PixelBox,
+  PixelPredicate,
+  Rgba,
+  ScreenImage,
+  ScreenImageOptions,
+  TrailblazeScreen,
+} from "./screen-image.js";
+export {
+  colorCounts,
+  deltaE2000,
+  parseHex,
+  percent,
+  rgbHex,
+  rgbToLab,
+  topColorShares,
+  type ColorShare,
+  type Lab,
+  type Rgb,
+} from "./color.js";
+export {
+  cantCheckVerdict,
+  checkRegion,
+  RegionDefaults,
+  RegionFailureCode,
+  RegionOutcome,
+  type RegionCheckInput,
+  type RegionCheckOptions,
+  type RegionRule,
+  type RuleVerdict,
+} from "./region-check.js";
 export type {
   EventMatch,
   EventMatchValue,
@@ -84,6 +123,7 @@ export type {
   TrailblazeSurveyMap,
   TrailblazeSurveys,
 } from "./session-surveys.js";
+export type { DeviceClassifier, DeviceClassifierInput } from "./device-classifier.js";
 export {
   captureViewHierarchy,
   ConditionalActionFailedError,
@@ -106,6 +146,9 @@ export {
 // Side-effect import: pure `TrailblazeToolMap` declaration merging (compiles to no runtime values),
 // so in-process tool authors get the same framework-tool autocomplete the full entry provides.
 import "./built-in-tools.js";
+import { deviceClassifier } from "./device-classifier.js";
+// Named too, as index.ts and sub-process.ts export it, so `import { deviceClassifier }` resolves in-process.
+export { deviceClassifier };
 
 /**
  * Typed-only `trailblaze.tool()` for the in-process profile. Matches the full profile's typed
@@ -204,12 +247,13 @@ export async function run(): Promise<void> {
 
 /**
  * Namespace bundle authors import as `trailblaze` on the in-process path. Same shape as the full
- * profile (`{ tool, trailhead, run }`) so author code is profile-agnostic; the slim members just throw for
+ * profile (`{ tool, trailhead, deviceClassifier, run }`) so author code is profile-agnostic; the slim members just throw for
  * the subprocess-only forms.
  */
 export const trailblaze = {
   tool,
   trailhead,
+  deviceClassifier,
   run,
 };
 

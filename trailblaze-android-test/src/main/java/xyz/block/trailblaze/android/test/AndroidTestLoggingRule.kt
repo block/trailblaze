@@ -24,6 +24,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.tracing.TraceLevel
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 /**
  * Session logging for the in-process ANDROID_TEST driver.
@@ -37,24 +38,13 @@ import xyz.block.trailblaze.util.Console
  * out of an app's instrumentation harness. The two agree on the directory name because the CI
  * pull path is the contract between them.
  */
-class AndroidTestLoggingRule(
-  override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = { defaultDeviceInfo() },
-  /**
-   * The level to record this test at, or null for "not requested".
-   *
-   * Defaults to the instrumentation argument, which is how a CI lane or a Gradle invocation asks.
-   * A harness that already knows what it wants can pass it directly instead of round-tripping
-   * through an argument — and that is also what lets the apply-and-restore behavior be tested
-   * without starting an instrumentation.
-   */
-  private val requestedTraceLevel: TraceLevel? = requestedTraceLevelFromArgs(),
-  /**
-   * Writes nothing and opens no reportable session. For tests of this rule's own lifecycle, which
-   * would otherwise each leave a session in the pulled logs directory that no trail named.
-   */
-  noLogging: Boolean = false,
+class AndroidTestLoggingRule internal constructor(
+  trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
+  private val requestedTraceLevel: TraceLevel?,
+  noLogging: Boolean,
+  logsBaseUrl: String,
 ) : TrailblazeLoggingRule(
-  logsBaseUrl = AndroidTestInstrumentation.logsEndpoint(),
+  logsBaseUrl = logsBaseUrl,
   writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
     writeToLogsDir(
       fileName = OnDeviceLogFileName.forLog(sessionId, log.timestamp.toEpochMilliseconds()),
@@ -78,6 +68,71 @@ class AndroidTestLoggingRule(
   },
   noLogging = noLogging,
 ) {
+  constructor(
+    trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = { defaultDeviceInfo() },
+    requestedTraceLevel: TraceLevel? = requestedTraceLevelFromArgs(),
+    noLogging: Boolean = false,
+  ) : this(trailblazeDeviceInfoProvider, requestedTraceLevel, noLogging, AndroidTestInstrumentation.logsEndpoint())
+
+  private val originalDeviceInfoProvider = trailblazeDeviceInfoProvider
+  internal var deviceClassifiersOverride: List<TrailblazeDeviceClassifier> = emptyList()
+  internal var recordingClassifiers: List<TrailblazeDeviceClassifier>? = null
+
+  internal fun selectionDeviceInfo(): TrailblazeDeviceInfo {
+    val info = originalDeviceInfoProvider()
+    val selection = DeviceClassifierKey.refine(info.classifiers, deviceClassifiersOverride)
+    return info.copy(classifiers = selection, metadata = info.metadata +
+      (DeviceClassifierKey.EXECUTION_DEVICE_CLASS to selection.joinToString("-") { it.classifier }))
+  }
+
+  override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
+    val info = selectionDeviceInfo()
+    info.copy(classifiers = recordingClassifiers ?: info.classifiers)
+  }
+
+  private var runtimeSession: Pair<SessionId, TrailblazeDeviceId>? = null
+
+  internal fun prepareRpcRequest(
+    request: xyz.block.trailblaze.llm.RunYamlRequest,
+    beforeInstall: () -> Unit = {},
+  ) {
+    // Without an override the handler creates a fresh session for this request.
+    val identity = request.config.overrideSessionId?.let {
+      SessionId.sanitized(it.value) to request.trailblazeDeviceId
+    }
+    prepareRpcIdentity(request, identity != null && runtimeSession == identity, beforeInstall)
+    runtimeSession = identity
+  }
+
+  internal fun rememberRpcSession(sessionId: SessionId, deviceId: TrailblazeDeviceId) {
+    runtimeSession = sessionId to deviceId
+  }
+
+  internal fun prepareRpcIdentity(
+    request: xyz.block.trailblaze.llm.RunYamlRequest,
+    sameSession: Boolean,
+    beforeInstall: () -> Unit = {},
+  ) {
+    val codec = xyz.block.trailblaze.yaml.createTrailblazeYaml()
+    val bare = codec.isBareToolEnvelope(request.yaml)
+    val nextSelectionOverride = when {
+      !bare -> request.deviceClassifierOverride.map(::TrailblazeDeviceClassifier)
+      !sameSession -> emptyList()
+      else -> deviceClassifiersOverride
+    }
+    val selection = DeviceClassifierKey.refine(originalDeviceInfoProvider().classifiers, nextSelectionOverride)
+    // Validate a full declaration before installing any part of the replacement identity.
+    codec.recordingClassifiersFor(request.yaml, selection, tolerateMalformedYaml = true)
+    val nextRecording = when {
+      !bare -> null
+      request.deviceClassifierOverride.isNotEmpty() -> request.deviceClassifierOverride.map(::TrailblazeDeviceClassifier)
+      sameSession -> recordingClassifiers
+      else -> null
+    }
+    beforeInstall()
+    deviceClassifiersOverride = nextSelectionOverride
+    recordingClassifiers = nextRecording
+  }
 
   /** This rule runs inside the app's instrumentation, so every timestamp is the device's clock. */
   protected override val useDeviceClock: Boolean = true

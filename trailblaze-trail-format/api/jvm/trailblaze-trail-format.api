@@ -742,10 +742,14 @@ public class xyz/block/trailblaze/yaml/TrailFormatYaml {
 	public fun <init> (Ljava/util/Map;Z)V
 	public final fun decodeTools (Ljava/lang/String;)Ljava/util/List;
 	public final fun decodeTrail (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Ljava/util/List;
+	public final fun decodeTrail (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun decodeTrail$default (Lxyz/block/trailblaze/yaml/TrailFormatYaml;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Ljava/util/List;
+	public static synthetic fun decodeTrail$default (Lxyz/block/trailblaze/yaml/TrailFormatYaml;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Ljava/util/List;
 	public final fun decodeTrailDocument (Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/TrailDocument;
 	public final fun decodeTrailOrToolEnvelope (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Ljava/util/List;
+	public final fun decodeTrailOrToolEnvelope (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun decodeTrailOrToolEnvelope$default (Lxyz/block/trailblaze/yaml/TrailFormatYaml;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Ljava/util/List;
+	public static synthetic fun decodeTrailOrToolEnvelope$default (Lxyz/block/trailblaze/yaml/TrailFormatYaml;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Ljava/util/List;
 	public final fun decodeUnifiedTrail (Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;
 	public final fun decodeUnifiedTrailConfig (Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
 	public final fun encodeToolToYaml (Ljava/lang/String;Lxyz/block/trailblaze/toolcalls/TrailblazeTool;)Ljava/lang/String;
@@ -1421,7 +1425,9 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter {
 	public final fun lowerConfig (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/yaml/TrailConfig;
 	public static synthetic fun lowerConfig$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter;Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/TrailConfig;
 	public final fun lowerToTrailItems (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;)Ljava/util/List;
+	public final fun lowerToTrailItems (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;Ljava/util/List;)Ljava/util/List;
 	public static synthetic fun lowerToTrailItems$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter;Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Ljava/util/List;
+	public static synthetic fun lowerToTrailItems$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter;Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Ljava/util/List;
 	public final fun mergeRecordedClassifier (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;
 	public final fun mergeRecordedClassifier (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lkotlin/ranges/IntRange;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;
 	public final fun mergeRecordedClassifier (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lkotlin/ranges/IntRange;Lkotlin/jvm/functions/Function1;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;

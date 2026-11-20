@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -17,4 +18,10 @@ interface HostLocalToolDispatchingBridge {
     toolRepo: TrailblazeToolRepo,
     traceId: TraceId? = null,
   ): String?
+
+  /**
+   * The language this host set [deviceId] to when its trail started (`TrailblazeDeviceInfo.initialLocale`),
+   * so device info built outside the bridge carries it too. Null when the host didn't set it.
+   */
+  fun initialLocale(deviceId: TrailblazeDeviceId): String? = null
 }

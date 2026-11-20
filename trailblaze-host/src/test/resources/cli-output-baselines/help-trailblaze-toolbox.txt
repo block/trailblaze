@@ -5,7 +5,7 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze toolbox [-hvV] [--detail] [-d=<device>] [-n=<name>]
+Usage: trailblaze toolbox [-ahvV] [--detail] [-d=<device>] [-n=<name>]
                           [-s=<search>] [-t=<target>] [ROLE]
 Browse available tools by target app and platform
       [ROLE]              Optional role filter — show only tools tagged with
@@ -16,6 +16,13 @@ Browse available tools by target app and platform
                             Use one at the start of every trail.
                           Omit to show everything; trailheads will be called
                             out as a headline section above the toolset listing.
+  -a, --all               Also list tools the in-session LLM is not offered:
+                            ones that hide themselves (surfaceToLlm: false) and
+                            ones the target drops (excluded_tools:). Each is
+                            marked. Call one with trailblaze tool, a trail
+                            step, or a TS tool (ctx.tools.<name>), except a
+                            target's own scripted tool that it also drops,
+                            which is never started.
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
                             Defaults to `$TRAILBLAZE_DEVICE` if set (manual
                             override; rare), otherwise this terminal's pin (set

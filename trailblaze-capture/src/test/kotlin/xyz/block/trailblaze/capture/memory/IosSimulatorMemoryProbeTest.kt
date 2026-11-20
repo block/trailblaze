@@ -4,6 +4,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import xyz.block.trailblaze.util.SimctlCommand
+
+/** The probe's first argv element for a simctl command: simctl's own path, or `xcrun` without Xcode. */
+private val SIMCTL = SimctlCommand.argv().first()
 
 class IosSimulatorMemoryProbeTest {
 
@@ -38,7 +42,7 @@ class IosSimulatorMemoryProbeTest {
     fun run(command: List<String>): String? {
       commands += command
       return when (command.first()) {
-        "xcrun" -> launchctlOverride ?: launchctl
+        SIMCTL -> launchctlOverride ?: launchctl
         "footprint" -> if (command[2].toInt() in livePids) footprint else null
         else -> error("unexpected: $command")
       }
@@ -81,7 +85,7 @@ class IosSimulatorMemoryProbeTest {
     assertNull(snapshot.device, "the Mac's RAM is not the simulated device's")
     assertNull(snapshot.gcForced, "nothing to force under ARC")
     assertEquals(MemoryProbe.SOURCE_SIMULATOR, snapshot.source)
-    assertEquals(listOf("xcrun", "simctl", "spawn", "UDID-1", "launchctl", "list"), commands[0])
+    assertEquals(SimctlCommand.argv("spawn", "UDID-1", "launchctl", "list"), commands[0])
     assertEquals(listOf("footprint", "-p", "5950"), commands[1])
     assertEquals(2, commands.size, "one launchctl listing and one footprint — nothing else")
   }
@@ -101,7 +105,7 @@ class IosSimulatorMemoryProbeTest {
     sim.commands.clear()
     val restarted = assertNotNull(probe.read("UDID-1", bundleId, forceGc = false))
     assertEquals(6001, restarted.pid)
-    assertEquals(listOf("footprint", "xcrun", "footprint"), sim.commands.map { it.first() }, "dead pid → launchctl → new pid")
+    assertEquals(listOf("footprint", SIMCTL, "footprint"), sim.commands.map { it.first() }, "dead pid → launchctl → new pid")
     sim.commands.clear()
     assertEquals(6001, probe.read("UDID-1", bundleId, forceGc = false)?.pid)
     assertEquals(listOf(listOf("footprint", "-p", "6001")), sim.commands, "the new pid is remembered in turn")
@@ -119,7 +123,7 @@ class IosSimulatorMemoryProbeTest {
     assertNull(gone.iosApp)
     sim.commands.clear()
     probe.read("UDID-1", bundleId, forceGc = false)
-    assertEquals(listOf("xcrun"), sim.commands.map { it.first() }, "nothing remembered: only the listing runs while the app is down")
+    assertEquals(listOf(SIMCTL), sim.commands.map { it.first() }, "nothing remembered: only the listing runs while the app is down")
   }
 
   @Test
@@ -150,7 +154,7 @@ class IosSimulatorMemoryProbeTest {
     val asked = mutableListOf<List<String>>()
     val probe = IosSimulatorMemoryProbe { command -> asked += command; null }
     assertNull(probe.read("UDID-1", bundleId, forceGc = false))
-    assertEquals(listOf(listOf("xcrun", "simctl", "spawn", "UDID-1", "launchctl", "list")), asked)
+    assertEquals(listOf(SimctlCommand.argv("spawn", "UDID-1", "launchctl", "list")), asked)
   }
 
   @Test

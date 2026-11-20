@@ -93,6 +93,7 @@ dependencies {
 
   // Unit-test deps for the accessibility-side tests folded in from `:trailblaze-accessibility`
   // (`useJUnitPlatform` is already enabled above for this module).
+  testImplementation(project(":trailblaze-android-ondevice-mcp"))
   testImplementation(libs.kotlin.test)
   testImplementation(libs.junit5.jupiter.engine)
   // OrchestraReflectiveContractTest drives ElementMatcherUsingMaestro, which reaches the vendored

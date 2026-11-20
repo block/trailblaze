@@ -17,6 +17,7 @@ import kotlin.test.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
+import xyz.block.trailblaze.host.lease.RemoteDevicePools
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
@@ -36,7 +37,7 @@ class RunCleanupReleaseTest {
 
   private val device = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
 
-  private fun manager(): TrailblazeDeviceManager {
+  private fun manager(devicePools: RemoteDevicePools = RemoteDevicePools(poolUrls = { emptyList() })): TrailblazeDeviceManager {
     val logsRepo = LogsRepo(logsDir = File(tempDir, "logs").also { it.mkdirs() }, watchFileSystem = false)
     return TrailblazeDeviceManager(
       logsRepo = logsRepo,
@@ -56,6 +57,7 @@ class RunCleanupReleaseTest {
       onDeviceInstrumentationArgsProvider = { emptyMap() },
       trailblazeAnalytics = TrailblazeAnalytics.NoOp,
       hostDriverDescriptors = HostDriverDescriptorRegistry.EMPTY,
+      remoteDevicePools = devicePools,
     )
   }
 
@@ -166,6 +168,32 @@ class RunCleanupReleaseTest {
     assertTrue("still being released" in refused.message.orEmpty(), refused.message)
     finish.countDown()
     release.join()
+  }
+
+  @Test
+  fun `a run cancelled while waiting for its device's release leaves the device not in use`() {
+    val pools = RemoteDevicePools(poolUrls = { emptyList() })
+    val manager = manager(pools)
+    val releasing = CountDownLatch(1)
+    val finish = CountDownLatch(1)
+    val first = manager.beginRun(device)
+    val release = thread {
+      manager.ifDeviceStillOnSession(device, ownSession = null) {
+        releasing.countDown()
+        finish.await(30, TimeUnit.SECONDS)
+      }
+    }
+    assertTrue(releasing.await(10, TimeUnit.SECONDS))
+    val waiting = thread { runCatching { manager.beginRun(device) } }
+    Thread.sleep(200)
+    waiting.interrupt()
+    waiting.join(10_000)
+    finish.countDown()
+    release.join()
+
+    manager.endRun(first)
+
+    assertFalse(pools.isLocallyInUse(device.instanceId), "the cancelled run still counts as using the device")
   }
 
   @Test

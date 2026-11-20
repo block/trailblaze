@@ -1226,7 +1226,7 @@ class McpProxy(
             // entry (e.g. a future headless-iOS sim placeholder) means one
             // edit, not two.
             val realDevices =
-              with(CliMcpClient) { parseDeviceList(result.content).filterRealDevices() }
+              with(CliMcpClient) { parseDeviceList(result.content).filterRealDevices().preferOwnDevices() }
             resolveAutodetectFromDeviceList(realDevices, log)
           }
         }
@@ -2001,6 +2001,13 @@ internal fun daemonSpawnCommand(): List<String>? {
     currentJvmArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().inputArguments,
   )
 }
+
+/**
+ * Argv that runs `trailblaze <args>` through the launcher in its own session, so it outlives the
+ * process that starts it; null when there is no launcher to run (Windows, IDE runs).
+ */
+fun detachedLauncherArgv(args: List<String>): List<String>? =
+  findTrailblazeLauncher()?.let { inOwnSession(listOf(it.absolutePath) + args) }
 
 /**
  * [argv] run as the leader of a new session, so a signal the terminal sends the CLI's process group

@@ -59,6 +59,7 @@ import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 /**
  * Replays a trail file in-process, through the ANDROID_TEST driver, and logs the session so the
@@ -203,6 +204,12 @@ class AndroidTestTrailblazeRule(
       // On this driver the app under test is by definition the instrumented target package — no
       // installed-packages probe needed, unlike the on-device rule.
       appId = InstrumentationRegistry.getInstrumentation().targetContext.packageName,
+      // Tool dispatch captures without a screenshot (see [screenStateProvider]); pixel reads get
+      // one, and like every capture a tool polls on, first let the app's timers catch up.
+      screenshotStateProvider = {
+        localeAwareTarget.advanceAppClock()
+        snapshotProvider()
+      },
       metricsSink = metricsSink,
       logToolCalls = logToolCalls,
     )
@@ -220,7 +227,7 @@ class AndroidTestTrailblazeRule(
 
   /**
    * Screenshot-free by design: this feeds tool dispatch, which resolves selectors against the
-   * hierarchy and never reads pixels. Report frames come from [snapshotProvider].
+   * hierarchy. Report frames and tools that read pixels get [snapshotProvider] instead.
    */
   private val screenStateProvider: () -> ScreenState = {
     // Each capture a tool polls on lets the app's timers catch up first; see advanceAppClock.
@@ -302,7 +309,7 @@ class AndroidTestTrailblazeRule(
         testMethod.calculateTrailblazeYamlAssetPathWithNestedStructure(),
       )
     }
-    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = loggingRule.selectionDeviceInfo().classifiers
     val explicitAssetPath = preflightTrailAssetPathProvider()
     val resolvedAssetPath = if (explicitAssetPath != null) {
       TrailRecordings.findBestTrailResourcePath(
@@ -325,7 +332,7 @@ class AndroidTestTrailblazeRule(
     }
     resolvedAssetPath?.let { assetPath ->
       val yaml = AndroidTestInstrumentation.readAssetAsString(assetPath)
-      val trailItems = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = classifiers)
+      val trailItems = decodeTrailForRun(yaml)
       if (trailblazeYaml.firstSkipReason(trailItems) == null) {
         val config = trailblazeYaml.extractTrailConfig(trailItems)
         validateExecutableTrail(trailItems, config, assetPath)
@@ -349,7 +356,7 @@ class AndroidTestTrailblazeRule(
   ) {
     val resolvedPath = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
-      deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
+      deviceClassifiers = loggingRule.selectionDeviceInfo().classifiers,
       doesResourceExist = AndroidTestInstrumentation::assetExists,
     ) ?: throw TrailblazeException("Trail asset not found: $yamlAssetPath")
     Console.log("[Trailblaze] Running trail from asset: $resolvedPath")
@@ -365,15 +372,24 @@ class AndroidTestTrailblazeRule(
    * trail whose device entry requires `android-host-execution` — this runs on the device with no host behind
    * it; host-driven runs arrive through [runRpcEnvelope] instead.
    */
+  internal fun decodeTrailForRun(yaml: String): List<TrailYamlItem> {
+    val selection = loggingRule.selectionDeviceInfo().classifiers
+    loggingRule.recordingClassifiers = trailblazeYaml.recordingClassifiersFor(
+      yaml, selection, current = loggingRule.recordingClassifiers,
+    )
+    return trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = selection,
+      recordingClassifiers = loggingRule.recordingClassifiers ?: selection)
+  }
+
   fun run(
     trailYaml: String,
     trailFilePath: String? = null,
     trailSourceUrl: String? = null,
   ) {
-    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = loggingRule.selectionDeviceInfo().classifiers
     trailblazeYaml.hostExecutionRefusal(trailYaml, classifiers, trailFilePath)
       ?.let { throw TrailblazeException(it) }
-    val trailItems = trailblazeYaml.decodeTrail(trailYaml, deviceClassifiers = classifiers)
+    val trailItems = decodeTrailForRun(trailYaml)
     runDecoded(
       trailItems = trailItems,
       trailYaml = trailYaml,
@@ -412,9 +428,9 @@ class AndroidTestTrailblazeRule(
     trailSourceUrl: String? = null,
     keepDeviceLanguage: Boolean = false,
   ): TrailblazeToolResult.Success? {
-    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val classifiers = loggingRule.selectionDeviceInfo().classifiers
     val trailItems =
-      trailblazeYaml.decodeTrailOrToolEnvelope(trailYaml, deviceClassifiers = classifiers)
+      decodeTrailForRun(trailYaml)
     return runDecoded(
       trailItems = trailItems,
       trailYaml = trailYaml,
@@ -460,6 +476,18 @@ class AndroidTestTrailblazeRule(
    */
   fun <T : Any> tryCaptureWithStableDeviceConfiguration(capture: () -> T): T? =
     activityLocaleGate.tryWithStableConfiguration(capture)
+
+  internal suspend fun claimOrLaunchScriptedTools(
+    sessionId: SessionId,
+    launch: suspend (xyz.block.trailblaze.devices.TrailblazeDeviceInfo) -> LaunchedQuickJsToolRuntime?,
+  ): Boolean {
+    val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+    return ScriptedToolBundleReuse.claimOrLaunch(
+      sessionId = sessionId,
+      repo = trailblazeToolRepo,
+      classifiers = deviceInfo.classifiers,
+    ) { launch(deviceInfo) }
+  }
 
   private fun runDecoded(
     trailItems: List<TrailYamlItem>,
@@ -549,10 +577,7 @@ class AndroidTestTrailblazeRule(
       // entry takes whole trail documents, so a document's declared defaults have to land here or
       // they never land at all. Absent-keys-only is what keeps the host authoritative: a value the
       // host seeded, or a key a tool explicitly deleted this run, is never overwritten or revived.
-      trailConfig?.memory?.forEach { (key, value) ->
-        val memory = agent.memory
-        if (!memory.has(key) && key !in memory.deletedKeys) memory.remember(key, value)
-      }
+      agent.memory.seedDefaults(trailConfig?.memory)
 
       // Launch the session's scripted-tool bundles (the QuickJS-compiled `tools/*.ts` this APK
       // packaged as assets) before the first step, so a recorded step naming one — a trail whose
@@ -567,12 +592,12 @@ class AndroidTestTrailblazeRule(
       // cost ~140 ms a step (resolving the bundle plan, then loading the engines) for steps that
       // mostly call no scripted tool. The session's launch is kept for its later requests instead,
       // unless the session may load bundles the host pushed, which can change between requests.
-      val launch: suspend () -> LaunchedQuickJsToolRuntime? = {
+      val launch: suspend (xyz.block.trailblaze.devices.TrailblazeDeviceInfo) -> LaunchedQuickJsToolRuntime? = { deviceInfo ->
         OnDeviceScriptedToolBundleLauncher.launchAll(
           toolRepo = trailblazeToolRepo,
           target = hostAppTarget,
           sessionId = session.sessionId,
-          deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+          deviceInfo = deviceInfo,
           // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher installs,
           // so a scripted tool's HTTP works identically here, on-device, and host-dispatched.
           engineExtension = OkHttpFetchExtension(),
@@ -581,15 +606,10 @@ class AndroidTestTrailblazeRule(
       if (externalMemory != null && !OnDeviceScriptedToolBundleLauncher.readsPushedBundles(hostAppTarget)) {
         reusedSessionId = session.sessionId
         runBlocking {
-          ScriptedToolBundleReuse.claimOrLaunch(
-            sessionId = session.sessionId,
-            repo = trailblazeToolRepo,
-            classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
-            launch = launch,
-          )
+          claimOrLaunchScriptedTools(session.sessionId, launch)
         }
       } else {
-        scriptedToolRuntime = runBlocking { launch() }
+        scriptedToolRuntime = runBlocking { launch(loggingRule.trailblazeDeviceInfoProvider()) }
       }
       // One trail: the trailhead's teardown runs after it, whatever the outcome.
       runnerUtil.runTrailBlocking {

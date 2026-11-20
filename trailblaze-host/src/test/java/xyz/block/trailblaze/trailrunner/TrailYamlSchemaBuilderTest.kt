@@ -89,12 +89,12 @@ class TrailYamlSchemaBuilderTest {
   @Test
   fun `recording tool names are open and always include framework tools`() {
     // Framework tools are in scope even when the target set excludes them (recordings use primitives
-    // like mobile_maestro), and the tool-call item is OPEN so an unknown recorded tool is never flagged.
-    val catalog = listOf(entry("myapp_tapCharge", "myapp"), entry("mobile_maestro", "trailblaze"))
+    // like launchApp), and the tool-call item is OPEN so an unknown recorded tool is never flagged.
+    val catalog = listOf(entry("myapp_tapCharge", "myapp"), entry("launchApp", "trailblaze"))
     val schema = parse(TrailYamlSchemaBuilder.build(catalog, targetToolNames = setOf("myapp_tapCharge")))
     val toolCallItem = recordingToolCallItem(schema)
     // Framework tool present despite not being in the target set.
-    assertThat(toolCallItem["properties"]!!.jsonObject.keys).contains("mobile_maestro")
+    assertThat(toolCallItem["properties"]!!.jsonObject.keys).contains("launchApp")
     // Open: unknown recorded tool names are permitted (not flagged).
     assertThat(toolCallItem["additionalProperties"].toString()).isEqualTo("true")
   }
@@ -203,7 +203,7 @@ class TrailYamlSchemaBuilderTest {
 
   @Test
   fun `a unified step recording completes tool names under a device classifier`() {
-    val catalog = listOf(entry("myapp_tapCharge", "myapp"), entry("mobile_maestro", "trailblaze"), entry("otherapp_sendMoney", "otherapp"))
+    val catalog = listOf(entry("myapp_tapCharge", "myapp"), entry("launchApp", "trailblaze"), entry("otherapp_sendMoney", "otherapp"))
     val schema = parse(TrailYamlSchemaBuilder.build(catalog, targetToolNames = setOf("myapp_tapCharge")))
     val step = unifiedStep(schema)
     val stepProps = step["properties"]!!.jsonObject
@@ -213,7 +213,7 @@ class TrailYamlSchemaBuilderTest {
     val toolCallItem = unifiedClassifierRecording(step)["items"]!!.jsonObject
     val toolNames = toolCallItem["properties"]!!.jsonObject.keys
     assertThat(toolNames).contains("myapp_tapCharge")
-    assertThat(toolNames).contains("mobile_maestro") // framework tools always in scope
+    assertThat(toolNames).contains("launchApp") // framework tools always in scope
     assertThat(toolNames).doesNotContain("otherapp_sendMoney")
     // Open like the v1 branch: an unmodeled step field never false-flags a valid unified step.
     assertThat(step["additionalProperties"].toString()).isEqualTo("true")

@@ -18,7 +18,7 @@ import xyz.block.trailblaze.devices.WebViewportSpec
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
-import xyz.block.trailblaze.mcp.DeviceBusyException
+import xyz.block.trailblaze.mcp.DeviceUnavailableException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolNames
@@ -804,7 +804,7 @@ class DeviceManagerToolSet(
         onTerminateSession?.invoke(previousClaim.mcpSessionId)
       }
       null
-    } catch (e: DeviceBusyException) {
+    } catch (e: DeviceUnavailableException) {
       "Error: ${e.message}"
     }
   }
@@ -914,7 +914,7 @@ class DeviceManagerToolSet(
           displacedSessionInfo = clientName ?: previousClaim.mcpSessionId
           displacedFromOtherSession = true
         }
-      } catch (e: DeviceBusyException) {
+      } catch (e: DeviceUnavailableException) {
         return "Error: ${e.message}"
       }
     }

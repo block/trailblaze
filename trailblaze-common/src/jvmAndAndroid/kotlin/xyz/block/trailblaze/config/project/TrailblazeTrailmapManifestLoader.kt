@@ -1,12 +1,14 @@
 package xyz.block.trailblaze.config.project
 
+import xyz.block.trailblaze.config.MemoryKeyDeclaration
 import java.io.File
 import java.io.IOException
 import java.util.WeakHashMap
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -163,20 +165,12 @@ object TrailblazeTrailmapManifestLoader {
    * malformed bundled trailmap must not break discovery of the rest. Only direct `<id>/trailmap.yaml`
    * entries are accepted; deeper nesting is ignored to keep the convention crisp.
    *
-   * ## Why this bypasses the `ConfigResourceSource` abstraction
+   * ## On-device discovery
    *
-   * The flat config loaders for tools/toolsets/targets go through the
-   * `ConfigResourceSource` abstraction so they can be backed by either a JVM classpath
-   * or an Android `AssetManager`. That abstraction's API
-   * (`discoverAndLoad(directoryPath, suffix): Map<String, String>`) assumes a flat
-   * directory layout — every match collapses to a `name → content` map keyed by
-   * filename, which loses the subdirectory structure that trailmap discovery requires
-   * (`<id>/trailmap.yaml` vs `<id>/sub/trailmap.yaml`). Adding a hierarchical variant to
-   * `ConfigResourceSource` would also require an Android `AssetManager` implementation
-   * we don't currently need (trailmap discovery is a JVM-host CLI concern). Calling
-   * [ClasspathResourceDiscovery] directly is the smaller surface change for now.
-   * If on-device trailmap discovery becomes a real requirement, the right move is to
-   * extend `ConfigResourceSource` with a recursive method and migrate this call to it.
+   * Discovery goes through [bundledConfigResourceSource] (recursive, so `<id>/trailmap.yaml`
+   * keeps its subdirectory). On the JVM that is the plain classpath scan; on Android it also
+   * reads the APK's assets, which a classloader cannot enumerate — without it an on-device run
+   * (`assertWaypoint`, target discovery) finds no trailmaps at all.
    */
   fun discoverAndLoadFromClasspath(): List<LoadedTrailblazeTrailmapManifest> {
     val classLoader = Thread.currentThread().contextClassLoader
@@ -194,8 +188,11 @@ object TrailblazeTrailmapManifestLoader {
     }
   }
 
-  private fun computeClasspathTrailmaps(): List<LoadedTrailblazeTrailmapManifest> {
-    val discovered = ClasspathResourceDiscovery.discoverAndLoadRecursive(
+  /** `internal` so a test can discover from a fake [resourceSource] without the per-classloader cache. */
+  internal fun computeClasspathTrailmaps(
+    resourceSource: ConfigResourceSource = bundledConfigResourceSource(),
+  ): List<LoadedTrailblazeTrailmapManifest> {
+    val discovered = resourceSource.discoverAndLoadRecursive(
       directoryPath = TRAILMAPS_RESOURCE_DIR,
       suffix = "/$TRAILMAP_FILENAME",
     )
@@ -205,11 +202,14 @@ object TrailblazeTrailmapManifestLoader {
     val seenById = mutableMapOf<String, String>()
     discovered.forEach { (relativeKey, content) ->
       // Accept only "<id>/trailmap.yaml" — `<id>` is the segment between TRAILMAPS_RESOURCE_DIR and
-      // the trailing `/trailmap.yaml`. Deeper paths (e.g. `<id>/subdir/trailmap.yaml`) are skipped.
+      // the trailing `/trailmap.yaml`. Deeper paths (e.g. `<id>/subdir/trailmap.yaml`) are skipped,
+      // and so is a top-level `trailmap.yaml`, which a source matching the suffix against the full
+      // path returns under the bare key `trailmap.yaml`.
+      if (!relativeKey.endsWith("/$TRAILMAP_FILENAME")) return@forEach
       val trailmapDirectoryName = relativeKey.removeSuffix("/$TRAILMAP_FILENAME")
       if (trailmapDirectoryName.isEmpty() || trailmapDirectoryName.contains('/')) return@forEach
       val resourceDir = "$TRAILMAPS_RESOURCE_DIR/$trailmapDirectoryName"
-      val source = TrailmapSource.Classpath(resourceDir = resourceDir)
+      val source = TrailmapSource.Classpath(resourceDir = resourceDir, resourceSource = resourceSource)
       val identifier = "classpath:$resourceDir/$TRAILMAP_FILENAME"
       try {
         val loaded = parseManifest(content, source, identifier = identifier)
@@ -289,6 +289,9 @@ object TrailblazeTrailmapManifestLoader {
     warnOnRemovedMcpServersField(manifest, content, identifier)
     warnOnTrailmapScoping(manifest, identifier)
     enforceLibraryTrailmapContract(manifest, identifier)
+    MemoryKeyDeclaration.problems(manifest.memory).takeIf { it.isNotEmpty() }?.let { problems ->
+      throw TrailblazeProjectConfigException("Invalid memory: in $identifier: ${problems.joinToString("; ")}")
+    }
     return LoadedTrailblazeTrailmapManifest(
       manifest = manifest,
       source = source,

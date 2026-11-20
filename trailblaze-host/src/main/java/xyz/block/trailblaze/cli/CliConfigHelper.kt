@@ -178,6 +178,15 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
+    name = "lend-devices",
+    description = "Lend this machine's devices to other Trailblaze daemons, as TRAILBLAZE_LEASE_DEVICES=1 does (read when the daemon starts)",
+    validValues = "true, false",
+    get = { config -> config.lendDevices.toString() },
+    set = { config, value ->
+      value.toBooleanStrictOrNull()?.let { config.copy(lendDevices = it) }
+    },
+  ),
+  ConfigKey(
     // Per-step natural-language description is what self-heal retries against
     // when a recorded selector goes stale. Permissive default keeps ad-hoc
     // tire-kicking unblocked; flip to true for serious authoring so every
@@ -232,14 +241,16 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "device",
     description = "Default device platform for CLI commands",
-    validValues = "android, ios, web",
+    validValues = "android, ios, web, or 'unset' to clear",
     get = { config -> config.cliDevicePlatform?.lowercase() ?: "not set" },
     set = { config, value ->
       val platform = value.uppercase()
-      if (platform in setOf("ANDROID", "IOS", "WEB")) {
-        config.copy(cliDevicePlatform = platform)
-      } else {
-        null
+      when {
+        // Older releases also saved this from every `device connect` / `session start`, so a
+        // machine can hold a default nobody chose on purpose. `unset` is how to drop it.
+        value.equals("unset", ignoreCase = true) -> config.copy(cliDevicePlatform = null)
+        platform in setOf("ANDROID", "IOS", "WEB") -> config.copy(cliDevicePlatform = platform)
+        else -> null
       }
     },
   ),

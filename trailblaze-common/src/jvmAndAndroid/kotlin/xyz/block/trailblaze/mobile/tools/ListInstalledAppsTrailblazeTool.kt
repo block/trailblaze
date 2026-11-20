@@ -7,6 +7,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages.MOBILE_PLATFORMS
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -85,17 +87,17 @@ data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnly
         }
 
         TrailblazeDevicePlatform.WEB -> TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "mobile_listInstalledApps is not supported for web devices.",
+          errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_listInstalledApps", MOBILE_PLATFORMS, deviceInfo),
         )
 
         TrailblazeDevicePlatform.DESKTOP -> TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "mobile_listInstalledApps is not supported for the Compose desktop driver.",
+          errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_listInstalledApps", MOBILE_PLATFORMS, deviceInfo),
         )
       }
     } catch (e: CancellationException) {
       // Re-throw so structured-concurrency teardown (agent abort, driver disconnect, session
       // shutdown) isn't silently converted into a normal tool error. Precedent:
-      // RunCommandTrailblazeTool.execute catches this same trap explicitly.
+      // ExecTrailblazeTool.execute catches this same trap explicitly.
       throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(

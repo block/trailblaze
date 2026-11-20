@@ -2345,6 +2345,99 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `a target's device classifier resolves to the file that declares it`() {
+    val trailmapDir = classifierTrailmap(
+      deviceClassifier = "sampleapp_deviceClassifier",
+      "tools/device/classify.ts" to
+        "export const sampleapp_deviceClassifier: DeviceClassifier = trailblaze.deviceClassifier((d) => d.key);",
+      "tools/notes.ts" to "// sampleapp_deviceClassifier is declared in device/classify.ts",
+    )
+
+    val target = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      tempFolder.writeConfig("targets:\n  - sampleapp"),
+      includeClasspathTrailmaps = false,
+    )!!.targets.single()
+
+    val classifier = target.deviceClassifier!!
+    assertEquals("sampleapp_deviceClassifier", classifier.name)
+    assertEquals(File(trailmapDir, "tools/device/classify.ts").canonicalPath, File(classifier.script).canonicalPath)
+    // A device classifier is not a tool.
+    assertTrue(target.tools.orEmpty().none { it.name == "sampleapp_deviceClassifier" }, "${target.tools}")
+  }
+
+  @Test
+  fun `a target can name a device classifier declared anywhere in its dependency closure`() {
+    val sharedDir = File(tempFolder.root, "trailmaps/sharedlib").apply { mkdirs() }
+    File(sharedDir, "trailmap.yaml").writeText("id: sharedlib")
+    File(sharedDir, "tools/shared_deviceClassifier.ts").apply { parentFile.mkdirs() }
+      .writeText("export const shared_deviceClassifier = trailblaze.deviceClassifier((d) => d.key);")
+    // A dependency of a dependency, as a vertical's trailmap depends on its app's, which depends on the shared one.
+    File(tempFolder.root, "trailmaps/middle").apply { mkdirs() }
+      .let { File(it, "trailmap.yaml").writeText("id: middle\ndependencies: [sharedlib]") }
+    classifierTrailmap(deviceClassifier = "shared_deviceClassifier", dependencies = listOf("middle"))
+
+    val classifier = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      tempFolder.writeConfig("targets:\n  - sampleapp"),
+      includeClasspathTrailmaps = false,
+    )!!.targets.single().deviceClassifier!!
+    assertEquals("shared_deviceClassifier", classifier.name)
+    assertEquals(File(sharedDir, "tools/shared_deviceClassifier.ts").canonicalPath, File(classifier.script).canonicalPath)
+  }
+
+  @Test
+  fun `a device classifier that no file declares leaves the target on the framework's key`() {
+    classifierTrailmap(
+      deviceClassifier = "sampleapp_deviceClassifier",
+      "tools/classify.ts" to "export const somethingElse = trailblaze.deviceClassifier((d) => d.key);",
+    )
+
+    val target = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      tempFolder.writeConfig("targets:\n  - sampleapp"),
+      includeClasspathTrailmaps = false,
+    )!!.targets.single()
+
+    assertEquals(null, target.deviceClassifier)
+  }
+
+  @Test
+  fun `a device classifier declared by two files leaves the target on the framework's key`() {
+    val declaration = "export const sampleapp_deviceClassifier = trailblaze.deviceClassifier((d) => d.key);"
+    classifierTrailmap(
+      deviceClassifier = "sampleapp_deviceClassifier",
+      "tools/a.ts" to declaration,
+      "tools/b.ts" to declaration,
+    )
+
+    val target = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      tempFolder.writeConfig("targets:\n  - sampleapp"),
+      includeClasspathTrailmaps = false,
+    )!!.targets.single()
+
+    assertEquals(null, target.deviceClassifier)
+  }
+
+  private fun classifierTrailmap(
+    deviceClassifier: String,
+    vararg files: Pair<String, String>,
+    dependencies: List<String> = emptyList(),
+  ): File {
+    val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      buildString {
+        appendLine("id: sampleapp")
+        if (dependencies.isNotEmpty()) appendLine("dependencies: [${dependencies.joinToString(", ")}]")
+        appendLine("target:")
+        appendLine("  display_name: Sample App Trailmap")
+        appendLine("  device_classifier: $deviceClassifier")
+      },
+    )
+    files.forEach { (path, content) ->
+      File(trailmapDir, path).apply { parentFile.mkdirs() }.writeText(content)
+    }
+    return trailmapDir
+  }
+
+  @Test
   fun `trailmap with missing system_prompt_file is skipped with logged failure`() {
     // Atomic-per-trailmap failure model: a trailmap with an unresolvable system_prompt_file fails to
     // resolve, but sibling trailmaps continue. Mirrors the behavior the existing test

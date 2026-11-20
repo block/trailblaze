@@ -52,6 +52,25 @@ object AssetManagerConfigResourceSource : ConfigResourceSource {
     return results
   }
 
+  override fun readResource(path: String): String? =
+    try {
+      InstrumentationRegistry.getInstrumentation().context.assets.open(path).use {
+        it.bufferedReader().readText()
+      }
+    } catch (_: Exception) {
+      // Missing asset (FileNotFoundException) and unavailable instrumentation both mean "not here".
+      null
+    }
+
+  // Opening the stream proves presence without reading it.
+  override fun resourceExists(path: String): Boolean =
+    try {
+      InstrumentationRegistry.getInstrumentation().context.assets.open(path).close()
+      true
+    } catch (_: Exception) {
+      false
+    }
+
   /**
    * `AssetManager.list(path)` returns immediate children only and gives no way to tell a file
    * apart from a directory. Recurse: every name is treated as a potential directory; if

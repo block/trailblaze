@@ -5,6 +5,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.host.recording.OnDeviceRpcDeviceScreenStream
 import xyz.block.trailblaze.host.rpc.RunTrailYamlRequest
 import xyz.block.trailblaze.host.rpc.RunTrailYamlResponse
+import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -16,10 +17,10 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  * Runs an arbitrary trail YAML against a connected device — the web Tool Palette's
  * "Run on Device" button. Dispatch depends on the device's screen stream:
  *
- *  - **[OnDeviceRpcDeviceScreenStream] (Android)** → [OnDeviceRpcDeviceScreenStream.dispatchYaml],
- *    a direct on-device RPC that bypasses session bookkeeping. Returns when the on-device runner
- *    accepts the request; the next frame poll picks up the result. This fast path avoids the ~2s
- *    session-bookkeeping latency.
+ *  - **[OnDeviceRpcDeviceScreenStream] (Android)** → [OnDeviceRpcDeviceScreenStream.runYaml],
+ *    a direct on-device RPC that bypasses session bookkeeping (~2s of latency) and returns when
+ *    the run finishes. It counts as a run on the device meanwhile, so a borrowed emulator, or one
+ *    this machine lends, is busy to others until it is done, and a busy one is refused here.
  *
  *  - **[PlaywrightDeviceScreenStream] (Web)** → [TrailblazeDeviceManager.runYaml] with
  *    `sendSessionEndLog = false` + `getOrCreateSessionResolution`. Critical: without
@@ -52,8 +53,25 @@ class RunTrailYamlHandler(
     return try {
       when (stream) {
         is OnDeviceRpcDeviceScreenStream -> {
-          stream.dispatchYaml(request.yaml, useRecordedSteps = true)
-          RpcResult.Success(RunTrailYamlResponse(success = true))
+          val pools = deviceManager.remoteDevicePools
+          try {
+            pools.runStarted(deviceId)
+          } catch (e: IllegalStateException) {
+            return RpcResult.Failure(
+              errorType = RpcResult.ErrorType.HTTP_ERROR,
+              message = e.message ?: "${deviceId.toFullyQualifiedDeviceId()} can't be used right now",
+            )
+          }
+          try {
+            withTimeoutOrNull(TRAIL_RUN_TIMEOUT_MS) { stream.runYaml(request.yaml, useRecordedSteps = true) }
+              ?.toRunTrailYamlResult()
+              ?: RpcResult.Failure(
+                errorType = RpcResult.ErrorType.HTTP_ERROR,
+                message = "Trail run did not complete within ${TRAIL_RUN_TIMEOUT_MS / 1000}s and was cancelled.",
+              )
+          } finally {
+            pools.runEnded(deviceId)
+          }
         }
 
         is PlaywrightDeviceScreenStream -> {
@@ -123,6 +141,19 @@ class RunTrailYamlHandler(
       message = "Trail run did not complete within ${TRAIL_RUN_TIMEOUT_MS / 1000}s. " +
         "The trail may still be running on the daemon; check the daemon log.",
     )
+  }
+
+  private fun RpcResult<RunYamlResponse>.toRunTrailYamlResult(): RpcResult<RunTrailYamlResponse> = when (this) {
+    is RpcResult.Success ->
+      if (data.success == true) {
+        RpcResult.Success(RunTrailYamlResponse(success = true))
+      } else {
+        RpcResult.Failure(
+          errorType = RpcResult.ErrorType.HTTP_ERROR,
+          message = "Trail run failed: ${data.errorMessage ?: "no reason given"}",
+        )
+      }
+    is RpcResult.Failure -> this
   }
 
   private fun TrailExecutionResult.toRpcResult(): RpcResult<RunTrailYamlResponse> = when (this) {

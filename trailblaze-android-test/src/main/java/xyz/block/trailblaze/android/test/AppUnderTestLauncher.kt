@@ -19,9 +19,8 @@ import xyz.block.trailblaze.android.test.hierarchy.ForeignWindow
 /**
  * Launching the app under test by intent — the launch every in-process harness needs and none
  * should have to write: the per-test `@Before` in [LaunchedAppTrailblazeTest], and the mid-trail
- * relaunch [tools.MaestroCommandAdapters] performs when a recorded `launchApp` targets the app
- * under test. One implementation so the "wait for a DIFFERENT resumed Activity" subtlety below
- * cannot drift between callers.
+ * relaunch a recorded `launchApp` of the app under test performs. One implementation so the
+ * "wait for a DIFFERENT resumed Activity" subtlety below cannot drift between callers.
  *
  * Entirely app-agnostic: the package is the instrumentation's own target package, and the entry
  * point is that package's launcher Activity. An app with no launcher entry point (or one that must

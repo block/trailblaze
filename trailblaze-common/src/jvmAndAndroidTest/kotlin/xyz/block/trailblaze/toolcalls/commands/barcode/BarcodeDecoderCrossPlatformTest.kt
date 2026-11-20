@@ -28,6 +28,31 @@ class BarcodeDecoderCrossPlatformTest {
   }
 
   @Test
+  fun `a light QR code on a dark background decodes with the default formats`() {
+    val source = BarcodeTestMatrices.sourceFrom(
+      BarcodeTestMatrices.barcodePixels(QR_CONTENT, BarcodeFormat.QR_CODE),
+    ).invert()
+
+    assertThat(BarcodeDecoder.decode(source)).isEqualTo(QR_CONTENT)
+  }
+
+  @Test
+  fun `a light QR code inset in a screenshot is found without crop support`() {
+    val inset = BarcodeTestMatrices.inset(
+      inner = BarcodeTestMatrices.barcodePixels(QR_CONTENT, BarcodeFormat.QR_CODE, 300, 300),
+      canvasWidth = 900,
+      canvasHeight = 600,
+    )
+    val inverted = BarcodeTestMatrices.sourceFrom(inset).invert()
+    val source = object : LuminanceSource(inverted.width, inverted.height) {
+      override fun getRow(y: Int, row: ByteArray?): ByteArray = inverted.getRow(y, row)
+      override fun getMatrix(): ByteArray = inverted.matrix
+    }
+
+    assertThat(BarcodeDecoder.decode(source)).isEqualTo(QR_CONTENT)
+  }
+
+  @Test
   fun `a linear barcode is invisible by default and readable only when opted in`() {
     // The allow-list contract stated directly, with no reliance on compression noise: a clean,
     // unambiguous Code 128 that the 1D readers would trivially decode is still not returned,
