@@ -18,6 +18,8 @@ import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
@@ -34,12 +36,14 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValida
 import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
 import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.CallableOnlyFromToolsException
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
@@ -69,6 +73,13 @@ class StepToolSet(
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   /** Provider for available UI tools. The analyzer uses these for type-safe recommendations. */
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+  /**
+   * Every tool name the session's target and driver register, including tools the LLM is not
+   * offered (`surfaceToLlm: false`) and tools the target's `excluded_tools:` keeps off the LLM's
+   * menu. A direct call (`step(tools=…)`, `trailblaze tool`) may run any of them, so the
+   * device/target gate checks against this plus [availableToolsProvider], never the menu alone.
+   */
+  private val registeredToolNamesProvider: () -> Set<String> = { emptySet() },
   /** Emits objective logs to LogsRepo for log-based trail generation. */
   private val logEmitter: LogEmitter? = null,
   /** Provides the active Trailblaze session ID for log emission. */
@@ -98,6 +109,11 @@ class StepToolSet(
   private val customToolClassesProvider: (() -> Set<KClass<out TrailblazeTool>>)? = null,
   /** Provides the current session's dynamic-tool repo, if one is loaded. */
   private val dynamicToolRepoProvider: (suspend () -> TrailblazeToolRepo?)? = null,
+  /**
+   * The driver and device a direct tool call will land on, so a tool rejected for this device can
+   * say which device that is and where the tool does run. Null when no device is bound.
+   */
+  private val currentDeviceProvider: (suspend () -> Pair<TrailblazeDriverType, TrailblazeDeviceId?>?)? = null,
 ) : ToolSet {
 
   private fun parseSnapshotDetails(value: String?): Set<SnapshotDetail> {
@@ -700,10 +716,14 @@ class StepToolSet(
     val toolWrappers = try {
       val trailItems = yaml.decodeTrail(toolsYaml)
       trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>().flatMap { it.tools }
-    } catch (_: Exception) {
+    } catch (trailError: Exception) {
+      // A tool only another tool may call (`exec`) refuses at decode, in either
+      // format. Say that plainly rather than as a YAML parse failure, which reads as a typo.
+      trailError.callableOnlyFromToolsRefusal()?.let { return fail(it) }
       try {
         yaml.decodeTools(toolsYaml)
       } catch (e: Exception) {
+        e.callableOnlyFromToolsRefusal()?.let { return fail(it) }
         return fail("Failed to parse tools YAML: ${e.message}")
       }
     }
@@ -728,7 +748,8 @@ class StepToolSet(
     // device/target validity gate below, which emits the actionable `web_navigate` hint instead
     // of the generic "Unknown tool" message. Without this, every driver-restricted scripted tool
     // requested on the wrong driver would surface as a confusing typo-style error.
-    val knownScriptedToolNames = TrailblazeToolSetCatalog.defaultEntries()
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
+    val knownScriptedToolNames = catalog
       .flatMap { it.scriptedToolNames }
       .map { it.toolName }
       .toSet()
@@ -766,18 +787,43 @@ class StepToolSet(
     // (the request may still succeed); we log so the daemon log shows when the catalog
     // gate was bypassed, which is useful when debugging "why did I get the cryptic cast
     // error back" reports.
+    //
+    // Checked against every tool the session registers, not just the LLM's menu: a tool hidden
+    // from the LLM (`surfaceToLlm: false`) or kept off its menu by the target's `excluded_tools:`
+    // is still the caller's to run directly. The LLM's menu stays the gate's on/off switch, so a
+    // session without one (no LLM configured) validates nothing, as before.
     if (availableNames.isEmpty()) {
       Console.log("Tool catalog empty for this device/target; skipping per-tool availability check")
     } else {
-      val notValidForDevice = resolvedToolWrappers.map { it.name }.filter { it !in availableNames }
+      // Off the menu, a call can still run a tool the session registers. Asked only then: reading
+      // the session's registrations waits on its tool runtime.
+      val offMenu = resolvedToolWrappers.map { it.name }.filter { it !in availableNames }
+      val notValidForDevice = if (offMenu.isEmpty()) {
+        offMenu
+      } else {
+        val registered = registeredToolNamesProvider()
+        offMenu.filter { it !in registered }
+      }
       if (notValidForDevice.isNotEmpty()) {
         // "web_navigate" remains a string literal because trailblaze-server cannot
         // depend on trailblaze-playwright (where PlaywrightNativeNavigateTool is
         // declared); introduce a shared constant if a second cross-platform hint
         // is added.
+        val currentDevice = currentDeviceProvider?.invoke()
         val hints = buildString {
           if (CoreTools.OPEN_URL in notValidForDevice && "web_navigate" in availableNames) {
             append(" On web devices, use `web_navigate url=<url>` instead of `${CoreTools.OPEN_URL}`.")
+          }
+          // Say where each rejected tool does run, against the device it landed on. A call that
+          // reached the wrong device (a saved default, another session's selection) otherwise
+          // reads as a tool limitation, and nothing tells the caller to pick another device.
+          notValidForDevice.distinct().forEach { toolName ->
+            ToolAvailabilityMessages.whereAvailable(
+              toolName = toolName,
+              entries = catalog,
+              currentDriver = currentDevice?.first,
+              currentDeviceId = currentDevice?.second,
+            )?.let { append(" ").append(it) }
           }
         }
         val msg = "Tool${if (notValidForDevice.size > 1) "s" else ""} not valid for the current device/target: " +
@@ -1390,6 +1436,13 @@ data class AskResult(
   private fun collapseWhitespace(s: String): String =
     s.trim().replace(Regex("\\s+"), " ")
 }
+
+/** The refusal a [CallableOnlyFromToolsException] anywhere in this chain carries, else null. */
+private fun Throwable.callableOnlyFromToolsRefusal(): String? =
+  generateSequence(this) { it.cause }
+    .filterIsInstance<CallableOnlyFromToolsException>()
+    .firstOrNull()
+    ?.let { CallableOnlyFromToolsException.message(it.toolName) }
 
 /** Recognized values for the [StepToolSet.blaze] `hint` parameter. */
 enum class BlazeHint {

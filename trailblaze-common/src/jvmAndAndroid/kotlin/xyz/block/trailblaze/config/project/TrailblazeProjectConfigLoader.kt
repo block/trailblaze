@@ -13,6 +13,7 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
+import xyz.block.trailblaze.config.TargetDeviceClassifierConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
@@ -588,7 +589,7 @@ object TrailblazeProjectConfigLoader {
           ownTrailmapId = trailmap.manifest.id,
           ownDependencies = trailmap.manifest.dependencies,
           trailmapsById = trailmapsById,
-        )
+        ).let { resolveTargetDeviceClassifier(trailmap, it, trailmapsById) }
       } catch (e: TrailblazeProjectConfigException) {
         Console.log(
           "Warning: Failed dependency resolution for trailmap '${trailmap.manifest.id}' " +
@@ -938,6 +939,7 @@ object TrailblazeProjectConfigLoader {
       toolsets = resolvedToolsets,
       tools = resolvedTools,
       waypoints = resolvedWaypoints,
+      deviceClassifiers = discoverDeviceClassifiers(loadedManifest.source),
     )
   }
 
@@ -1086,10 +1088,11 @@ object TrailblazeProjectConfigLoader {
     // The `.bundle.js` leg matters because the esbuild-absent route (an installed uber-JAR daemon)
     // serves a tool from its precompiled bundle and never opens the `.ts` — a jar that ships only
     // bundles is missing nothing.
-    if (!ClasspathResourceDiscovery.resourceExists(resourcePath) &&
-      !ClasspathResourceDiscovery.resourceExists(
-        ScriptedToolNameDiscoverer.bundleResourcePathForScript(resourcePath),
-      )
+    // Probed through the trailmap's own resource source so an on-device (APK assets) trailmap is
+    // found too; a classloader probe would call every asset-backed tool unavailable.
+    val present = { path: String -> source.resourceSource.resourceExists(path) }
+    if (!present(resourcePath) &&
+      !present(ScriptedToolNameDiscoverer.bundleResourcePathForScript(resourcePath))
     ) {
       throw ClasspathScriptedToolUnavailableException(
         "Trailmap descriptor '$descriptorRelativePath' (${source.describe()}) declares scripted " +
@@ -1160,6 +1163,13 @@ object TrailblazeProjectConfigLoader {
    */
   private val TYPED_TOOL_BINDING_PATTERN =
     Regex("""(?m)^\s*export\s+const\s+(\w+)\s*=\s*trailblaze\.(?:tool|trailhead)\s*[<(]""")
+
+  /**
+   * An `export const <name> = trailblaze.deviceClassifier(` binding, with or without a type
+   * annotation on the name. Matches what the bundler can call by export name.
+   */
+  private val DEVICE_CLASSIFIER_BINDING_PATTERN =
+    Regex("""(?m)^\s*export\s+const\s+(\w+)\s*(?::[^=]+)?=\s*trailblaze\.deviceClassifier\s*\(""")
 
   /**
    * Filename suffixes that mark an operational tool YAML under `<trailmap>/tools/` rather than a
@@ -1492,6 +1502,88 @@ object TrailblazeProjectConfigLoader {
       emptySet()
     }
     return ScriptedToolDiscoveryResult(registry, skipped, classpathSkippedNames)
+  }
+
+  /**
+   * Every `export const <name> = trailblaze.deviceClassifier(...)` under the trailmap's `tools/`,
+   * on disk or on the classpath. A name declared twice is left out with a warning rather than
+   * failing the trailmap: only a target that names it is affected, and that target says so.
+   */
+  private fun discoverDeviceClassifiers(source: TrailmapSource): List<TargetDeviceClassifierConfig> {
+    val byName = source
+      .listSiblingsRecursive(relativeDir = TRAILMAP_SCRIPTED_TOOLS_DIR, suffixes = listOf(".ts"))
+      .filterNot { it.endsWith(".d.ts") || it.endsWith(".test.ts") }
+      .flatMap { path ->
+        val content = source.readSibling(path) ?: return@flatMap emptyList()
+        DEVICE_CLASSIFIER_BINDING_PATTERN.findAll(content).map { it.groupValues[1] to path }.toList()
+      }
+      .groupBy({ it.first }, { it.second })
+    return byName.mapNotNull { (name, paths) ->
+      val path = paths.distinct().singleOrNull() ?: run {
+        Console.log(
+          "Warning: device classifier $name is declared by more than one file in ${source.describe()} " +
+            "(${paths.distinct().joinToString(", ")}); keep one.",
+        )
+        return@mapNotNull null
+      }
+      TargetDeviceClassifierConfig(
+        name = name,
+        script = when (source) {
+          is TrailmapSource.Filesystem -> File(source.trailmapDir, path).toPath().normalize().toFile().absolutePath
+          // Read through the classpath fallback of the scripted-tool launcher, which extracts the
+          // trailmap's whole `tools/` tree so relative imports still resolve.
+          is TrailmapSource.Classpath -> "${source.resourceDir}/$path"
+        },
+      )
+    }
+  }
+
+  /**
+   * [target] with the device classifier its trailmap names in `target.device_classifier:`, which
+   * may be the trailmap's own or one declared anywhere in its dependency closure.
+   *
+   * A name that resolves to nothing leaves the target on the framework's key, with a warning:
+   * the trailmap's tools, waypoints and recordings still load.
+   */
+  private fun resolveTargetDeviceClassifier(
+    trailmap: ResolvedTrailmap,
+    target: AppTargetYamlConfig,
+    trailmapsById: Map<String, ResolvedTrailmap>,
+  ): AppTargetYamlConfig {
+    val name = trailmap.manifest.target?.deviceClassifier ?: return target
+    val byName = linkedMapOf<String, Pair<String, TargetDeviceClassifierConfig>>()
+    val visited = mutableSetOf<String>()
+    val frontier = ArrayDeque(listOf(trailmap.manifest.id))
+    while (frontier.isNotEmpty()) {
+      val current = trailmapsById[frontier.removeFirst()] ?: continue
+      if (!visited.add(current.manifest.id)) continue
+      current.deviceClassifiers.forEach { classifier ->
+        val existing = byName[classifier.name]
+        if (existing == null) {
+          byName[classifier.name] = current.manifest.id to classifier
+        } else if (existing.first != current.manifest.id) {
+          Console.log(
+            "Warning: device classifier ${classifier.name} is declared by both trailmap " +
+              "'${existing.first}' and '${current.manifest.id}'; target '${target.id}' uses the one " +
+              "from '${existing.first}'.",
+          )
+        }
+      }
+      frontier.addAll(current.manifest.dependencies)
+    }
+    val classifier = byName[name]?.second
+    if (classifier == null) {
+      val available = byName.keys.sorted()
+      Console.log(
+        "Warning: target '${target.id}' (${trailmap.source.describe()}) names device_classifier: $name, " +
+          "but no `.ts` under tools/ of this trailmap or its dependencies declares " +
+          "`export const $name = trailblaze.deviceClassifier(...)`. " +
+          "Available: ${if (available.isEmpty()) "(none)" else available.joinToString(", ")}. " +
+          "Runs on this target use the framework's device key.",
+      )
+      return target
+    }
+    return target.copy(deviceClassifier = classifier)
   }
 
   /**
@@ -2027,4 +2119,6 @@ data class ResolvedTrailmap(
   val toolsets: List<ToolSetYamlConfig>,
   val tools: List<ToolYamlConfig>,
   val waypoints: List<WaypointDefinition>,
+  /** The device classifiers this trailmap declares under `tools/`, which its dependants can name. */
+  val deviceClassifiers: List<TargetDeviceClassifierConfig> = emptyList(),
 )

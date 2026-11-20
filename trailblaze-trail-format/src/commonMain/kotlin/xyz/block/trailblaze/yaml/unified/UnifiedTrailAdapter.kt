@@ -139,6 +139,14 @@ object UnifiedTrailAdapter {
     unified: UnifiedTrail,
     classifiers: List<TrailblazeDeviceClassifier>,
     selectedDeviceConfiguration: String? = null,
+  ): List<TrailYamlItem> =
+    lowerToTrailItems(unified, classifiers, selectedDeviceConfiguration, classifiers)
+
+  fun lowerToTrailItems(
+    unified: UnifiedTrail,
+    classifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String? = null,
+    recordingClassifiers: List<TrailblazeDeviceClassifier>,
   ): List<TrailYamlItem> {
     // Multi-device configuration names are invisible to every chain-based lookup below —
     // a configuration's legs/pins are reachable only by exact configuration selection.
@@ -162,6 +170,9 @@ object UnifiedTrailAdapter {
       resolveClosestMatch(unified.config.devices, resolutionChain, allConfigurationNames)
     val resolvedDriver = resolvedDeviceDefinition?.driver?.name
     val resolvedLocale = resolvedDeviceDefinition?.locale
+    val recordingResolutionChain =
+      listOfNotNull(selectedDeviceConfiguration) +
+        TrailblazeClassifierLineage.resolutionChain(recordingClassifiers).map { it.classifier }
     // Resolve the per-classifier skip reason the same closest-wins way, lowering to the single v1
     // `TrailConfig.skip` the runner/CLI consult before executing.
     val resolvedSkip = resolveSkip(unified.config, classifiers, selectedDeviceConfiguration)
@@ -182,24 +193,30 @@ object UnifiedTrailAdapter {
     // only fire on the unmatched case, so without this a run that replayed zero tools
     // deterministically (a matched `classifier: []`) or replayed another device's tools via a
     // family alias looks identical in the log to a full exact-key replay.
-    if (resolutionChain.isNotEmpty()) {
+    if (recordingResolutionChain.isNotEmpty()) {
       Console.log(
-        "[unified-resolve] ${resolutionChain.first()}: " +
-          describeRecordingResolution(unified, classifiers, selectedDeviceConfiguration).summarize()
+        "[unified-resolve] ${recordingResolutionChain.first()}: " +
+          describeRecordingResolution(unified, recordingClassifiers, selectedDeviceConfiguration)
+            .summarize()
       )
     }
     val promptSteps =
       unified.trail.map { step ->
-        val matchedTools = resolveClosestMatch(step.recordings, resolutionChain, configurationNames)
+        val matchedTools =
+          resolveClosestMatch(step.recordings, recordingResolutionChain, configurationNames)
         val tools = matchedTools.withoutNonReplayableControlTools()
         // Observability: a step that DECLARES recordings but matches none on this device's chain
         // lowers to LLM mode indistinguishably from an intentional `recordable`/no-recording step.
         // Surface it so a mis-keyed classifier or a genuine coverage gap is debuggable. Gated on a
         // non-empty chain so the config-only safe-mode decode (empty classifiers) stays quiet.
-        if (matchedTools == null && step.recordings.isNotEmpty() && resolutionChain.isNotEmpty()) {
+        if (
+          matchedTools == null &&
+            step.recordings.isNotEmpty() &&
+            recordingResolutionChain.isNotEmpty()
+        ) {
           Console.log(
             "[unified-resolve] step \"${step.step.take(60)}\" declares recordings for " +
-              "${step.recordings.keys} but none match this device's chain $resolutionChain — " +
+              "${step.recordings.keys} but none match this device's chain $recordingResolutionChain — " +
               "running it in LLM mode."
           )
         }
@@ -207,7 +224,7 @@ object UnifiedTrailAdapter {
         // control marker. Reported separately because "matched nothing" and "matched a leg with no
         // replayable action in it" call for different fixes (a mis-keyed classifier vs a
         // re-record).
-        if (matchedTools != null && tools == null && resolutionChain.isNotEmpty()) {
+        if (matchedTools != null && tools == null && recordingResolutionChain.isNotEmpty()) {
           Console.log(
             "[unified-resolve] step \"${step.step.take(60)}\" matched a recording whose only tools " +
               "are non-replayable control markers ($NON_REPLAYABLE_CONTROL_TOOL_NAMES) — " +
@@ -244,7 +261,7 @@ object UnifiedTrailAdapter {
     val trailheadItem =
       unified.trailhead?.let { th ->
         val matchedTrailheadTools =
-          resolveClosestMatch(th.recordings, resolutionChain, configurationNames)
+          resolveClosestMatch(th.recordings, recordingResolutionChain, configurationNames)
         val trailheadTools = matchedTrailheadTools.withoutNonReplayableControlTools()
         // Observability: the trailhead is the deterministic step 0, so a declared-but-unmatched
         // recording that silently drops its bootstrap tools is even worse than the per-step case
@@ -253,15 +270,17 @@ object UnifiedTrailAdapter {
         if (
           matchedTrailheadTools == null &&
             th.recordings.isNotEmpty() &&
-            resolutionChain.isNotEmpty()
+            recordingResolutionChain.isNotEmpty()
         ) {
           Console.log(
             "[unified-resolve] trailhead declares recordings for ${th.recordings.keys} but none " +
-              "match this device's chain $resolutionChain — running the trailhead in LLM mode."
+              "match this device's chain $recordingResolutionChain — running the trailhead in LLM mode."
           )
         }
         if (
-          matchedTrailheadTools != null && trailheadTools == null && resolutionChain.isNotEmpty()
+          matchedTrailheadTools != null &&
+            trailheadTools == null &&
+            recordingResolutionChain.isNotEmpty()
         ) {
           Console.log(
             "[unified-resolve] trailhead matched a recording whose only tools are non-replayable " +

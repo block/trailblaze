@@ -34,17 +34,27 @@ class FilesystemConfigResourceSource(
 
   override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> {
     val subDir = resolveSubDir(rootDir, directoryPath)
-    if (!subDir.isDirectory) return emptyMap()
+    return discoverFilenamesRecursive(directoryPath, suffix)
+      .associateWith { rel -> File(subDir, rel).readText() }
+  }
+
+  override fun discoverFilenamesRecursive(directoryPath: String, suffix: String): Set<String> {
+    val subDir = resolveSubDir(rootDir, directoryPath)
+    if (!subDir.isDirectory) return emptySet()
     val rootPath = subDir.toPath()
     return subDir.walkTopDown()
       .filter { it.isFile }
-      .mapNotNull { file ->
-        val rel = rootPath.relativize(file.toPath()).toString()
-          .replace(File.separatorChar, '/')
-        if (rel.endsWith(suffix)) rel to file.readText() else null
-      }
-      .toMap()
+      .map { file -> rootPath.relativize(file.toPath()).toString().replace(File.separatorChar, '/') }
+      .filter { it.endsWith(suffix) }
+      .toSet()
   }
+
+  override fun resourceExists(path: String): Boolean = resolveSubDir(rootDir, path).isFile
+
+  // Same `trails/config/` prefix resolution as discovery, so a composite that discovers a file here
+  // also reads it from here rather than from a lower layer.
+  override fun readResource(path: String): String? =
+    resolveSubDir(rootDir, path).takeIf { it.isFile }?.readText()
 
   companion object {
     /**

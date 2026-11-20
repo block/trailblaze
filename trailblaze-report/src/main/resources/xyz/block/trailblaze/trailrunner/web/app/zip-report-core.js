@@ -147,12 +147,13 @@
     }
     // A REJECTION, never a synchronous throw: inflating a corrupt entry throws, and every caller
     // handles a bad entry with `.catch` — a throw would escape that and fail the whole report
-    // build over one unreadable file. An injected inflater cannot stop early, so its output is
+    // build over one unreadable file. An injected inflater also receives the entry and the bound,
+    // so it can refuse a size the archive declares or stop inflating early; its output is still
     // checked once it returns.
     if (entry.method === 8) {
       try {
         if (!inflateRaw) return inflateRawWithDecompressionStream(raw, maxBytes);
-        return Promise.resolve(inflateRaw(raw)).then(tooBig);
+        return Promise.resolve(inflateRaw(raw, entry, maxBytes)).then(tooBig);
       } catch (e) { return Promise.reject(e); }
     }
     return Promise.reject(new Error('Unsupported ZIP compression method ' + entry.method + ' for "' + entry.name + '".'));
@@ -598,13 +599,16 @@
 
   // Parse the archive into sessions: chronologically-ordered log records, the image inventory
   // (bytes stay in the zip until sessionImageDataUri pulls one), and the recorded trail YAML.
-  // Groups without any log file (e.g. a stray top-level dir) are skipped.
+  // Groups without any log file (e.g. a stray top-level dir) are skipped. `options.sessionPath`
+  // keeps only the session in that top-level directory ('' for a flat archive), before any of
+  // another session's logs are read.
   function loadZipSessions(zipBytes, options) {
     var inflateRaw = (options && options.inflateRaw) || null;
     var groups = groupEntriesBySession(parseZipEntries(zipBytes));
     var sessions = [];
     var chain = Promise.resolve();
     groups.forEach(function (group) {
+      if (options && options.sessionPath != null && group.sessionId !== options.sessionPath) return;
       var fileNames = flatFileNames(group.byFileName);
       var logFiles = fileNames.filter(isSessionLogFileName).sort();
       if (!logFiles.length) return;
@@ -653,11 +657,14 @@
   // their lambda URLs, bundling only a subset locally. A URL is already a usable <img src>, so it's
   // passed through verbatim, unless it carries a character that could end the HTML attribute it is
   // written into (quote, angle bracket, whitespace, backslash); only a bare filename is looked up in
-  // the archive.
+  // the archive, and only when it has an image extension, so a log cannot make the report inline
+  // an arbitrary archive file (a log, the trail YAML) as a data URI.
   function sessionImageDataUri(zipBytes, session, fileName, options) {
+    if (typeof fileName !== 'string') return Promise.resolve(null);
     if (/^https?:\/\//i.test(fileName)) {
       return Promise.resolve(/^[^"'<>\s\\]+$/.test(fileName) ? fileName : null);
     }
+    if (!isImageFileName(fileName)) return Promise.resolve(null);
     var entry = session.byFileName[fileName];
     if (!entry) return Promise.resolve(null);
     var inflateRaw = (options && options.inflateRaw) || null;
@@ -971,7 +978,7 @@
     var inflateRaw = options.inflateRaw || null;
     var generatedAt = options.generatedAt || new Date().toLocaleString();
 
-    return loadZipSessions(zipBytes, { inflateRaw: inflateRaw, render: options.render }).then(function (sessions) {
+    return loadZipSessions(zipBytes, { inflateRaw: inflateRaw, render: options.render, sessionPath: options.sessionPath }).then(function (sessions) {
       if (!sessions.length) throw new Error('No Trailblaze session logs found in this archive.');
       var inputs = [];
       var chain = Promise.resolve();

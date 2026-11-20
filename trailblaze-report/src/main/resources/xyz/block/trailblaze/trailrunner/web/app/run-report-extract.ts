@@ -1550,14 +1550,7 @@ function summarizeToolArgs(raw: any, delegated: any): string {
   if (a.x != null && a.y != null) return `(${a.x}, ${a.y})`;
   if (a.appId) return String(a.appId);
   // Structured-payload tools used to summarize to nothing (the generic scan below drops every
-  // object-valued arg), leaving a bare tool name in the timeline. Name the work instead:
-  // `commands` is the maestro contract (a list of single-key command objects), `argv` is exec's.
-  if (Array.isArray(a.commands) && a.commands.length) {
-    const names = a.commands
-      .map((c: any) => (c && typeof c === 'object' ? Object.keys(c)[0] : String(c)))
-      .filter(Boolean);
-    if (names.length) return truncate(names.join(' · '), 60);
-  }
+  // object-valued arg), leaving a bare tool name in the timeline. Name the work instead: exec's `argv`.
   if (Array.isArray(a.argv) && a.argv.length) return truncate(a.argv.join(' '), 60);
   const skip = { reason: 1, reasoning: 1, ref: 1, selector: 1 };
   const keys = Object.keys(a).filter((k) => !skip[k] && typeof a[k] !== 'object');
@@ -1890,6 +1883,9 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       originalYaml: s.originalYaml || originalYaml,
       deviceLog: s.deviceLog || null,
       deviceLogGz: s.deviceLogGz || null,
+      ...(s.companionDeviceLogs && s.companionDeviceLogs.length
+        ? { deviceLogDevice: s.deviceLogDevice || null, companionDeviceLogs: s.companionDeviceLogs }
+        : {}),
       network: s.network || null,
       networkGz: s.networkGz || null,
       events: s.events || null,

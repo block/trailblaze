@@ -6,11 +6,15 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -56,6 +60,76 @@ class TargetToolBaselineGeneratorTest {
     TargetToolBaselineGenerator(generatedDir = newDir("ignored")).pruneStaleFiles(dir, keep = setOf("kept.md"))
 
     assertEquals(setOf("kept.md", "notes.md"), dir.list()!!.toSet())
+  }
+
+  /**
+   * A workspace target, written the way `trailblaze compile` writes it: under `dist/targets/`, with
+   * its scripted tool's absolute path.
+   */
+  private fun workspaceWithTarget(): File {
+    val root = newDir("workspace").canonicalFile
+    val script = File(root, "trailblaze-config/trailmaps/acme/tools/acme_hello.ts")
+      .apply { parentFile.mkdirs(); writeText("// fixture\n") }
+    File(root, "trailblaze-config/dist/targets/acme.yaml").apply {
+      parentFile.mkdirs()
+      writeText(
+        """
+        id: "acme"
+        display_name: "Acme"
+        platforms:
+          "android":
+            tool_sets:
+            - "core_interaction"
+        tools:
+        - script: "${script.absolutePath}"
+          name: "acme_hello"
+          description: "Say hello."
+          inputSchema:
+            "type": "object"
+            "properties": {}
+        """.trimIndent(),
+      )
+    }
+    return root
+  }
+
+  @Test
+  fun `a workspace baseline describes only the named targets, with workspace-relative script paths`() {
+    val root = workspaceWithTarget()
+    val out = newDir("surface")
+    val header = "<!-- GENERATED FILE. DO NOT EDIT. Regenerate with: fixture -->"
+    // Written by an earlier run with another regeneration command: still the generator's to delete.
+    File(out, "gone.md").writeText("<!-- GENERATED FILE. DO NOT EDIT. Regenerate with: old --out -->\n")
+
+    TargetToolBaselineGenerator(
+      generatedDir = out,
+      resourceSource = workspaceLayeredConfigResourceSource(File(root, "trailblaze-config")),
+      onlyTargetIds = setOf("acme"),
+      scriptPathRoot = root,
+      regenerateWith = "fixture",
+    ).generate(targetsDir = out)
+
+    val readme = File(out, TargetToolBaselineGenerator.INDEX_FILE_NAME).readText()
+    val targetsSection = readme.substringAfter("## Targets").substringBefore("##")
+    assertEquals(listOf("- [`acme`](acme.md) — Acme"), targetsSection.lines().filter { it.isNotBlank() })
+    val acme = File(out, "acme.md").readText()
+    assertEquals(header, acme.lines().first())
+    assertFalse(File(out, "gone.md").exists(), "a generated file for a removed trailmap survived")
+    assertTrue("./trailblaze-config/trailmaps/acme/tools/acme_hello.ts" in acme, acme)
+    out.listFiles()!!.forEach { assertFalse(root.absolutePath in it.readText(), "${it.name} leaks the workspace path") }
+  }
+
+  @Test
+  fun `naming a target that is not discovered fails rather than writing a partial baseline`() {
+    val root = workspaceWithTarget()
+    val error = assertFailsWith<IllegalArgumentException> {
+      TargetToolBaselineGenerator(
+        generatedDir = newDir("surface"),
+        resourceSource = workspaceLayeredConfigResourceSource(File(root, "trailblaze-config")),
+        onlyTargetIds = setOf("acme", "missing"),
+      ).generate()
+    }
+    assertTrue("missing" in error.message.orEmpty(), error.message)
   }
 
   @Test

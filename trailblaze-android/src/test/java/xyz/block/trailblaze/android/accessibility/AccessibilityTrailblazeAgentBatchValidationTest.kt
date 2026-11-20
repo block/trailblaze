@@ -21,7 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 
 /**
  * Pins [AccessibilityTrailblazeAgent.runMaestroCommands]'s whole-batch validation — the entry
- * point every tool call site (`MapsToMaestroCommands`, `MaestroTrailblazeTool`, etc.) lands on.
+ * point every tool call site (`MapsToMaestroCommands`, etc.) lands on.
  * An unconvertible command anywhere in the batch must fail the call BEFORE any command
  * dispatches; the base per-command loop would otherwise execute earlier commands' side effects
  * first. The failure path never touches the device, so this runs as a plain JVM test; the

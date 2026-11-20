@@ -48,6 +48,8 @@ import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.driver.DeviceListingVisibility
 import xyz.block.trailblaze.host.driver.BootedIosSimulator
 import xyz.block.trailblaze.host.driver.ConnectedAdbDevice
+import xyz.block.trailblaze.host.lease.RemoteDeviceCall
+import xyz.block.trailblaze.host.lease.RemoteDevicePools
 import xyz.block.trailblaze.host.driver.DescriptorDeviceDiscovery
 import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostScreenStateDeps
@@ -124,6 +126,8 @@ class TrailblazeDeviceManager(
    * device and screen-state capture throws. An app that wants any driver passes its registry.
    */
   val hostDriverDescriptors: HostDriverDescriptorRegistry = HostDriverDescriptorRegistry.EMPTY,
+  /** Other daemons' devices this one may borrow; inert unless a lender is paired. */
+  internal val remoteDevicePools: RemoteDevicePools = RemoteDevicePools.shared,
   /**
    * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
    * paths. See [SessionCaptureCoordinator] for why this exists at the device-manager
@@ -293,6 +297,8 @@ class TrailblazeDeviceManager(
           TrailblazeServerState.TestingEnvironment.WEB
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
         val driverType = connectedDeviceSummary.trailblazeDriverType
+        // A borrowed device runs on its lender's driver, whichever drivers are enabled here.
+        if (remoteDevicePools.isRemote(connectedDeviceSummary.trailblazeDeviceId)) return@filter true
         // An addressable-but-unlisted driver stays in device state whatever the user's enabled
         // -drivers setting says: `--device <its id>` has to keep working, and the listings that
         // shouldn't show it strip it themselves via DeviceListingVisibility.
@@ -632,13 +638,25 @@ class TrailblazeDeviceManager(
    * while it holds a session. Such a caller passes it as `callerRun` to [getOrCreateSessionResolution].
    */
   fun beginRun(trailblazeDeviceId: TrailblazeDeviceId): RunInFlight {
+    // A borrowed device is leased for as long as a run is on it, however quiet the run gets.
+    remoteDevicePools.runStarted(trailblazeDeviceId)
     // Not while a run's cleanup is letting go of a device (see [releaseDeviceAfterRun]): that would
     // take this run's scope and session with it. Bounded, so a driver that never closes fails the
     // later runs instead of holding them, and refused rather than started mid-release.
     val lock = deviceReleaseLock(trailblazeDeviceId)
-    check(lock.tryLock(deviceReleaseWaitMillis, TimeUnit.MILLISECONDS)) {
-      "${trailblazeDeviceId.instanceId} is still being released by an earlier run after ${deviceReleaseWaitMillis / 1000}s; " +
-        "not starting on it. Try again, or restart the daemon if it stays stuck."
+    val locked = try {
+      lock.tryLock(deviceReleaseWaitMillis, TimeUnit.MILLISECONDS)
+    } catch (e: InterruptedException) {
+      // Cancelled while waiting: the run never starts, so it must not keep a borrowed device busy.
+      remoteDevicePools.runEnded(trailblazeDeviceId)
+      throw e
+    }
+    if (!locked) {
+      remoteDevicePools.runEnded(trailblazeDeviceId)
+      error(
+        "${trailblazeDeviceId.instanceId} is still being released by an earlier run after ${deviceReleaseWaitMillis / 1000}s; " +
+          "not starting on it. Try again, or restart the daemon if it stays stuck.",
+      )
     }
     try {
       return RunInFlight(trailblazeDeviceId).also(runsInFlight::add)
@@ -654,6 +672,7 @@ class TrailblazeDeviceManager(
   fun endRun(run: RunInFlight) {
     if (!runsInFlight.remove(run)) return
     val device = run.trailblazeDeviceId
+    remoteDevicePools.runEnded(device)
     if (runsInFlight.any { it.trailblazeDeviceId == device }) return
     releaseDeferredDevice(device)
     // Unbinds first: they mark a session this device still logged into, which holds its release.
@@ -1207,6 +1226,14 @@ class TrailblazeDeviceManager(
    * This method is used from the MCP server.
    */
   suspend fun getCurrentScreenState(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
+    if (remoteDevicePools.isRemote(trailblazeDeviceId)) {
+      return withContext(Dispatchers.IO) {
+        remoteDevicePools.call(
+          trailblazeDeviceId,
+          RemoteDeviceCall(trailblazeDeviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.SCREEN_STATE),
+        ).screenState?.toScreenState()
+      }
+    }
     val deviceState = getDeviceState(trailblazeDeviceId) ?: return null
     val driverType = deviceState.device.trailblazeDriverType
 
@@ -1333,6 +1360,56 @@ class TrailblazeDeviceManager(
     }
   }
 
+  /**
+   * This machine's own devices, never ones another daemon lends, enumerated now. Reuses a fresh
+   * scan when there is one, but never waits on [loadDevicesMutex]: a scan in progress may be asking
+   * a paired daemon for its devices, and that daemon may be asking this one for these.
+   */
+  suspend fun loadOwnDevicesSuspend(): List<TrailblazeConnectedDeviceSummary> {
+    if (discoveryCache.isFresh()) {
+      return targetDeviceFilter(_allDiscoveredDevicesFlow.value)
+        .filterNot { remoteDevicePools.isRemote(it.trailblazeDeviceId) }
+    }
+    return targetDeviceFilter(discoverLocalDevices())
+  }
+
+  /** Every device this machine's drivers find on it, enumerated in parallel with timeouts. */
+  private suspend fun discoverLocalDevices(): List<TrailblazeConnectedDeviceSummary> {
+    val androidFuture = CompletableFuture.supplyAsync {
+      listConnectedAdbDevices()
+    }
+    val iosFuture = CompletableFuture.supplyAsync {
+      listBootedIosSimulators()
+    }
+    val androidDevices = try {
+      androidFuture.get(10, TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Console.log("Android device discovery timed out or failed: ${e.message}")
+      emptyList()
+    }
+    val iosSimulators = try {
+      iosFuture.get(60, TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Console.log("iOS device discovery timed out or failed: ${e.message}")
+      emptyList()
+    }
+    // Whatever the plugged-in drivers find, given the transports enumerated above so none of
+    // them re-runs an enumeration the host already paid for. Runs concurrently with itself and
+    // contains its own failures — see [DescriptorDeviceDiscovery].
+    return DescriptorDeviceDiscovery.discoverAll(
+      descriptors = hostDriverDescriptors.descriptors,
+      inventory = HostDeviceInventory(
+        adbDevices = androidDevices.map { (serial, description) ->
+          ConnectedAdbDevice(serial = serial, description = description)
+        },
+        bootedIosSimulators = iosSimulators.map { (udid, name) ->
+          BootedIosSimulator(udid = udid, name = name)
+        },
+        runningWebBrowsers = webBrowserManager.getAllRunningBrowserSummaries(),
+      ),
+    )
+  }
+
   private suspend fun loadDevicesSuspendImpl(applyDriverFilter: Boolean): List<TrailblazeConnectedDeviceSummary> {
     withContext(Dispatchers.Default) {
       updateDeviceState { currDeviceState ->
@@ -1341,40 +1418,11 @@ class TrailblazeDeviceManager(
     }
 
     try {
-      // Run all device discovery in parallel via direct CLI calls with timeouts.
-      val androidFuture = CompletableFuture.supplyAsync {
-        listConnectedAdbDevices()
+      // The devices other daemons offer to lend, of any platform, found alongside this machine's own.
+      val remoteFuture = CompletableFuture.supplyAsync {
+        remoteDevicePools.remoteDevices()
       }
-      val iosFuture = CompletableFuture.supplyAsync {
-        listBootedIosSimulators()
-      }
-      val androidDevices = try {
-        androidFuture.get(10, TimeUnit.SECONDS)
-      } catch (e: Exception) {
-        Console.log("Android device discovery timed out or failed: ${e.message}")
-        emptyList()
-      }
-      val iosSimulators = try {
-        iosFuture.get(60, TimeUnit.SECONDS)
-      } catch (e: Exception) {
-        Console.log("iOS device discovery timed out or failed: ${e.message}")
-        emptyList()
-      }
-      // Whatever the plugged-in drivers find, given the transports enumerated above so none of
-      // them re-runs an enumeration the host already paid for. Runs concurrently with itself and
-      // contains its own failures — see [DescriptorDeviceDiscovery].
-      val descriptorDevices = DescriptorDeviceDiscovery.discoverAll(
-        descriptors = hostDriverDescriptors.descriptors,
-        inventory = HostDeviceInventory(
-          adbDevices = androidDevices.map { (serial, description) ->
-            ConnectedAdbDevice(serial = serial, description = description)
-          },
-          bootedIosSimulators = iosSimulators.map { (udid, name) ->
-            BootedIosSimulator(udid = udid, name = name)
-          },
-          runningWebBrowsers = webBrowserManager.getAllRunningBrowserSummaries(),
-        ),
-      )
+      val descriptorDevices = discoverLocalDevices()
 
       // Every device comes from a driver's descriptor, mapped out of the inventory enumerated
       // above: each connected `adb` device under all three Android drivers, each booted simulator
@@ -1382,7 +1430,14 @@ class TrailblazeDeviceManager(
       // the always-on Playwright-native default, an answering Electron CDP endpoint). A descriptor
       // returns nothing when its driver isn't usable here, so an app that doesn't register one
       // never sees its devices.
-      val allDevices = descriptorDevices
+      // Borrowed devices are listed as their lender drives them; see [RemoteDevicePools].
+      val remoteDevices = try {
+        remoteFuture.get(10, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        Console.log("Remote device discovery timed out or failed: ${e.message}")
+        emptyList()
+      }
+      val allDevices = descriptorDevices + remoteDevices
 
       Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
 
@@ -2325,10 +2380,21 @@ class TrailblazeDeviceManager(
   suspend fun refreshAppInventory(
     trailblazeDeviceId: TrailblazeDeviceId,
     includeVersionInfo: Boolean = true,
-  ): Set<String>? = appInventory.refresh(
-    deviceId = trailblazeDeviceId,
-    relevantAppIds = if (includeVersionInfo) relevantAppIdsForVersionInfo() else emptySet(),
-  )
+  ): Set<String>? {
+    // A borrowed device's apps are listed by its lender.
+    if (remoteDevicePools.isRemote(trailblazeDeviceId)) {
+      return withContext(Dispatchers.IO) {
+        remoteDevicePools.call(
+          trailblazeDeviceId,
+          RemoteDeviceCall(trailblazeDeviceId.toFullyQualifiedDeviceId(), RemoteDeviceCall.Op.INSTALLED_APPS),
+        ).installedAppIds
+      }
+    }
+    return appInventory.refresh(
+      deviceId = trailblazeDeviceId,
+      relevantAppIds = if (includeVersionInfo) relevantAppIdsForVersionInfo() else emptySet(),
+    )
+  }
 
   /**
    * Version info is probed only for apps that belong to available app targets — probing every
@@ -2663,17 +2729,12 @@ class TrailblazeDeviceManager(
     internal fun listBootedIosSimulators(): List<Pair<String, String>> {
       if (!isMacOs()) return emptyList()
       return try {
-        val process = ProcessBuilder(SimctlCommand.argv("list", "devices", "booted"))
-          .redirectErrorStream(true)
-          .start()
-        val finished = process.waitFor(60, TimeUnit.SECONDS)
-        if (!finished) {
-          process.destroyForcibly()
-          process.waitFor(5, TimeUnit.SECONDS)
+        val listing = SimctlCommand.run(listOf("list", "devices", "booted"), timeoutSeconds = 60)
+        if (listing.timedOut) {
           Console.log("[loadDevices] [iOS] xcrun simctl timed out after 60s")
           return emptyList()
         }
-        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val output = listing.stdout
         // Parse lines like "    iPad (A16) (6171FEAD-...) (Booted)"
         val deviceRegex = Regex("""^\s+(.+?)\s+\(([0-9A-Fa-f-]{36})\)\s+\(Booted\)""")
         val results = output.lines().mapNotNull { line ->

@@ -20,7 +20,7 @@ import kotlin.reflect.KClass
  *   wrapper tools that delegate to more precise tools.
  * @property requiresHost **The tool cannot run anywhere but a host machine.** Reserved for
  *   low-level framework plumbing that has no on-device meaning at all: forking a subprocess
- *   (`exec`, `runCommand`), holding a second bound device (`switchDevice`), reading a registry only
+ *   (`exec`), holding a second bound device (`switchDevice`), reading a registry only
  *   the host populates (`assertWaypoint`). Setting it makes the host dispatch forks
  *   (`HostOnDeviceRpcTrailblazeAgent`, `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) keep the call host-side, and for a
  *   *scripted* tool it additionally drops the tool at on-device registration
@@ -60,6 +60,13 @@ import kotlin.reflect.KClass
  *   `SerialDescriptorTsCodegen`) and the per-trailmap `trailblaze-client.d.ts` generator
  *   (`WorkspaceClientDtsGenerator`), so both surfaces render the same typed `result` instead of
  *   one hand-written and the other falling back to `string`.
+ * @property callableOnlyFromTools **Only another tool may call this one.** A tool calling it
+ *   (a scripted tool's `ctx.tools.exec(...)`, or Kotlin composition) runs it as usual; every
+ *   entry point that is not a tool refuses it: a trail step, `trailblaze tool` and the MCP `step`
+ *   tool, the in-session agent, and the recorder's tool palette. Set it on a tool that runs a
+ *   caller-chosen process on the host (`exec`): the daemon's MCP endpoint can be
+ *   reached from other machines, and hiding a tool from the LLM does not stop a direct call.
+ *   `CallableOnlyFromToolsTest` fails when a host-process tool lacks it.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -71,4 +78,5 @@ annotation class TrailblazeToolClass(
   val isVerification: Boolean = false,
   val trailheadTo: String = "",
   val resultType: KClass<*> = Unit::class,
+  val callableOnlyFromTools: Boolean = false,
 )

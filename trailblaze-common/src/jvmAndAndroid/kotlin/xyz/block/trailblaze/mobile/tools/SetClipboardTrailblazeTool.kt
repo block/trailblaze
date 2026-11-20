@@ -4,6 +4,8 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages.MOBILE_PLATFORMS
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -50,12 +52,12 @@ data class SetClipboardTrailblazeTool(
 
         TrailblazeDevicePlatform.WEB ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "mobile_setClipboard is not supported for web devices.",
+            errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_setClipboard", MOBILE_PLATFORMS, deviceInfo),
           )
 
         TrailblazeDevicePlatform.DESKTOP ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "mobile_setClipboard is not supported for the Compose desktop driver.",
+            errorMessage = ToolAvailabilityMessages.unsupportedPlatform("mobile_setClipboard", MOBILE_PLATFORMS, deviceInfo),
           )
       }
       val preview = text.replace("\n", "\\n")

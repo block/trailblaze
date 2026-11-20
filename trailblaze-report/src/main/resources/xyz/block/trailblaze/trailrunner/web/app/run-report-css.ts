@@ -791,6 +791,9 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 .yamlmark.tool.selfheal { border-left-width: 4px; }
 .shotwrap { position: relative; display: block; }
 .mark { position: absolute; pointer-events: none; }
+/* The recording's mark layer: fitted in script to the picture inside the letterboxed <video>
+   (fitClipMarkFrame); until then it covers the element. */
+.markframe { position: absolute; inset: 0; pointer-events: none; }
 .mark.tap { width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid var(--fail); border-radius: 99px; background: rgba(248,71,82,.25); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
 .mark.assertok { width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid var(--pass); border-radius: 99px; background: rgba(46,204,92,.22); }
 .markborder { position: absolute; inset: 0; border: 3px solid var(--fail); border-radius: var(--r-lg); pointer-events: none; }

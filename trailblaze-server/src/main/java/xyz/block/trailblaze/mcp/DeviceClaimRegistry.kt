@@ -30,6 +30,8 @@ class DeviceClaimRegistry(
    * Null when the session is unknown to the server (already cleaned up).
    */
   private val clientInfoLookup: ((mcpSessionId: String) -> ClaimingClientInfo?)? = null,
+  /** Told when a device gains its first claim or loses its last one; see [DeviceClaimHooks]. */
+  private val hooks: DeviceClaimHooks? = null,
 ) {
 
   /** Identifying info about the session holding a claim. Surfaced in [DeviceBusyException]. */
@@ -46,6 +48,16 @@ class DeviceClaimRegistry(
 
   private val claims = HashMap<String, DeviceClaim>()
 
+  init {
+    hooks?.watchToolCalls(::hasToolCallInFlight)
+  }
+
+  /** True while the session claiming [deviceId] is in the middle of a tool call. */
+  fun hasToolCallInFlight(deviceId: TrailblazeDeviceId): Boolean {
+    val claim = getClaim(deviceId) ?: return false
+    return inFlightLookup?.invoke(claim.mcpSessionId) != null
+  }
+
   /**
    * Claims a device for an MCP session.
    *
@@ -57,13 +69,27 @@ class DeviceClaimRegistry(
    *   conflict. Callers use the non-null return to terminate the displaced
    *   session cleanly.
    * @throws DeviceBusyException when the prior holder has a tool call in flight.
+   * @throws DeviceUnavailableException when [DeviceClaimHooks.beforeClaim] refuses the device (a
+   *   borrowed emulator someone else is using, or one that can't be reached).
    */
   fun claim(
     deviceId: TrailblazeDeviceId,
     mcpSessionId: String,
   ): DeviceClaim? {
     val key = deviceId.instanceId
+    // Outside the lock: a hook may block on the network (leasing a remote device). A busy device
+    // is already claimed, so whatever the hook holds for it stays held for the current holder.
+    try {
+      hooks?.beforeClaim(deviceId)
+    } catch (e: DeviceUnavailableException) {
+      throw e
+    } catch (e: RuntimeException) {
+      throw DeviceUnavailableException(deviceId, e.message ?: "${deviceId.instanceId} can't be claimed", e)
+    }
+    return claimLocked(deviceId, key, mcpSessionId)
+  }
 
+  private fun claimLocked(deviceId: TrailblazeDeviceId, key: String, mcpSessionId: String): DeviceClaim? {
     synchronized(this) {
       // Evict stale claims on each claim attempt to prevent permanent lockout
       // after unclean shutdown or disconnects that bypass onSessionClosed.
@@ -74,6 +100,7 @@ class DeviceClaimRegistry(
       // Same session re-claiming — always allowed, but refresh timestamp to prevent stale eviction
       if (existingClaim?.mcpSessionId == mcpSessionId) {
         claims[key] = existingClaim.copy(claimedAt = System.currentTimeMillis())
+        hooks?.onClaimed(deviceId)
         return null
       }
 
@@ -98,6 +125,7 @@ class DeviceClaimRegistry(
         mcpSessionId = mcpSessionId,
         deviceId = deviceId,
       )
+      hooks?.onClaimed(deviceId)
       Console.log("[DeviceClaimRegistry] Device $key claimed by session $mcpSessionId")
       return existingClaim
     }
@@ -115,6 +143,7 @@ class DeviceClaimRegistry(
       val existing = claims[key]
       if (existing != null && existing.mcpSessionId == mcpSessionId) {
         claims.remove(key)
+        hooks?.onReleased(existing.deviceId)
         Console.log("[DeviceClaimRegistry] Device $key released by session $mcpSessionId")
         return true
       }
@@ -132,7 +161,7 @@ class DeviceClaimRegistry(
         .filter { it.value.mcpSessionId == mcpSessionId }
         .map { it.key }
       toRemove.forEach { key ->
-        claims.remove(key)
+        claims.remove(key)?.let { hooks?.onReleased(it.deviceId) }
         Console.log("[DeviceClaimRegistry] Device $key released (session $mcpSessionId closed)")
       }
     }
@@ -152,6 +181,7 @@ class DeviceClaimRegistry(
    * Called inside [claim] while holding the synchronized lock.
    */
   private fun evictStaleClaims() {
+    if (claims.isEmpty()) return
     val now = System.currentTimeMillis()
     val staleKeys = claims.entries
       .filter { now - it.value.claimedAt > claimTtlMs }
@@ -159,6 +189,7 @@ class DeviceClaimRegistry(
     staleKeys.forEach { key ->
       val stale = claims.remove(key)
       if (stale != null) {
+        hooks?.onReleased(stale.deviceId)
         Console.log(
           "[DeviceClaimRegistry] Evicted stale claim for device $key " +
             "(session ${stale.mcpSessionId}, claimed ${formatTimeSince(stale.claimedAt)})"
@@ -166,6 +197,35 @@ class DeviceClaimRegistry(
       }
     }
   }
+}
+
+/**
+ * Lets the host do work as devices are claimed and released — leasing a remote device and giving
+ * it back, today. A claim passed from one session to another (a yield) is not a release: the
+ * device stays claimed throughout.
+ */
+interface DeviceClaimHooks {
+  /**
+   * Called before every claim of [deviceId], re-claims included, outside the registry's lock so
+   * it may block (on the network, say), and therefore idempotent. May throw to refuse the claim,
+   * with a message the user will see.
+   */
+  fun beforeClaim(deviceId: TrailblazeDeviceId)
+
+  /**
+   * Called under the registry's lock each time [deviceId] is claimed, re-claims and yields
+   * included. Called in the registry's order with [onReleased], so must return at once.
+   */
+  fun onClaimed(deviceId: TrailblazeDeviceId)
+
+  /** Called under the registry's lock once [deviceId]'s claim is gone. Must return at once. */
+  fun onReleased(deviceId: TrailblazeDeviceId)
+
+  /**
+   * Called once, as the registry is made, with a way to ask whether the session claiming a device
+   * is in the middle of a tool call. Not under the registry's lock.
+   */
+  fun watchToolCalls(inFlight: (TrailblazeDeviceId) -> Boolean) {}
 }
 
 /**
@@ -179,13 +239,24 @@ class DeviceClaimRegistry(
  * - the trace ID for log correlation.
  */
 class DeviceBusyException(
-  val deviceId: TrailblazeDeviceId,
+  deviceId: TrailblazeDeviceId,
   val owningSessionId: String,
   val owningClient: DeviceClaimRegistry.ClaimingClientInfo?,
   val inFlight: InFlightToolCall,
-) : RuntimeException(
+) : DeviceUnavailableException(
+  deviceId,
   buildBusyMessage(deviceId, owningSessionId, owningClient, inFlight),
 )
+
+/**
+ * [deviceId] can't be claimed right now, for the reason in [message], which is written for the user.
+ * Callers of [DeviceClaimRegistry.claim] catch this to roll back and report, whatever the reason.
+ */
+open class DeviceUnavailableException(
+  val deviceId: TrailblazeDeviceId,
+  message: String,
+  cause: Throwable? = null,
+) : RuntimeException(message, cause)
 
 private fun buildBusyMessage(
   deviceId: TrailblazeDeviceId,

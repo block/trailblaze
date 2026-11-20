@@ -506,6 +506,8 @@ internal val MISUSE_MARKERS = listOf(
   "not valid for the current device/target",
   "was called with unknown argument keys",
   "was called without required argument keys",
+  // CallableOnlyFromToolsException's refusal: `trailblaze tool exec` is a misuse, not a failure.
+  "can only be called from another tool",
 )
 
 /**

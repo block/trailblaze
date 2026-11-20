@@ -58,6 +58,53 @@ class ToolSetYamlLoaderTest {
   }
 
   @Test
+  fun `a malformed memory block keeps the toolset and records the problem`() {
+    // Memory declarations are descriptive only: a bad key name must not make the toolset's tools
+    // vanish from the run. Its keys are ignored and `trailblaze check` reports the problem.
+    val source = FakeSource(
+      trailmapsRecursive = mapOf(
+        "a/toolsets/accounts.yaml" to """
+          id: accounts
+          description: account setup
+          memory:
+            bad-name:
+              description: Not letters, digits and underscores.
+        """.trimIndent(),
+      ),
+    )
+
+    val loaded = ToolSetYamlLoader.discoverAndLoadAll(ToolNameResolver.fromToolClasses(emptySet()), source)
+
+    val entry = assertNotNull(loaded["accounts"], "the toolset must still load").toCatalogEntry()
+    assertEquals(emptyMap(), entry.memoryKeys)
+    assertEquals(1, entry.memoryProblems.size, entry.memoryProblems.toString())
+    assertEquals("a", entry.trailmapId)
+  }
+
+  @Test
+  fun `a memory block the decoder can't read keeps the toolset too`() {
+    // A missing description, a key mapped to a bare string, and a list in place of the map would
+    // each fail a strict decode; none of them may drop the toolset's tools.
+    val blocks = mapOf(
+      "missing description" to "memory:\n  account_email: {}",
+      "bare string" to "memory:\n  account_email: The account's email.",
+      "list" to "memory:\n  - account_email",
+    )
+    blocks.forEach { (shape, block) ->
+      val source = FakeSource(
+        trailmapsRecursive = mapOf("a/toolsets/accounts.yaml" to "id: accounts\ndescription: account setup\n$block"),
+      )
+
+      val loaded = ToolSetYamlLoader.discoverAndLoadAll(ToolNameResolver.fromToolClasses(emptySet()), source)
+
+      val entry = assertNotNull(loaded["accounts"], "$shape: the toolset must still load").toCatalogEntry()
+      assertEquals(emptyMap(), entry.memoryKeys, shape)
+      assertEquals(1, entry.memoryProblems.size, "$shape: ${entry.memoryProblems}")
+      assertEquals("a", entry.trailmapId, shape)
+    }
+  }
+
+  @Test
   fun `only entries under toolsets segment are picked up from the trailmaps walk`() {
     // The recursive walk catches every `.yaml` under `trails/config/trailmaps/`, which
     // includes `trailmap.yaml`, `tools/*.tool.yaml`, etc. The segment-filter

@@ -9,11 +9,12 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.SimctlCommand
 
 /**
- * Unit tests for [SimctlCli]'s pure helpers: the permission-preserving bundle copy backing
- * `clearAppState`'s reinstall, the symlink-safe temp-bundle delete, the `launchctl list`
+ * Unit tests for [SimctlCli]'s pure helpers, plus the permission-preserving bundle copy and
+ * symlink-safe delete its `clearAppState` reinstall uses from [IosHostSimctlUtils]: the `launchctl list`
  * parse backing `ensureStopped`, and the `launch` argv build. The simctl-subprocess paths
  * need a real simulator and aren't covered here.
  */
@@ -45,7 +46,7 @@ class SimctlCliTest {
     Files.setPosixFilePermissions(binary, exec)
 
     val dst = Files.createTempDirectory("simctl-copy-dst-").resolve("Widget.app")
-    SimctlCli.copyDirectoryPreservingAttributes(src, dst)
+    IosHostSimctlUtils.copyDirectoryPreservingAttributes(src, dst)
 
     val copied = dst.resolve("PlugIns/Widget.appex/Widget")
     assertTrue(Files.isRegularFile(copied))
@@ -69,7 +70,7 @@ class SimctlCliTest {
     )
 
     val dst = Files.createTempDirectory("simctl-copy-dst-").resolve("Widget.app")
-    SimctlCli.copyDirectoryPreservingAttributes(src, dst)
+    IosHostSimctlUtils.copyDirectoryPreservingAttributes(src, dst)
 
     val perms = Files.getPosixFilePermissions(dst.resolve("Info.plist"))
     assertFalse(PosixFilePermission.OWNER_EXECUTE in perms)
@@ -85,7 +86,7 @@ class SimctlCliTest {
     val link: Path = Files.createSymbolicLink(src.resolve("Latest"), real.fileName)
 
     val dst = Files.createTempDirectory("simctl-copy-dst-").resolve("Widget.app")
-    SimctlCli.copyDirectoryPreservingAttributes(src, dst)
+    IosHostSimctlUtils.copyDirectoryPreservingAttributes(src, dst)
 
     val copiedLink = dst.resolve("Latest")
     assertTrue(Files.isSymbolicLink(copiedLink))
@@ -104,7 +105,7 @@ class SimctlCliTest {
     Files.createFile(bundle.resolve("Info.plist"))
     Files.createSymbolicLink(bundle.resolve("Escape"), external)
 
-    SimctlCli.deleteRecursivelyNoFollowLinks(bundle)
+    IosHostSimctlUtils.deleteRecursivelyNoFollowLinks(bundle)
 
     assertFalse(Files.exists(bundle))
     assertTrue(Files.isDirectory(external))
@@ -157,7 +158,7 @@ class SimctlCliTest {
   @Test
   fun `launchCommand appends launch arguments after the bundle id`() {
     assertEquals(
-      SimctlCommand.argv(
+      listOf(
         "launch", "UDID-123", "com.example.app",
         "-E2ETestLaunchSessionToken", "session-token-value",
       ),
@@ -172,7 +173,7 @@ class SimctlCliTest {
   @Test
   fun `launchCommand without launch arguments is the bare simctl launch command`() {
     assertEquals(
-      SimctlCommand.argv("launch", "UDID-123", "com.example.app"),
+      listOf("launch", "UDID-123", "com.example.app"),
       SimctlCli.launchCommand(
         udid = "UDID-123",
         bundleId = "com.example.app",
@@ -200,13 +201,13 @@ class SimctlCliTest {
 
     fun state(): String? = if (states.size > 1) states.removeAt(0) else states.first()
 
-    fun boot(): SimctlCli.Result {
+    fun boot(): SimctlCommand.Result {
       booted += "boot"
-      return if (booted.size <= bootFailures) SimctlCli.Result(1, "", "Unable to boot") else SimctlCli.Result(0, "", "")
+      return if (booted.size <= bootFailures) SimctlCommand.Result(1, "", "Unable to boot") else SimctlCommand.Result(0, "", "")
     }
   }
 
-  private fun FakeReboot.run(shutdown: SimctlCli.Result?, timeoutSeconds: Long = 120) =
+  private fun FakeReboot.run(shutdown: SimctlCommand.Result?, timeoutSeconds: Long = 120) =
     SimctlCli.bootAfterShutdown(
       udid = "SIM",
       shutdown = shutdown,
@@ -221,7 +222,7 @@ class SimctlCliTest {
   fun `a reboot waits out the shutdown before it boots`() {
     val fake = FakeReboot("Shutting Down", "Shutting Down", "Shutdown")
 
-    assertTrue(fake.run(SimctlCli.Result(0, "", "")).success)
+    assertTrue(fake.run(SimctlCommand.Result(0, "", "")).success)
     assertEquals(listOf("boot"), fake.booted)
   }
 
@@ -229,7 +230,7 @@ class SimctlCliTest {
   fun `a shutdown that timed out but went through is still followed by a boot`() {
     val fake = FakeReboot("Shutting Down", "Shutdown")
 
-    assertTrue(fake.run(SimctlCli.Result(-1, "", "simctl timed out after 120s")).success)
+    assertTrue(fake.run(SimctlCommand.Result(-1, "", "simctl timed out after 120s")).success)
     assertEquals(listOf("boot"), fake.booted)
   }
 
@@ -237,7 +238,7 @@ class SimctlCliTest {
   fun `a device a failed shutdown left booted reports that failure and is not booted again`() {
     val fake = FakeReboot("Booted")
 
-    val result = fake.run(SimctlCli.Result(1, "", "Unable to shutdown"))
+    val result = fake.run(SimctlCommand.Result(1, "", "Unable to shutdown"))
 
     assertFalse(result.success)
     assertEquals("Unable to shutdown", result.stderr)
@@ -248,7 +249,7 @@ class SimctlCliTest {
   fun `a boot that fails while the device stays shut down is tried again`() {
     val fake = FakeReboot("Shutdown", bootFailures = 1)
 
-    assertTrue(fake.run(SimctlCli.Result(0, "", "")).success)
+    assertTrue(fake.run(SimctlCommand.Result(0, "", "")).success)
     assertEquals(listOf("boot", "boot"), fake.booted)
   }
 
@@ -256,7 +257,7 @@ class SimctlCliTest {
   fun `a device that never boots reports the last boot failure`() {
     val fake = FakeReboot("Shutdown", bootFailures = Int.MAX_VALUE)
 
-    val result = fake.run(SimctlCli.Result(0, "", ""), timeoutSeconds = 2)
+    val result = fake.run(SimctlCommand.Result(0, "", ""), timeoutSeconds = 2)
 
     assertFalse(result.success)
     assertEquals("Unable to boot", result.stderr)
@@ -266,7 +267,7 @@ class SimctlCliTest {
   fun `a device that never finishes shutting down fails the reboot`() {
     val fake = FakeReboot("Shutting Down")
 
-    val result = fake.run(SimctlCli.Result(0, "", ""), timeoutSeconds = 2)
+    val result = fake.run(SimctlCommand.Result(0, "", ""), timeoutSeconds = 2)
 
     assertFalse(result.success)
     assertTrue(result.stderr.contains("still `Shutting Down`"))

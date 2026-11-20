@@ -81,13 +81,14 @@ class MaestroHostRunnerImpl(
    * that build. Null uses the real [HostMaestroDriverScreenState], which touches the device;
    * tests substitute a fake so no lazy device lookup is forced. */
   private val driverScreenStateFactory: (
-    (skipScreenshot: Boolean, secondaryTreeCapture: (() -> SecondaryTreeResult)?) -> ScreenState
+    (skipScreenshot: Boolean, secondaryTreeCapture: (() -> SecondaryTreeResult)?, classifiers: List<TrailblazeDeviceClassifier>) -> ScreenState
   )? = null,
   /** Sink for the one-per-run dual-tree failure warning. Seam for tests, which cannot read
    * [Console] reliably — it caches `System.out` at class init. */
   private val migrationCaptureLog: (String) -> Unit = { Console.error(it) },
   /** A device the caller already connected and owns; null looks one up (taking a new hold). */
   private val injectedConnectedDevice: TrailblazeConnectedDevice? = null,
+  private val deviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier> = { deviceClassifiers },
 ) : MaestroHostRunner {
 
   init {
@@ -366,13 +367,14 @@ class MaestroHostRunnerImpl(
    */
   private fun buildDriverScreenState(skipScreenshot: Boolean): ScreenState {
     val secondaryTreeCapture = secondaryTreeCaptureOrNull()
-    return driverScreenStateFactory?.invoke(skipScreenshot, secondaryTreeCapture)
+    val currentClassifiers = deviceClassifiersProvider()
+    return driverScreenStateFactory?.invoke(skipScreenshot, secondaryTreeCapture, currentClassifiers)
       ?: HostMaestroDriverScreenState(
         maestroDriver = loggingDriver,
         // Re-resolve per call so live settings changes (e.g. `trailblaze config
         // screenshot-format png` mid-session) take effect on the very next capture.
         screenshotScalingConfig = screenshotScalingConfigProvider(),
-        deviceClassifiers = deviceClassifiers,
+        deviceClassifiers = currentClassifiers,
         skipScreenshot = skipScreenshot,
         trailblazeDeviceId = trailblazeDeviceId,
         secondaryTreeCapture = secondaryTreeCapture,

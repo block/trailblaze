@@ -179,6 +179,14 @@ export type MockTrailblazeClient = TrailblazeClient & {
    */
   stub(toolName: string, response: MockStubResponse): void;
 
+  /**
+   * Register responses for [toolName] that calls take in order, the last one repeating: a screen
+   * that changes between reads, then settles. Each entry behaves like a [stub] response, so one
+   * with `errorMessage` throws for that call only. Takes precedence over a [stub] for the same
+   * tool, and persists until [reset].
+   */
+  stubSequence(toolName: string, responses: MockStubResponse[]): void;
+
   /** Recorded `client.host.<name>(args)` calls in invocation order; `tool` is the function name. */
   hostCalls: MockCall[];
 
@@ -205,13 +213,25 @@ export type MockTrailblazeClient = TrailblazeClient & {
 export function createMockClient(): MockTrailblazeClient {
   const calls: MockCall[] = [];
   const stubs = new Map<string, MockStubResponse>();
+  const sequences = new Map<string, { responses: MockStubResponse[]; next: number }>();
+
+  const requireToolName = (method: string, toolName: string): void => {
+    if (toolName.trim() === "") {
+      throw new Error(
+        `createMockClient: ${method}() tool name must not be empty or whitespace-only.`,
+      );
+    }
+  };
 
   const dispatch = async (
     name: string,
     args: Record<string, unknown>,
   ): Promise<TrailblazeCallToolResult> => {
     calls.push({ tool: name, args });
-    const stub = stubs.get(name);
+    const sequence = sequences.get(name);
+    const stub = sequence
+      ? sequence.responses[Math.min(sequence.next++, sequence.responses.length - 1)]
+      : stubs.get(name);
     if (stub && stub.errorMessage && stub.errorMessage.length > 0) {
       // Mirror the production client's error wording so a test that asserts on caught
       // error messages doesn't drift from production behavior. See `unwrapCallbackResponse`
@@ -256,18 +276,22 @@ export function createMockClient(): MockTrailblazeClient {
       hostStubs.set(name, response);
     },
     stub(toolName: string, response: MockStubResponse): void {
-      if (toolName.trim() === "") {
-        throw new Error(
-          "createMockClient: stub() tool name must not be empty or whitespace-only.",
-        );
-      }
+      requireToolName("stub", toolName);
       stubs.set(toolName, response);
+    },
+    stubSequence(toolName: string, responses: MockStubResponse[]): void {
+      requireToolName("stubSequence", toolName);
+      if (responses.length === 0) {
+        throw new Error("createMockClient: stubSequence() needs at least one response.");
+      }
+      sequences.set(toolName, { responses: [...responses], next: 0 });
     },
     reset(): void {
       // Mutate `calls` in place (rather than reassigning) so a test that captured the array
       // reference earlier sees the cleared state instead of holding a stale snapshot.
       calls.length = 0;
       stubs.clear();
+      sequences.clear();
       hostCalls.length = 0;
       hostStubs.clear();
     },
@@ -394,8 +418,8 @@ export interface CreateMockContextOptions {
     driver?: string;
     /**
      * Simulator UDID / emulator serial (`TrailblazeDevice.instanceId`). Set this to exercise a
-     * tool that targets the device's host CLI directly — e.g. a step composing
-     * `ctx.tools.exec({ argv: ["xcrun","simctl","terminate", ctx.device.instanceId, "<bundleId>"] })`.
+     * tool that reads it, e.g. one that names the device in its messages. Simulator control goes
+     * through `ctx.tools.ios_simctl`, which targets the session's simulator itself.
      * Left undefined unless a test sets it, mirroring the production envelope where older daemons
      * and non-mobile sessions don't carry it.
      */
@@ -406,6 +430,12 @@ export interface CreateMockContextOptions {
      * sets it, mirroring web devices, on-device runs, and older daemons.
      */
     trailblazePort?: number;
+    /**
+     * The language the device started the trail in (`TrailblazeDevice.initialLocale`), such as `es-US`. Left
+     * undefined unless a test sets it, mirroring older hosts and devices whose language this host
+     * did not set.
+     */
+    initialLocale?: string;
   };
   target?: TrailblazeTarget;
   memory?: Record<string, unknown>;
@@ -569,6 +599,7 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     // left undefined unless a test sets it.
     instanceId: opts.device?.instanceId,
     trailblazePort: opts.device?.trailblazePort,
+    initialLocale: opts.device?.initialLocale,
   };
 
   return {

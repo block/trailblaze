@@ -6,6 +6,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.util.IosAppProcess
+import xyz.block.trailblaze.util.SimctlCommand
 
 class IosLogStreamPredicateTest {
 
@@ -133,7 +134,7 @@ class IosLogStreamPredicateTest {
     val command = buildIosLogStreamCommand("SIM-1", "com.example.sampleapp")
     assertEquals(buildIosLogStreamPredicate("com.example.sampleapp"), command.predicate())
     assertTrue(command.isAppScoped)
-    assertEquals(listOf("xcrun", "simctl", "spawn", "SIM-1", "log", "stream"), command.argv.take(6))
+    assertEquals(SimctlCommand.argv("spawn", "SIM-1", "log", "stream"), command.argv.take(SimctlCommand.argv().size + 4))
   }
 
   @Test

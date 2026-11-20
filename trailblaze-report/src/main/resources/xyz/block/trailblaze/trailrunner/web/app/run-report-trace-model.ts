@@ -41,6 +41,17 @@ export interface ReportTimelineEntry {
   /** Run-clock instant and duration playback schedules this entry on (the row's, or the child's). */
   ts: number | null;
   ms: number | null;
+  /**
+   * Run-clock instant the entry's screenshot was taken, which is the moment a recording must show
+   * for the entry to look like its screenshot. A row's screenshot usually comes from a driver
+   * record, and drivers capture just before they act, so that record's start (`shotTs`) is the
+   * capture. `ts` is when the TOOL started, and a device busy with other work can delay the capture
+   * by seconds, so a recording seeked to `ts` shows the screen from before the step's action. The
+   * record's end (`shotEndTs`) is no better: it is after the action ran, which for a tap is the next
+   * screen. A dispatch's instant is already its own driver record's start. Falls back to `ts` when
+   * no record says when the capture was taken.
+   */
+  capturedTs: number | null;
 }
 
 export interface ReportTraceModel {
@@ -220,13 +231,14 @@ export function buildReportTraceModel(trace: TraceStep[], llmCount: number): Rep
   for (const row of trace) {
     const kids = row.children || [];
     entryIndexById.set(row.i, entries.length);
-    entries.push({ row, kid: null, child: null, ts: row.ts ?? null, ms: row.ms ?? null });
+    const ts = row.ts ?? null;
+    entries.push({ row, kid: null, child: null, ts, ms: row.ms ?? null, capturedTs: row.shotTs ?? ts });
     let shownShot: string | null = row.screenshotFile || null;
     const instants = childInstants(row);
     kids.forEach((child, kid) => {
-      const ts = instants[kid];
+      const childTs = instants[kid];
       if (child.screenshotFile && child.screenshotFile !== shownShot) {
-        entries.push({ row, kid, child, ts, ms: child.ms ?? null });
+        entries.push({ row, kid, child, ts: childTs, ms: child.ms ?? null, capturedTs: childTs });
         shownShot = child.screenshotFile;
       }
     });

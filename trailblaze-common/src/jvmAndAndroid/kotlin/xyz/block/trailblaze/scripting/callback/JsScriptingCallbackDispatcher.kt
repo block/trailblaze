@@ -255,6 +255,15 @@ object JsScriptingCallbackDispatcher {
     action: JsScriptingCallbackAction.CallTool,
     timeoutMs: Long,
   ): JsScriptingCallbackResult {
+    // Same forwarding refusal as [xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding.callFromBundle].
+    entry.executionContext.forwardedToolOnlyRefusal(action.toolName, entry.toolRepo)?.let { message ->
+      Console.log(
+        "[JsScriptingCallbackDispatcher] FORWARDED_TOOL_ONLY_REJECTED tool '${action.toolName}' in session " +
+          "${entry.sessionId.value}",
+      )
+      return JsScriptingCallbackResult.CallToolResult(success = false, errorMessage = message)
+    }
+
     // Unknown-key gate — runtime side of the typed-surface contract (#3209). Closes the
     // gap between `client.d.ts`'s compile-time rejection and the deserializer's
     // `ignoreUnknownKeys = true` silent-drop behavior. Returns a CallToolResult error (not
@@ -291,7 +300,7 @@ object JsScriptingCallbackDispatcher {
     // tier ([TrailblazeToolRepo.expectedArgumentKeysFor]'s global fallback) and so does the
     // in-process QuickJS transport ([SessionScopedHostBinding.callFromBundle]). Resolving
     // through the filtered lookup here would validate a schema this line then refuses to
-    // decode, so a class-backed tool in no toolset (e.g. `mobile_maestro`) failed on this
+    // decode, so a class-backed tool in no toolset failed on this
     // transport while succeeding on QuickJS.
     val tool = try {
       entry.toolRepo.toolCallToTrailblazeToolUnfiltered(action.toolName, action.argumentsJson)
@@ -369,8 +378,11 @@ object JsScriptingCallbackDispatcher {
         withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1) + DispatchCancellation.element(currentCoroutineContext().job)) {
           // With no nested executor (e.g. Revyl) the tool runs here, outside any dispatch, so it is
           // recorded here.
-          val result = entry.executionContext.nestedToolExecutor?.invoke(tool)
-            ?: ToolCallHistory.recordExecution(entry.executionContext, tool) { tool.execute(entry.executionContext) }
+          val context = entry.executionContext
+          val result = context.callerArguments.callFromTool {
+            context.nestedToolExecutor?.invoke(tool)
+              ?: ToolCallHistory.recordExecution(context, tool) { tool.execute(context) }
+          }
           when (result) {
             is TrailblazeToolResult.Success ->
               JsScriptingCallbackResult.CallToolResult(

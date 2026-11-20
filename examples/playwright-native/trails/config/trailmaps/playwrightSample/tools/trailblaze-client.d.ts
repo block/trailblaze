@@ -1752,6 +1752,17 @@ declare module "@trailblaze/scripting" {
       result: string;
     };
   }
+
+  interface TrailblazeMemoryKeysByTrailmap {
+    "playwrightSample": {
+      /**
+       * The email playwrightSample_web_submitContactForm submitted, for later steps to check.
+       *
+       * Declared by trailmap `playwrightSample`.
+       */
+      "contact_form_email": "contact_form_email";
+    };
+  }
 }
 
 export {};

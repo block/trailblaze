@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.config.MemoryKeyDeclaration
 import kotlin.reflect.KClass
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolSetYamlLoader
@@ -20,6 +21,15 @@ data class ToolSetCatalogEntry(
   override val scriptedToolNames: Set<ToolName> = emptySet(),
   val alwaysEnabled: Boolean = false,
   val compatibleDriverTypes: Set<TrailblazeDriverType> = emptySet(),
+  /** The memory keys this toolset's tools read or write, from its YAML `memory:` block. */
+  val memoryKeys: Map<String, MemoryKeyDeclaration> = emptyMap(),
+  /** The trailmap whose `toolsets/` folder holds this toolset, when it was discovered from one. */
+  val trailmapId: String? = null,
+  /**
+   * What is wrong with a malformed YAML `memory:` block, whose keys are then left out of
+   * [memoryKeys]. `trailblaze check` fails on it; the toolset's tools still load and run.
+   */
+  val memoryProblems: List<String> = emptyList(),
 ) : TrailblazeToolSurface {
   // The reference union — class-backed and scripted names together, via the single
   // [allToolNames] accessor so this can't drift from how every other surface enumerates tools.

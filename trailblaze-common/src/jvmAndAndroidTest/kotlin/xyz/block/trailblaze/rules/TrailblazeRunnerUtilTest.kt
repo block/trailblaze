@@ -28,6 +28,9 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailheadException
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.ScreenStateLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
@@ -459,6 +462,42 @@ class TrailblazeRunnerUtilTest {
 
     assertTrue(session.usedSelfHeal)
     assertEquals(1, runner.recoverCalls.size)
+  }
+
+  @Test
+  fun `a heal is logged at its trail step's position, which the trailhead does not count toward`() = runBlocking {
+    // The recording save matches heals to `trail:` steps by this index (see TrailCommand.replayedRun),
+    // so a trailhead counted in it would rewrite the step after the one that healed.
+    val logs = mutableListOf<TrailblazeLog>()
+    var session = newSession("session-heal-index")
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          if ((tools.single() as InputTextTrailblazeTool).text == "fail") {
+            TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "boom")
+          } else {
+            TrailblazeToolResult.Success()
+          }
+        },
+        trailblazeRunner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") }),
+        trailblazeLogger = TrailblazeLogger(LogEmitter { logs += it }, ScreenStateLogger { "" }),
+        sessionProvider = { session },
+        sessionUpdater = { session = it },
+      )
+
+    // Runners replay the trailhead and the `trail:` steps in separate calls.
+    util.runPromptSuspend(
+      prompts = listOf(TrailheadDefinition(step = "Launch signed in", tools = listOf(tool("pass"))).toPromptStep()),
+      useRecordedSteps = true,
+      selfHeal = true,
+    )
+    util.runPromptSuspend(
+      prompts = listOf(recordedStep("First step", tool("pass")), recordedStep("Second step", tool("fail"))),
+      useRecordedSteps = true,
+      selfHeal = true,
+    )
+
+    assertEquals(listOf(1), logs.filterIsInstance<TrailblazeLog.SelfHealInvokedLog>().map { it.stepIndex })
   }
 
   @Test

@@ -34,6 +34,12 @@ export {
   type TrailblazeTarget,
 } from "./context.js";
 export type { TrailblazeCleanupCalls, TrailblazeToolCall, TrailblazeToolSession } from "./session-undo.js";
+export {
+  memoryKeys,
+  type TrailblazeMemoryKey,
+  type TrailblazeMemoryKeyArg,
+  type TrailblazeMemoryKeysByTrailmap,
+} from "./memory-keys.js";
 export type {
   SessionEvents,
   SessionEventsCountResult,
@@ -45,6 +51,37 @@ export type {
 } from "./session-events.js";
 export type { HistorySection, MemoryChange, ToolCall, ToolHistory } from "./history.js";
 export { formatToolCalls } from "./history.js";
+export type {
+  PixelBox,
+  PixelPredicate,
+  Rgba,
+  ScreenImage,
+  ScreenImageOptions,
+  TrailblazeScreen,
+} from "./screen-image.js";
+export {
+  colorCounts,
+  deltaE2000,
+  parseHex,
+  percent,
+  rgbHex,
+  rgbToLab,
+  topColorShares,
+  type ColorShare,
+  type Lab,
+  type Rgb,
+} from "./color.js";
+export {
+  cantCheckVerdict,
+  checkRegion,
+  RegionDefaults,
+  RegionFailureCode,
+  RegionOutcome,
+  type RegionCheckInput,
+  type RegionCheckOptions,
+  type RegionRule,
+  type RuleVerdict,
+} from "./region-check.js";
 export type {
   SurveyRunFinding,
   SurveyRunOptions,
@@ -73,6 +110,9 @@ export type {
 } from "./client.js";
 export type { EmptyInput, ToolContext, TrailblazeHost, TypedToolDefinition } from "./tool.js";
 export { ToolError } from "./tool-error.js";
+// `ctx.tools.ios_simctl` that throws on a non-zero exit or a timeout.
+export { simctlOrThrow } from "./ios-simctl.js";
+export type { IosSimctlTools } from "./ios-simctl.js";
 export {
   captureViewHierarchy,
   ConditionalActionFailedError,
@@ -112,9 +152,13 @@ import "./built-in-tools.js";
 // from the tool map entry.
 export type {
   InstalledApp,
+  IosKeychainItem,
+  IosKeychainResult,
+  IosSimctlResult,
   ListInstalledAppsDetailedResult,
   ListInstalledAppsResult,
 } from "./generated/built-in-tool-results.js";
+export type { IosKeychainArgs, IosSimctlArgs } from "./built-in-tools.js";
 export type {
   RunOptions,
   TrailblazeToolHandler,
@@ -135,4 +179,5 @@ export type {
  * re-exported here. The SDK's public surface is `tool`, `run`, `fromMeta`, and the type
  * exports above; tests that need internals import from the module's relative path directly.
  */
-export { trailblaze, run, tool, trailhead } from "./sub-process.js";
+export { trailblaze, run, tool, trailhead, deviceClassifier } from "./sub-process.js";
+export type { DeviceClassifier, DeviceClassifierInput } from "./device-classifier.js";

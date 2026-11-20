@@ -8,11 +8,22 @@ import io.ktor.server.engine.sslConnector
 import java.io.File
 
 object SslConfig {
-  fun ApplicationEngine.Configuration.configureForSelfSignedSsl(requestedHttpPort: Int, requestedHttpsPort: Int) {
+  fun ApplicationEngine.Configuration.configureForSelfSignedSsl(
+    requestedHttpPort: Int,
+    requestedHttpsPort: Int,
+    /** [LendingPort]: loopback only, and the daemon's routing serves it nothing but `/leases`. */
+    lendingPort: Int? = null,
+  ) {
     // Always configure the HTTP connector first so the server starts even if SSL setup fails.
     connector {
       host = "::"
       port = requestedHttpPort
+    }
+    if (lendingPort != null) {
+      connector {
+        host = "127.0.0.1"
+        port = lendingPort
+      }
     }
 
     // Store the keystore under ~/.trailblaze/ so it works regardless of the working directory.

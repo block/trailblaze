@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.capture.memory
 
 import xyz.block.trailblaze.capture.video.runSubprocessWithTimeout
+import xyz.block.trailblaze.util.SimctlCommand
 import xyz.block.trailblaze.util.isMacOs
 
 /**
@@ -36,7 +37,7 @@ class IosSimulatorMemoryProbe(
     if (sample == null) {
       // No remembered pid, or the remembered process is gone: resolve afresh.
       knownPidByApp.remove(key)
-      val launchctl = run(listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "list")) ?: return null
+      val launchctl = run(SimctlCommand.argv("spawn", deviceId, "launchctl", "list")) ?: return null
       pid = parseLaunchctlPid(launchctl, appId)
       sample = pid?.let(::footprintOf)
       if (pid != null && sample != null) knownPidByApp[key] = pid

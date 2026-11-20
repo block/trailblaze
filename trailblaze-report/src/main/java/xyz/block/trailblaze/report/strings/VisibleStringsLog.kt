@@ -109,9 +109,10 @@ data class VisibleStringsScreenLine(
    * judge that is filed as `text` here was seen drawn in one of its boxes (see
    * `VisibleStringExtractor.confirmDrawnLabels`). Labels it cannot judge keep the element-type
    * rule even here: under 3 letters or digits, in a script other than Latin or Cyrillic, or with
-   * no box on screen. Absent when no OCR read ran (any other driver, a non-macOS host, or OCR
-   * failed or timed out). A reader that corrects old captures by geometry must leave the labels a
-   * checked capture judged alone, or it re-demotes labels OCR saw drawn.
+   * no box on screen. Absent when no OCR read ran: OCR is off (the default, see
+   * [VisibleStringsLog.OCR_ENV_VAR]), another driver, a non-macOS host, or OCR failed or timed
+   * out. A reader that corrects old captures by geometry must leave the labels a checked capture
+   * judged alone, or it re-demotes labels OCR saw drawn.
    */
   val ocrChecked: Boolean? = null,
   /** The [captureId] of the earlier capture whose strings are identical to this one's in every
@@ -129,13 +130,18 @@ data class VisibleStringsScreenLine(
  * was emitted (see `withVisibleStrings`). A log from before that field existed is read from its
  * tree instead, so this still covers sessions recorded long before either existed.
  *
- * The export adds one thing the record lacks: on macOS, each iOS AXe capture's labels are checked
- * against its screenshot ([VisibleStringsScreenLine.ocrChecked]). That read takes up to a second a
- * screenshot, and far longer while Vision loads, which a run cannot afford as each log is written.
+ * The export can add one thing the record lacks: with [OCR_ENV_VAR] set on macOS, each iOS AXe
+ * capture's labels are checked against its screenshot ([VisibleStringsScreenLine.ocrChecked]). It is
+ * off by default because it is slow: about 40 s for a typical AXe session, every one of them, while
+ * the CLI waits to print results. Every string is in the tree either way; OCR only refiles labels
+ * the element-type rule calls drawn and the screenshot does not show.
  */
 object VisibleStringsLog {
 
   const val FILE_NAME: String = "visible-strings.ndjson"
+
+  /** Set to `true` or `1` to OCR iOS AXe captures in [write]. Off when unset. */
+  const val OCR_ENV_VAR: String = "TRAILBLAZE_VISIBLE_STRINGS_OCR"
   /**
    * 2 keys screens by screenshot and writes `bounds` as corners; 1 keyed them by step number and
    * wrote `[x, y, width, height]`. Both are four integers, which is why the version has to say.
@@ -153,6 +159,8 @@ object VisibleStringsLog {
   /**
    * Writes the file into the session's own directory and returns it, or null with no captures.
    *
+   * @param ocr whether to check iOS AXe labels against their screenshots; see [OCR_ENV_VAR].
+   *
    * First saves a frame from the session's recording for each capture that has no screenshot, so
    * its line can name one ([VisibleStringsScreenLine.frame]).
    *
@@ -164,7 +172,12 @@ object VisibleStringsLog {
    * touches, and a sweep over a large logs directory would then hold all of them at once. This
    * walks sessions one at a time and never needs the previous one again.
    */
-  fun write(logsRepo: LogsRepo, sessionId: SessionId, collapseRepeats: Boolean = true): File? {
+  fun write(
+    logsRepo: LogsRepo,
+    sessionId: SessionId,
+    collapseRepeats: Boolean = true,
+    ocr: Boolean = ocrEnabled(System.getenv(OCR_ENV_VAR)),
+  ): File? {
     val logs = logsRepo.getLogsForSession(sessionId)
     val sessionDir = logsRepo.getSessionDir(sessionId)
     val filled = CaptureVideoFrames.fill(sessionDir, logs)
@@ -180,7 +193,11 @@ object VisibleStringsLog {
       logs = logs,
       collapseRepeats = collapseRepeats,
       frames = filled.frames,
-      readerFor = { screenshot, width, height -> VisionScreenTextReader(File(sessionDir, screenshot), width, height) },
+      readerFor = if (ocr) {
+        { screenshot, width, height -> VisionScreenTextReader(File(sessionDir, screenshot), width, height) }
+      } else {
+        null
+      },
     ) ?: return null
     return File(sessionDir, FILE_NAME).apply { writeText(lines) }
   }
@@ -394,4 +411,7 @@ object VisibleStringsLog {
     if (strings.isNullOrEmpty() || screenshot == null || annotated) return null
     return VisibleStringExtractor.confirmDrawnLabels(strings, axeTree, readerFor(screenshot, deviceWidth, deviceHeight))
   }
+
+  /** True when [flag], the value of [OCR_ENV_VAR], turns OCR on. */
+  fun ocrEnabled(flag: String?): Boolean = flag == "1" || flag.equals("true", ignoreCase = true)
 }

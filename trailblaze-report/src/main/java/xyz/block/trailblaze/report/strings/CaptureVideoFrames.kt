@@ -40,6 +40,16 @@ object CaptureVideoFrames {
   /** Where a capture's frame lives in its session dir. */
   fun fileName(captureId: String): String = "$captureId.webp"
 
+  /**
+   * [log]'s saved frame in [sessionDir], or null when it is not a screenshot-less capture or no
+   * frame was saved for it. What a reader of the session's images uses in place of the screenshot.
+   */
+  fun savedFrame(sessionDir: File, log: TrailblazeLog): File? {
+    val captureId = log.screenshotlessCapture()?.captureId ?: return null
+    if (!SAFE_NAME.matches(captureId)) return null
+    return File(sessionDir, fileName(captureId)).takeIf { it.isFile }
+  }
+
   private val SCREENSHOT = ScreenshotScalingConfig.DEFAULT
 
   /**

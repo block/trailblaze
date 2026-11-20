@@ -37,6 +37,13 @@ class TrailblazeYaml internal constructor(
     selectedDeviceConfiguration: String? = null,
   ) = codec.decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration)
 
+  fun decodeTrail(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
+    recordingClassifiers: List<TrailblazeDeviceClassifier>,
+  ) = codec.decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration, recordingClassifiers)
+
   fun decodeTools(yaml: String) = codec.decodeTools(yaml)
 
   fun decodeTrailOrToolEnvelope(
@@ -44,6 +51,13 @@ class TrailblazeYaml internal constructor(
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     selectedDeviceConfiguration: String? = null,
   ) = codec.decodeTrailOrToolEnvelope(yaml, deviceClassifiers, selectedDeviceConfiguration)
+
+  fun decodeTrailOrToolEnvelope(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
+    recordingClassifiers: List<TrailblazeDeviceClassifier>,
+  ) = codec.decodeTrailOrToolEnvelope(yaml, deviceClassifiers, selectedDeviceConfiguration, recordingClassifiers)
 
   fun isBareToolEnvelope(yaml: String) = codec.isBareToolEnvelope(yaml)
 

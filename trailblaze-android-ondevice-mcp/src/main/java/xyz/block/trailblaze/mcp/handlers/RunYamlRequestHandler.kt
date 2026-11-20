@@ -5,11 +5,15 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.logs.client.SessionStartRecords
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -18,6 +22,7 @@ import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.RpcHandler
@@ -35,6 +40,7 @@ import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -58,9 +64,10 @@ internal fun computeHasRecordedSteps(
   trailblazeYaml: TrailblazeYaml,
   yaml: String,
   deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  recordingClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers,
 ): Boolean = try {
   trailblazeYaml.hasRecordedSteps(
-    trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = deviceClassifiers),
+    trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = deviceClassifiers, recordingClassifiers = recordingClassifiers),
   )
 } catch (e: Exception) {
   false
@@ -158,7 +165,9 @@ class RunYamlRequestHandler(
     val session: TrailblazeSession,
     val outcome: CompletableDeferred<Outcome>,
     val job: Job,
-  )
+  ) {
+    val terminalLogClaimed = AtomicBoolean()
+  }
 
   private val currentRun = AtomicReference<CurrentRun?>(null)
 
@@ -189,7 +198,80 @@ class RunYamlRequestHandler(
   }
 
 
+  internal var prepareRunYamlRequest: ((RunYamlRequest) -> Unit)? = null
+  private val preparationMutex = kotlinx.coroutines.sync.Mutex()
+
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
+    val prepare = prepareRunYamlRequest ?: return handlePrepared(request, {})
+    var locked = false
+    var interruptedRun: CurrentRun? = null
+    var timeoutResponse: (() -> RpcResult<RunYamlResponse>)? = null
+    fun releasePreparation() {
+      if (locked) {
+        locked = false
+        preparationMutex.unlock()
+      }
+    }
+    try {
+      // The same RPC cap covers serialization, driver preparation and synchronous execution.
+      val result = withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) {
+        preparationMutex.lock()
+        locked = true
+        val previous = currentRun.get()
+        if (previous != null) {
+          val interrupted = !previous.outcome.isCompleted
+          if (interrupted) {
+            interruptedRun = previous
+            previous.job.cancelAndJoin()
+          } else previous.job.join()
+          retireRun(previous, request, interrupted)
+        }
+        // Existing hooks are synchronous. Interruption connects their runBlocking queue bridge
+        // to request cancellation without changing the public server constructor.
+        runInterruptible { prepare(request) }
+        currentCoroutineContext().ensureActive()
+        handlePrepared(request, ::releasePreparation) { timeoutResponse = it }
+      }
+      if (result != null) return result
+      releasePreparation()
+      timeoutResponse?.let { return it() }
+      // Setup never installed a new run. Retire interrupted work only once it really stops,
+      // without holding request serialization or overwriting the still-installed identity.
+      interruptedRun?.let { previous ->
+        backgroundScope.launch {
+          previous.job.join()
+          retireRun(previous, request, interrupted = true)
+        }
+      }
+      return RpcResult.Success(RunYamlResponse(
+        sessionId = SessionId.sanitized(request.config.overrideSessionId?.value ?: request.testName),
+        success = false,
+        errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
+        memorySnapshot = if (request.awaitCompletion) request.memorySnapshot else emptyMap(),
+        sensitiveMemoryKeys = if (request.awaitCompletion) request.sensitiveMemoryKeys else emptyList(),
+        nonRecoverableWedge = probeUiAutomationWedge(),
+      ))
+    } finally {
+      releasePreparation()
+    }
+  }
+
+  private fun retireRun(previous: CurrentRun, replacement: RunYamlRequest, interrupted: Boolean) {
+    if (currentRun.compareAndSet(previous, null) && interrupted &&
+      previous.session.sessionId != replacement.config.overrideSessionId?.let { SessionId.sanitized(it.value) } &&
+      previous.terminalLogClaimed.compareAndSet(false, true)) {
+      sessionManager.endSession(previous.session, SessionStatus.Ended.Cancelled(
+        durationMs = 0L,
+        cancellationMessage = "Session cancelled after the user started a new session.",
+      ))
+    }
+  }
+
+  private suspend fun handlePrepared(
+    request: RunYamlRequest,
+    onRunStarted: () -> Unit,
+    onTimeoutReady: (() -> RpcResult<RunYamlResponse>) -> Unit = {},
+  ): RpcResult<RunYamlResponse> {
     // Hang this dispatch's spans under the host span that asked for it, so the run's two halves
     // arrive as one trace instead of two. Called on every request including the ones carrying no
     // readable traceparent, which is how this server stops inheriting a finished run's trace: it
@@ -213,12 +295,20 @@ class RunYamlRequestHandler(
     // Create a single YAML parser instance for consistent usage throughout the handler
     val trailblazeYaml = createTrailblazeYaml()
 
-    // Extract config values for session naming
+    // Freeze definition selection before projecting recording/session identity.
+    val selectionInfo = if (request.config.sendSessionStartLog)
+      trailblazeDeviceInfoProvider(request.trailblazeDeviceId) else null
+    val originalClassifiers = DeviceClassifierKey.refine(
+      selectionInfo?.classifiers.orEmpty(),
+      request.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
+    )
     val trailConfig = try {
-      trailblazeYaml.extractTrailConfig(request.yaml)
+      trailblazeYaml.extractTrailConfig(request.yaml, originalClassifiers)
     } catch (e: Exception) {
       null
     }
+
+    val recordingClassifiers = DeviceClassifierKey.withDeclaredLocale(originalClassifiers, trailConfig?.locale)
 
     ActionTrace.mark(ActionTrace.Boundary.YAML_PARSED)
 
@@ -245,7 +335,15 @@ class RunYamlRequestHandler(
     val shouldEmitStartLogHere = request.config.sendSessionStartLog
 
     if (shouldEmitStartLogHere) {
-      val deviceInfo = trailblazeDeviceInfoProvider(request.trailblazeDeviceId).let { info ->
+      // Bare tools continue the driver's prepared runtime identity; they do not select a lane.
+      val executionDeviceClass = if (trailblazeYaml.isBareToolEnvelope(request.yaml)) {
+        selectionInfo?.metadata?.get(DeviceClassifierKey.EXECUTION_DEVICE_CLASS)
+      } else null
+      val deviceInfo = checkNotNull(selectionInfo).copy(
+        classifiers = recordingClassifiers,
+        metadata = selectionInfo.metadata + (DeviceClassifierKey.EXECUTION_DEVICE_CLASS to
+          (executionDeviceClass ?: originalClassifiers.joinToString("-") { it.classifier })),
+      ).let { info ->
         // Use the driver type from the request (set by CLI --driver flag or trail config) rather
         // than the provider's default, which knows nothing about what this run was asked to use.
         val requestDriverType = request.driverType
@@ -257,7 +355,8 @@ class RunYamlRequestHandler(
       val hasRecordedSteps = computeHasRecordedSteps(
         trailblazeYaml = trailblazeYaml,
         yaml = request.yaml,
-        deviceClassifiers = deviceInfo.classifiers,
+        deviceClassifiers = originalClassifiers,
+        recordingClassifiers = recordingClassifiers,
       )
 
       sessionManager.emitSessionStartLog(
@@ -311,6 +410,7 @@ class RunYamlRequestHandler(
       // Launch the job in the background scope so it doesn't block the response.
       // Fire-and-forget callers observe progress via SubscribeToProgressHandler; sync callers
       // observe completion via [outcome] below.
+      if (prepareRunYamlRequest != null) currentCoroutineContext().ensureActive()
       val job = backgroundScope.launch {
         try {
           ActionTrace.mark(ActionTrace.Boundary.JOB_STARTED)
@@ -452,7 +552,8 @@ class RunYamlRequestHandler(
       // Replace the current run in one swap, so each run is superseded by exactly one request, and
       // that request sees the run's own job, session and outcome together. Requests can overlap:
       // the WebSocket route handles each frame in its own coroutine.
-      currentRun.getAndSet(CurrentRun(session, outcome, job))?.let { previousRun ->
+      val thisRun = CurrentRun(session, outcome, job)
+      currentRun.getAndSet(thisRun)?.let { previousRun ->
         // A job reports its outcome as its last act, so one that has reported is only returning
         // from its launch block. The host sends a session's next tool as soon as the previous
         // reply lands, which can beat that return while `isActive` still reads true.
@@ -489,84 +590,91 @@ class RunYamlRequestHandler(
         }
       }
 
+      fun timeoutResponse(): RpcResult<RunYamlResponse> {
+        // Hard cap so a hung tool can't tie up an HTTP socket indefinitely. Cancel the job
+        // and launch a background cleanup: the launched block's catch path exits via
+        // `CancellationException` and short-circuits session-end + progress-event emission,
+        // so without this the ProgressSessionManager would stay in RUNNING and the session
+        // would never get a terminal log. We do the end-session and ExecutionCompleted
+        // emission here ourselves after joining the cancelled job, so every RunYamlRequest
+        // lifecycle ends with a terminal state regardless of how it unwinds.
+        val timeoutMessage = OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MESSAGE
+        val timeoutTimeMs = System.currentTimeMillis()
+        // Timeout cleanup and replacement retirement may both wait for this job to unwind.
+        val ownsTerminalLog = thisRun.terminalLogClaimed.compareAndSet(false, true)
+        job.cancel(CancellationException(timeoutMessage))
+        backgroundScope.launch {
+          job.join()
+          progressManager?.onProgressEvent(
+            TrailblazeProgressEvent.ExecutionCompleted(
+              timestamp = timeoutTimeMs,
+              sessionId = session.sessionId,
+              deviceId = request.trailblazeDeviceId,
+              success = false,
+              totalDurationMs = timeoutTimeMs - startTimeMs,
+              totalActions = 0,
+              errorMessage = timeoutMessage,
+            ),
+          )
+          if (request.config.sendSessionEndLog && ownsTerminalLog) {
+            val endedStatus = SessionStatus.Ended.Cancelled(
+              durationMs = timeoutTimeMs - startTimeMs,
+              cancellationMessage = timeoutMessage,
+            )
+            // This cleanup joins a cancelled job, so it runs after the timeout response has
+            // already gone back and another request can have arrived and begun recording. The
+            // span recorder is process-wide and exporting DRAINS it, so ending through the rule
+            // then would file the live run's buffered spans under this session id and take them
+            // off the run that is still going. Once another request has entered, end without
+            // exporting — the same trade the replacement path above makes, and the same choice:
+            // the run that already timed out loses its spans rather than the live one.
+            if (requestsEntered.get() == runGeneration) {
+              loggingRule.endSession(
+                startedSession = session,
+                endedStatus = endedStatus,
+              )
+            } else {
+              sessionManager.endSession(
+                session = session,
+                endedStatus = endedStatus,
+              )
+            }
+          }
+        }
+        // Shape #5: a timeout exits via cancellation, so the launched-job catch never
+        // classified this failure. Take one cheap synchronous UiAutomation touch to see whether
+        // the device is actually wedged (vs. a slow-but-healthy tool) and surface the typed tag
+        // so the host can arm recovery from a timeout too. We set ONLY the field — the on-disk
+        // status stays Ended.Cancelled (above), since flake-classification / retry consumers key
+        // on Cancelled and a status flip would risk regressing them. (Validation-pending on a
+        // real wedged device.)
+        val timedOutWhileWedged = probeUiAutomationWedge()
+        return RpcResult.Success(
+          RunYamlResponse(
+            sessionId = session.sessionId,
+            success = false,
+            errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
+            memorySnapshot = agentMemory.variables.toMap(),
+            memoryDeletions = agentMemory.deletedKeys.toList(),
+            nonRecoverableWedge = timedOutWhileWedged,
+            sensitiveMemoryKeys = agentMemory.sensitiveKeys.toList(),
+          ),
+        )
+      }
+      onTimeoutReady(::timeoutResponse)
+      onRunStarted()
       if (request.awaitCompletion) {
         // The launched job lives in the standalone backgroundScope; tie it to this await so an
         // originating HTTP-call cancellation cancels it instead of stalling to the handler cap.
         val resolved = try {
-          withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) { outcome.await() }
+          if (prepareRunYamlRequest == null) {
+            withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) { outcome.await() }
+          } else outcome.await()
         } catch (e: CancellationException) {
           job.cancel(CancellationException("Originating HTTP call cancelled before completion"))
           throw e
         }
-        if (resolved == null) {
-          // Hard cap so a hung tool can't tie up an HTTP socket indefinitely. Cancel the job
-          // and launch a background cleanup: the launched block's catch path exits via
-          // `CancellationException` and short-circuits session-end + progress-event emission,
-          // so without this the ProgressSessionManager would stay in RUNNING and the session
-          // would never get a terminal log. We do the end-session and ExecutionCompleted
-          // emission here ourselves after joining the cancelled job, so every RunYamlRequest
-          // lifecycle ends with a terminal state regardless of how it unwinds.
-          val timeoutMessage = OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MESSAGE
-          val timeoutTimeMs = System.currentTimeMillis()
-          job.cancel(CancellationException(timeoutMessage))
-          backgroundScope.launch {
-            job.join()
-            progressManager?.onProgressEvent(
-              TrailblazeProgressEvent.ExecutionCompleted(
-                timestamp = timeoutTimeMs,
-                sessionId = session.sessionId,
-                deviceId = request.trailblazeDeviceId,
-                success = false,
-                totalDurationMs = timeoutTimeMs - startTimeMs,
-                totalActions = 0,
-                errorMessage = timeoutMessage,
-              ),
-            )
-            if (request.config.sendSessionEndLog) {
-              val endedStatus = SessionStatus.Ended.Cancelled(
-                durationMs = timeoutTimeMs - startTimeMs,
-                cancellationMessage = timeoutMessage,
-              )
-              // This cleanup joins a cancelled job, so it runs after the timeout response has
-              // already gone back and another request can have arrived and begun recording. The
-              // span recorder is process-wide and exporting DRAINS it, so ending through the rule
-              // then would file the live run's buffered spans under this session id and take them
-              // off the run that is still going. Once another request has entered, end without
-              // exporting — the same trade the replacement path above makes, and the same choice:
-              // the run that already timed out loses its spans rather than the live one.
-              if (requestsEntered.get() == runGeneration) {
-                loggingRule.endSession(
-                  startedSession = session,
-                  endedStatus = endedStatus,
-                )
-              } else {
-                sessionManager.endSession(
-                  session = session,
-                  endedStatus = endedStatus,
-                )
-              }
-            }
-          }
-          // Shape #5: a timeout exits via cancellation, so the launched-job catch never
-          // classified this failure. Take one cheap synchronous UiAutomation touch to see whether
-          // the device is actually wedged (vs. a slow-but-healthy tool) and surface the typed tag
-          // so the host can arm recovery from a timeout too. We set ONLY the field — the on-disk
-          // status stays Ended.Cancelled (above), since flake-classification / retry consumers key
-          // on Cancelled and a status flip would risk regressing them. (Validation-pending on a
-          // real wedged device.)
-          val timedOutWhileWedged = probeUiAutomationWedge()
-          return RpcResult.Success(
-            RunYamlResponse(
-              sessionId = session.sessionId,
-              success = false,
-              errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
-              memorySnapshot = agentMemory.variables.toMap(),
-              memoryDeletions = agentMemory.deletedKeys.toList(),
-              nonRecoverableWedge = timedOutWhileWedged,
-              sensitiveMemoryKeys = agentMemory.sensitiveKeys.toList(),
-            ),
-          )
-        }
+        if (resolved == null) return timeoutResponse()
         ActionTrace.mark(ActionTrace.Boundary.OUTCOME_RESOLVED)
         val successOutcome = resolved as? Outcome.Success
         val toolPayload = successOutcome?.lastToolSuccess

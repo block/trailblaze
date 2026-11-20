@@ -533,4 +533,11 @@ class MaestroCommandToIosDriverActionConverterTest {
     assertIs<IosDriverAction.InputText>(out[0])
     assertIs<IosDriverAction.LaunchApp>(out[1])
   }
+
+  @Test
+  fun `InputText's description never carries its text`() {
+    // The description is printed to the host log, which is uploaded with the session.
+    val description = IosDriverAction.InputText("Typed-Secret-0451").description
+    assertTrue("Typed-Secret-0451" !in description, "Description leaks the text: $description")
+  }
 }

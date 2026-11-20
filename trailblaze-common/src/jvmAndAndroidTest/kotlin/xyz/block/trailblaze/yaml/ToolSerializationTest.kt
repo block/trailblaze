@@ -37,7 +37,6 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTo
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 
 /**
  * These tests pin down each tool's YAML (de)serialization. The v1 top-level-list trail shape
@@ -977,127 +976,6 @@ trail:
         selected = null,
       ),
     )
-  }
-
-  @Test
-  fun deserializeMaestroTool() {
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - mobile_maestro:
-            commands:
-              - extendedWaitUntil:
-                  notVisible: Gift card added to cart
-                  timeout: 20000
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    assertThat(tools.size).isEqualTo(1)
-    assertThat(tools[0].name).isEqualTo("mobile_maestro")
-    assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
-    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-      // yaml holds the Maestro commands-list YAML; substring checks keep this stable
-      // whether kaml renders flow style or block style.
-      assertThat(yaml).contains("extendedWaitUntil")
-      assertThat(yaml).contains("Gift card added to cart")
-      assertThat(yaml).contains("20000")
-    }
-  }
-
-  @Test
-  fun deserializeMaestroToolMultipleCommands() {
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - mobile_maestro:
-            commands:
-              - assertVisible:
-                  text: Hello
-              - tapOn:
-                  text: OK
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    assertThat(tools.size).isEqualTo(1)
-    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-      assertThat(yaml).contains("assertVisible")
-      assertThat(yaml).contains("tapOn")
-    }
-  }
-
-  @Test
-  fun maestroToolRoundTrip() {
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - mobile_maestro:
-            commands:
-              - extendedWaitUntil:
-                  notVisible: Gift card added to cart
-                  timeout: 20000
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
-    assertThat(reDecoded.size).isEqualTo(1)
-    assertThat(reDecoded[0].name).isEqualTo("mobile_maestro")
-    with(reDecoded[0].trailblazeTool as MaestroTrailblazeTool) {
-      assertThat(yaml).contains("extendedWaitUntil")
-    }
-  }
-
-  @Test
-  fun deserializeMaestroSetOrientation() {
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - mobile_maestro:
-            commands:
-              - setOrientation: LANDSCAPE_LEFT
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    assertThat(tools.size).isEqualTo(1)
-    assertThat(tools[0].name).isEqualTo("mobile_maestro")
-    assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
-    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-      assertThat(yaml).contains("setOrientation")
-      assertThat(yaml).contains("LANDSCAPE_LEFT")
-    }
-  }
-
-  @Test
-  fun maestroSetOrientationRoundTrip() {
-    val yaml = """
-config: {}
-trail:
-  - step: recorded
-    recording:
-      android:
-        - mobile_maestro:
-            commands:
-              - setOrientation: LANDSCAPE_LEFT
-    """.trimIndent()
-
-    val tools = decodeRecordedTools(yaml)
-    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
-    assertThat(reDecoded.size).isEqualTo(1)
-    assertThat(reDecoded[0].name).isEqualTo("mobile_maestro")
-    with(reDecoded[0].trailblazeTool as MaestroTrailblazeTool) {
-      assertThat(yaml).contains("setOrientation")
-    }
   }
 
   @Test

@@ -81,4 +81,27 @@ private object AndroidPlatformConfigResourceSource : ConfigResourceSource {
       fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
       fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
     )
+
+  // Assets first, same precedence as discovery (instrumentation-asset keys override the classpath).
+  override fun readResource(path: String): String? {
+    // Same "assets unavailable here, the classpath still answers" tolerance as [discoverMerged].
+    val fromAssets =
+      try {
+        AssetManagerConfigResourceSource.readResource(path)
+      } catch (_: Throwable) {
+        null
+      }
+    return fromAssets ?: ClasspathConfigResourceSource.readResource(path)
+  }
+
+  override fun resourceExists(path: String): Boolean {
+    val inAssets =
+      try {
+        AssetManagerConfigResourceSource.resourceExists(path)
+      } catch (_: Throwable) {
+        false
+      }
+    return inAssets || ClasspathConfigResourceSource.resourceExists(path)
+  }
+  // discoverFilenamesRecursive keeps the default: the recursive listing it reads is memoized above.
 }

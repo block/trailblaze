@@ -8,6 +8,7 @@ import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.report.utils.LogsRepo
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -79,6 +80,23 @@ class CaptureVideoFramesTest {
     val rgb = image.getRGB(image.width / 2, image.height / 2)
     val channels = mapOf("red" to (rgb shr 16 and 0xFF), "green" to (rgb shr 8 and 0xFF), "blue" to (rgb and 0xFF))
     return channels.maxBy { it.value }.key
+  }
+
+  @Test
+  fun `a capture without a screenshot reads as its saved frame`() {
+    val logsDir = tmp.newFolder()
+    val sessionDir = File(logsDir, session.value).apply { mkdirs() }
+    val frame = File(sessionDir, CaptureVideoFrames.fileName("capture-a")).apply { writeText("frame") }
+    val shot = File(sessionDir, "shot.webp").apply { writeText("screenshot") }
+    val logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
+
+    assertEquals(frame, logsRepo.getScreenshotFile(capture("capture-a", 0)))
+    // The screenshot wins when there is one, and a capture with no saved frame has no image.
+    assertEquals(shot, logsRepo.getScreenshotFile(capture("capture-a", 0, screenshot = "shot.webp")))
+    assertEquals(null, logsRepo.getScreenshotFile(capture("capture-b", 0)))
+    // An id that can't be a file name never reaches outside the session dir.
+    File(logsDir, "escape.webp").writeText("outside")
+    assertEquals(null, logsRepo.getScreenshotFile(capture("../escape", 0)))
   }
 
   @Test

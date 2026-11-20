@@ -226,6 +226,55 @@ class CheckCommandTest {
   }
 
   @Test
+  fun `check --no-tests skips only the tool unit tests`() {
+    // A test that throws fails the unit-test phase: as a test failure where bun is installed, and
+    // as a usage error where it is not. Either way, --no-tests must not reach it.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
+    File(workspaceRoot, "trails/config/trailmaps/alpha/tools").apply { mkdirs() }
+      .resolve("broken.test.ts").writeText("throw new Error(\"ran\");\n")
+
+    val (fullExit, fullStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck")
+      }
+    }
+    assertTrue(fullExit != 0, "A full check should fail on the throwing test. stderr:\n$fullStderr")
+
+    val (noTestsExit, noTestsStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck", "--no-tests")
+      }
+    }
+    assertEquals(0, noTestsExit, "stderr was:\n$noTestsStderr")
+
+    // Only the tests are skipped: a trail with an undeclared `{{args.x}}` still fails the
+    // arg-token phase, a text scan that needs no bun.
+    File(workspaceRoot, "trails").apply { mkdirs() }.resolve("bad.trail.yaml").writeText(
+      """
+      config:
+        id: test/bad
+      trail:
+      - step: Reply to {{args.sender}}
+      """.trimIndent(),
+    )
+    val (invalidExit, invalidStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck", "--no-tests")
+      }
+    }
+    assertTrue(invalidExit != 0, "--no-tests skipped the trail validations. stderr:\n$invalidStderr")
+    assertTrue(invalidStderr.contains("arg-token validation FAILED"), "stderr was:\n$invalidStderr")
+
+    val (bothExit, bothStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-tests", "--tests-only")
+      }
+    }
+    assertEquals(TrailblazeExitCode.MISUSE.code, bothExit, "stderr was:\n$bothStderr")
+    assertTrue(bothStderr.contains("mutually exclusive"), "stderr was:\n$bothStderr")
+  }
+
+  @Test
   fun `check --tests-only skips the trail validations a full check fails on`() {
     // A trail with an undeclared `{{args.x}}` fails the arg-token phase, a pure text scan that
     // needs no bun. A full check reports it; --tests-only must not reach it. With no `*.test.ts`
@@ -402,6 +451,54 @@ class CheckCommandTest {
         stderr.contains("example-org/alpha-trails"),
       "Expected the shadow warning, routed under `trailblaze check:` and naming the registered " +
         "home repo; got: $stderr",
+    )
+  }
+
+  @Test
+  fun `check fails when a memory key is declared twice in a trailmap's reach`() {
+    // Memory is one flat namespace: `alpha` redeclaring a key its own toolset already declares
+    // can't change what that toolset's tools write, so check fails and names both declarations.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha")
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/alpha")
+    File(trailmapDir, "toolsets").mkdirs()
+    File(trailmapDir, "toolsets/alpha_accounts.yaml").writeText(
+      """
+      id: alpha_accounts
+      description: "Account setup."
+      tools:
+        - web_requestDetails
+      memory:
+        account_email:
+          description: The email of the account a setup tool created.
+      """.trimIndent(),
+    )
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+            tool_sets: [alpha_accounts]
+      memory:
+        account_email:
+          description: Alpha's account.
+      """.trimIndent(),
+    )
+
+    val (exit, stderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck")
+      }
+    }
+
+    assertEquals(1, exit, "A duplicate memory-key declaration fails check. Got: $stderr")
+    assertTrue(
+      stderr.contains(
+        "trailblaze check: memory key 'account_email' is declared by trailmap `alpha` and toolset `alpha_accounts`",
+      ),
+      "Expected the conflict, routed under `trailblaze check:`; got: $stderr",
     )
   }
 

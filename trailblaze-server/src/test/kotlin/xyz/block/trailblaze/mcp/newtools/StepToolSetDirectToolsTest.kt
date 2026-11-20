@@ -25,6 +25,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.RecordedStepType
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
@@ -42,14 +43,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toLogPayload
-import xyz.block.trailblaze.toolcalls.toOtherTrailblazeToolPayload
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedTrailItems
@@ -372,115 +371,6 @@ class StepToolSetDirectToolsTest {
       .filter { it.isTopLevelToolCall }.map { it.traceId }
     assertEquals(2, outerTraces.distinct().size)
     assertEquals(executorTraces, outerTraces)
-  }
-
-  @Test
-  fun `direct Maestro chooses safe inner launch provenance beside a sibling tap`() = runTest {
-    val sessionId = SessionId("maestro-recording-session")
-    val emittedLogs = mutableListOf<TrailblazeLog>()
-    val emitter = LogEmitter { emittedLogs += it }
-    val toolSet = StepToolSet(
-      screenAnalyzer = throwingScreenAnalyzer,
-      executor = throwingExecutor,
-      screenStateProvider = { _, _, _ -> dummyScreenState },
-      rawToolExecutor = { tool, traceId ->
-        when (tool) {
-          is MaestroTrailblazeTool -> emitter.emit(TrailblazeLog.TrailblazeToolLog(
-            trailblazeTool = tool.toLogPayload(),
-            rawTrailblazeTool = tool.toOtherTrailblazeToolPayload(),
-            toolName = "mobile_maestro",
-            successful = true,
-            traceId = traceId,
-            durationMs = 1L,
-            session = sessionId,
-            timestamp = Clock.System.now(),
-            isRecordable = true,
-          ))
-          is AssertVisibleTrailblazeTool -> emitter.emit(TrailblazeLog.TrailblazeToolLog(
-            trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
-              nodeSelector = TrailblazeNodeSelector.withMatch(
-                DriverNodeMatch.AndroidAccessibility(textRegex = "Battery percentage"),
-              ),
-            ).toLogPayload(),
-            toolName = "assertVisibleBySelector",
-            successful = true,
-            traceId = traceId,
-            durationMs = 1L,
-            session = sessionId,
-            timestamp = Clock.System.now(),
-            isRecordable = true,
-          ))
-          else -> assertTrue(tool is TapOnPointTrailblazeTool)
-        }
-        "OK"
-      },
-      logEmitter = emitter,
-      sessionIdProvider = { sessionId },
-    )
-
-    toolSet.step(
-      objective = "Launch and tap",
-      tools = """
-        - mobile_maestro:
-            commands:
-              - launchApp:
-                  appId: com.example.app
-                  arguments:
-                    credential: '{{token}}'
-        - tapOnPoint:
-            x: 100
-            y: 200
-        - assertVisible:
-            ref: k138
-      """.trimIndent(),
-    )
-
-    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
-    assertEquals(listOf("mobile_maestro", "tapOnPoint", "assertVisibleBySelector"), recording?.tools?.map { it.name })
-    assertContains(recording.toString(), "{{token}}")
-
-    // Persisted logs may be sorted by start timestamp rather than emission order; the outer
-    // wrapper starts before its inner dispatch even though it is emitted afterward.
-    val reordered = emittedLogs.toMutableList()
-    val innerIndex = reordered.indexOfFirst { it is TrailblazeLog.TrailblazeToolLog &&
-      it.toolName == "mobile_maestro" && !it.isTopLevelToolCall }
-    val outerIndex = reordered.indexOfFirst { it is TrailblazeLog.TrailblazeToolLog &&
-      it.toolName == "mobile_maestro" && it.isTopLevelToolCall }
-    val inner = reordered[innerIndex]
-    reordered[innerIndex] = reordered[outerIndex]
-    reordered[outerIndex] = inner
-    val reorderedRecording = reordered.generateRecordedTrailItems(createTrailblazeYaml())
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
-    assertEquals(listOf("mobile_maestro", "tapOnPoint", "assertVisibleBySelector"), reorderedRecording?.tools?.map { it.name })
-  }
-
-  @Test
-  fun `direct Maestro is not recordable`() = runTest {
-    val sessionId = SessionId("maestro-no-inner-session")
-    val emittedLogs = mutableListOf<TrailblazeLog>()
-    val toolSet = StepToolSet(
-      screenAnalyzer = throwingScreenAnalyzer,
-      executor = throwingExecutor,
-      screenStateProvider = { _, _, _ -> dummyScreenState },
-      rawToolExecutor = { _, _ -> "OK" },
-      logEmitter = LogEmitter { emittedLogs += it },
-      sessionIdProvider = { sessionId },
-    )
-
-    toolSet.step(
-      objective = "Enter a value",
-      tools = """
-        - mobile_maestro:
-            commands:
-              - inputText: Hello
-      """.trimIndent(),
-    )
-
-    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single().recording
-    // `mobile_maestro` is framework-internal: it runs, but a recording never carries it.
-    assertEquals(null, recording?.tools?.map { it.name })
   }
 
   @Test
@@ -826,6 +716,90 @@ class StepToolSetDirectToolsTest {
     assertContains(result, "tapOnPoint")
     // The rejected tool must not have reached rawToolExecutor.
     assertEquals(0, executedTools.size)
+  }
+
+  @Test
+  fun `direct tools run a tool the session registers but does not offer to the LLM`() = runTest {
+    // `tapOnPoint` stands in for both shapes: a `surfaceToLlm: false` tool and one the target's
+    // `excluded_tools:` keeps off the LLM's menu. Neither is on the menu, both are registered, and a
+    // direct call names the tool on purpose, so it runs.
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = { listOf(TrailblazeToolDescriptor(name = "web_click")) },
+        registeredToolNamesProvider = { setOf("tapOnPoint") },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+      )
+
+    val result = toolSet.step(objective = "Tap on point", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+
+    assertFalse(result.contains("not valid for the current device/target"), result)
+    assertEquals(listOf<TrailblazeTool>(TapOnPointTrailblazeTool(x = 100, y = 200)), executedTools)
+  }
+
+  @Test
+  fun `direct tools refuse exec and registerCleanup, which only another tool may call`() = runTest {
+    // Both are registered here, so nothing but the tool's own flag stands between the call and a
+    // host process. `trailblaze_registerCleanup` would run `exec` at trail end.
+    for ((name, args) in listOf(
+      "exec" to "argv: [printf, hi]",
+      "trailblaze_registerCleanup" to "tool: exec",
+    )) {
+      val trail = "trail:\n  - step: run it\n    recording:\n      android:\n        - $name:\n            $args"
+      for (yaml in listOf("- $name:\n    $args", trail)) {
+        val executedTools = mutableListOf<TrailblazeTool>()
+        val toolSet =
+          StepToolSet(
+            screenAnalyzer = throwingScreenAnalyzer,
+            executor = throwingExecutor,
+            screenStateProvider = { _, _, _ -> dummyScreenState },
+            availableToolsProvider = { emptyList() },
+            registeredToolNamesProvider = { setOf("exec", "trailblaze_registerCleanup") },
+            rawToolExecutor = { tool, _ ->
+              executedTools.add(tool)
+              "OK"
+            },
+          )
+
+        val result = toolSet.step(objective = "Run $name", tools = yaml)
+
+        assertContains(result, "`$name` can only be called from another tool")
+        assertEquals(emptyList(), executedTools, "$name must not run from: $yaml")
+      }
+    }
+  }
+
+  @Test
+  fun `a mobile-only tool rejected on web names the device and the platforms it runs on`() = runTest {
+    // The shape a caller sees when its call landed on the wrong device: the rejection has to say
+    // which device that was and where the tool runs, or it reads as a tool limitation.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = { listOf(TrailblazeToolDescriptor(name = "web_click")) },
+        rawToolExecutor = { _, _ -> "OK" },
+        currentDeviceProvider = {
+          TrailblazeDriverType.PLAYWRIGHT_NATIVE to
+            TrailblazeDeviceId("playwright-native", TrailblazeDevicePlatform.WEB)
+        },
+      )
+
+    val result = toolSet.step(objective = "List installed apps", tools = "- mobile_listInstalledApps: {}")
+
+    assertContains(result, "not valid for the current device/target")
+    assertContains(
+      result,
+      "mobile_listInstalledApps runs on Android and iOS only, and this device is " +
+        "web/playwright-native (Web Browser).",
+    )
   }
 
   @Test

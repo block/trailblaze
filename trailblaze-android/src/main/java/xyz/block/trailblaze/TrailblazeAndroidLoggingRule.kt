@@ -22,12 +22,17 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.util.Console
 
-class TrailblazeAndroidLoggingRule(
-  trailblazeDeviceIdProvider: () -> TrailblazeDeviceId,
-  trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
+class TrailblazeAndroidLoggingRule internal constructor(
+  private val physicalDeviceInfoProvider: () -> TrailblazeDeviceInfo,
+  private val trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
+  logsBaseUrl: String,
+  initialDriverType: TrailblazeDriverType,
+  private val requestedDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
   additionalLogEmitter: LogEmitter? = null,
+  noLogging: Boolean = false,
 ) : TrailblazeLoggingRule(
-  logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
+  logsBaseUrl = logsBaseUrl,
+  noLogging = noLogging,
   additionalLogEmitter = additionalLogEmitter,
   writeLogToDisk = { currentTestName: SessionId, log: TrailblazeLog ->
     try {
@@ -71,6 +76,30 @@ class TrailblazeAndroidLoggingRule(
   },
 ) {
 
+  constructor(
+    trailblazeDeviceIdProvider: () -> TrailblazeDeviceId,
+    trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
+    additionalLogEmitter: LogEmitter? = null,
+  ) : this(
+    physicalDeviceInfoProvider = {
+      val displayMetrics = getDisplayMetrics()
+      TrailblazeDeviceInfo(
+        trailblazeDeviceId = trailblazeDeviceIdProvider(),
+        trailblazeDriverType = TrailblazeDriverType.DEFAULT_ANDROID,
+        locale = getCurrentLocale().toLanguageTag(),
+        orientation = getDeviceOrientation(),
+        widthPixels = displayMetrics.widthPixels,
+        heightPixels = displayMetrics.heightPixels,
+        metadata = getDeviceMetadata(),
+      )
+    },
+    trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
+    logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
+    initialDriverType = InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.DEFAULT_ANDROID,
+    requestedDeviceClassifiersProvider = CatalogDeviceArgs::classifiers,
+    additionalLogEmitter = additionalLogEmitter,
+  )
+
   protected override val useBinaryLogTransport: Boolean = true
 
   /** These timestamps — trace spans and agent logs — are stamped by the device's own clock, which drifts from the host's by seconds. */
@@ -86,29 +115,37 @@ class TrailblazeAndroidLoggingRule(
    * otherwise [TrailblazeDriverType.DEFAULT_ANDROID], so this stays accurate if that default moves.
    */
   var driverTypeOverride: TrailblazeDriverType =
-    InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.DEFAULT_ANDROID
+    initialDriverType
 
   /** Host-validated locale/variant classifiers for the current run. Reset on every request. */
   var deviceClassifiersOverride: List<TrailblazeDeviceClassifier> = emptyList()
 
   /** The catalog device a device-farm run says it stands for; see [CatalogDeviceArgs]. */
   private val requestedDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
-    CatalogDeviceArgs.classifiers()
+    requestedDeviceClassifiersProvider()
+  }
+
+  var recordingClassifiers: List<TrailblazeDeviceClassifier>? = null
+
+  fun selectionClassifiers(): List<TrailblazeDeviceClassifier> = selectionClassifiersFor(deviceClassifiersOverride)
+
+  internal fun selectionClassifiersFor(override: List<TrailblazeDeviceClassifier>): List<TrailblazeDeviceClassifier> = override.ifEmpty {
+    DeviceClassifierKey.refine(trailblazeDeviceClassifiersProvider(), requestedDeviceClassifiers)
   }
 
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
-    val displayMetrics = getDisplayMetrics()
-    TrailblazeDeviceInfo(
-      trailblazeDeviceId = trailblazeDeviceIdProvider(),
+    deviceInfoFor(selectionClassifiers(), recordingClassifiers)
+  }
+
+  internal fun deviceInfoFor(
+    selection: List<TrailblazeDeviceClassifier>,
+    recordings: List<TrailblazeDeviceClassifier>?,
+  ): TrailblazeDeviceInfo {
+    val info = physicalDeviceInfoProvider()
+    return info.copy(
       trailblazeDriverType = driverTypeOverride,
-      locale = getCurrentLocale().toLanguageTag(),
-      orientation = getDeviceOrientation(),
-      widthPixels = displayMetrics.widthPixels,
-      heightPixels = displayMetrics.heightPixels,
-      classifiers = deviceClassifiersOverride.ifEmpty {
-        DeviceClassifierKey.refine(trailblazeDeviceClassifiersProvider(), requestedDeviceClassifiers)
-      },
-      metadata = getDeviceMetadata(),
+      classifiers = recordings ?: selection,
+      metadata = info.metadata + (DeviceClassifierKey.EXECUTION_DEVICE_CLASS to selection.joinToString("-") { it.classifier }),
     )
   }
 

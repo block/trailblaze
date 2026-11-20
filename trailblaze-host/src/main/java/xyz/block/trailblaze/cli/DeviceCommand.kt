@@ -5,7 +5,6 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.driver.BrowsableDeviceListing
 import xyz.block.trailblaze.devices.WebInstanceIds
@@ -23,6 +22,7 @@ import kotlin.system.exitProcess
  *   trailblaze device connect ANDROID       - Connect an Android device to your session
  *   trailblaze device connect IOS           - Connect an iOS device to your session
  *   trailblaze device connect WEB           - Connect a web browser to your session
+ *   trailblaze device install app.apk -d …  - Install an app on a device, own or borrowed
  */
 @Command(
   name = "device",
@@ -34,6 +34,9 @@ import kotlin.system.exitProcess
     DeviceRebindCommand::class,
     DeviceDisconnectCommand::class,
     DeviceCreateCommand::class,
+    DeviceInstallCommand::class,
+    DevicePairCommand::class,
+    DeviceUnpairCommand::class,
   ],
 )
 class DeviceCommand : Callable<Int> {
@@ -374,14 +377,10 @@ class DeviceConnectCommand : Callable<Int> {
         }
       }
 
-      // 3. Persist the platform choice for backwards-compatible "default platform"
-      //    semantics on subsequent commands that haven't been migrated to read
-      //    TRAILBLAZE_DEVICE yet. Safe to keep — the env-var resolver (added in a
-      //    follow-on PR) wins over this when both are set.
-      val platformStr = platform.split("/", limit = 2)[0]
-      if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
-        CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
-      }
+      // 3. Deliberately NOT saved as the machine-wide default (`trailblaze config device`).
+      //    That default is the last device tier of `trailblaze run` in every terminal, so
+      //    writing it here let one terminal's connect pick the device for another terminal's
+      //    run. This terminal keeps the device through its pin (step 5).
 
       // 4. Resolve the actual bound device id so the env var refers to a specific
       //    instance (e.g. `android/emulator-5554`) rather than the generic platform

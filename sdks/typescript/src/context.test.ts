@@ -60,6 +60,14 @@ describe("fromMeta: device block", () => {
     expect(fromMeta(withDevice({ ...device, classifiers: ["android", 7] }))?.device.classifiers).toBeUndefined();
   });
 
+  test("initialLocale is parsed onto ctx.device.initialLocale, absent when missing or malformed", () => {
+    const device = { platform: "ios", widthPixels: 1170, heightPixels: 2532, driverType: "ios-host" };
+    expect(fromMeta(withDevice({ ...device, initialLocale: "es-US" }))?.device.initialLocale).toBe("es-US");
+    expect(fromMeta(withDevice(device))?.device.initialLocale).toBeUndefined();
+    expect(fromMeta(withDevice({ ...device, initialLocale: 7 }))?.device.initialLocale).toBeUndefined();
+    expect(fromMeta(withDevice({ ...device, initialLocale: "" }))?.device.initialLocale).toBeUndefined();
+  });
+
   test("instanceId absent leaves it undefined without dropping the envelope (older daemon / subprocess path)", () => {
     const ctx = fromMeta(
       withDevice({

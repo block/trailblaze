@@ -53,6 +53,12 @@ class IosDriverTrailblazeAgent(
    * capture is a screenshot and a tree read per action for nothing.
    */
   private val logDriverActions: Boolean = true,
+  /**
+   * Whether the session is recording video. While it is, each action is logged without a
+   * screenshot and the report takes its picture from the video; see
+   * [IosDriverTrailRunner.shouldScreenshotBeforeAction].
+   */
+  private val isRecordingVideo: (SessionId) -> Boolean = { false },
   memory: AgentMemory = AgentMemory(),
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
@@ -70,6 +76,19 @@ class IosDriverTrailblazeAgent(
   override val usesAccessibilityDriver: Boolean = true
 
   private val driverActionLogger: TrailblazeLogger? get() = trailblazeLogger.takeIf { logDriverActions }
+
+  /** Runs [actions], logging each one unless [logDriverActions] is off. */
+  private fun runActions(actions: List<IosDriverAction>, traceId: TraceId?): TrailblazeToolResult =
+    IosDriverTrailRunner.runActions(
+      actions = actions,
+      traceId = traceId,
+      deviceManager = deviceManager,
+      trailblazeLogger = driverActionLogger,
+      sessionProvider = sessionProvider,
+      screenshotBeforeAction = IosDriverTrailRunner.shouldScreenshotBeforeAction(
+        recordingVideo = driverActionLogger != null && isRecordingVideo(sessionProvider.invoke().sessionId),
+      ),
+    )
 
   /** One tool call is one [IosDeviceManager.shareScreenReads] span on the trail-runner path. */
   override fun executeTool(
@@ -105,13 +124,7 @@ class IosDriverTrailblazeAgent(
         stackTrace = e.stackTraceToString(),
       )
     }
-    return IosDriverTrailRunner.runActions(
-      actions = actions,
-      traceId = traceId,
-      deviceManager = deviceManager,
-      trailblazeLogger = driverActionLogger,
-      sessionProvider = sessionProvider,
-    )
+    return runActions(actions, traceId)
   }
 
   /**
@@ -127,7 +140,7 @@ class IosDriverTrailblazeAgent(
     // Ignored — the iOS driver never dismisses the keyboard before a tap.
     hideKeyboardBefore: Boolean,
     traceId: TraceId?,
-  ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
+  ): TrailblazeToolResult = runActions(
     actions = listOf(
       IosDriverAction.TapOnElement(
         nodeSelector,
@@ -136,52 +149,37 @@ class IosDriverTrailblazeAgent(
       ),
     ),
     traceId = traceId,
-    deviceManager = deviceManager,
-    trailblazeLogger = driverActionLogger,
-    sessionProvider = sessionProvider,
   )
 
   override suspend fun answerNotificationsAlert(appId: String, allow: Boolean?, traceId: TraceId?): TrailblazeToolResult =
-    IosDriverTrailRunner.runActions(
+    runActions(
       actions = listOf(IosDriverAction.AnswerNotificationsAlert(appId, allow)),
       traceId = traceId,
-      deviceManager = deviceManager,
-      trailblazeLogger = driverActionLogger,
-      sessionProvider = sessionProvider,
     )
 
   /** Select-all + delete: two key events, where erasing by count costs one AXe process per character. */
   override suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult =
-    IosDriverTrailRunner.runActions(
+    runActions(
       actions = listOf(IosDriverAction.ClearText),
       traceId = traceId,
-      deviceManager = deviceManager,
-      trailblazeLogger = driverActionLogger,
-      sessionProvider = sessionProvider,
     )
 
   override suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
     timeoutMs: Long?,
     traceId: TraceId?,
-  ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
+  ): TrailblazeToolResult = runActions(
     actions = listOf(IosDriverAction.AssertVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
-    deviceManager = deviceManager,
-    trailblazeLogger = driverActionLogger,
-    sessionProvider = sessionProvider,
   )
 
   override suspend fun executeNodeSelectorAssertNotVisible(
     nodeSelector: TrailblazeNodeSelector,
     timeoutMs: Long?,
     traceId: TraceId?,
-  ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
+  ): TrailblazeToolResult = runActions(
     actions = listOf(IosDriverAction.AssertNotVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
-    deviceManager = deviceManager,
-    trailblazeLogger = driverActionLogger,
-    sessionProvider = sessionProvider,
   )
 
   /**

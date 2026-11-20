@@ -105,6 +105,12 @@ class VisibleStringsLogTest {
     ?.getValue("source")?.jsonPrimitive?.content
 
   @Test
+  fun `OCR runs only when its environment variable turns it on`() {
+    assertTrue(listOf("true", "TRUE", "1").all { VisibleStringsLog.ocrEnabled(it) })
+    assertTrue(listOf(null, "", "0", "false", "yes").none { VisibleStringsLog.ocrEnabled(it) })
+  }
+
+  @Test
   fun `a capture OCR read is marked checked, and one it could not read is not`() {
     val read = ScreenTextReader { boxes -> boxes.map { if (it.top == 1600) listOf("Pay") else emptyList() } }
     val lines = render(

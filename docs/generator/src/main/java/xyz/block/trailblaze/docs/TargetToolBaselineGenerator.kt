@@ -22,6 +22,7 @@ import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
@@ -75,7 +76,30 @@ class TargetToolBaselineGenerator(
    * `web_core`, ...) the same way classpath targets do.
    */
   private val additionalTargets: List<AdditionalTarget> = emptyList(),
+  /**
+   * Where targets, toolsets and tools are discovered. Classpath-only by default, so a developer
+   * running the generator from inside a workspace doesn't fold that workspace into the committed
+   * output. A workspace's own baseline passes the workspace-layered source instead, so its trailmaps
+   * shadow the copies bundled into the binary the same way they do at runtime.
+   */
+  private val resourceSource: ConfigResourceSource = ClasspathConfigResourceSource,
+  /**
+   * Render only these targets (and the trailmaps their tools and toolsets come from), or every
+   * discovered target when null. A workspace baseline names its own targets, so the other targets
+   * bundled into the binary don't land in its files. Naming a target that isn't discovered fails.
+   */
+  private val onlyTargetIds: Set<String>? = null,
+  /**
+   * Directory an absolute scripted-tool path is rendered relative to, for targets with no
+   * [AdditionalTarget.trailmapDir] — a workspace's compiled targets carry each script's absolute
+   * path, which would otherwise leak per-machine state into the committed file.
+   */
+  private val scriptPathRoot: File? = null,
+  /** The command that regenerates the files, named in each file's first line. */
+  regenerateWith: String = DEFAULT_REGENERATE_WITH,
 ) {
+
+  private val generatedHeader = "$GENERATED_MARKER Regenerate with: $regenerateWith -->"
 
   /**
    * One pre-resolved target supplied by a non-classpath caller. The wrapper carries
@@ -114,24 +138,24 @@ class TargetToolBaselineGenerator(
     val toolDetails: Map<String, ToolDetail?>,
   )
 
-  fun generate() {
-    val targetsDir = File(generatedDir, "targets").apply { mkdirs() }
+  /** Writes the files into [targetsDir] (by default `<generatedDir>/targets`). */
+  fun generate(targetsDir: File = File(generatedDir, "targets")) {
+    targetsDir.mkdirs()
 
-    // Generator emits canonical bundled-classpath baselines committed to the repo and diffed
-    // in CI. With the JVM platform default now workspace-aware, any developer running the
-    // generator from a workspace would silently fold their `trails/config/` files into the
-    // committed output — pin every discovery to ClasspathConfigResourceSource so the
-    // generated artifacts stay reproducible across machines.
-    val classpathOnly = ClasspathConfigResourceSource
-    val customToolClasses = ToolYamlLoader.discoverAndLoadAll(resourceSource = classpathOnly)
-    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(customToolClasses, resourceSource = classpathOnly)
-    val toolSets = ToolSetYamlLoader.discoverAndLoadAll(resolver, resourceSource = classpathOnly)
-    val classpathConfigs = AppTargetYamlLoader.discoverConfigs(resourceSource = classpathOnly)
+    // Every discovery goes through [resourceSource] — classpath-only unless the caller chose a
+    // workspace — so the generated artifacts stay reproducible across machines. With the JVM
+    // platform default workspace-aware, the default source would silently fold the caller's
+    // `trails/config/` files into the committed output.
+    val source = resourceSource
+    val customToolClasses = ToolYamlLoader.discoverAndLoadAll(resourceSource = source)
+    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(customToolClasses, resourceSource = source)
+    val toolSets = ToolSetYamlLoader.discoverAndLoadAll(resolver, resourceSource = source)
+    val classpathConfigs = AppTargetYamlLoader.discoverConfigs(resourceSource = source)
     val classpathTargets = AppTargetYamlLoader.discoverAndLoadAll(
       toolNameResolver = resolver,
       availableToolSets = toolSets,
       companions = companions,
-      resourceSource = classpathOnly,
+      resourceSource = source,
     )
 
     // Merge classpath-discovered configs with caller-supplied additional configs. A
@@ -149,7 +173,7 @@ class TargetToolBaselineGenerator(
       }
       addition.trailmapDir?.let { trailmapDirsByTargetId[addition.config.id] = it }
     }
-    val targets = classpathTargets + additionalTargets.map { addition ->
+    val allTargets = classpathTargets + additionalTargets.map { addition ->
       YamlBackedHostAppTarget(
         config = addition.config,
         toolNameResolver = resolver,
@@ -157,9 +181,18 @@ class TargetToolBaselineGenerator(
         companion = companions[addition.config.id],
       )
     }
+    val targets = if (onlyTargetIds == null) {
+      allTargets
+    } else {
+      val missing = onlyTargetIds - allTargets.map { it.id }.toSet()
+      require(missing.isEmpty()) {
+        "Targets ${missing.sorted()} were asked for but not discovered; discovered: ${allTargets.map { it.id }.sorted()}"
+      }
+      allTargets.filter { it.id in onlyTargetIds }
+    }
 
     val discoveredScriptedByName =
-      runCatching { ScriptedToolNameDiscoverer.discoverDescriptorsByName() }.getOrNull().orEmpty()
+      runCatching { ScriptedToolNameDiscoverer.discoverDescriptorsByName(resourceSource = source) }.getOrNull().orEmpty()
 
     val surfaces = targets.sortedBy { it.id }.map { target ->
       resolveTargetSurface(
@@ -168,10 +201,10 @@ class TargetToolBaselineGenerator(
         allToolSets = toolSets,
         resolver = resolver,
         discoveredScriptedByName = discoveredScriptedByName,
-        trailmapDir = trailmapDirsByTargetId[target.id],
+        trailmapDir = trailmapDirsByTargetId[target.id] ?: scriptPathRoot,
       )
     }
-    val files = renderFiles(surfaces, toolSets, toolSetTrailmaps(classpathOnly))
+    val files = renderFiles(surfaces, toolSets, toolSetTrailmaps(source))
     files.forEach { (name, content) -> ResolvedTargetIdempotentWrite.writeIfChanged(File(targetsDir, name), content) }
     pruneStaleFiles(targetsDir, keep = files.keys)
   }
@@ -179,11 +212,12 @@ class TargetToolBaselineGenerator(
   /**
    * Deletes the generated file of a trailmap that no longer declares a tool or toolset, so a removal
    * shows up as a deleted file rather than a stale one CI keeps diffing clean. Only files that start
-   * with [GENERATED_HEADER] are touched: a hand-written note beside them survives regeneration.
+   * with [GENERATED_MARKER] are touched — whatever command their header names, so a file written
+   * with an earlier `--out` still goes — and a hand-written note beside them survives regeneration.
    */
   internal fun pruneStaleFiles(dir: File, keep: Set<String>) {
     dir.listFiles { f -> f.isFile && f.name.endsWith(".md") && f.name !in keep }
-      ?.filter { it.useLines { lines -> lines.firstOrNull() == GENERATED_HEADER } }
+      ?.filter { it.useLines { lines -> lines.firstOrNull()?.startsWith(GENERATED_MARKER) == true } }
       ?.forEach { it.delete() }
   }
 
@@ -191,7 +225,7 @@ class TargetToolBaselineGenerator(
    * Toolset id → the trailmap that declares it, from where its YAML lives
    * (`trailmaps/<trailmap>/toolsets/<name>.yaml`) — the same walk [ToolSetYamlLoader] makes.
    */
-  private fun toolSetTrailmaps(resourceSource: ClasspathConfigResourceSource): Map<String, String> =
+  private fun toolSetTrailmaps(resourceSource: ConfigResourceSource): Map<String, String> =
     resourceSource.discoverAndLoadRecursive(TrailblazeConfigPaths.TRAILMAPS_DIR, ".yaml")
       .mapNotNull { (relPath, content) ->
         val segments = relPath.split('/')
@@ -344,7 +378,7 @@ class TargetToolBaselineGenerator(
     files[INDEX_FILE_NAME] = renderIndex(surfaces, trailmapIds, tokensByTargetTool)
     for (trailmapId in trailmapIds) {
       files["$trailmapId.md"] = buildString {
-        appendLine(GENERATED_HEADER)
+        appendLine(generatedHeader)
         appendLine()
         val surface = surfacesById[trailmapId]
         if (surface != null) {
@@ -414,7 +448,7 @@ class TargetToolBaselineGenerator(
     trailmapIds: Set<String>,
     tokensByTargetTool: Map<Pair<String, String>, Int?>,
   ): String = buildString {
-    appendLine(GENERATED_HEADER)
+    appendLine(generatedHeader)
     appendLine()
     appendLine("# LLM tool surface")
     appendLine()
@@ -641,7 +675,10 @@ class TargetToolBaselineGenerator(
   companion object {
     /** The index: every target and trailmap file, and the per-driver token totals. */
     const val INDEX_FILE_NAME = "README.md"
-    internal const val GENERATED_HEADER = "<!-- GENERATED FILE. DO NOT EDIT. Regenerate with: ./gradlew :internal-docs-generator:run -->"
+    /** How every generated file's first line starts; marks the files regeneration may delete. */
+    internal const val GENERATED_MARKER = "<!-- GENERATED FILE. DO NOT EDIT."
+    private const val DEFAULT_REGENERATE_WITH = "./gradlew :internal-docs-generator:run"
+    internal const val GENERATED_HEADER = "$GENERATED_MARKER Regenerate with: $DEFAULT_REGENERATE_WITH -->"
     private val TRAILMAP_IN_PATH = Regex("""(?:^|/)trailmaps/([^/]+)/""")
   }
 }

@@ -37,6 +37,50 @@ import xyz.block.trailblaze.yaml.string
 class UnifiedTrailAdapterTest {
 
   @Test
+  fun `recordings use regional projection without reselecting competing definition`() {
+    val yaml =
+      """
+      config:
+        skip: {ios-iphone-es-mx: regional-only skip}
+        devices:
+          ios-iphone-es: {driver: IOS_AXE, locale: es-MX}
+          ios-iphone-es-mx: {driver: IOS_HOST, locale: es-US}
+      trail:
+        - step: Open the app
+          recording:
+            ios-iphone-es: [openApp: {appId: com.example.parent}]
+            ios-iphone-es-mx: [openApp: {appId: com.example.regional}]
+        - step: Parent fallback
+          recording:
+            ios-iphone-es: [openApp: {appId: com.example.parent}]
+      """
+        .trimIndent()
+    val codec = TrailFormatYaml()
+    val original = listOf("ios", "iphone", "es").map(::TrailblazeDeviceClassifier)
+    val items =
+      codec.decodeTrail(
+        yaml,
+        original,
+        recordingClassifiers = listOf("ios", "iphone", "es", "mx").map(::TrailblazeDeviceClassifier),
+      )
+    val config = codec.extractTrailConfig(items)!!
+    assertEquals("IOS_AXE", config.driver)
+    assertEquals("es-MX", config.locale)
+    assertNull(config.skip)
+    val steps = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps
+    assertEquals(
+      JsonPrimitive("com.example.regional"),
+      ((steps[0] as DirectionStep).recording!!.tools.single().trailblazeTool as OtherTrailblazeTool)
+        .raw["appId"],
+    )
+    assertEquals(
+      JsonPrimitive("com.example.parent"),
+      ((steps[1] as DirectionStep).recording!!.tools.single().trailblazeTool as OtherTrailblazeTool)
+        .raw["appId"],
+    )
+  }
+
+  @Test
   fun `closest-wins picks the most specific classifier match`() {
     val unified =
       UnifiedTrail(

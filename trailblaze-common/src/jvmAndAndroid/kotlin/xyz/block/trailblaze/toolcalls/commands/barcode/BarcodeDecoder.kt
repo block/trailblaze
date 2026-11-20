@@ -91,6 +91,8 @@ object BarcodeDecoder {
     require(formats.isNotEmpty()) { "At least one barcode format must be allowed." }
     val hints = mapOf<DecodeHintType, Any>(
       DecodeHintType.TRY_HARDER to true,
+      // Screens can render light modules on a dark background; TRY_HARDER alone misses them.
+      DecodeHintType.ALSO_INVERTED to true,
       // Without this, every ZXing reader participates and the linear ones hallucinate.
       DecodeHintType.POSSIBLE_FORMATS to formats,
     )

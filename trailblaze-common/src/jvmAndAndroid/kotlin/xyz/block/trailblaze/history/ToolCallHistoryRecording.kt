@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.withExecutedToolSecretsRedacted
 import xyz.block.trailblaze.logs.client.SessionSecrets
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.toolcalls.CallerArguments
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -42,12 +43,15 @@ import xyz.block.trailblaze.util.Console
  * changes no tool made.
  */
 internal class HistoryDispatch(
-  val handle: ToolCallHistory.CallHandle,
+  /** Null when the session couldn't be read: nothing is recorded, but [callerNote] still ends. */
+  val handle: ToolCallHistory.CallHandle?,
   val memoryAtStart: AgentMemory,
   val valuesAtStart: Map<String, String>,
   val sensitiveKeysAtStart: Set<String>,
   val declaredSecrets: Collection<String> = emptyList(),
   val secretResult: Boolean = false,
+  /** The names an outside caller passed this call, counted until it ends. See [CallerArguments]. */
+  val callerNote: CallerArguments.Note? = null,
 )
 
 /**
@@ -97,12 +101,30 @@ internal fun ToolCallHistory.beginDispatch(
   tool: TrailblazeTool,
   device: String?,
   memory: AgentMemory,
-): HistoryDispatch? = try {
-  beginDispatch(context.sessionProvider.invoke().sessionId, toolName, tool, device, memory, context.trailblazeDeviceInfo)
-} catch (e: Exception) {
-  Console.log("[ToolCallHistory] could not record $toolName: ${e::class.simpleName}: ${e.message}")
-  null
+): HistoryDispatch? {
+  // Every dispatch that has a context passes here (the agent loop and the daemon's host-local
+  // path alike), so this is where the context learns which names callers handed in. It must run
+  // before the tool does, so a nested call the tool makes is checked against it. Tokens resolve
+  // as the tool will see them, so `{{name}}` can't carry a tool-only name past the check.
+  val note = context.callerArguments.noteDispatch(tool) {
+    memory.interpolateVariables(it, context.trailblazeDeviceInfo.tokenValues)
+  }
+  val dispatch = try {
+    beginDispatch(context.sessionProvider.invoke().sessionId, toolName, tool, device, memory, context.trailblazeDeviceInfo)
+  } catch (e: Exception) {
+    Console.log("[ToolCallHistory] could not record $toolName: ${e::class.simpleName}: ${e.message}")
+    null
+  }
+  return when {
+    note == null -> dispatch
+    dispatch == null -> HistoryDispatch(null, AgentMemory(), emptyMap(), emptySet(), callerNote = note)
+    else -> dispatch.withCallerNote(note)
+  }
 }
+
+private fun HistoryDispatch.withCallerNote(note: CallerArguments.Note) = HistoryDispatch(
+  handle, memoryAtStart, valuesAtStart, sensitiveKeysAtStart, declaredSecrets, secretResult, note,
+)
 
 /** [beginDispatch] for a caller that knows the session but has no execution context. */
 internal fun ToolCallHistory.beginDispatch(
@@ -166,9 +188,10 @@ internal fun ToolCallHistory.beginDispatch(
 }
 
 internal fun ToolCallHistory.endDispatch(dispatch: HistoryDispatch?, result: TrailblazeToolResult, memory: AgentMemory) {
-  dispatch ?: return
+  dispatch?.callerNote?.end()
+  val handle = dispatch?.handle ?: return
   end(
-    dispatch.handle,
+    handle,
     success = result is TrailblazeToolResult.Success,
     message = result.historyMessage(dispatch.scrubbing(memory), dispatch.secretResult, dispatch.declaredSecrets),
     endedAt = System.currentTimeMillis(),
@@ -179,10 +202,11 @@ internal fun ToolCallHistory.endDispatch(dispatch: HistoryDispatch?, result: Tra
 }
 
 internal fun ToolCallHistory.endDispatch(dispatch: HistoryDispatch?, thrown: Throwable, memory: AgentMemory) {
-  dispatch ?: return
+  dispatch?.callerNote?.end()
+  val handle = dispatch?.handle ?: return
   val message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown::class.simpleName.orEmpty()
   end(
-    dispatch.handle,
+    handle,
     success = false,
     message = scrubSensitiveValues(
       "${thrown::class.simpleName}: $message",

@@ -759,6 +759,17 @@ interface TracerSpan {
   clock?: string | null;
 }
 
+/**
+ * A companion device's log in a multi-device session (`device-<name>.log`), carried like the start
+ * device's: inline text below the driver's threshold, gzip+base64 above it.
+ */
+interface CompanionDeviceLog {
+  /** The configuration name of the device (`buyer`). */
+  device: string;
+  deviceLog?: string | null;
+  deviceLogGz?: string | null;
+}
+
 /** One run inside the embedded payload. */
 interface SessionPayload {
   meta: RunMeta;
@@ -780,6 +791,10 @@ interface SessionPayload {
   /** gzip(deviceLog text) as base64 — used instead of `deviceLog` past the driver's inline
    * threshold; the viewer inflates it lazily via DecompressionStream. */
   deviceLogGz?: string | null;
+  /** The configuration name of the device `deviceLog` came from, in a multi-device session. */
+  deviceLogDevice?: string | null;
+  /** The other devices' logs in a multi-device session, in capture order. Absent when there are none. */
+  companionDeviceLogs?: CompanionDeviceLog[] | null;
   network?: NetworkEvent[] | null;
   /** gzip(JSON.stringify(NetworkEvent[])) as base64 — see deviceLogGz. */
   networkGz?: string | null;
@@ -849,6 +864,10 @@ interface SessionInput {
   deviceLog?: string | null;
   /** See SessionPayload.deviceLogGz. */
   deviceLogGz?: string | null;
+  /** See SessionPayload.deviceLogDevice. */
+  deviceLogDevice?: string | null;
+  /** See SessionPayload.companionDeviceLogs. */
+  companionDeviceLogs?: CompanionDeviceLog[] | null;
   network?: NetworkEvent[] | null;
   /** See SessionPayload.networkGz. */
   networkGz?: string | null;
@@ -935,7 +954,7 @@ interface TrailblazeLogRecord {
 interface ZipReportExports {
   buildSessionInputsFromZipBytes: (
     zipBytes: Uint8Array,
-    options?: { render?: unknown; onStage?: (stage: string) => void; inflateRaw?: unknown; generatedAt?: string },
+    options?: { render?: unknown; onStage?: (stage: string) => void; inflateRaw?: unknown; generatedAt?: string; sessionPath?: string },
   ) => Promise<{ sessions: SessionInput[]; generatedAt: string; zipBytes: number }>;
 }
 

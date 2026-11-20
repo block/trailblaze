@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.mcp
 
 import java.io.File
+import xyz.block.trailblaze.devices.TrailDeviceLocale
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.host.jvmScopedDeviceId
@@ -55,7 +57,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.AssertWaypointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ExecTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.RunCommandTrailblazeTool
 
 /**
  * Pins the pure helpers `executeTrailblazeTool` is built out of — where a tool is routed and
@@ -589,10 +590,6 @@ class TrailblazeMcpBridgeImplTest {
       TrailblazeMcpBridgeImpl.ToolDispatchRoute.HOST_LOCAL,
       TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(ExecTrailblazeTool(argv = listOf("printf", "hi"))),
     )
-    assertEquals(
-      TrailblazeMcpBridgeImpl.ToolDispatchRoute.HOST_LOCAL,
-      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(RunCommandTrailblazeTool(command = "printf hi")),
-    )
   }
 
   @Test
@@ -725,6 +722,16 @@ class TrailblazeMcpBridgeImplTest {
     )
     assertEquals(1080, info.widthPixels)
     assertEquals(2400, info.heightPixels)
+  }
+
+  @Test
+  fun `device info carries the language the host last put the device in`() {
+    val deviceId = TrailblazeDeviceId("host-local-locale", TrailblazeDevicePlatform.IOS)
+    val info = { TrailblazeMcpBridgeImpl.hostLocalDeviceInfo(deviceId, TrailblazeDriverType.IOS_HOST, null) }
+    assertNull(info().initialLocale)
+    DeviceLocaleConfigurator.applyForTrail(deviceId, TrailDeviceLocale.forTrail("es-US")) { true }
+    DeviceLocaleConfigurator.cleanupDone(deviceId)
+    assertEquals("es-US", info().initialLocale)
   }
 
   @Test

@@ -2635,12 +2635,14 @@ class GenerateTestResultsCliCommandTest {
 
       writeTrailRun(
         logsDir = logsDir,
-        deviceInfo = webDeviceInfo(),
+        deviceInfo = webDeviceInfo().copy(locale = "es-US",
+          classifiers = listOf("web", "browser", "es", "mx").map { xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(it) },
+          metadata = mapOf("executionDeviceClass" to "web-browser-es")),
         sessionId = sessionId,
         trailFilePath = "trails/example/checkout.trail.yaml",
         startedAt = "2026-09-21T12:00:00Z",
         ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
-        trailConfig = TrailConfig(id = "example-checkout-config", metadata = metadata),
+        trailConfig = TrailConfig(id = "example-checkout-config", metadata = metadata, locale = "es-MX"),
       )
 
       captureStdout {
@@ -2660,6 +2662,9 @@ class GenerateTestResultsCliCommandTest {
         Json.parseToJsonElement("""[{"source":"example/trails","id":"checkout"}]"""),
         tracker.getValue("refs"),
       )
+      val wire = Json.parseToJsonElement(sidecarText).jsonObject
+      assertEquals("es-MX", wire["locale"]?.jsonPrimitive?.content)
+      assertEquals("web-browser-es", wire["device_classifier"]?.jsonPrimitive?.content)
       val sidecar = json.decodeFromString<SessionResult>(sidecarText)
       assertEquals(metadata, sidecar.metadata)
       assertEquals("example-checkout-config", sidecar.trail_id)

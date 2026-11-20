@@ -198,6 +198,12 @@ abstract class InProcessRpcServerTest(
     } ?: return false
     val server = OnDeviceRpcServer(
       loggingRule = loggingRule,
+      prepareRunYamlRequest = { request ->
+        // A cancelled dispatch can leave an Espresso block running on the test thread.
+        // Queue identity installation behind that actual work, not only its cancelled coroutine.
+        workQueue.prepareRpcRequest(loggingRule, request)
+        hostDeviceId = request.trailblazeDeviceId
+      },
       runTrailblazeYaml = { request, session, agentMemory ->
         workQueue.dispatch { runOnTestThread(request, session, agentMemory) }
       },
@@ -322,6 +328,7 @@ abstract class InProcessRpcServerTest(
     session: TrailblazeSession,
     agentMemory: AgentMemory,
   ): RunYamlCallbackResult {
+    loggingRule.rememberRpcSession(session.sessionId, request.trailblazeDeviceId)
     loggingRule.setSession(session)
     openSessions += session.sessionId
     val toolLogCount = AtomicInteger(0)

@@ -335,7 +335,7 @@ class CallbackDispatcherTest {
     // validator walks the UNFILTERED tool tier (expectedArgumentKeysFor's global fallback),
     // and the in-process QuickJS transport (SessionScopedHostBinding) resolves via
     // toolCallToTrailblazeToolUnfiltered — so this subprocess transport must too. Before the
-    // fix, a class-backed tool in no toolset (mobile_maestro, tapOnElementBySelector, …)
+    // fix, a class-backed tool in no toolset (tapOnElementBySelector, …)
     // passed validation and then failed decode with "Could not find Trailblaze tool",
     // making `trailblaze tool` fail where `trailblaze run` succeeded. `inputText` is
     // globally registered via @TrailblazeToolClass, so an empty session repo forces

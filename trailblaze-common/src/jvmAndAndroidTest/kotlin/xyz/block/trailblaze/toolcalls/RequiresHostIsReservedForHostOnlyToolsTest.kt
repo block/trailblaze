@@ -24,10 +24,11 @@ import kotlin.test.fail
  *
  * ## Why an allowlist and not a ban
  *
- * The flag is load-bearing where it is set, and the five tools that carry it genuinely cannot run
- * anywhere but a host machine: `exec` and `runCommand` fork a subprocess, `switchDevice` needs a
+ * The flag is load-bearing where it is set, and the tools that carry it genuinely cannot run
+ * anywhere but a host machine: `exec` forks a subprocess, `switchDevice` needs a
  * second bound device, `assertWaypoint` reads a registry only `TrailblazeHostYamlRunner` populates,
- * `android_reconnectSession` relaunches the on-device runner it would otherwise run in.
+ * `android_reconnectSession` relaunches the on-device runner it would otherwise run in, and
+ * `saveScreenshot` and `setCameraImage` write files on the host.
  * Deleting it from those would delete a true fact — and their generated contract pages are where a
  * reader looks it up.
  *
@@ -49,7 +50,7 @@ import kotlin.test.fail
  * only the second must not reach for the first:
  * - `sleep`, the downstream login and seed helpers: marker only. Dispatch in-process, run fine
  *   on-device.
- * - the five here: BOTH. The flag for the machine requirement, the marker for the dispatch.
+ * - the tools here: BOTH. The flag for the machine requirement, the marker for the dispatch.
  *
  * They do overlap in one place, which is why the marker is not a substitute: every host dispatch fork
  * (`HostOnDeviceRpcTrailblazeAgent`, `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) branches on
@@ -64,12 +65,12 @@ import kotlin.test.fail
  * 2. **`DelegatingTrailblazeTool` routes differently.** `TrailblazeMcpBridgeImpl` matches
  *    `tool is DelegatingTrailblazeTool && requiresHostInstance()` → `HOST_EXPAND` *before* the
  *    `HOST_LOCAL` branch, so a delegating tool's route depends on the flag in a way a non-delegating
- *    one's does not. None of the five is delegating.
+ *    one's does not. None of them is delegating.
  *
  * ## Why source-level rather than registry-level
  *
- * A registry-based version can only see tools a registry resolves, which silently omits
- * `runCommand` — a real flagged tool with no bundled `.tool.yaml`. Scanning source sees every
+ * A registry-based version can only see tools a registry resolves, which silently omits a real
+ * flagged tool with no bundled `.tool.yaml`. Scanning source sees every
  * declaration, including ones no trailmap references, and — because the walk starts at the repo root
  * rather than a list of module names — including ones in modules that did not exist when this test
  * was written.
@@ -223,7 +224,7 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
      * The tool's advertised id, or null when the annotation names it through a constant this scan
      * could not resolve. Null is reported by file path instead — a declaration whose name we cannot
      * read must never be silently DROPPED, which is how an earlier version of this scan lost
-     * `switchDevice` (positional name argument) and `runCommand` (name via constant) while still
+     * `switchDevice` (positional name argument) and a tool named via a constant while still
      * reporting green.
      */
     val name: String?,
@@ -270,9 +271,9 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
         .toList()
         .map { it to it.readText() }
 
-    // `@TrailblazeToolClass(name = RUN_COMMAND_TOOL_NAME)` is legal and used, so resolve string
-    // constants repo-wide first. Built from every scanned file because the constant is often
-    // declared in a different file from the annotation that references it.
+    // `@TrailblazeToolClass(name = RegisterCleanupTrailblazeTool.TOOL_NAME)` is legal and used, so
+    // resolve string constants repo-wide first. Built from every scanned file because the constant
+    // is often declared in a different file from the annotation that references it.
     val stringConstants: Map<String, String> =
       sources
         .flatMap { (_, source) ->
@@ -526,12 +527,14 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
     /**
      * The only class-backed tools allowed to declare `@TrailblazeToolClass(requiresHost = true)`,
      * each because it cannot run anywhere but a host machine:
-     * - `exec`, `runCommand` — fork a host subprocess.
+     * - `exec` — forks a host subprocess.
      * - `switchDevice` — hands the session to a second bound device, which only a host-orchestrated
      *   session can hold.
      * - `assertWaypoint` — resolves against a registry only `TrailblazeHostYamlRunner` populates.
      * - `android_reconnectSession` — relaunches the on-device runner after a reboot killed it; the
      *   runner cannot reconnect to itself.
+     * - `saveScreenshot`, `setCameraImage` — write files on the host machine, the second the one an
+     *   emulator's camera reads.
      *
      * Adding an entry is a claim that an on-device session cannot run the tool AT ALL, not that the
      * tool should skip the device driver. State the reason here in one line; if you can't, the tool
@@ -541,7 +544,8 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
       "android_reconnectSession",
       "assertWaypoint",
       "exec",
-      "runCommand",
+      "saveScreenshot",
+      "setCameraImage",
       "switchDevice",
     )
 
@@ -596,7 +600,7 @@ class RequiresHostIsReservedForHostOnlyToolsTest {
      * A floor, not a census — scoped to the framework subtree so it holds in the framework repo on
      * its own as well as in a repo that vendors it. It exists so a parser or scan regression cannot
      * pass by examining nothing, which is exactly how the first version of this scan silently
-     * dropped `switchDevice` and `runCommand`, and how named scan roots dropped four whole modules.
+     * dropped `switchDevice` and a constant-named tool, and how named scan roots dropped four whole modules.
      */
     private const val EXPECTED_MINIMUM_FRAMEWORK_DECLARATIONS = 100
 

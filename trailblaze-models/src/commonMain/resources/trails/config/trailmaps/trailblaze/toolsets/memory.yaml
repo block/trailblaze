@@ -17,4 +17,5 @@ tools:
   - rememberRandomValue
   - rememberText
   - rememberValue
+  - rememberSecretValue
   - rememberWithAi

@@ -1,0 +1,2 @@
+id: saveScreenshot
+class: xyz.block.trailblaze.toolcalls.commands.camera.SaveScreenshotTrailblazeTool

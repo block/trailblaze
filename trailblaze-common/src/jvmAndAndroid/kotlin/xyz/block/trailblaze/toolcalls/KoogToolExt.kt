@@ -72,16 +72,11 @@ fun KClass<out TrailblazeTool>.toTrailblazeToolDescriptorWithSource(): Trailblaz
  * Selector params come back too ([withSelectorParamsRestored]). Both descriptor paths strip them,
  * which is right for a caller composing a toolbox and wrong for one describing a tool to a person:
  * `tapOn` without its `nodeSelector` reads as a tap with nothing to tap.
- *
- * And the result is reconciled against the tool's serializer ([withSerializedParameterNames]),
- * because what a person is shown has to be what a trail step decodes. The two differ only for a
- * tool with a hand-written serializer.
  */
 fun KClass<out TrailblazeTool>.toTrailblazeToolDescriptorIgnoringLlmSurface(): TrailblazeToolDescriptor? =
   toScriptedToolDescriptor()
     ?.toTrailblazeToolDescriptor()
     ?.withSelectorParamsRestored(this)
-    ?.withSerializedParameterNames(this)
     ?.withKotlinSource(qualifiedName)
 
 private fun TrailblazeToolDescriptor.withKotlinSource(qualifiedName: String?): TrailblazeToolDescriptor =

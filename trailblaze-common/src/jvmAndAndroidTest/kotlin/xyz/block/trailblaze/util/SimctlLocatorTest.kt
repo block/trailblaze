@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * [SimctlLocator] decides what every simctl invocation runs. The contract: run simctl's own path
@@ -60,6 +61,25 @@ class SimctlLocatorTest {
     answer = moved
 
     assertEquals(listOf(moved), locator.prefix())
+  }
+
+  @Test
+  fun `an interrupted lookup propagates and is not remembered as not found`() {
+    var interrupt = true
+    var lookups = 0
+    val locator = SimctlLocator(
+      lookup = {
+        lookups++
+        if (interrupt) throw InterruptedException("cancelled") else simctl
+      },
+      isExecutable = { true },
+    )
+
+    assertFailsWith<InterruptedException> { locator.prefix() }
+    interrupt = false
+
+    assertEquals(listOf(simctl), locator.prefix(), "a cancelled caller must not pin every later one to xcrun simctl")
+    assertEquals(2, lookups)
   }
 
   @Test

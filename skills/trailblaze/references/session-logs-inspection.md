@@ -5,8 +5,9 @@ call (request + response + screenshot + view hierarchy), every tool the agent in
 every screen state captured, every step's outcome. The same on-disk layout is produced
 locally by `trailblaze` and by any CI system that uploads the `logs/` directory as a
 `logs_*.zip` artifact - extract that zip back into the configured logs directory
-(`<git root>/logs` in a checkout, `~/.trailblaze/logs` for an installed CLI) and everything
-below applies.
+(by default, `<git root>/logs` when the daemon's workspace is a checkout, even with an installed
+CLI; `~/.trailblaze/logs` outside a checkout) and everything below applies. An explicitly
+configured logs directory takes precedence.
 
 This reference is the **inspection layer** — it tells you what's in the files, how to read
 them, and the common debugging patterns. It works the same whether the session ran on your

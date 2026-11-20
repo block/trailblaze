@@ -35,9 +35,10 @@ data class ComposeTypeTool(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
-    // before execution, so `text` arrives resolved here.
+    // before execution, so `text` and `existingText` arrive resolved here — and are kept out of the
+    // console, which is uploaded with the session.
     val description = element.ifBlank { elementId ?: testTag ?: existingText ?: "unknown" }
-    Console.log("### Typing into $description: $text")
+    Console.log("### Typing into ${element.ifBlank { elementId ?: testTag ?: "the field holding the given text" }}")
     return try {
       val matcher =
         ComposeExecutableTool.resolveElement(elementId, testTag, existingText, context)

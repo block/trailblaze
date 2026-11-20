@@ -56,3 +56,8 @@ spotless {
 tasks.matching { it.name.startsWith("publish") && it.name.contains("IosSimulatorArm64") }.configureEach {
     enabled = false
 }
+
+// Shared framework implementation hooks are not supported SDK declarations.
+apiValidation {
+    ignoredPackages.add("xyz.block.trailblaze.yaml.internal")
+}

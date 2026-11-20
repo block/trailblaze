@@ -8,6 +8,7 @@ import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -53,6 +54,7 @@ import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import java.io.File
 import kotlin.reflect.KClass
 import xyz.block.trailblaze.events.SessionEventsWaitPump
+import xyz.block.trailblaze.yaml.internal.recordingClassifiersFor
 
 /**
  * Base test class for Playwright-native web testing.
@@ -215,13 +217,34 @@ open class BasePlaywrightNativeTest(
         trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
         widthPixels = viewport.width,
         heightPixels = viewport.height,
-        classifiers = deviceClassifierOverride.ifEmpty {
-          listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier())
-        },
+        classifiers = currentRecordingClassifiers(),
+        metadata = mapOf(DeviceClassifierKey.EXECUTION_DEVICE_CLASS to deviceClassifierOverride.ifEmpty { listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()) }.joinToString("-") { it.classifier }),
         locale = (browserManager as? PlaywrightBrowserManager)?.contextLocale,
         advertisedInstanceId = advertisedDeviceInstanceId,
       )
     }
+
+  private var recordingSessionId: SessionId? = null
+
+  internal fun prepareRecordingClassifiers(yaml: String) {
+    val sessionId = loggingRule.session?.sessionId
+    if (sessionId != null && sessionId != recordingSessionId) {
+      recordingClassifiers = null
+      recordingSessionId = sessionId
+    }
+    val selection = deviceClassifierOverride.ifEmpty {
+      listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier())
+    }
+    recordingClassifiers = trailblazeYaml.recordingClassifiersFor(
+      yaml, selection, current = recordingClassifiers,
+    )
+  }
+
+  internal fun currentRecordingClassifiers() = recordingClassifiers ?: deviceClassifierOverride.ifEmpty {
+    listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier())
+  }
+
+  private var recordingClassifiers: List<TrailblazeDeviceClassifier>? = null
 
   val loggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
@@ -421,9 +444,14 @@ open class BasePlaywrightNativeTest(
     // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch, e.g. `trailblaze tool`) additionally
     // decodes to one ToolTrailItem. Required because host-runner single-tool dispatch now sends the
     // bare envelope instead of the legacy `- tools:` list shape.
+    val selectionClassifiers = deviceClassifierOverride.ifEmpty {
+      listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier())
+    }
+    prepareRecordingClassifiers(yaml)
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
       yaml,
-      deviceClassifiers = trailblazeDeviceInfo.classifiers,
+      deviceClassifiers = selectionClassifiers,
+      recordingClassifiers = recordingClassifiers ?: selectionClassifiers,
     )
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 

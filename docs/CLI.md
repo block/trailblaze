@@ -278,6 +278,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 | `--search`, `-s` | Substring search on tool name and description. | - |
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--detail` | Show full parameter descriptions for all tools | - |
+| `--all`, `-a` | Also list tools the in-session LLM is not offered: ones that hide themselves (surfaceToLlm: false) and ones the target drops (excluded_tools:). Each is marked. Call one with trailblaze tool, a trail step, or a TS tool (ctx.tools.<name>), except a target's own scripted tool that it also drops, which is never started. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1394,11 +1395,12 @@ trailblaze config reset
 | `android-driver` | Android driver type | accessibility, in-process |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
+| `lend-devices` | Lend this machine's devices to other Trailblaze daemons, as TRAILBLAZE_LEASE_DEVICES=1 does (read when the daemon starts) | true, false |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
 | `max-llm-calls` | Per-objective LLM call cap for the agent | positive integer, or 'unset' to clear |
 | `mode` | CLI working mode: trail (author reproducible trails) or blaze (explore device) | trail, blaze |
 | `web-headless` | Default for `--headless` on web devices (CLI flag still wins when explicitly passed) | true, false |
-| `device` | Default device platform for CLI commands | android, ios, web |
+| `device` | Default device platform for CLI commands | android, ios, web, or 'unset' to clear |
 | `screenshot-format` | Image format used for screenshots sent to the LLM and shown in the timeline | png, jpeg, webp, or 'unset' to use the framework default (webp) |
 | `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
 | `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
@@ -1516,6 +1518,9 @@ trailblaze device connect
 trailblaze device rebind
 trailblaze device disconnect
 trailblaze device create
+trailblaze device install
+trailblaze device pair
+trailblaze device unpair
 ```
 
 **Options:**
@@ -1659,6 +1664,82 @@ trailblaze device create web [OPTIONS]
 
 ---
 
+### `trailblaze device install`
+
+Install an app on a device, including one borrowed from another machine
+
+**Synopsis:**
+
+```
+trailblaze device install [OPTIONS] <APP>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<APP>` | The .apk, .app or .zip to install | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-d`, `--device` | Device to install on, as `trailblaze device list` shows it. Defaults to `$TRAILBLAZE_DEVICE` if set, otherwise this terminal's pin. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze device pair`
+
+Use another machine's devices: pair with a Trailblaze daemon that lends them
+
+**Synopsis:**
+
+```
+trailblaze device pair [OPTIONS] [<URL>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<URL>` | The lending daemon, as `http://<host>:<port>` | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze device unpair`
+
+Stop using a paired daemon's devices
+
+**Synopsis:**
+
+```
+trailblaze device unpair [OPTIONS] <URL>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<URL>` | The paired daemon, as given to 'device pair' | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
 ### `trailblaze show`
 
 Open the multi-device live grid (/devices/all) in your default browser
@@ -1748,6 +1829,7 @@ trailblaze check [OPTIONS] [<<trailmap-id>>]
 | `--workspace` | Pin the workspace root explicitly (the directory containing `trailblaze-config/trailmaps/` or the legacy `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
 | `--no-typecheck` | Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
 | `--tests-only` | Materialize the workspace's SDK + per-trailmap typed bindings, then run only the trailmaps' `*.test.ts` unit tests via bun: no typecheck and no trail validation, and the exit code is the tests' alone. Fails when no checked trailmap has a test. For CI gates that judge tool tests apart from the trail corpus. | - |
+| `--no-tests` | Skip the trailmaps' `*.test.ts` unit tests; every other phase still runs. For CI that runs those tests itself (in parallel, or with its own timeouts), so `check` does not run them a second time. | - |
 | `--show-typed-tools` | Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by default because the per-trailmap subprocess spawn it requires adds noticeable latency to `check`. Has no effect when node, the SDK shim, or the SDK's `ts-json-schema-generator` install are missing — the analyzer skips cleanly with an explanatory log line. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |

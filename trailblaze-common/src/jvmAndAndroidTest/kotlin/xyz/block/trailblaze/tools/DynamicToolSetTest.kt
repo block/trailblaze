@@ -3,6 +3,7 @@ package xyz.block.trailblaze.tools
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import kotlinx.serialization.Serializable
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -11,6 +12,8 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.allToolNameStrings
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -18,7 +21,6 @@ import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
@@ -83,7 +85,7 @@ class DynamicToolSetTest {
   fun `resolveToolScopeForDriver layers trailmap plus custom minus excluded`() {
     // Verify the composite layering semantics in isolation:
     //   1. driver-compatible base — provides `objectiveStatus` (meta) and `tap` (core_interaction)
-    //   2. `+` target custom — adds `MaestroTrailblazeTool` (deliberately not in any YAML toolset,
+    //   2. `+` target custom — adds `CustomOnlyTool` (deliberately not in any YAML toolset,
     //      so this assertion actually proves the custom contribution reaches the result — a
     //      tool already in the base would pass the assertion regardless).
     //   3. `-` target excluded — removes `tap`
@@ -92,7 +94,7 @@ class DynamicToolSetTest {
     val fakeTarget = object : TrailblazeHostAppTarget(id = "fake", displayName = "Fake") {
       override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
       override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
-        setOf(MaestroTrailblazeTool::class, TapTrailblazeTool::class)
+        setOf(CustomOnlyTool::class, TapTrailblazeTool::class)
       override fun getExcludedToolsForDriver(driverType: TrailblazeDriverType) =
         setOf(TapTrailblazeTool::class)
     }
@@ -102,7 +104,7 @@ class DynamicToolSetTest {
     ).toolClasses
     val names = result.map { it.toolName().toolName }.toSet()
 
-    assertTrue("mobile_maestro" in names, "Target's custom overlay must surface in the result")
+    assertTrue("test_customOnly" in names, "Target's custom overlay must surface in the result")
     assertFalse(
       "tap" in names,
       "Excluded wins over custom: tap is in both custom and excluded, must NOT be in result",
@@ -131,14 +133,14 @@ class DynamicToolSetTest {
     val fakeTarget = object : TrailblazeHostAppTarget(id = "fake-catalog", displayName = "Fake") {
       override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
       override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
-        setOf(MaestroTrailblazeTool::class)
+        setOf(CustomOnlyTool::class)
     }
     val result = fakeTarget.resolveToolScopeForDriver(
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       catalog = emptyList(),
     ).toolClasses
     assertEquals(
-      expected = setOf(MaestroTrailblazeTool::class),
+      expected = setOf(CustomOnlyTool::class),
       actual = result,
       message = "Empty base catalog: only the target's custom contribution should survive",
     )
@@ -555,4 +557,9 @@ class DynamicToolSetTest {
     assertTrue("tap" in androidNames, "Android is a compatible driver for core_interaction")
     assertTrue("hideKeyboard" in androidNames, "Android sees core_interaction tools")
   }
+
+  /** A tool in no YAML toolset, so it reaches a scope only through a target's custom overlay. */
+  @Serializable
+  @TrailblazeToolClass("test_customOnly")
+  private class CustomOnlyTool : TrailblazeTool
 }

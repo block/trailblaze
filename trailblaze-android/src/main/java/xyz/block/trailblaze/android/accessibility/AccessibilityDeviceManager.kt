@@ -69,6 +69,11 @@ class AccessibilityDeviceManager(
   },
 ) : DriverDispatch {
 
+  init {
+    // Lets an opted-in selector wait (`findSelectorMatches(stopWhenSettled = true)`) stop early.
+    AccessibilityAppIdleProbe.install()
+  }
+
   companion object {
     /** Polling interval for element resolution loops. Balances responsiveness with CPU usage. */
     private const val POLL_INTERVAL_MS = 100L
@@ -260,8 +265,8 @@ class AccessibilityDeviceManager(
    */
   fun execute(action: AccessibilityAction): ExecutionResult {
     Console.log("Executing: ${action.description}")
-    // The TYPE, deliberately, not `action.description`. `InputText` and `SetClipboard` embed their
-    // payload in the description, so recording it here would write a typed password or a
+    // The TYPE, deliberately, not `action.description`. A description that carried a payload
+    // would write a typed password or a
     // `rememberSensitive` value into `trace.json` — which is uploaded to the host, packaged into
     // report artifacts, and exported as an OpenTelemetry attribute. Type-only is also fail-safe: a
     // new action that embeds a payload cannot leak through a span that never reads its text.

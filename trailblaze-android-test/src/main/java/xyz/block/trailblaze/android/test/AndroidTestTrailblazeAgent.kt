@@ -34,7 +34,6 @@ import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
@@ -79,6 +78,11 @@ class AndroidTestTrailblazeAgent(
    */
   private val appId: String? = null,
   private val screenStateProviderOverride: (() -> ScreenState)? = null,
+  /**
+   * A capture that always includes a screenshot, handed to tools that read pixels. Set when the
+   * provider this agent dispatches with skips the screenshot, as [AndroidTestTrailblazeRule]'s does.
+   */
+  private val screenshotStateProvider: (() -> ScreenState)? = null,
   private val metricsSink: AndroidTestMetricsSink = AndroidTestMetricsSink.NONE,
   /**
    * Emit a [xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog] per dispatched tool.
@@ -125,6 +129,7 @@ class AndroidTestTrailblazeAgent(
         trailblazeDeviceInfo = deviceInfo,
         sessionProvider = sessionProvider,
         screenStateProvider = screenStateProvider ?: this.screenStateProvider,
+        screenshotStateProvider = screenshotStateProvider,
         trailblazeLogger = trailblazeLogger,
         memory = memory,
         toolRepo = trailblazeToolRepo,
@@ -238,17 +243,14 @@ class AndroidTestTrailblazeAgent(
 
   /**
    * Refuses a tool whose only body is Maestro dispatch, or null to let it through. This driver
-   * carries no Maestro agent, so letting one through fails anyway — but as
-   * "MaestroTrailblazeTool requires MaestroTrailblazeAgent", which names an implementation detail
-   * instead of the actual situation. Reached only after the canonical adapters (which lower the
-   * common Maestro-era recorded tools onto this driver's own backends — raw `mobile_maestro`
-   * command lists included, per-command, via
-   * [xyz.block.trailblaze.android.test.tools.MaestroCommandAdapters]). So in practice this names
-   * the remaining [MapsToMaestroCommands] tool classes nothing upstream claimed; a raw
-   * `MaestroTrailblazeTool` never reaches it.
+   * carries no Maestro agent, so letting one through fails anyway, but with an error that names an
+   * implementation detail instead of the actual situation. Reached only after the canonical
+   * adapters, which lower the common Maestro-era recorded tools onto this driver's own backends,
+   * so in practice this names the remaining [MapsToMaestroCommands] tool classes nothing upstream
+   * claimed.
    */
   private fun refuseIfMaestroBound(tool: ExecutableTrailblazeTool): TrailblazeToolResult? {
-    if (tool !is MaestroTrailblazeTool && tool !is MapsToMaestroCommands) return null
+    if (tool !is MapsToMaestroCommands) return null
     return TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = "${tool::class.simpleName} dispatches through Maestro, which the in-process " +
         "ANDROID_TEST driver does not carry. Either replay this trail on a driver that does, or " +

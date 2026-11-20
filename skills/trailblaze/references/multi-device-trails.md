@@ -46,7 +46,11 @@ before the trail ends if you need it.
 
 ## Recording
 
-Boot every device in the cast, then run with AI on and the companions bound for that run. The start
+Every recording, the trailhead's included, is keyed by the configuration name. Write the calls you
+know there and capture the rest; an AI run is one way to capture them, not a reason to leave known
+calls out.
+
+To record with AI, boot the cast and bind the companions for that run. The start
 device is `-d`; never bind it:
 
 ```bash

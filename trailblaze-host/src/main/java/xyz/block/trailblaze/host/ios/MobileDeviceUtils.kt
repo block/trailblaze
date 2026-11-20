@@ -11,6 +11,7 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcessWithTimeout
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
@@ -18,6 +19,15 @@ import java.nio.file.Files
 import xyz.block.trailblaze.util.SimctlCommand
 
 object MobileDeviceUtils {
+
+  /**
+   * Bounds `simctl install` of a downloaded app. Generous: GB-plus production bundles have outrun
+   * 30s; it only stops a wedged CoreSimulator from hanging the install forever.
+   */
+  private const val DOWNLOADED_APP_INSTALL_TIMEOUT_SECONDS = 300L
+
+  /** How long extracting an `.app` from an archive may take before it is stopped. */
+  private const val UNZIP_TIMEOUT_SECONDS = 300L
   /**
    * Gets version information for an installed app on the specified device.
    *
@@ -237,121 +247,123 @@ object MobileDeviceUtils {
     val message: String,
   )
 
+  /**
+   * Downloads the app at [appUrl] (an `.apk` for Android, a `.zip` holding an `.app` for an iOS
+   * simulator) and installs it on [trailblazeDeviceId] with [install], by default [installAppFile],
+   * which works only on this machine's own devices.
+   */
   suspend fun installFromUrl(
     trailblazeDeviceId: TrailblazeDeviceId,
     appUrl: String,
+    install: suspend (TrailblazeDeviceId, File) -> InstallResult = ::installAppFile,
   ): InstallResult {
-    return when (trailblazeDeviceId.trailblazeDevicePlatform) {
-      TrailblazeDevicePlatform.ANDROID -> installAndroidApkFromUrl(trailblazeDeviceId, appUrl)
-      TrailblazeDevicePlatform.IOS -> installIosSimulatorZipFromUrl(trailblazeDeviceId, appUrl)
-      TrailblazeDevicePlatform.WEB -> InstallResult(
-        success = false,
-        message = "Web browser devices do not support app installation.",
-      )
-
-      TrailblazeDevicePlatform.DESKTOP -> InstallResult(
-        success = false,
-        message = "Compose desktop driver does not support app installation — it drives the host app directly.",
-      )
+    val platform = trailblazeDeviceId.trailblazeDevicePlatform
+    unsupportedInstallReason(platform)?.let { return InstallResult(success = false, message = it) }
+    val download = when (platform) {
+      TrailblazeDevicePlatform.ANDROID -> downloadToTempFile(appUrl, suffix = ".apk")
+      else -> downloadWithCurl(appUrl, suffix = ".zip").getOrElse {
+        return InstallResult(success = false, message = "Failed to download iOS app: ${it.message}")
+      }
     }
-  }
-
-  private suspend fun installAndroidApkFromUrl(
-    trailblazeDeviceId: TrailblazeDeviceId,
-    appUrl: String,
-  ): InstallResult {
-    val apkFile = downloadToTempFile(appUrl, suffix = ".apk")
     return try {
-      val installed = withContext(Dispatchers.IO) {
-        AndroidHostAdbUtils.installApkFile(apkFile, trailblazeDeviceId)
-      }
-      if (installed) {
-        InstallResult(true, "APK installed successfully on ${trailblazeDeviceId.instanceId}.")
-      } else {
-        InstallResult(false, "APK installation failed on ${trailblazeDeviceId.instanceId}.")
-      }
+      install(trailblazeDeviceId, download)
     } finally {
-      apkFile.delete()
+      download.delete()
     }
   }
 
-  private suspend fun installIosSimulatorZipFromUrl(
+  /**
+   * Installs the app in [appFile] on [trailblazeDeviceId], a device attached to this machine: an
+   * `.apk` on Android; on an iOS simulator an `.app` bundle, or a `.zip` holding one.
+   */
+  suspend fun installAppFile(
     trailblazeDeviceId: TrailblazeDeviceId,
-    appUrl: String,
+    appFile: File,
   ): InstallResult {
-    val tempDir = withContext(Dispatchers.IO) {
-      Files.createTempDirectory("trailblaze-ios-app-").toFile()
+    val platform = trailblazeDeviceId.trailblazeDevicePlatform
+    installableAppProblem(platform, appFile)?.let { return InstallResult(success = false, message = it) }
+    val instanceId = trailblazeDeviceId.instanceId
+    if (platform == TrailblazeDevicePlatform.ANDROID) {
+      val installed = withContext(Dispatchers.IO) { AndroidHostAdbUtils.installApkFile(appFile, trailblazeDeviceId) }
+      return if (installed) {
+        InstallResult(true, "APK installed successfully on $instanceId.")
+      } else {
+        InstallResult(false, "APK installation failed on $instanceId.")
+      }
     }
-    val zipFile = File(tempDir, "app.zip")
-    val extractDir = File(tempDir, "app")
-
+    if (appFile.isDirectory) return simctlInstall(trailblazeDeviceId, appFile)
+    val extractDir = withContext(Dispatchers.IO) { Files.createTempDirectory("trailblaze-ios-app-").toFile() }
     return try {
-      // Download using curl -L (follows redirects, with timeouts)
-      val downloadResult = withContext(Dispatchers.IO) {
-        TrailblazeProcessBuilderUtils.createProcessBuilder(
-          listOf(
-            "curl", "-L",
-            "--max-time", "300",
-            "--connect-timeout", "30",
-            "-o", zipFile.absolutePath,
-            appUrl,
-          ),
-        ).runProcess {}
+      // System unzip preserves the permissions and symlinks an .app bundle needs. The archive may
+      // come from a borrower, so unzip never asks a question (-n: keep the first of two entries
+      // with one name; no input to read) and is stopped if it runs too long.
+      val (unzipResult, timedOut) = TrailblazeProcessBuilderUtils
+        .createProcessBuilder(listOf("unzip", "-n", "-q", appFile.absolutePath, "-d", extractDir.absolutePath))
+        .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+        .runProcessWithTimeout(timeoutSeconds = UNZIP_TIMEOUT_SECONDS)
+      if (timedOut) {
+        return InstallResult(false, "Extracting ${appFile.name} took longer than ${UNZIP_TIMEOUT_SECONDS}s; gave up.")
       }
-
-      if (downloadResult.exitCode != 0) {
-        return InstallResult(
-          success = false,
-          message = "Failed to download iOS app: ${downloadResult.fullOutput}",
-        )
-      }
-
-      // Extract using system unzip (preserves permissions and symlinks needed for .app bundles)
-      withContext(Dispatchers.IO) {
-        extractDir.mkdirs()
-      }
-      val unzipResult = withContext(Dispatchers.IO) {
-        TrailblazeProcessBuilderUtils.createProcessBuilder(
-          listOf("unzip", "-q", zipFile.absolutePath, "-d", extractDir.absolutePath),
-        ).runProcess {}
-      }
-
       if (unzipResult.exitCode != 0) {
-        return InstallResult(
-          success = false,
-          message = "Failed to extract iOS app archive: ${unzipResult.fullOutput}",
-        )
+        return InstallResult(false, "Failed to extract iOS app archive: ${unzipResult.fullOutput}")
       }
-
-      val appBundle = withContext(Dispatchers.IO) {
-        findAppBundle(extractDir)
-      }
-        ?: return InstallResult(
-          success = false,
-          message = "No .app bundle found in the downloaded archive.",
-        )
-
-      val installResult = withContext(Dispatchers.IO) {
-        TrailblazeProcessBuilderUtils.createProcessBuilder(
-          SimctlCommand.argv(
-            "install",
-            trailblazeDeviceId.instanceId,
-            appBundle.absolutePath,
-          ),
-        ).runProcess {}
-      }
-
-      if (installResult.exitCode == 0) {
-        InstallResult(true, "iOS app installed successfully on ${trailblazeDeviceId.instanceId}.")
-      } else {
-        InstallResult(
-          false,
-          "iOS app installation failed: ${installResult.fullOutput}",
-        )
-      }
+      val appBundle = withContext(Dispatchers.IO) { findAppBundle(extractDir) }
+        ?: return InstallResult(false, "No .app bundle found in ${appFile.name}.")
+      simctlInstall(trailblazeDeviceId, appBundle)
     } finally {
-      tempDir.deleteRecursively()
+      // Never through a symlink: the archive may come from a borrower, and a link in it could point
+      // anywhere on this machine.
+      IosHostSimctlUtils.deleteRecursivelyNoFollowLinks(extractDir.toPath())
     }
+  }
+
+  /**
+   * Why [appFile] can't be installed on a [platform] device, or null when it is the right kind: an
+   * `.apk` for Android; an `.app` bundle, or a `.zip` holding one, for an iOS simulator.
+   */
+  fun installableAppProblem(platform: TrailblazeDevicePlatform, appFile: File): String? {
+    unsupportedInstallReason(platform)?.let { return it }
+    return when {
+      platform == TrailblazeDevicePlatform.ANDROID ->
+        if (appFile.isFile && appFile.name.endsWith(".apk", ignoreCase = true)) null
+        else "An Android device installs an .apk file, not ${appFile.name}."
+      appFile.isDirectory && appFile.name.endsWith(".app") -> null
+      appFile.isFile && appFile.name.endsWith(".zip", ignoreCase = true) -> null
+      else -> "An iOS simulator installs an .app bundle, or a .zip holding one, not ${appFile.name}."
+    }
+  }
+
+  /** Why [platform] can't have an app installed on it, or null when it can. */
+  private fun unsupportedInstallReason(platform: TrailblazeDevicePlatform): String? = when (platform) {
+    TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> null
+    TrailblazeDevicePlatform.WEB -> "Web browser devices do not support app installation."
+    TrailblazeDevicePlatform.DESKTOP ->
+      "Compose desktop driver does not support app installation — it drives the host app directly."
+  }
+
+  private suspend fun simctlInstall(trailblazeDeviceId: TrailblazeDeviceId, appBundle: File): InstallResult {
+    val installResult = SimctlCommand.runSuspending(
+      listOf("install", trailblazeDeviceId.instanceId, appBundle.absolutePath),
+      DOWNLOADED_APP_INSTALL_TIMEOUT_SECONDS,
+    )
+    return if (installResult.success) {
+      InstallResult(true, "iOS app installed successfully on ${trailblazeDeviceId.instanceId}.")
+    } else {
+      InstallResult(false, "iOS app installation failed: ${installResult.output}")
+    }
+  }
+
+  /** Downloads with `curl -L` (follows redirects, with timeouts); the failure carries curl's output. */
+  private suspend fun downloadWithCurl(appUrl: String, suffix: String): Result<File> {
+    val file = withContext(Dispatchers.IO) { Files.createTempFile("trailblaze-app-download-", suffix).toFile() }
+    val result = withContext(Dispatchers.IO) {
+      TrailblazeProcessBuilderUtils.createProcessBuilder(
+        listOf("curl", "-L", "--max-time", "300", "--connect-timeout", "30", "-o", file.absolutePath, appUrl),
+      ).runProcess {}
+    }
+    if (result.exitCode == 0) return Result.success(file)
+    file.delete()
+    return Result.failure(IllegalStateException(result.fullOutput))
   }
 
   private suspend fun downloadToTempFile(
@@ -367,9 +379,11 @@ object MobileDeviceUtils {
     tempFile
   }
 
+  /** The first `.app` under [rootDir], never found through a symlink out of it. */
   private fun findAppBundle(rootDir: File): File? {
     return rootDir
       .walkTopDown()
-      .firstOrNull { file -> file.isDirectory && file.name.endsWith(".app") }
+      .onEnter { !Files.isSymbolicLink(it.toPath()) }
+      .firstOrNull { file -> !Files.isSymbolicLink(file.toPath()) && file.isDirectory && file.name.endsWith(".app") }
   }
 }

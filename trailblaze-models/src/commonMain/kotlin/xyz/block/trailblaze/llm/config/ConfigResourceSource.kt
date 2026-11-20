@@ -27,4 +27,27 @@ fun interface ConfigResourceSource {
    */
   fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
     discoverAndLoad(directoryPath, suffix).mapKeys { (key, _) -> "$key$suffix" }
+
+  /**
+   * Reads the single text resource at [path] (full resource path, e.g.
+   * `trails/config/trailmaps/<id>/waypoints/home.waypoint.yaml`), or returns null if it doesn't
+   * exist. Lets a caller that already knows a file's path read it without enumerating a directory.
+   *
+   * Default returns null so existing implementations keep compiling — sources that can read a
+   * single file override this.
+   */
+  fun readResource(path: String): String? = null
+
+  /**
+   * Whether a resource exists at [path]. Override when presence can be checked without reading the
+   * file — a scripted tool's `.bundle.js` can be a large bundle.
+   */
+  fun resourceExists(path: String): Boolean = readResource(path) != null
+
+  /**
+   * The relative paths [discoverAndLoadRecursive] would key its result by, without the contents.
+   * Override when names can be listed without reading every file.
+   */
+  fun discoverFilenamesRecursive(directoryPath: String, suffix: String): Set<String> =
+    discoverAndLoadRecursive(directoryPath, suffix).keys
 }

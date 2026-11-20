@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -26,9 +27,13 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
+import xyz.block.trailblaze.toolcalls.CallableOnlyFromToolsException
+import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.isCallableOnlyFromTools
 import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
@@ -135,6 +140,7 @@ class ToolDiscoveryToolSet(
     toolbox(detail=true) → full parameter details for every tool
     toolbox(name="tap") → single tool with full descriptor
     toolbox(target="sampleapp") → tools for a specific target app
+    toolbox(all=true) → also tools the in-session LLM is not offered; call one with a direct step(tools=...) call, a trail step, or a TS tool
 
     Use this to understand what actions are possible before calling step().
     """
@@ -146,6 +152,12 @@ class ToolDiscoveryToolSet(
     @LLMDescription("Substring search on tool name and description.") search: String? = null,
     @LLMDescription("Target device (e.g. android, android/emulator-5554).") platform: String? = null,
     @LLMDescription("Expand tools with full parameter descriptions") detail: Boolean? = null,
+    @LLMDescription(
+      "Also list tools the in-session LLM is not offered (hidden by the tool, or excluded by the " +
+        "target). Call one with a direct step(tools=...) call, a trail step, or a TS tool " +
+        "(ctx.tools.<name>), except a target's own scripted tool that it also drops, which is never started.",
+    )
+    all: Boolean? = null,
   ): String {
     val platformFilter = platform?.let { TrailblazeDevicePlatform.fromString(it) }
     // "default" in index mode means "show only platform tools, no target tools"
@@ -170,15 +182,23 @@ class ToolDiscoveryToolSet(
     }
     // One descriptor walk for everything this call describes — see [scriptedToolCatalogFactory].
     val catalog = scriptedToolCatalogFactory()
+    val includeNotOffered = all ?: false
     return when {
       // NAME mode intentionally spans all platforms — looking up a tool by exact name is "find me
       // this tool wherever it's defined" rather than "what's runnable on the current device." The
       // result's `foundInCategories` / `foundInTargets` already tell the caller which platforms
-      // the tool lives on. If `platform` was passed here it's accepted but ignored on purpose.
-      name != null -> handleNameMode(name, catalog)
-      search != null -> handleSearchMode(search, target, platformFilter, catalog)
-      target != null && !isDefaultTarget -> handleTargetMode(target, detail ?: false, platformFilter, catalog)
-      else -> handleIndexMode(detail ?: false, platformFilter, suppressTargetTools = isDefaultTarget, catalog = catalog)
+      // the tool lives on. `target` / `platform` only scope the note on whether the LLM is offered it.
+      name != null -> handleNameMode(name, target, platformFilter, catalog)
+      search != null -> handleSearchMode(search, target, platformFilter, catalog, includeNotOffered)
+      target != null && !isDefaultTarget ->
+        handleTargetMode(target, detail ?: false, platformFilter, catalog, includeNotOffered)
+      else -> handleIndexMode(
+        detail ?: false,
+        platformFilter,
+        suppressTargetTools = isDefaultTarget,
+        catalog = catalog,
+        includeNotOffered = includeNotOffered,
+      )
     }
   }
 
@@ -204,6 +224,7 @@ class ToolDiscoveryToolSet(
     platformFilter: TrailblazeDevicePlatform? = null,
     suppressTargetTools: Boolean = false,
     catalog: ScriptedToolCatalog,
+    includeNotOffered: Boolean = false,
   ): String {
     val currentTarget = currentTargetProvider()
     val currentDriverType = currentDriverTypeProvider()
@@ -227,10 +248,23 @@ class ToolDiscoveryToolSet(
     } else {
       currentTarget
     }
-    val excludedToolNames = getExcludedToolNames(listedTarget, effectiveDriverType)
-    val platformToolsets = buildPlatformToolsets(detail, excludedToolNames, effectiveDriverType, catalog)
-    val targetToolsets =
+    val allPlatformToolsets = buildPlatformToolsets(
+      detail, getTargetExcludedToolNames(listedTarget, effectiveDriverType), effectiveDriverType, catalog,
+    ).withoutRepeatedNotOffered()
+    val allTargetToolsets =
       if (suppressTargetTools) null else buildTargetToolsets(currentTarget, effectiveDriverType, detail, catalog)
+        ?.withoutRepeatedNotOffered { it.name.substringBefore("/") }
+    // Counted over the listed target only: detail mode lists every target's groups, and the note is
+    // about what THIS target's session is not offered.
+    val notOfferedCount = notOfferedToolCount(
+      allPlatformToolsets,
+      allTargetToolsets?.filter { ts ->
+        // Device-connected groups are `<id>/<group>`; driver-less ones are `<id> (<platform>)`.
+        currentTarget != null && (ts.name.startsWith("${currentTarget.id}/") || ts.name.startsWith("${currentTarget.id} ("))
+      },
+    )
+    val platformToolsets = allPlatformToolsets.shown(includeNotOffered)
+    val targetToolsets = allTargetToolsets?.shown(includeNotOffered)?.ifEmpty { null }
     // Other-targets hint: when the target listing is scoped to the current target
     // (!includeAllTargetsInIndex), the rest of the catalogue IS this name list — always emit it.
     // Detail mode lists every target's tools inline, so the hint is only needed when that
@@ -269,6 +303,9 @@ class ToolDiscoveryToolSet(
         "For direct execution: blaze(objective=\"description\", tools=\"- toolName:\\n    param: value\"). " +
         "For tool details: toolbox(name=\"toolName\").",
       trailheadTools = trailheadToolNames,
+      notOfferedToolCount = notOfferedCount.takeIf { it > 0 },
+      notOfferedNote = notOfferedNote(notOfferedCount, includeNotOffered),
+      includesNotOffered = true.takeIf { includeNotOffered },
     )
     return jsonFormat.encodeToString(result)
   }
@@ -325,7 +362,21 @@ class ToolDiscoveryToolSet(
       .sorted()
   }
 
-  private fun handleNameMode(name: String, catalog: ScriptedToolCatalog): String {
+  private fun handleNameMode(
+    name: String,
+    targetId: String?,
+    platformFilter: TrailblazeDevicePlatform?,
+    catalog: ScriptedToolCatalog,
+  ): String {
+    val allTargets = allTargetAppsProvider()
+    // `target` only scopes the verdict on whether the LLM is offered the tool. An id nothing has
+    // loaded would silently judge it against the current target instead, so say so.
+    val namedTarget = targetId?.let { id ->
+      allTargets.firstOrNull { it.id.equals(id, ignoreCase = true) }
+        ?: DefaultTrailblazeHostAppTarget.takeIf { it.id.equals(id, ignoreCase = true) }
+        ?: return jsonFormat.encodeToString(ToolDiscoveryNameResult(error = unknownTargetMessage(id, allTargets)))
+    }
+
     // Search all platform tools
     val allPlatformTools = DISCOVERABLE_CATEGORIES.flatMap { category ->
       getToolDescriptorsForCategory(category, catalog).map { descriptor ->
@@ -336,16 +387,14 @@ class ToolDiscoveryToolSet(
     // Search current target tools
     val currentTarget = currentTargetProvider()
     val currentDriverType = currentDriverTypeProvider()
-    val targetTools = if (currentTarget != null && currentDriverType != null) {
-      getCustomToolDescriptors(currentTarget, currentDriverType, catalog, includeHidden = true).map { descriptor ->
-        descriptor to currentTarget.id
-      }
+    val currentListed = if (currentTarget != null && currentDriverType != null) {
+      listCustomTools(currentTarget, currentDriverType, catalog)
     } else {
       emptyList()
     }
+    val targetTools = currentListed.map { it.descriptor to currentTarget!!.id }
 
     // Search all other target tools
-    val allTargets = allTargetAppsProvider()
     val allTargetTools = allTargets.flatMap { appTarget ->
       TrailblazeDevicePlatform.entries.flatMap { platform ->
         getCustomToolDescriptorsForPlatform(appTarget, platform, catalog, includeHidden = true).map { descriptor ->
@@ -375,12 +424,9 @@ class ToolDiscoveryToolSet(
             usage = when (standing.door) {
               ToolDoor.AGENT -> buildUsageHint(descriptor)
               ToolDoor.SESSION -> buildSessionToolUsageHint(descriptor)
-              ToolDoor.TRAIL ->
-                if (recordable(descriptor.name)) {
-                  buildRecordedTrailUsageHint(descriptor)
-                } else {
-                  buildScriptedUsageHint(descriptor, standing.runsOnlyOnDrivers)
-                }
+              ToolDoor.DIRECT -> buildNotOfferedUsageHint(descriptor)
+              ToolDoor.TOOL_ONLY -> buildToolOnlyUsageHint(descriptor)
+              ToolDoor.TRAIL -> buildTrailUsageHint(descriptor, standing.runsOnlyOnDrivers)
             },
           )
         )
@@ -401,15 +447,125 @@ class ToolDiscoveryToolSet(
       .map { (_, targetId) -> targetId }
       .distinct()
 
+    // Found is not the same as offered: the lookup above includes tools the in-session LLM never
+    // sees, so say which, and why, before the usage hint tells the reader to `blaze(...)` it.
+    val scopeTarget = namedTarget ?: currentTarget
+    val scopeDriver = resolveEffectiveDriverType(currentDriverType, platformFilter)
+    // The current target's listing was walked above; reuse it when that is the scope asked about.
+    val scopeListed = currentListed.takeIf { scopeTarget == currentTarget && scopeDriver == currentDriverType }
+    val notOffered = notOfferedReasonFor(descriptor.name, scopeTarget, scopeDriver, catalog, scopeListed)
+
     return jsonFormat.encodeToString(
       ToolDiscoveryNameResult(
         tool = descriptor,
         foundInCategories = foundInCategories.ifEmpty { null },
         foundInTargets = foundInTargets.ifEmpty { null },
-        usage = buildUsageHint(descriptor),
+        availability = notOffered?.let { notOfferedAvailability(descriptor.name, it, scopeTarget, scopeDriver) },
+        notOffered = notOffered,
+        usage = if (notOffered == null) buildUsageHint(descriptor) else buildNotOfferedUsageHint(descriptor),
       )
     )
   }
+
+  /**
+   * Why the in-session LLM is not offered [toolName] on [target] / [driverType], or null when it is
+   * (or when that can't be told). The tool hiding itself wins over the target excluding it: it is
+   * off the menu on every target, and that is the more useful thing to know. [targetListed] is
+   * [target]'s own listing on [driverType] when the caller already has it.
+   *
+   * With no driver (no device bound, no `platform`), [target]'s whole surface — platform tools
+   * included — is judged on every driver a run of it can reach: offered when any of them offers it.
+   */
+  private fun notOfferedReasonFor(
+    toolName: String,
+    target: TrailblazeHostAppTarget?,
+    driverType: TrailblazeDriverType?,
+    catalog: ScriptedToolCatalog,
+    targetListed: List<ListedTool>? = null,
+  ): ToolNotOfferedReason? {
+    val drivers = when {
+      driverType != null -> listOf(driverType)
+      target != null -> reachableDrivers(target)
+      else -> emptyList()
+    }
+    val marks = drivers.flatMap { driver ->
+      scopedMarks(target, driver, catalog, targetListed.takeIf { driver == driverType })
+        .filter { (name, _) -> name.equals(toolName, ignoreCase = true) }
+    }
+    if (marks.isNotEmpty()) return if (marks.any { (_, reason) -> reason == null }) null else marks.first().second
+
+    // Not in this scope's listing (another target's tool, or no device): only the tool's own flag applies.
+    return if (hiddenFromLlmAnywhere(toolName, catalog)) ToolNotOfferedReason.HIDDEN_BY_TOOL else null
+  }
+
+  /**
+   * Every tool [target]'s listing on [driverType] carries, platform and target-owned alike, with
+   * its not-offered mark — the same marks that listing shows, so a lookup agrees with it exactly.
+   */
+  private fun scopedMarks(
+    target: TrailblazeHostAppTarget?,
+    driverType: TrailblazeDriverType,
+    catalog: ScriptedToolCatalog,
+    targetListed: List<ListedTool>? = null,
+  ): List<Pair<String, ToolNotOfferedReason?>> =
+    buildPlatformToolsets(
+      detail = false,
+      targetExcludedToolNames = getTargetExcludedToolNames(target, driverType),
+      driverType = driverType,
+      catalog = catalog,
+    ).flatMap { ts -> ts.toolDetails.orEmpty().map { it.name to ts.notOffered?.get(it.name) } } +
+      (targetListed ?: target?.let { listCustomTools(it, driverType, catalog) }.orEmpty())
+        .map { it.descriptor.name to it.notOffered }
+
+  /**
+   * The drivers a run of [target] can reach: live ones, on a platform it declares, and
+   * `ANDROID_TEST` only with an in-process harness. A no-device listing merges exactly these.
+   */
+  private fun reachableDrivers(target: TrailblazeHostAppTarget): List<TrailblazeDriverType> =
+    TrailblazeDriverType.entries
+      .filter { target.getPossibleAppIdsForPlatform(it.platform) != null && it !in TrailblazeDriverType.RETIRED_DRIVERS }
+      .filter { it != TrailblazeDriverType.ANDROID_TEST || target.getAndroidTestInstrumentationTarget() != null }
+
+  /**
+   * What a lookup naming a target nothing has loaded says back. A target declared as living in
+   * another repo gets the clone pointer appended — without it the available-list reads as "pick
+   * another one", which is never the right recovery.
+   */
+  private fun unknownTargetMessage(targetId: String, allTargets: Collection<TrailblazeHostAppTarget>): String {
+    val elsewhere = KnownTargetMessages.unavailableTargetHint(targetId)?.let { "\n$it" }.orEmpty()
+    return "Target '$targetId' not found. Available targets: ${allTargets.joinToString(", ") { it.id }}$elsewhere"
+  }
+
+  /** Whether [toolName] sets `surfaceToLlm: false` itself, in whichever backing defines it. */
+  private fun hiddenFromLlmAnywhere(toolName: String, catalog: ScriptedToolCatalog): Boolean {
+    if (!surfacedToAgents(toolName)) return true
+    // The catalog rethrows a broken workspace's discovery failure; that is no reason to fail a lookup.
+    val scripted = runCatching { catalog.descriptorsByName }.getOrNull()?.get(ToolName(toolName))
+      ?.toolConfigs()
+      ?.firstOrNull { it.name == toolName }
+    if (scripted != null && !scripted.surfacesToLlm(scripted.toolMeta())) return true
+    return allTargetAppsProvider().any { target ->
+      target.getInlineScriptTools().any { it.name == toolName && !it.surfacesToLlm(it.toolMeta()) }
+    }
+  }
+
+  /**
+   * Usage for a tool found by name that the in-session LLM is not offered. [buildUsageHint]'s
+   * objective-only `blaze(...)` goes through the agent, which does not have it, so the only `blaze`
+   * form shown is a direct call that names the tool.
+   */
+  private fun buildNotOfferedUsageHint(descriptor: TrailblazeToolDescriptor): String =
+    "Direct: blaze(objective=\"description\", tools=\"${toolYamlExample(descriptor)}\")\n" +
+      "As a trail step:\n" +
+      "${toolYamlExample(descriptor)}\n" +
+      "From a TS tool: ctx.tools.${descriptor.name}(${toolArgsJsExample(descriptor)})"
+
+  /**
+   * Usage for a [xyz.block.trailblaze.toolcalls.TrailblazeToolClass.callableOnlyFromTools] tool:
+   * the one door is another tool, so no trail or `blaze(tools=…)` form is shown.
+   */
+  private fun buildToolOnlyUsageHint(descriptor: TrailblazeToolDescriptor): String =
+    "From a TS tool: ctx.tools.${descriptor.name}(${toolArgsJsExample(descriptor)})"
 
   /**
    * The descriptor for a name the global tool registry knows but no toolset offers, or `null` when
@@ -446,8 +602,17 @@ class ToolDiscoveryToolSet(
      */
     SESSION,
 
+    /**
+     * The session registers it but the inner agent is not offered it (`surfaceToLlm: false`): a
+     * direct call (`blaze(tools=…)`, `trailblaze tool`) and a trail step both run it.
+     */
+    DIRECT,
+
     /** Nothing here runs it. Only a trail's `tools:` block does. */
     TRAIL,
+
+    /** Only another tool may call it (`callableOnlyFromTools`); no trail or direct call runs it. */
+    TOOL_ONLY,
   }
 
   /**
@@ -477,9 +642,12 @@ class ToolDiscoveryToolSet(
    * here, and say which door it is behind.
    */
   private fun toolSetStanding(toolName: String): ToolSetStanding {
+    if (knownToolClassProvider(toolName)?.isCallableOnlyFromTools() == true) {
+      return ToolSetStanding(CallableOnlyFromToolsException.message(toolName), ToolDoor.TOOL_ONLY)
+    }
     val offering = TrailblazeToolSetCatalog.defaultEntries()
       .filter { entry -> entry.toolNames.any { it.equals(toolName, ignoreCase = true) } }
-    if (offering.isEmpty()) return ToolSetStanding(notOfferedAvailability(toolName), ToolDoor.TRAIL)
+    if (offering.isEmpty()) return ToolSetStanding(NOT_OFFERED_AVAILABILITY, ToolDoor.TRAIL)
     val tail = notOfferedTail(toolName)
 
     val multiDevice = offering.firstOrNull { it.id == SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID }
@@ -511,15 +679,14 @@ class ToolDiscoveryToolSet(
       // agent's surface, target or no target — so on a listed driver the tool is simply there.
       val onThisDriver = alwaysEnabled.filter { driver != null && it.isCompatibleWith(driver) }
       if (onThisDriver.isNotEmpty()) {
-        // The toolset being on the surface does not put every tool in it there. A tool marked
-        // `surfaceToLlm = false` (`mobile_clearAppData`) is dropped from the agent's descriptors,
-        // and `step` gates on those descriptors — so it is refused exactly like a tool no toolset
-        // offers, and only a trail runs it.
+        // The toolset being on the surface does not put every tool in it on the agent's menu. A
+        // tool marked `surfaceToLlm = false` (`mobile_clearAppData`) is dropped from the agent's
+        // descriptors, but the session still registers it, so a direct call and a trail run it.
         if (!surfacedToAgents(toolName)) {
           return ToolSetStanding(
-            availability = "Always enabled by the ${onThisDriver.ids()} toolset(s) on this session's " +
-              "driver (${driver!!.yamlKey}), but hidden from agents on purpose: $tail",
-            door = ToolDoor.TRAIL,
+            availability = "Not offered to the LLM (it hides itself; the ${onThisDriver.ids()} " +
+              "toolset(s) enable it on ${driver!!.yamlKey}); ${directCallEnding(toolName)}",
+            door = ToolDoor.DIRECT,
           )
         }
         return ToolSetStanding(
@@ -555,36 +722,60 @@ class ToolDiscoveryToolSet(
     flatMap { it.compatibleDriverTypes }.map { it.yamlKey }.distinct().sorted()
 
   /**
-   * Whether the recorder ever writes this tool into a trail. `isRecordable = false` means a
-   * recording never carries it — so "a recording that uses it replays" is a promise about a
-   * recording that cannot exist, and the doors left are a hand-written trail step or a scripted
-   * tool's `client.tools.<name>(…)`, which resolves through the unfiltered registry.
+   * Whether the recorder ever writes this tool into a trail, for the recorder's tool palette.
+   * Nothing a caller reads says it: the CLI never talks about recordings.
+   *
+   * A scripted tool opts out with `isRecordable: false` or `_meta: trailblaze/isRecordable: false`;
+   * a target's own (inline) copy is read before a catalog one, as the session registers it over
+   * that. Pass one [catalog] when asking about many names: each new catalog walks the descriptors.
    */
-  private fun recordable(toolName: String): Boolean =
-    knownToolClassProvider(toolName)?.trailblazeToolClassAnnotation()?.isRecordable ?: true
-
-  private fun notOfferedTail(toolName: String, runsOnlyOnDrivers: List<String>? = null): String =
-    if (recordable(toolName)) NOT_OFFERED_TAIL else notRecordableTail(toolName, runsOnlyOnDrivers)
-
-  private fun notOfferedAvailability(toolName: String): String =
-    if (recordable(toolName)) NOT_OFFERED_AVAILABILITY else "$NOT_OFFERED_OPENING ${notRecordableTail(toolName)}"
+  fun recordable(toolName: String, catalog: ScriptedToolCatalog? = null): Boolean {
+    knownToolClassProvider(toolName)?.let { return it.trailblazeToolClassAnnotation().isRecordable }
+    val scripted = allTargetAppsProvider().firstNotNullOfOrNull { target ->
+      target.getInlineScriptTools().firstOrNull { it.name == toolName }
+    } ?: runCatching { (catalog ?: scriptedToolCatalogFactory()).descriptorsByName }.getOrNull()
+      ?.get(ToolName(toolName))
+      ?.toolConfigs()
+      ?.firstOrNull { it.name == toolName }
+    return scripted == null || (scripted.isRecordable && scripted.toolMeta().isRecordable)
+  }
 
   /**
-   * A trail step names its own device, so "a hand-written trail step runs it" holds whatever this
-   * session is bound to. A scripted tool runs on THIS session's device — so when the tool is
-   * scoped to drivers this session lacks, the `client.tools.<name>(…)` door is named with the
-   * drivers it opens on, not offered as a way in from here.
+   * What a name lookup says about a tool a toolset in scope lists but the LLM is not offered:
+   * [reason] says why, and the ending says how it is still called.
    */
-  private fun notRecordableTail(toolName: String, runsOnlyOnDrivers: List<String>? = null): String {
-    val opening = "no agent here sees it and 'trailblaze tool' refuses to run it. The recorder never " +
-      "writes it, so no recording carries it; "
-    if (runsOnlyOnDrivers == null) {
-      return opening + "a hand-written trail step or a scripted tool's `client.tools.$toolName(…)` runs it."
+  private fun notOfferedAvailability(
+    toolName: String,
+    reason: ToolNotOfferedReason,
+    target: TrailblazeHostAppTarget?,
+    driverType: TrailblazeDriverType?,
+  ): String {
+    val why = when (reason) {
+      ToolNotOfferedReason.HIDDEN_BY_TOOL -> "the tool hides itself (`surfaceToLlm: false`)"
+      ToolNotOfferedReason.EXCLUDED_BY_TARGET ->
+        "target `${target?.id}` drops it ${driverType?.let { "on ${it.yamlKey}" } ?: "on every platform it runs on"} (`excluded_tools:`)"
     }
-    return opening + "a hand-written trail step runs it on a device whose driver is one of " +
-      "${runsOnlyOnDrivers.joinToString(", ")}, and a scripted tool's `client.tools.$toolName(…)` " +
-      "runs it only from a session on one of those drivers — not this one."
+    return "Not offered to the LLM ($why); ${directCallEnding(toolName)}"
   }
+
+  /** How a tool the LLM is not offered, but that this session registers, is still called. */
+  private fun directCallEnding(toolName: String): String =
+    "call it with `trailblaze tool`, a trail step, or a TS tool (`ctx.tools.$toolName`)."
+
+  /**
+   * What is left for a tool this session does not register: `trailblaze tool` checks the session's
+   * tools and refuses it, while a trail step names its own device and a TS tool resolves through the
+   * whole registry. When the tool is scoped to drivers this session lacks, both doors are named
+   * with the drivers they open on.
+   */
+  private fun notOfferedTail(toolName: String, runsOnlyOnDrivers: List<String>? = null): String =
+    if (runsOnlyOnDrivers == null) {
+      NOT_OFFERED_TAIL
+    } else {
+      "no agent here sees it and `trailblaze tool` can't call it from this session. A trail step on a " +
+        "${runsOnlyOnDrivers.joinToString(", ")} device can, and so can a TS tool (`ctx.tools.$toolName`) " +
+        "in a session on one of those drivers, not this one."
+    }
 
   private fun List<ToolSetCatalogEntry>.ids(): String = joinToString(", ") { "`${it.id}`" }
 
@@ -600,20 +791,13 @@ class ToolDiscoveryToolSet(
     detail: Boolean,
     platformFilter: TrailblazeDevicePlatform? = null,
     catalog: ScriptedToolCatalog,
+    includeNotOffered: Boolean = false,
   ): String {
     val allTargets = allTargetAppsProvider()
     val targetApp = allTargets.firstOrNull { it.id.equals(targetId, ignoreCase = true) }
 
     if (targetApp == null) {
-      val available = allTargets.map { it.id }
-      // A target declared as living in another repo gets the clone pointer appended — without it the
-      // available-list reads as "pick another one", which is never the right recovery.
-      val elsewhere = KnownTargetMessages.unavailableTargetHint(targetId)?.let { "\n$it" }.orEmpty()
-      return jsonFormat.encodeToString(
-        ToolDiscoveryTargetResult(
-          error = "Target '$targetId' not found. Available targets: ${available.joinToString(", ")}$elsewhere",
-        )
-      )
+      return jsonFormat.encodeToString(ToolDiscoveryTargetResult(error = unknownTargetMessage(targetId, allTargets)))
     }
 
     val currentDriverType = currentDriverTypeProvider()
@@ -635,20 +819,26 @@ class ToolDiscoveryToolSet(
       // Apply targetApp's own exclusions so a `excluded_tools: [eraseText]` declaration in the
       // target YAML doesn't leak into the listing — discovery output should reflect what the
       // executor actually accepts when this target is current.
-      val excludedToolNames = getExcludedToolNames(targetApp, effectiveDriverType)
+      val excludedToolNames = getTargetExcludedToolNames(targetApp, effectiveDriverType)
+      val inline = inlineListedTools(targetApp, effectiveDriverType)
+      val inlineNames = inlineToolNames(inline)
       val classGroups = targetApp.getCustomToolGroupsForDriver(effectiveDriverType).mapNotNull { group ->
-        val descriptors = group.toMergedDescriptors(catalog)
-          .filter { it.name !in excludedToolNames }
-          .sortedWith(compareBy { it.name })
-        if (descriptors.isEmpty()) return@mapNotNull null
-        ToolDiscoveryToolsetInfo(
+        toolsetInfo(
           name = group.id,
           description = group.description,
-          tools = if (detail) null else descriptors.map { it.name },
-          toolDetails = toolDetailsFor(detail, descriptors),
+          listed = listedTools(
+            group.toolClasses,
+            group.scriptedToolNames.filterNotTo(mutableSetOf()) { it.toolName in inlineNames },
+            catalog,
+            excludedToolNames,
+          ),
+          detail = detail,
         )
       }
-      val toolGroups = classGroups + buildInlineScriptToolsetsForDriver(targetApp, effectiveDriverType, detail)
+      val allToolGroups = (classGroups + buildInlineScriptToolsetsForDriver(targetApp, inline, detail))
+        .withoutRepeatedNotOffered()
+      val notOfferedCount = notOfferedToolCount(allToolGroups)
+      val toolGroups = allToolGroups.shown(includeNotOffered)
 
       // Mirror the index-mode role enrichment so `toolbox trailheads --target=<non-default>`
       // gets the role lists it needs — otherwise the CLI's role-filter view always reports
@@ -666,6 +856,9 @@ class ToolDiscoveryToolSet(
           systemPrompt = systemPromptForTarget(targetApp),
           toolGroups = toolGroups.ifEmpty { null },
           trailheadTools = trailheadToolNames,
+          notOfferedToolCount = notOfferedCount.takeIf { it > 0 },
+          notOfferedNote = notOfferedNote(notOfferedCount, includeNotOffered),
+          includesNotOffered = true.takeIf { includeNotOffered },
         )
       )
     }
@@ -673,12 +866,20 @@ class ToolDiscoveryToolSet(
     // No device connected and no platform filter — show all platforms flat. Each platform's
     // listing is filtered by targetApp's exclusions for that platform's drivers, mirroring the
     // device-connected branch above.
-    val platformTools = TrailblazeDevicePlatform.entries.mapNotNull { platform ->
-      val tools = getPermittedToolDescriptorsForPlatform(targetApp, platform, catalog)
-      if (tools.isEmpty()) return@mapNotNull null
+    val allListed = TrailblazeDevicePlatform.entries.associateWith { platform ->
+      listPermittedToolsForPlatform(targetApp, platform, catalog)
+    }
+    val offeredNames = allListed.values.flatten().filter { it.notOffered == null }.mapTo(mutableSetOf()) { it.descriptor.name }
+    val notOfferedCount = allListed.values.flatten()
+      .mapNotNullTo(mutableSetOf()) { l -> l.descriptor.name.takeIf { l.notOffered != null } }
+      .count { it !in offeredNames }
+    val platformTools = allListed.mapNotNull { (platform, listed) ->
+      val shown = if (includeNotOffered) listed else listed.filter { it.notOffered == null }
+      if (shown.isEmpty()) return@mapNotNull null
       ToolDiscoveryTargetPlatformTools(
         platform = platform.displayName,
-        tools = toolDetailsFor(detail, tools),
+        tools = toolDetailsFor(detail, shown.map { it.descriptor }),
+        notOffered = shown.mapNotNull { l -> l.notOffered?.let { l.descriptor.name to it } }.toMap().ifEmpty { null },
       )
     }
 
@@ -697,6 +898,9 @@ class ToolDiscoveryToolSet(
         systemPrompt = systemPromptForTarget(targetApp),
         toolsByPlatform = platformTools.ifEmpty { null },
         trailheadTools = trailheadToolNames,
+        notOfferedToolCount = notOfferedCount.takeIf { it > 0 },
+        notOfferedNote = notOfferedNote(notOfferedCount, includeNotOffered),
+        includesNotOffered = true.takeIf { includeNotOffered },
       )
     )
   }
@@ -706,6 +910,7 @@ class ToolDiscoveryToolSet(
     targetFilter: String?,
     platformFilter: TrailblazeDevicePlatform? = null,
     catalog: ScriptedToolCatalog,
+    includeNotOffered: Boolean = false,
   ): String {
     val terms = query.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
     if (terms.isEmpty()) {
@@ -733,9 +938,18 @@ class ToolDiscoveryToolSet(
     // Search platform tools — use platform-filtered toolsets (same as index mode)
     // so tools inapplicable to the current device don't appear in results
     // (e.g., openUrl won't show for web since the default.yaml only includes web_core).
-    val excludedToolNames = getExcludedToolNames(currentTarget, effectiveDriverType)
+    // A `target` filter scopes the platform tools' exclusions too: they are what THAT target drops.
+    val exclusionTarget = if (targetFilter == null) {
+      currentTarget
+    } else {
+      allTargetAppsProvider().firstOrNull { it.id.equals(targetFilter, ignoreCase = true) }
+        ?: DefaultTrailblazeHostAppTarget.takeIf { it.id.equals(targetFilter, ignoreCase = true) }
+    }
     val platformToolsets = buildPlatformToolsets(
-      detail = true, excludedToolNames = excludedToolNames, driverType = effectiveDriverType, catalog = catalog,
+      detail = true,
+      targetExcludedToolNames = getTargetExcludedToolNames(exclusionTarget, effectiveDriverType),
+      driverType = effectiveDriverType,
+      catalog = catalog,
     )
     for (toolset in platformToolsets) {
       toolset.toolDetails?.filter { matches(it) }?.forEach { descriptor ->
@@ -743,6 +957,7 @@ class ToolDiscoveryToolSet(
           ToolDiscoverySearchMatch(
             tool = descriptor,
             source = toolset.name.replaceFirstChar { it.titlecase() },
+            notOffered = toolset.notOffered?.get(descriptor.name),
           )
         )
       }
@@ -760,25 +975,27 @@ class ToolDiscoveryToolSet(
 
     for (target in targetsToSearch) {
       if (effectiveDriverType != null) {
-        getCustomToolDescriptors(target, effectiveDriverType, catalog)
-          .filter { matches(it) }
-          .forEach { descriptor ->
+        listCustomTools(target, effectiveDriverType, catalog)
+          .filter { matches(it.descriptor) }
+          .forEach { listed ->
             results.add(
               ToolDiscoverySearchMatch(
-                tool = descriptor,
+                tool = listed.descriptor,
                 source = "${target.displayName} (${effectiveDriverType.platform.displayName})",
+                notOffered = listed.notOffered,
               )
             )
           }
       } else {
         TrailblazeDevicePlatform.entries.forEach { platform ->
-          getPermittedToolDescriptorsForPlatform(target, platform, catalog)
-            .filter { matches(it) }
-            .forEach { descriptor ->
+          listPermittedToolsForPlatform(target, platform, catalog)
+            .filter { matches(it.descriptor) }
+            .forEach { listed ->
               results.add(
                 ToolDiscoverySearchMatch(
-                  tool = descriptor,
-                  source = "${target.displayName} (${ platform.displayName})",
+                  tool = listed.descriptor,
+                  source = "${target.displayName} (${platform.displayName})",
+                  notOffered = listed.notOffered,
                 )
               )
             }
@@ -786,13 +1003,21 @@ class ToolDiscoveryToolSet(
       }
     }
 
-    // Deduplicate by tool name (prefer first match)
-    val deduped = results.distinctBy { it.tool.name }
+    // Deduplicate by tool name, preferring an offered match over a not-offered one for the same name.
+    val offeredNames = results.filter { it.notOffered == null }.mapTo(mutableSetOf()) { it.tool.name }
+    val deduped = results
+      .filter { it.notOffered == null || it.tool.name !in offeredNames }
+      .distinctBy { it.tool.name }
+    val notOfferedCount = deduped.count { it.notOffered != null }
+    val shown = if (includeNotOffered) deduped else deduped.filter { it.notOffered == null }
 
     return jsonFormat.encodeToString(
       ToolDiscoverySearchResult(
         query = query,
-        matches = deduped.ifEmpty { null },
+        matches = shown.ifEmpty { null },
+        notOfferedToolCount = notOfferedCount.takeIf { it > 0 },
+        notOfferedNote = notOfferedNote(notOfferedCount, includeNotOffered, matching = true),
+        includesNotOffered = true.takeIf { includeNotOffered },
       )
     )
   }
@@ -917,7 +1142,7 @@ class ToolDiscoveryToolSet(
    */
   private fun buildPlatformToolsets(
     detail: Boolean,
-    excludedToolNames: Set<String> = emptySet(),
+    targetExcludedToolNames: Set<String> = emptySet(),
     driverType: TrailblazeDriverType? = null,
     catalog: ScriptedToolCatalog,
   ): List<ToolDiscoveryToolsetInfo> {
@@ -928,15 +1153,11 @@ class ToolDiscoveryToolSet(
       val groups = defaultTarget.getCustomToolGroupsForDriver(effectiveDriver)
       if (groups.isNotEmpty()) {
         return groups.mapNotNull { group ->
-          val descriptors = group.toMergedDescriptors(catalog)
-            .filter { it.name !in excludedToolNames }
-            .sortedWith(compareBy { it.name })
-          if (descriptors.isEmpty()) return@mapNotNull null
-          ToolDiscoveryToolsetInfo(
+          toolsetInfo(
             name = group.id,
             description = group.description,
-            tools = if (detail) null else descriptors.map { it.name },
-            toolDetails = toolDetailsFor(detail, descriptors),
+            listed = listedTools(group.toolClasses, group.scriptedToolNames, catalog, targetExcludedToolNames),
+            detail = detail,
           )
         }
       }
@@ -944,17 +1165,138 @@ class ToolDiscoveryToolSet(
 
     // Fallback: use hardcoded categories (open source without default target YAML)
     return DISCOVERABLE_CATEGORIES.mapNotNull { category ->
-      val descriptors = getToolDescriptorsForCategory(category, catalog)
-        .filter { it.name !in excludedToolNames }
-      if (descriptors.isEmpty()) return@mapNotNull null
-      ToolDiscoveryToolsetInfo(
+      val resolved = ToolSetCategoryMapping.resolve(category)
+      toolsetInfo(
         name = category.name.lowercase(),
         description = category.description,
-        tools = if (detail) null else descriptors.map { it.name },
-        toolDetails = toolDetailsFor(detail, descriptors),
+        listed = listedTools(resolved.toolClasses, resolved.scriptedToolNames, catalog, targetExcludedToolNames),
+        detail = detail,
       )
     }
   }
+
+  /**
+   * A tool as a listing sees it: its descriptor, and why the in-session LLM is not offered it
+   * (null when it is). Every listing is built with the not-offered tools in and marked; [shown]
+   * drops them for the default view, so the count of what was dropped comes from the same pass.
+   */
+  private class ListedTool(val descriptor: TrailblazeToolDescriptor, val notOffered: ToolNotOfferedReason?)
+
+  private fun notOfferedReason(hiddenByTool: Boolean, excludedByTarget: Boolean): ToolNotOfferedReason? = when {
+    hiddenByTool -> ToolNotOfferedReason.HIDDEN_BY_TOOL
+    excludedByTarget -> ToolNotOfferedReason.EXCLUDED_BY_TARGET
+    else -> null
+  }
+
+  /**
+   * Class-backed and catalog-scripted tools, each marked. A class marked `surfaceToLlm = false`
+   * gets no descriptor from the gate the agent's toolbox goes through, so it is described without
+   * that gate; a scripted tool's flag comes from its config, as the session's registration reads
+   * it. [SYSTEM_INTERNAL_TOOLS] never appear.
+   */
+  private fun listedTools(
+    toolClasses: Set<KClass<out TrailblazeTool>>,
+    scriptedToolNames: Set<ToolName>,
+    catalog: ScriptedToolCatalog,
+    targetExcludedToolNames: Set<String>,
+  ): List<ListedTool> {
+    val classTools = toolClasses.filter { it !in SYSTEM_INTERNAL_TOOLS }.mapNotNull { cls ->
+      val offered = cls.toTrailblazeToolDescriptorWithSource()
+      val descriptor = offered
+        ?: cls.takeUnless { it.trailblazeToolClassAnnotation().surfaceToLlm }?.toTrailblazeToolDescriptorIgnoringLlmSurface()
+        ?: return@mapNotNull null
+      ListedTool(descriptor, notOfferedReason(offered == null, descriptor.name in targetExcludedToolNames))
+    }
+    val scriptedTools = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(scriptedToolNames, catalog = catalog)
+      .map { resolved ->
+        val config = resolved.config
+        ListedTool(
+          LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config),
+          notOfferedReason(!config.surfacesToLlm(config.toolMeta()), config.name in targetExcludedToolNames),
+        )
+      }
+    return (classTools + scriptedTools).distinctBy { it.descriptor.name }
+  }
+
+  /** A toolset entry over [listed], every tool in it, with the not-offered ones marked. Null when empty. */
+  private fun toolsetInfo(
+    name: String,
+    description: String,
+    listed: List<ListedTool>,
+    detail: Boolean,
+  ): ToolDiscoveryToolsetInfo? {
+    if (listed.isEmpty()) return null
+    val sorted = listed.sortedWith(compareBy { it.descriptor.name })
+    val descriptors = sorted.map { it.descriptor }
+    return ToolDiscoveryToolsetInfo(
+      name = name,
+      description = description,
+      tools = if (detail) null else descriptors.map { it.name },
+      toolDetails = toolDetailsFor(detail, descriptors),
+      notOffered = sorted.mapNotNull { l -> l.notOffered?.let { l.descriptor.name to it } }.toMap().ifEmpty { null },
+    )
+  }
+
+  /**
+   * The view a caller asked for: every tool, marked, when [includeNotOffered]; otherwise only the
+   * tools the in-session LLM is offered, with toolsets that end up empty dropped.
+   */
+  private fun List<ToolDiscoveryToolsetInfo>.shown(includeNotOffered: Boolean): List<ToolDiscoveryToolsetInfo> {
+    if (includeNotOffered) return this
+    return mapNotNull { ts ->
+      val notOffered = ts.notOffered?.keys ?: return@mapNotNull ts
+      val details = ts.toolDetails?.filter { it.name !in notOffered }
+      if (details.isNullOrEmpty()) return@mapNotNull null
+      ts.copy(tools = ts.tools?.filter { it !in notOffered }, toolDetails = details, notOffered = null)
+    }
+  }
+
+  /**
+   * Drops a not-offered entry whose name an earlier toolset already lists, so a tool a target both
+   * names in a toolset and ships as an inline script shows once under `all=true`. Toolsets with
+   * different [scope]s never dedupe against each other (one per target, in a listing of several).
+   */
+  private fun List<ToolDiscoveryToolsetInfo>.withoutRepeatedNotOffered(
+    scope: (ToolDiscoveryToolsetInfo) -> String = { "" },
+  ): List<ToolDiscoveryToolsetInfo> {
+    val seenByScope = mutableMapOf<String, MutableSet<String>>()
+    return mapNotNull { ts ->
+      val seen = seenByScope.getOrPut(scope(ts)) { mutableSetOf() }
+      val repeats = ts.notOffered?.keys.orEmpty().filterTo(mutableSetOf()) { it in seen }
+      seen += ts.toolDetails.orEmpty().map { it.name }
+      if (repeats.isEmpty()) return@mapNotNull ts
+      val details = ts.toolDetails?.filter { it.name !in repeats }
+      if (details.isNullOrEmpty()) return@mapNotNull null
+      ts.copy(
+        tools = ts.tools?.filter { it !in repeats },
+        toolDetails = details,
+        notOffered = ts.notOffered?.filterKeys { it !in repeats }?.ifEmpty { null },
+      )
+    }
+  }
+
+  /** Distinct tools these toolsets mark as not offered, less any another toolset here does offer. */
+  private fun notOfferedToolCount(vararg toolsets: List<ToolDiscoveryToolsetInfo>?): Int {
+    val all = toolsets.flatMap { it.orEmpty() }
+    val notOffered = all.flatMap { it.notOffered?.keys.orEmpty() }.toSet()
+    val offered = all.flatMap { ts -> ts.toolDetails.orEmpty().map { it.name }.filter { ts.notOffered?.containsKey(it) != true } }
+    return (notOffered - offered.toSet()).size
+  }
+
+  /**
+   * The one line an MCP caller reads under a default listing: how many tools it is not seeing, what
+   * they are for, and how to list them. Null when there are none, or when they were listed.
+   */
+  private fun notOfferedNote(count: Int, includeNotOffered: Boolean, matching: Boolean = false): String? {
+    if (count <= 0 || includeNotOffered) return null
+    val what = (if (matching) "matching " else "") + (if (count == 1) "tool is" else "tools are")
+    return "$count more $what not offered to the LLM: offered tools drive a flow, the rest are for specific " +
+      "use cases; call one with a direct step(tools=...) call, a trail step, or a TS tool (ctx.tools.<name>). " +
+      "Pass all=true to list them."
+  }
+
+  private fun InlineScriptToolConfig.toolMeta(): TrailblazeToolMeta =
+    meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
 
   private fun buildTargetToolsets(
     currentTarget: TrailblazeHostAppTarget?,
@@ -982,20 +1324,23 @@ class ToolDiscoveryToolSet(
       // filtered by THAT target's own exclusions so an `excluded_tools:` declaration is honored
       // consistently with platform listings.
       val allGroups = targets.flatMap { target ->
-        val excludedToolNames = getExcludedToolNames(target, currentDriverType)
+        val excludedToolNames = getTargetExcludedToolNames(target, currentDriverType)
+        val inline = inlineListedTools(target, currentDriverType)
+        val inlineNames = inlineToolNames(inline)
         val classGroups = target.getCustomToolGroupsForDriver(currentDriverType).mapNotNull { group ->
-          val descriptors = group.toMergedDescriptors(catalog)
-            .filter { it.name !in excludedToolNames }
-            .sortedWith(compareBy { it.name })
-          if (descriptors.isEmpty()) return@mapNotNull null
-          ToolDiscoveryToolsetInfo(
+          toolsetInfo(
             name = "${target.id}/${group.id}",
             description = group.description,
-            tools = if (detail) null else descriptors.map { it.name },
-            toolDetails = toolDetailsFor(detail, descriptors),
+            listed = listedTools(
+              group.toolClasses,
+              group.scriptedToolNames.filterNotTo(mutableSetOf()) { it.toolName in inlineNames },
+              catalog,
+              excludedToolNames,
+            ),
+            detail = detail,
           )
         }
-        classGroups + buildInlineScriptToolsetsForDriver(target, currentDriverType, detail)
+        classGroups + buildInlineScriptToolsetsForDriver(target, inline, detail)
       }
       return allGroups.ifEmpty { null }
     }
@@ -1004,13 +1349,11 @@ class ToolDiscoveryToolSet(
     // exclusions for the same reason as the device-connected branch above.
     val allGroups = targets.flatMap { target ->
       TrailblazeDevicePlatform.entries.mapNotNull { platform ->
-        val descriptors = getPermittedToolDescriptorsForPlatform(target, platform, catalog)
-        if (descriptors.isEmpty()) return@mapNotNull null
-        ToolDiscoveryToolsetInfo(
+        toolsetInfo(
           name = "${target.id} (${platform.displayName})",
           description = "${target.displayName} tools for ${platform.displayName}",
-          tools = if (detail) null else descriptors.map { it.name },
-          toolDetails = toolDetailsFor(detail, descriptors),
+          listed = listPermittedToolsForPlatform(target, platform, catalog),
+          detail = detail,
         )
       }
     }
@@ -1053,10 +1396,21 @@ class ToolDiscoveryToolSet(
     val systemExclusions = SYSTEM_INTERNAL_TOOLS.mapNotNull {
       it.toTrailblazeToolDescriptorWithSource()?.name
     }.toSet()
+    return systemExclusions + getTargetExcludedToolNames(target, driverType)
+  }
 
-    if (driverType == null || target == null) return systemExclusions
+  /**
+   * The names [target] drops on [driverType] with `excluded_tools:` — the tools a listing marks
+   * [ToolNotOfferedReason.EXCLUDED_BY_TARGET]. Unlike [SYSTEM_INTERNAL_TOOLS], these stay callable
+   * by name (a direct call, a trail, a TS tool), so `all=true` lists them.
+   */
+  private fun getTargetExcludedToolNames(
+    target: TrailblazeHostAppTarget?,
+    driverType: TrailblazeDriverType?,
+  ): Set<String> {
+    if (driverType == null || target == null) return emptySet()
 
-    val targetExclusions = try {
+    return try {
       // One read of the target's `excluded_tools:` surface across both backings — the same
       // central accessor the resolver / runtime / on-device paths use. This keeps discovery's
       // hidden set in lockstep with what the agent actually sees: a target's
@@ -1079,8 +1433,6 @@ class ToolDiscoveryToolSet(
       )
       emptySet()
     }
-
-    return systemExclusions + targetExclusions
   }
 
   private fun getToolDescriptorsForCategory(
@@ -1097,33 +1449,30 @@ class ToolDiscoveryToolSet(
   }
 
   /**
-   * Get custom tool descriptors for a specific driver type.
-   * Used when a device is connected and we know the exact driver.
-   *
-   * Unions class-backed, catalog-scripted (toolset / `platforms.<p>.tools:` names), and
-   * inline-scripted (`target.tools:`) tools so name/search/target listings see the same set the
-   * executor accepts. Without the scripted branches, name-only entries pulled in by a target's
-   * `tool_sets:` or `tools:` would silently drop from these listings even when they execute fine —
-   * the same parity the grouped [TrailblazeHostAppTarget.ToolGroup.toMergedDescriptors] path
-   * enforces.
+   * [target]'s own tools on [driverType] — class-backed, catalog-scripted and inline-scripted —
+   * each marked with why the in-session LLM is not offered it, if it isn't. The scripted branches
+   * keep name-only entries pulled in by a target's `tool_sets:` or `tools:` in the listings, so
+   * they match the set the executor accepts.
    */
-  private fun getCustomToolDescriptors(
+  private fun listCustomTools(
     target: TrailblazeHostAppTarget,
     driverType: TrailblazeDriverType,
     catalog: ScriptedToolCatalog,
-    includeHidden: Boolean = false,
-  ): List<TrailblazeToolDescriptor> {
-    return try {
-      val classDescriptors = target.getCustomToolsForDriver(driverType)
-        .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-      val scriptedDescriptors = InProcessScriptedToolLauncher
-        .describe(target.getCustomScriptedToolNamesForDriver(driverType), catalog)
-      (classDescriptors + scriptedDescriptors + getInlineToolDescriptors(target, driverType, includeHidden))
-        .distinctBy { it.name }
-        .sortedWith(compareBy { it.name })
-    } catch (_: Exception) {
-      emptyList()
-    }
+  ): List<ListedTool> = try {
+    val excluded = getTargetExcludedToolNames(target, driverType)
+    val listed = listedTools(
+      target.getCustomToolsForDriver(driverType),
+      target.getCustomScriptedToolNamesForDriver(driverType),
+      catalog,
+      excluded,
+    )
+    // Inline first: the session registers a target's own scripted tool over a catalog one of the
+    // same name, so its visibility is the one that holds.
+    (inlineListedTools(target, driverType).map { it.second } + listed)
+      .distinctBy { it.descriptor.name }
+      .sortedWith(compareBy { it.descriptor.name })
+  } catch (_: Exception) {
+    emptyList()
   }
 
   /**
@@ -1137,24 +1486,38 @@ class ToolDiscoveryToolSet(
     target: TrailblazeHostAppTarget,
     platform: TrailblazeDevicePlatform,
     catalog: ScriptedToolCatalog,
-  ): List<TrailblazeToolDescriptor> {
-    if (target.getPossibleAppIdsForPlatform(platform) == null) return emptyList()
-    return TrailblazeDriverType.entries
-      .filter { it.platform == platform && it !in TrailblazeDriverType.RETIRED_DRIVERS }
-      .filter { it != TrailblazeDriverType.ANDROID_TEST || target.getAndroidTestInstrumentationTarget() != null }
-      .flatMap { driverType ->
-        val excluded = getExcludedToolNames(target, driverType)
-        getCustomToolDescriptors(target, driverType, catalog).filter { it.name !in excluded }
+  ): List<TrailblazeToolDescriptor> =
+    listPermittedToolsForPlatform(target, platform, catalog).filter { it.notOffered == null }.map { it.descriptor }
+
+  /**
+   * [getPermittedToolDescriptorsForPlatform] plus the tools it leaves out, each marked: a tool is
+   * offered when any reachable driver offers it, otherwise it carries the first driver's reason.
+   */
+  private fun listPermittedToolsForPlatform(
+    target: TrailblazeHostAppTarget,
+    platform: TrailblazeDevicePlatform,
+    catalog: ScriptedToolCatalog,
+  ): List<ListedTool> {
+    val byName = linkedMapOf<String, ListedTool>()
+    reachableDrivers(target)
+      .filter { it.platform == platform }
+      .forEach { driverType ->
+        val systemExcluded = getExcludedToolNames(target = null, driverType = driverType)
+        for (listed in listCustomTools(target, driverType, catalog)) {
+          val name = listed.descriptor.name
+          if (name in systemExcluded) continue
+          val existing = byName[name]
+          if (existing == null || (existing.notOffered != null && listed.notOffered == null)) byName[name] = listed
+        }
       }
-      .distinctBy { it.name }
-      .sortedWith(compareBy { it.name })
+    return byName.values.sortedWith(compareBy { it.descriptor.name })
   }
 
   /**
    * Get custom tool descriptors for all driver types on a platform.
    * Used as fallback when no device is connected.
    *
-   * Same class+scripted+inline union as [getCustomToolDescriptors], collapsed across every
+   * Same class+scripted+inline union as [listCustomTools], collapsed across every
    * driver for [platform] so a target's full surface area shows up regardless of which driver the
    * caller eventually picks. Scripted names are unioned across drivers first, then described in a
    * single [InProcessScriptedToolLauncher.describe] call against the request's shared [catalog]
@@ -1186,54 +1549,48 @@ class ToolDiscoveryToolSet(
 
   private fun buildInlineScriptToolsetsForDriver(
     target: TrailblazeHostAppTarget,
-    driverType: TrailblazeDriverType,
+    inline: List<Pair<String, ListedTool>>,
     detail: Boolean,
-  ): List<ToolDiscoveryToolsetInfo> {
-    val excluded = excludedInlineToolNames(target, driverType)
-    val grouped = target.getInlineScriptTools()
-      .mapNotNull { tool ->
-        val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-        if (tool.name in excluded || !tool.surfacesToLlm(meta) ||
-          !meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))
-        ) {
-          null
-        } else {
-          (meta.toolset ?: "scripted") to inlineToolToDescriptor(tool)
-        }
-      }
+  ): List<ToolDiscoveryToolsetInfo> =
+    inline
       .groupBy(keySelector = { it.first }, valueTransform = { it.second })
-
-    return grouped.entries.map { (toolsetId, descriptors) ->
-      val sorted = descriptors.sortedWith(compareBy { it.name })
-      ToolDiscoveryToolsetInfo(
-        name = "${target.id}/$toolsetId",
-        description = "${target.displayName} scripted tools",
-        tools = if (detail) null else sorted.map { it.name },
-        toolDetails = toolDetailsFor(detail, sorted),
-      )
-    }.sortedBy { it.name }
-  }
+      .mapNotNull { (toolsetId, listed) ->
+        toolsetInfo(
+          name = "${target.id}/$toolsetId",
+          description = "${target.displayName} scripted tools",
+          listed = listed,
+          detail = detail,
+        )
+      }
+      .sortedBy { it.name }
 
   /** The connected device's classifiers when [driverType] is its driver; otherwise unknown. */
   private fun classifiersFor(driverType: TrailblazeDriverType): List<TrailblazeDeviceClassifier>? =
     if (driverType == currentDriverTypeProvider()) currentDeviceClassifiersProvider() else null
 
-  /** [includeHidden] keeps `surfaceToLlm: false` tools, for lookup by exact name. */
-  private fun getInlineToolDescriptors(
+  /**
+   * Names of the inline tools in [inline]. A session registers a target's own scripted tool over a
+   * catalog tool of the same name, so grouped listings drop the catalog copy.
+   */
+  private fun inlineToolNames(inline: List<Pair<String, ListedTool>>): Set<String> =
+    inline.mapTo(mutableSetOf()) { it.second.descriptor.name }
+
+  /**
+   * [target]'s inline-scripted tools that register on [driverType], keyed by toolset id and marked:
+   * hidden by their own `surfaceToLlm: false`, or excluded by the target's `excluded_tools:`.
+   */
+  private fun inlineListedTools(
     target: TrailblazeHostAppTarget,
     driverType: TrailblazeDriverType,
-    includeHidden: Boolean = false,
-  ): List<TrailblazeToolDescriptor> {
+  ): List<Pair<String, ListedTool>> {
     val excluded = excludedInlineToolNames(target, driverType)
     return target.getInlineScriptTools().mapNotNull { tool ->
-      val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      if (tool.name in excluded || (!includeHidden && !tool.surfacesToLlm(meta)) ||
-        !meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))
-      ) {
-        null
-      } else {
-        inlineToolToDescriptor(tool)
-      }
+      val meta = tool.toolMeta()
+      if (!meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))) return@mapNotNull null
+      (meta.toolset ?: "scripted") to ListedTool(
+        inlineToolToDescriptor(tool),
+        notOfferedReason(!tool.surfacesToLlm(meta), tool.name in excluded),
+      )
     }
   }
 
@@ -1415,45 +1772,29 @@ class ToolDiscoveryToolSet(
       "Direct: blaze(objective=\"description\", tools=\"${toolYamlExample(descriptor)}\")"
 
   /**
-   * The usage hint for a tool nothing offers ([NOT_OFFERED_AVAILABILITY]).
-   *
-   * [buildUsageHint] is false here by construction, in both halves: no toolset lists the tool, so
-   * no agent can select it, and the `blaze(tools=…)` form it shows is what the device/target gate
-   * refuses. Showing it next to "no agent will choose it" hands the reader two contradictory
-   * answers. What is left is the one form that does run: the tool block of a trail.
+   * The usage hint for a tool this session does not register (nothing offers it, or its toolset is
+   * out of scope). [buildUsageHint] is false here by construction: no agent can select it, and the
+   * `blaze(tools=…)` form is what the device/target gate refuses. What runs it is a trail step or a
+   * TS tool, which resolves through the whole registry, on a device whose driver the tool runs on.
    */
-  private fun buildRecordedTrailUsageHint(descriptor: TrailblazeToolDescriptor): String =
-    "In a trail's tools: block — the only form that runs this tool, and what the recorder " +
-      "writes:\n${toolYamlExample(descriptor)}"
+  private fun buildTrailUsageHint(descriptor: TrailblazeToolDescriptor, runsOnlyOnDrivers: List<String>?): String {
+    val tsTool = if (runsOnlyOnDrivers == null) {
+      "From a TS tool"
+    } else {
+      "From a TS tool in a session on ${runsOnlyOnDrivers.joinToString(", ")}"
+    }
+    return "As a trail step:\n${toolYamlExample(descriptor)}\n" +
+      "$tsTool: ctx.tools.${descriptor.name}(${toolArgsJsExample(descriptor)})"
+  }
 
   /**
    * The usage hint for a tool a session-bound toolset offers to THIS session. It is in the
    * session's own tool list, not the inner agent's, so [buildUsageHint]'s `blaze(...)` forms are
-   * the wrong door: the caller invokes it directly, or a trail records it.
+   * the wrong door: the caller invokes it directly, or a trail step names it.
    */
   private fun buildSessionToolUsageHint(descriptor: TrailblazeToolDescriptor): String =
     "Call ${descriptor.name} directly — this session advertises it as its own tool.\n" +
       "In a trail's tools: block:\n${toolYamlExample(descriptor)}"
-
-  /**
-   * The usage hint for a tool nothing here runs AND the recorder never writes (`isRecordable =
-   * false`). [buildRecordedTrailUsageHint] promises "what the recorder writes", which for this tool
-   * is nothing. The doors that exist: a scripted tool composing it through `client.tools.<name>`
-   * (the dispatcher resolves that through the unfiltered registry, so toolset scope and LLM
-   * visibility do not apply), or a trail step someone typed by hand.
-   */
-  private fun buildScriptedUsageHint(descriptor: TrailblazeToolDescriptor, runsOnlyOnDrivers: List<String>?): String {
-    // The scripted door opens on the session's own device. When the tool is scoped to drivers this
-    // session lacks, the call below fails here — so say where it runs before showing the form.
-    val where = if (runsOnlyOnDrivers == null) {
-      "From a scripted tool"
-    } else {
-      "Runs only on drivers ${runsOnlyOnDrivers.joinToString(", ")}, so from a scripted tool on one of those"
-    }
-    return "$where: client.tools.${descriptor.name}(${toolArgsJsExample(descriptor)})\n" +
-      "The recorder never writes this tool; a trail runs it only as a hand-written step:\n" +
-      toolYamlExample(descriptor)
-  }
 
   /** The argument object of one `client.tools.<name>(…)` call, with placeholder values. */
   private fun toolArgsJsExample(descriptor: TrailblazeToolDescriptor): String {
@@ -1522,17 +1863,15 @@ class ToolDiscoveryToolSet(
      */
     private const val NOT_OFFERED_OPENING: String = "Not offered by any toolset, so"
 
-    internal const val NOT_OFFERED_AVAILABILITY: String =
-      "$NOT_OFFERED_OPENING no agent will choose it and 'trailblaze tool' refuses to " +
-        "run it. The name is still valid in a trail — a recording that uses it replays."
-
     /**
      * The consequence shared by every "a toolset offers it, but not to this session" verdict in
      * `toolSetStanding`: the same two facts as [NOT_OFFERED_AVAILABILITY], minus its opening claim.
      */
     private const val NOT_OFFERED_TAIL: String =
-      "no agent here sees it and 'trailblaze tool' refuses to run it. The name is still valid in a " +
-        "trail — a recording that uses it replays."
+      "no agent here sees it and `trailblaze tool` can't call it from this session; a trail step or a " +
+        "TS tool (`ctx.tools.<name>`) can."
+
+    internal const val NOT_OFFERED_AVAILABILITY: String = "$NOT_OFFERED_OPENING $NOT_OFFERED_TAIL"
 
     /**
      * What a lookup for an unrecognized tool name says back.
@@ -1583,6 +1922,15 @@ data class ToolDiscoveryIndexResult(
    * flags don't ride on the shared descriptor; this is a response-level enrichment.
    */
   val trailheadTools: List<String> = emptyList(),
+  /** How many of this target's tools on this driver the in-session LLM is not offered. See [ToolNotOfferedReason]. */
+  val notOfferedToolCount: Int? = null,
+  /** One line pointing at `all=true` when [notOfferedToolCount] tools were left out of this listing. */
+  val notOfferedNote: String? = null,
+  /**
+   * True when the listing was asked for with `all=true` and includes the tools the LLM is not
+   * offered. A daemon that predates `all` never sets it, which is how a client tells the two apart.
+   */
+  val includesNotOffered: Boolean? = null,
   // `error` is the contract the CLI formatter (`ToolboxCommand.formatToolsResult`) keys off to
   // short-circuit to `Console.error(...)` regardless of which mode-specific formatter would
   // otherwise run. Toolbox-level validation failures (e.g. unknown `--device` platform) set this
@@ -1599,7 +1947,25 @@ data class ToolDiscoveryToolsetInfo(
   val tools: List<String>? = null,
   /** Full tool descriptors (detail mode, when detail=true). */
   val toolDetails: List<TrailblazeToolDescriptor>? = null,
+  /** Tools listed here that the in-session LLM is not offered, and why. Present only with `all=true`. */
+  val notOffered: Map<String, ToolNotOfferedReason>? = null,
 )
+
+/**
+ * Why a tool a target can call is not on the in-session LLM's menu. Either way `trailblaze tool`, a
+ * trail step, or a TS tool's `ctx.tools.<name>(…)` still calls it: the LLM is offered the tools that drive a
+ * flow, and these are for specific use cases it should not reach for all the time.
+ */
+@Serializable
+enum class ToolNotOfferedReason {
+  /** The tool sets `surfaceToLlm: false` itself, so no target offers it. */
+  @SerialName("hidden_by_tool")
+  HIDDEN_BY_TOOL,
+
+  /** The target drops it on this driver with `platforms.<p>.excluded_tools:`. */
+  @SerialName("excluded_by_target")
+  EXCLUDED_BY_TARGET,
+}
 
 @Serializable
 data class ToolDiscoveryOtherTarget(
@@ -1619,6 +1985,8 @@ data class ToolDiscoveryNameResult(
    * case and means the tool is offered, as [foundInCategories] / [foundInTargets] then say where.
    */
   val availability: String? = null,
+  /** Set when the tool was found but the in-session LLM is not offered it on the scoped target and driver. */
+  val notOffered: ToolNotOfferedReason? = null,
   val usage: String? = null,
   val error: String? = null,
 )
@@ -1645,6 +2013,12 @@ data class ToolDiscoveryTargetResult(
    * target-mode envelope, not index-mode, when a non-default target is requested).
    */
   val trailheadTools: List<String> = emptyList(),
+  /** Same as [ToolDiscoveryIndexResult.notOfferedToolCount], for this target. */
+  val notOfferedToolCount: Int? = null,
+  /** Same as [ToolDiscoveryIndexResult.notOfferedNote]. */
+  val notOfferedNote: String? = null,
+  /** Same as [ToolDiscoveryIndexResult.includesNotOffered]. */
+  val includesNotOffered: Boolean? = null,
   val error: String? = null,
 )
 
@@ -1652,12 +2026,20 @@ data class ToolDiscoveryTargetResult(
 data class ToolDiscoveryTargetPlatformTools(
   val platform: String,
   val tools: List<TrailblazeToolDescriptor>,
+  /** With `all=true`: the tools here the in-session LLM is not offered, and why. */
+  val notOffered: Map<String, ToolNotOfferedReason>? = null,
 )
 
 @Serializable
 data class ToolDiscoverySearchResult(
   val query: String? = null,
   val matches: List<ToolDiscoverySearchMatch>? = null,
+  /** How many matching tools the in-session LLM is not offered; left out of [matches] unless `all=true`. */
+  val notOfferedToolCount: Int? = null,
+  /** Same as [ToolDiscoveryIndexResult.notOfferedNote], for the matches. */
+  val notOfferedNote: String? = null,
+  /** Same as [ToolDiscoveryIndexResult.includesNotOffered]. */
+  val includesNotOffered: Boolean? = null,
   val error: String? = null,
 )
 
@@ -1665,12 +2047,15 @@ data class ToolDiscoverySearchResult(
 data class ToolDiscoverySearchMatch(
   val tool: TrailblazeToolDescriptor,
   val source: String,
+  /** Why the in-session LLM is not offered this match; null when it is. */
+  val notOffered: ToolNotOfferedReason? = null,
 )
 
 /**
  * Combines class-backed and scripted tools from a [TrailblazeHostAppTarget.ToolGroup] into a
- * single descriptor list. Shared by every place that renders a [TrailblazeHostAppTarget.ToolGroup]
- * for discovery / summary output, so scripted entries flow through alongside class-backed tools.
+ * single descriptor list, for [DeviceManagerToolSet]'s per-group tool summary, so scripted entries
+ * flow through alongside class-backed tools. `toolbox` listings go through `listedTools` instead,
+ * which also marks the tools the LLM is not offered.
  *
  * Class descriptors take precedence on name collision (class-backed implementations are
  * authoritative; scripted names are descriptors only).

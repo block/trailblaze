@@ -76,112 +76,14 @@ class OrchestraRunnerLaunchRedactionTest {
       put("numericCopy", 123)
     }
 
-    val redacted = command.withKnownMaestroLaunchValuesRedacted(listOf("123"), preserveReferences = false)
+    val redacted = command.withKnownMaestroLaunchValuesRedacted(listOf("123"))
 
     assertEquals(JsonPrimitive("PIN=<redacted>"), redacted["inputTextCommand"]?.jsonObject?.get("text"))
     assertEquals(JsonPrimitive("com.example.app<redacted>"), redacted["launchAppCommand"]?.jsonObject?.get("appId"))
     assertEquals(JsonPrimitive("<redacted>"), redacted["stopAppCommand"]?.jsonObject?.get("appId"))
     assertEquals(JsonPrimitive("<redacted>"), redacted["numericCopy"])
     val eraseText = buildJsonObject { put("charactersToErase", 1) }
-    assertEquals(JsonPrimitive("<redacted>"), eraseText.withKnownMaestroLaunchValuesRedacted(
-      listOf("1"), preserveReferences = false,
-    )["charactersToErase"])
-  }
-
-  @Test
-  fun `unresolved reference shaped command text cannot exempt a launch credential`() {
-    val authored = buildJsonObject { putJsonObject("inputTextCommand") { put("text", "{{session_secret}}") } }
-    val unresolved = authored.withKnownMaestroLaunchValuesRedacted(
-      listOf("session_secret"), preserveReferences = true, executed = authored,
-    )
-    val resolved = authored.withKnownMaestroLaunchValuesRedacted(
-      listOf("session_secret"), preserveReferences = true,
-      executed = buildJsonObject { putJsonObject("inputTextCommand") { put("text", "session_secret") } },
-    )
-
-    assertEquals(JsonPrimitive("<redacted>"), unresolved["inputTextCommand"]?.jsonObject?.get("text"))
-    assertEquals(JsonPrimitive("{{session_secret}}"), resolved["inputTextCommand"]?.jsonObject?.get("text"))
-
-    val shortValue = buildJsonObject { putJsonObject("inputTextCommand") { put("text", "{{args.oauth2Token}}") } }
-    assertEquals(
-      JsonPrimitive("{{args.oauth2Token}}"),
-      shortValue.withKnownMaestroLaunchValuesRedacted(
-        listOf("2"), preserveReferences = true, executed = shortValue,
-      )["inputTextCommand"]?.jsonObject?.get("text"),
-    )
-  }
-
-  @Test
-  fun `blanked unknown Maestro reference cannot preserve a launch secret`() {
-    val authoredCommand = buildJsonObject {
-      putJsonObject("inputTextCommand") { put("text", "\${TOKEN-secret123}") }
-    }
-    val executedCommand = buildJsonObject {
-      putJsonObject("inputTextCommand") { put("text", "") }
-    }
-    assertEquals(
-      JsonPrimitive("<redacted>"),
-      authoredCommand.withKnownMaestroLaunchValuesRedacted(
-        listOf("secret123"), preserveReferences = true, executed = executedCommand,
-      )["inputTextCommand"]?.jsonObject?.get("text"),
-    )
-
-    val authoredLaunch = buildJsonObject {
-      putJsonObject("launchApp") { putJsonObject("arguments") { put("credential", "\${TOKEN-secret123}") } }
-    }
-    val executedLaunch = buildJsonObject {
-      putJsonObject("launchApp") { putJsonObject("arguments") { put("credential", "") } }
-    }
-    assertEquals(
-      JsonPrimitive("<redacted>"),
-      authoredLaunch.withAuthoredMaestroLaunchArgumentsRedacted(executedLaunch)
-        ["launchApp"]?.jsonObject?.get("arguments")?.jsonObject?.get("credential"),
-    )
-  }
-
-  @Test
-  fun `repeated launch values do not corrupt a proven authored reference`() {
-    val authored = buildJsonObject {
-      putJsonObject("inputTextCommand") { put("text", "{{session_secret}} value=session_secret") }
-    }
-    val executed = buildJsonObject {
-      putJsonObject("inputTextCommand") { put("text", "bound value=session_secret") }
-    }
-    assertEquals(
-      JsonPrimitive("{{session_secret}} value=<redacted>"),
-      authored.withKnownMaestroLaunchValuesRedacted(
-        listOf("session_secret", "session_secret"), preserveReferences = true, executed = executed,
-      )["inputTextCommand"]?.jsonObject?.get("text"),
-    )
-  }
-
-  @Test
-  fun `unresolved launch reference is a literal when another argument resolves`() {
-    val authored = buildJsonObject {
-      putJsonObject("launchApp") {
-        putJsonObject("arguments") {
-          put("credential", "{{session_secret}}")
-          put("other", "{{args.other}}")
-        }
-      }
-    }
-    val executed = buildJsonObject {
-      putJsonObject("launchApp") {
-        putJsonObject("arguments") {
-          put("other", "hello")
-          put("credential", "{{session_secret}}")
-        }
-      }
-    }
-
-    val literals = maestroAuthoredLaunchLiterals(authored, executed)
-    assertEquals(listOf("{{session_secret}}"), literals)
-    val later = buildJsonObject { putJsonObject("inputTextCommand") { put("text", "{{session_secret}}") } }
-    assertEquals(
-      JsonPrimitive("<redacted>"),
-      later.withKnownMaestroLaunchValuesRedacted(literals, preserveReferences = true, executed = later)
-        ["inputTextCommand"]?.jsonObject?.get("text"),
-    )
+    assertEquals(JsonPrimitive("<redacted>"), eraseText.withKnownMaestroLaunchValuesRedacted(listOf("1"))["charactersToErase"])
   }
 
   @Test
@@ -192,9 +94,7 @@ class OrchestraRunnerLaunchRedactionTest {
       put("shortExact", "en")
     }
 
-    val redacted = command.withKnownMaestroLaunchValuesRedacted(
-      listOf("true", "en"), preserveReferences = false,
-    )
+    val redacted = command.withKnownMaestroLaunchValuesRedacted(listOf("true", "en"))
 
     assertEquals(JsonPrimitive("Sent"), redacted["inputTextCommand"]?.jsonObject?.get("text"))
     assertEquals(JsonPrimitive(true), redacted["clearState"])

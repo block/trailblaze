@@ -7,6 +7,9 @@ package xyz.block.trailblaze.devices
  */
 object DeviceClassifierKey {
 
+  /** Original execution lane retained beside projected runtime classifiers in device metadata. */
+  const val EXECUTION_DEVICE_CLASS = "executionDeviceClass"
+
   private val CLASSIFIER_KEY_PATTERN = Regex("[a-z0-9_]+(?:-[a-z0-9_]+)*")
   private val ROOT_CLASSIFIERS = setOf("android", "desktop", "ios", "web")
   private val FORM_FACTOR_CLASSIFIERS = setOf("browser", "compose", "ipad", "iphone", "phone", "tablet")
@@ -16,6 +19,17 @@ object DeviceClassifierKey {
     "ios" to setOf("ipad", "iphone"),
     "web" to setOf("browser"),
   )
+
+  /** Whether [value] names a platform (`android`) or a form factor (`phone`) rather than a variant. */
+  fun isPlatformOrFormFactor(value: String): Boolean = value in ROOT_CLASSIFIERS || value in FORM_FACTOR_CLASSIFIERS
+
+  /** Projects an explicit declaration onto recording/session identity, never physical selection. */
+  fun withDeclaredLocale(
+    classifiers: List<TrailblazeDeviceClassifier>,
+    declaredLocale: String?,
+  ): List<TrailblazeDeviceClassifier> {
+    return xyz.block.trailblaze.yaml.internal.DeclaredLocaleClassifiers.project(classifiers, declaredLocale)
+  }
 
   /** Parses a CI/catalog device key into the classifiers used by unified trail recordings. */
   fun parse(key: String): List<TrailblazeDeviceClassifier> {

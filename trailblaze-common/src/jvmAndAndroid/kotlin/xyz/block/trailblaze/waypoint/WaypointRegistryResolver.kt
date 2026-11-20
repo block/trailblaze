@@ -151,10 +151,20 @@ object WaypointRegistryResolver {
     val resolved = active
       ?: loadFromWorkspaceWalkUp(workingDir, enrichment)
       ?: loadClasspathOnly(workingDir, enrichment)
+    val byId = resolved?.waypoints?.associateBy { it.id }.orEmpty()
+    // A registry that loaded but holds no waypoints makes every assertWaypoint report "unknown"
+    // with nothing else in the log (e.g. no trailmaps were discoverable on device) — say so.
+    if (resolved != null && byId.isEmpty()) {
+      Console.log(
+        "[WaypointRegistryResolver] Waypoint registry loaded with zero waypoints " +
+          "(trailmaps=${resolved.resolvedTrailmaps.size}); every assertWaypoint will report its " +
+          "waypoint as unknown. Check that the trailmaps are discoverable (classpath / APK assets).",
+      )
+    }
     // Unknown ids resolve to null — assertWaypoint surfaces those with a "check the waypoint id
     // against the loaded trailmaps" hint.
     return Registry(
-      byId = resolved?.waypoints?.associateBy { it.id }.orEmpty(),
+      byId = byId,
       loaded = resolved != null && !activeFailed,
       trailmapIdByTargetId = resolved?.resolvedTrailmaps.orEmpty()
         .mapNotNull { trailmap -> trailmap.target?.id?.takeIf { it != trailmap.manifest.id }?.let { it to trailmap.manifest.id } }

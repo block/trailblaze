@@ -96,9 +96,10 @@ export interface TrailblazeDevice {
   driver?: string;
   /**
    * The session device's instance identifier — the emulator serial (`emulator-5554`) on Android,
-   * the simulator UDID on iOS (sourced from `TrailblazeDeviceId.instanceId`). It's what host CLIs
-   * need to target this specific device, e.g.
-   * `ctx.tools.exec({ argv: ["xcrun","simctl","terminate", ctx.device.instanceId, "<bundleId>"] })`.
+   * the simulator UDID on iOS (sourced from `TrailblazeDeviceId.instanceId`). Tools that drive the
+   * device already target it: on iOS, control the simulator with
+   * `ctx.tools.ios_simctl({ argv: ["terminate", "booted", "<bundleId>"] })`, not `exec` of `xcrun simctl`.
+   * Read it for messages, or for a host CLI no built-in tool covers.
    *
    * Present on every scripted-tool path. Optional because older daemons don't carry it — guard
    * before use.
@@ -123,6 +124,19 @@ export interface TrailblazeDevice {
    * Optional because older hosts don't carry it — treat absent as `[]`.
    */
   classifiers?: string[];
+  /**
+   * The language Trailblaze set the device to when this trail started, as a BCP-47 tag: the trail's
+   * `locale:` for this device (`es-US`), or `en-US` for a trail that declares none. A tool reads it
+   * to match an app's own language setting to the trail's, without querying the device.
+   *
+   * It is a snapshot from the start, not a live reading: a step that changes the language
+   * mid-run (through Settings, say) still leaves this at the starting value. A tool that needs the
+   * device's current language must read the device itself.
+   *
+   * Optional because older hosts don't carry it, and because it is absent when this host has not
+   * set the device's language (a web device, or a failed switch). Guard before use.
+   */
+  initialLocale?: string;
 }
 
 /**
@@ -384,6 +398,10 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
     Array.isArray(classifiersRaw) && classifiersRaw.every((c) => typeof c === "string")
       ? (classifiersRaw as string[])
       : undefined;
+  // Optional: older hosts omit it. A non-string or empty value reads as absent.
+  const initialLocaleRaw = deviceRecord["initialLocale"];
+  const initialLocale =
+    typeof initialLocaleRaw === "string" && initialLocaleRaw.length > 0 ? initialLocaleRaw : undefined;
 
   // `_meta.trailblaze.memory` is a `Record<string, string>` snapshot of the host's
   // `AgentMemory.variables` at envelope build time. Wrap it in a `TrailblazeMemory` so
@@ -416,6 +434,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
       instanceId,
       trailblazePort,
       classifiers,
+      initialLocale,
     },
     target,
     hostPlatform: parseHostPlatform(tb["hostPlatform"]) ?? undefined,

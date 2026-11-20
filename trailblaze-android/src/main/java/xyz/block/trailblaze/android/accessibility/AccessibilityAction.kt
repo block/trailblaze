@@ -98,7 +98,8 @@ sealed interface AccessibilityAction {
   ) : AccessibilityAction {
     override val description
       get() = buildString {
-        if (clearFirst) append("Clear and input text \"$text\"") else append("Input text \"$text\"")
+        // Never the text: this is printed to logcat, which ships in the session's device.log.
+        append(if (clearFirst) "Clear and input text" else "Input text")
         if (nodeSelector != null) append(" into ${nodeSelector.description()}")
         if (hideKeyboardAfter) append(" and hide keyboard")
       }
@@ -215,7 +216,7 @@ sealed interface AccessibilityAction {
   // --- Clipboard ---
 
   data class SetClipboard(val text: String) : AccessibilityAction {
-    override val description get() = "Set clipboard to \"$text\""
+    override val description get() = "Set clipboard"
   }
 
   data object PasteText : AccessibilityAction {

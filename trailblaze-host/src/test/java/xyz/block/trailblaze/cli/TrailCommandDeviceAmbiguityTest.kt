@@ -3,6 +3,8 @@ package xyz.block.trailblaze.cli
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import xyz.block.trailblaze.devices.TrailDeviceSelection
 import xyz.block.trailblaze.devices.TrailDeviceSelector
 
@@ -51,6 +53,58 @@ class TrailCommandDeviceAmbiguityTest {
       TrailDeviceSelection.Resolved(listOf<String?>(null)),
       cmd.resolveDevicesForFile(trailFile("config: {}\ntrail:\n  - step: noop"), emptyList(), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = null),
     )
+  }
+
+  @Test
+  fun `a saved default platform the trail does not declare is honored with a warning`() {
+    // The saved default is machine-wide (`config device`), so it may not be what this terminal
+    // wants. It stays a valid choice, so it runs -- but the run must say why it isn't on the
+    // trail's device.
+    val ipadTrail = trailFile(
+      """
+      config:
+        devices:
+          ios-ipad: {}
+      trail:
+        - step: List the apps installed on the device
+          recording:
+            ios-ipad:
+              - mobile_listInstalledApps: {}
+      """.trimIndent(),
+    )
+    val ipads = listOf("ios/IPAD-1", "ios/IPAD-2")
+
+    // With devices connected, and with none (autodetect never lists the browser): same outcome.
+    for (connected in listOf(ipads, emptyList(), null)) {
+      lateinit var selection: TrailDeviceSelection
+      val stderr = captureStderrText {
+        selection = cmd.resolveDevicesForFile(ipadTrail, emptyList(), allDevices = false, defaultDevice = "WEB", driverType = null, connectedSpecs = connected, savedDefault = true)
+      }
+      assertEquals(TrailDeviceSelection.Resolved(listOf("WEB")), selection)
+      assertTrue(
+        "Warning: running ${ipadTrail.name} on the saved default platform 'web'" in stderr &&
+          "but it is for iOS. Pass `--device <spec>` to choose a device, " +
+            "or clear the default with `trailblaze config device unset`." in stderr,
+        "connected=$connected stderr=$stderr",
+      )
+    }
+
+    // A saved default the trail does declare runs quietly.
+    val quiet = captureStderrText {
+      assertEquals(
+        TrailDeviceSelection.Resolved(listOf("IOS")),
+        cmd.resolveDevicesForFile(ipadTrail, emptyList(), allDevices = false, defaultDevice = "IOS", driverType = null, connectedSpecs = ipads, savedDefault = true),
+      )
+    }
+    assertFalse("saved default platform" in quiet, quiet)
+    // A pin or env var is this shell's own choice: no warning.
+    val pinned = captureStderrText {
+      assertEquals(
+        TrailDeviceSelection.Resolved(listOf("web/playwright-native")),
+        cmd.resolveDevicesForFile(ipadTrail, emptyList(), allDevices = false, defaultDevice = "web/playwright-native", driverType = null, connectedSpecs = ipads, savedDefault = false),
+      )
+    }
+    assertFalse("saved default platform" in pinned, pinned)
   }
 
   @Test

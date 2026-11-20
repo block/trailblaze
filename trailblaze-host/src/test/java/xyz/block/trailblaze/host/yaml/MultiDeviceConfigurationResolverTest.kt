@@ -43,12 +43,14 @@ class MultiDeviceConfigurationResolverTest {
     rawDeviceBindings: String?,
     sessionDriverType: TrailblazeDriverType? = null,
     boundDevicePlatforms: Map<String, TrailblazeDevicePlatform> = emptyMap(),
+    borrowedDeviceDrivers: Map<String, TrailblazeDriverType> = emptyMap(),
   ) = MultiDeviceConfigurationResolver.resolve(
     yaml = yaml,
     primaryDeviceId = primaryDeviceId,
     rawDeviceBindings = rawDeviceBindings,
     sessionDriverType = sessionDriverType,
     boundDevicePlatforms = boundDevicePlatforms,
+    borrowedDeviceDrivers = borrowedDeviceDrivers,
   )
 
   /** The configuration a run that names none selects, before any device-side work. */
@@ -122,6 +124,18 @@ class MultiDeviceConfigurationResolverTest {
     // `android-phone` folds to the ANDROID platform.
     assertThat(resolved.companionDeviceIds.getValue("buyer").trailblazeDevicePlatform)
       .isEqualTo(TrailblazeDevicePlatform.ANDROID)
+  }
+
+  @Test
+  fun `a binding written the way device list prints it binds the bare device id`() {
+    val resolved = resolve(
+      yaml = pairTrail(buyerClassifier = "ios-iphone"),
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=ios/8F2C-SIM@localhost:51001",
+    )!!
+
+    assertThat(resolved.companionDeviceIds.getValue("buyer"))
+      .isEqualTo(TrailblazeDeviceId("8F2C-SIM@localhost:51001", TrailblazeDevicePlatform.IOS))
   }
 
   @Test
@@ -200,6 +214,45 @@ class MultiDeviceConfigurationResolverTest {
     "        buyer:\n          classifier: android-phone",
     "        buyer:\n          classifier: android-phone\n          driver: $driver",
   )
+
+  @Test
+  fun `a companion bound to a borrowed device runs on its lender's driver, not the session's`() {
+    val resolved = resolve(
+      yaml = pairTrail(),
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=emulator-5554@lender:51000",
+      sessionDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      borrowedDeviceDrivers = mapOf("emulator-5554@lender:51000" to TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+    )!!
+
+    assertThat(resolved.companionDriverTypes.getValue("buyer"))
+      .isEqualTo(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+    assertThat(resolved.borrowedCompanionNames).isEqualTo(setOf("buyer"))
+  }
+
+  @Test
+  fun `a borrowed companion's driver pin is checked against its lender's driver`() {
+    val lent = mapOf("emulator-5554@lender:51000" to TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+    // Matches the lender, though not the session: accepted.
+    resolve(
+      yaml = pairTrailWithBuyerDriver("ANDROID_ONDEVICE_ACCESSIBILITY"),
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = "buyer=emulator-5554@lender:51000",
+      sessionDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      borrowedDeviceDrivers = lent,
+    )!!
+    val message = assertFailsWith<TrailblazeException> {
+      resolve(
+        yaml = pairTrailWithBuyerDriver("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        primaryDeviceId = launchDevice,
+        rawDeviceBindings = "buyer=emulator-5554@lender:51000",
+        sessionDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        borrowedDeviceDrivers = lent,
+      )
+    }.message.orEmpty()
+    assertThat(message).contains("ANDROID_ONDEVICE_INSTRUMENTATION")
+    assertThat(message).contains("ANDROID_ONDEVICE_ACCESSIBILITY")
+  }
 
   @Test
   fun `a member driver the session will not run is rejected, naming both drivers`() {

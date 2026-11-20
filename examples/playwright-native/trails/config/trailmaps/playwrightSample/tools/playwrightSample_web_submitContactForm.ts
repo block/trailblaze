@@ -1,4 +1,4 @@
-import { trailblaze } from "@trailblaze/scripting";
+import { memoryKeys, trailblaze } from "@trailblaze/scripting";
 
 import {
   nonEmptyString,
@@ -60,6 +60,7 @@ export const playwrightSample_web_submitContactForm = trailblaze.tool<SubmitCont
       ref: 'css=#form-result strong:text-is("Form submitted!")',
     });
 
+    ctx.memory.set(memoryKeys.playwrightSample.contact_form_email, email);
     return `Submitted the sample contact form for ${name} (${email}).`;
   },
 );

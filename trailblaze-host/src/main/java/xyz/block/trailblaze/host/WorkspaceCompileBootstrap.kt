@@ -16,6 +16,7 @@ import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.toLowerHex
 import java.io.File
@@ -380,10 +381,30 @@ object WorkspaceCompileBootstrap {
             "the directory resolves outside this workspace, so the workspace that owns it generates its own.",
         )
       }
+      // Bootstrap runs before AppTargetDiscovery installs the workspace toolset overlay, so
+      // `defaultEntries()` would hold only bundled toolsets. Resolve the workspace's own, as
+      // `trailblaze compile` does, so its toolsets' tools and memory keys reach the bindings.
+      val toolSetCatalog = AppTargetDiscovery.workspaceToolSetCatalog(
+        resourceSource = workspaceLayeredConfigResourceSource(
+          configDir = configDir,
+          logPrefix = "[WorkspaceCompileBootstrap]",
+        ),
+        logPrefix = "[WorkspaceCompileBootstrap]",
+      )
       val clientDtsFiles = PerTrailmapClientDtsEmitter.emit(
         resolvedTrailmaps = resolvedTrailmaps,
+        catalog = toolSetCatalog,
         workspaceRoot = workspaceRoot,
       )
+      // A duplicate memory-key declaration fails `trailblaze check`; here it only warns.
+      TrailmapMemoryKeys.conflicts(
+        trailmaps = resolvedTrailmaps.filter { trailmap ->
+          val dir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir
+          dir != null && trailmapDirIsInsideWorkspace(workspaceRoot, dir.toPath())
+        },
+        trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id },
+        catalog = toolSetCatalog,
+      ).forEach { Console.log("[WorkspaceCompileBootstrap] ${it.message()}") }
       val configFiles = PerTrailmapTsconfigEmitter.emit(
         workspaceRoot = workspaceRoot,
         resolvedTrailmaps = resolvedTrailmaps,

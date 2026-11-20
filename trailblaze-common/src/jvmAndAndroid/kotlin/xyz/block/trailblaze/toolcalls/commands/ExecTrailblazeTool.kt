@@ -18,18 +18,11 @@ internal const val EXEC_TOOL_NAME = "exec"
 /**
  * Executes a process on the host JVM via direct argv invocation (no shell).
  *
- * The argv-form companion to [RunCommandTrailblazeTool]. Both run a process on the host;
- * the difference is the boundary between argv and shell:
- *
- *  - **`exec`** — `ProcessBuilder(argv).start()`. Each argv element becomes a literal
- *    process argument. No shell metacharacter interpretation. Templated parameter values
- *    can never be re-interpreted as `;`/`&&`/quotes/backticks/redirects, even when the
- *    value contains those characters. (A Windows `.bat`/`.cmd` runs through cmd.exe, which
- *    would re-read them, so such a call is refused instead; see [batchArgumentProblem].)
- *    Default for any case where parameters are interpolated from authored input.
- *  - **`runCommand`** — `sh -c "<command>"`. Pipes, globs, redirects, multi-statement
- *    work as they would at a prompt, with the cost that any unsanitized parameter
- *    value can change shell semantics.
+ * `ProcessBuilder(argv).start()`: each argv element becomes a literal process argument, with no
+ * shell metacharacter interpretation. Templated parameter values can never be re-interpreted as
+ * `;`/`&&`/quotes/backticks/redirects, even when the value contains those characters. (A Windows
+ * `.bat`/`.cmd` runs through cmd.exe, which would re-read them, so such a call is refused
+ * instead; see [batchArgumentProblem].)
  *
  * Authors who want shell features should opt in explicitly:
  * `exec({ argv: ["sh", "-c", "./gen.sh | grep ready | head -1"] })`. That keeps the
@@ -67,6 +60,8 @@ internal const val EXEC_TOOL_NAME = "exec"
   surfaceToLlm = false,
   isRecordable = false,
   requiresHost = true,
+  // Runs a caller-chosen process on the host: only another tool may call it.
+  callableOnlyFromTools = true,
 )
 @LLMDescription("Executes a process on the host JVM via argv (no shell). Returns combined stdout/stderr.")
 data class ExecTrailblazeTool(
@@ -192,8 +187,7 @@ data class ExecTrailblazeTool(
     } catch (e: CancellationException) {
       // Propagate cancellation so structured-concurrency teardown (agent abort, driver
       // disconnect, session shutdown) isn't silently converted into a normal tool error.
-      // Precedent: SubprocessTrailblazeTool.execute and RunCommandTrailblazeTool.execute
-      // both catch this same trap explicitly.
+      // Precedent: SubprocessTrailblazeTool.execute catches this same trap explicitly.
       throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(

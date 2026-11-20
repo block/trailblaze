@@ -64,8 +64,12 @@ internal object SelectorQueryEngine {
    * WHICH selectors went unanswered in its error.
    */
   sealed interface Outcome<out R> {
-    /** @property captures how many device captures it took — what a caller reports in its summary. */
-    data class Resolved<out R>(val result: R, val captures: Int) : Outcome<R>
+    /**
+     * @property captures how many device captures it took — what a caller reports in its summary.
+     * @property settledAfterMs set when an opted-in wait stopped before its timeout because nothing
+     *   matched and the screen settled ([SettledScreen]); how long it had waited. Null otherwise.
+     */
+    data class Resolved<out R>(val result: R, val captures: Int, val settledAfterMs: Long? = null) : Outcome<R>
 
     data class NoTreeEverSeen(val platform: TrailblazeDevicePlatform) : Outcome<Nothing>
 
@@ -164,6 +168,12 @@ internal object SelectorQueryEngine {
    * itself: both are [xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool], which is precisely
    * the marker that tells the dispatcher not to.
    *
+   * **[stopWhenSettled] ends a wait that has matched nothing once the screen settles** — the same
+   * complete tree for [SettledScreen.quietWindowMs] and the app idle per
+   * [SettledScreen.appIdleProbe]. Only complete captures count toward it, and only an all-empty
+   * frame may stop: a frame with any match is the normal early return above, never this one. With
+   * no probe installed (any driver but Android accessibility) the wait runs to its timeout.
+   *
    * The re-capture loop is intentionally simple; the real fix is a driver-native event-driven wait
    * (the accessibility / Maestro side already has one in `executeNodeSelectorAssertVisible`) so a
    * poll doesn't cost a full-tree capture.
@@ -174,9 +184,10 @@ internal object SelectorQueryEngine {
     traceTag: String?,
     logTag: String,
     describeAbsence: (R) -> String,
+    stopWhenSettled: Boolean = false,
     resolve: (TrailblazeNode) -> Resolution<R>,
   ): Outcome<R> = try {
-    pollLive(provider, timeoutMs, logTag, describeAbsence, resolve)
+    pollLive(provider, timeoutMs, logTag, describeAbsence, settledTracker(stopWhenSettled, logTag), resolve)
   } finally {
     SnapshotCache.invalidateCurrent(traceTag)
   }
@@ -186,6 +197,7 @@ internal object SelectorQueryEngine {
     timeoutMs: Long,
     logTag: String,
     describeAbsence: (R) -> String,
+    settled: SettledScreen.Tracker?,
     resolve: (TrailblazeNode) -> Resolution<R>,
   ): Outcome<R> {
     val start = TimeSource.Monotonic.markNow()
@@ -212,6 +224,23 @@ internal object SelectorQueryEngine {
         if (resolution.matched && (!resolution.claimsAbsence || lastResolveWasComplete)) {
           return Outcome.Resolved(resolution.result, pollCount)
         }
+        if (settled != null) {
+          if (!resolution.matched && lastResolveWasComplete) {
+            if (settled.settled(tree.hashCode())) {
+              val waitedMs = start.elapsedNow().inWholeMilliseconds
+              Console.log(
+                "[$logTag] stopWhenSettled: nothing matched, screen unchanged and app idle for " +
+                  "${SettledScreen.quietWindowMs}ms; stopping after ${waitedMs}ms of timeoutMs=$timeoutMs — " +
+                  describeAbsence(resolution.result),
+              )
+              return Outcome.Resolved(resolution.result, pollCount, settledAfterMs = waitedMs)
+            }
+          } else {
+            settled.reset()
+          }
+        }
+      } else {
+        settled?.reset()
       }
       val remaining = budget - start.elapsedNow()
       if (remaining <= Duration.ZERO) break
@@ -247,6 +276,17 @@ internal object SelectorQueryEngine {
         "returning empty — ${describeAbsence(finalResolution.result)}",
     )
     return Outcome.Resolved(finalResolution.result, pollCount)
+  }
+
+  /** A tracker for an opted-in wait, or null when not opted in or no idle signal exists here. */
+  private fun settledTracker(stopWhenSettled: Boolean, logTag: String): SettledScreen.Tracker? {
+    if (!stopWhenSettled) return null
+    val probe = SettledScreen.appIdleProbe
+    if (probe == null) {
+      Console.log("[$logTag] stopWhenSettled: this driver has no app-idle signal; waiting the full timeoutMs")
+      return null
+    }
+    return SettledScreen.Tracker(probe, SettledScreen.quietWindowMs)
   }
 
   /**

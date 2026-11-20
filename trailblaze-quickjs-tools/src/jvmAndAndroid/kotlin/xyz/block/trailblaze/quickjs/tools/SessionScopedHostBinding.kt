@@ -141,6 +141,13 @@ class SessionScopedHostBinding(
       )
     }
 
+    // A tool forwarding a tool-only name its caller handed in (`runIf`'s branches) meets the
+    // refusal that caller would have met. Before the lookup, which would happily resolve it.
+    context.forwardedToolOnlyRefusal(name, toolRepo)?.let { message ->
+      Console.log("[SessionScopedHostBinding] FORWARDED_TOOL_ONLY_REJECTED tool=$name session=${sessionId.value}")
+      return dispatchErrorEnvelope("trailblaze.call('$name'): $message")
+    }
+
     // Unknown-key gate — runtime side of the typed-surface contract (#3209). Pairs
     // with the matching check in [JsScriptingCallbackDispatcher] so both scripted-tool
     // dispatch transports (HTTP subprocess + on-device QuickJS binding) reject keys that
@@ -252,7 +259,7 @@ class SessionScopedHostBinding(
     }
 
     val result: TrailblazeToolResult = try {
-      executeResolved(resolved, context)
+      context.callerArguments.callFromTool { executeResolved(resolved, context) }
     } catch (e: CancellationException) {
       // Coroutine cancellation must propagate — swallowing it would convert a
       // session timeout / user abort into a normal tool error, defeating structured

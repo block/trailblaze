@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -41,6 +42,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.measureTimedValue
 
 /**
  * The load-bearing claim of `findSelectorMatches` is a COST claim — N selectors, one capture —
@@ -73,6 +79,8 @@ class FindSelectorMatchesTrailblazeToolTest {
   fun cleanup() {
     repeat(SnapshotCache.frameDepth()) { SnapshotCache.popFrame() }
     SelectorQueryEngine.pollIntervalMs = SelectorQueryEngine.DEFAULT_POLL_INTERVAL_MS
+    SettledScreen.appIdleProbe = null
+    SettledScreen.quietWindowMs = SettledScreen.DEFAULT_QUIET_WINDOW_MS
     TrailblazeTracer.level = incomingTraceLevel
     // Clearing at both ends keeps recorded spans from leaking in either direction.
     TrailblazeTracer.clear()
@@ -475,6 +483,133 @@ class FindSelectorMatchesTrailblazeToolTest {
     val matches = decode(result)
     assertEquals(2, matches.size)
     assertTrue(matches.all { it.isEmpty() })
+  }
+
+  // -- stopWhenSettled: the opt-in early stop --
+
+  /**
+   * Runs an opted-in (or not) wait of [timeoutMs] and reports how long it took. The quiet window is
+   * shrunk far below [timeoutMs], so a wait that is allowed to stop early always does so long before
+   * its timeout, and a wait that reaches [timeoutMs] is one that was not allowed to.
+   */
+  private fun timedWait(
+    context: TrailblazeToolExecutionContext,
+    timeoutMs: Long,
+    stopWhenSettled: Boolean = true,
+  ): Pair<TrailblazeToolResult, Duration> = runBlocking {
+    SettledScreen.quietWindowMs = 10
+    // Hang containment, not a speed budget: an early stop that never fires would otherwise park
+    // the test for the whole timeout.
+    withTimeout(1.minutes) {
+      measureTimedValue {
+        FindSelectorMatchesTrailblazeTool(
+          selectors = listOf(selectorFor("Starting balance"), selectorFor("Welcome")),
+          timeoutMs = timeoutMs,
+          stopWhenSettled = stopWhenSettled,
+        ).execute(context)
+      }.let { it.value to it.duration }
+    }
+  }
+
+  @Test
+  fun `an opted-in wait ends with an empty answer once the screen settles and the app is idle`() {
+    SettledScreen.appIdleProbe = { true }
+
+    // A ten-minute budget: the call can only return inside the hang guard by stopping early.
+    val (result, _) = timedWait(staticCtx(FakeScreenState(treeOf("Checkout"))), timeoutMs = 600_000)
+
+    assertEquals(listOf(emptyList(), emptyList<MatchDescriptor>()), decode(result))
+  }
+
+  @Test
+  fun `without opting in, a settled screen still waits out the full timeout`() {
+    SettledScreen.appIdleProbe = { true }
+
+    val (result, took) = timedWait(
+      staticCtx(FakeScreenState(treeOf("Checkout"))),
+      timeoutMs = 300,
+      stopWhenSettled = false,
+    )
+
+    assertTrue(decode(result).all { it.isEmpty() })
+    assertTrue(took >= 300.milliseconds, "stopped early without opting in, after $took")
+  }
+
+  @Test
+  fun `an opted-in wait keeps going while the app is busy`() {
+    SettledScreen.appIdleProbe = { false }
+
+    val (_, took) = timedWait(staticCtx(FakeScreenState(treeOf("Checkout"))), timeoutMs = 300)
+
+    assertTrue(took >= 300.milliseconds, "stopped on a busy app after $took")
+  }
+
+  @Test
+  fun `an opted-in wait keeps going while the screen keeps changing`() {
+    SettledScreen.appIdleProbe = { true }
+    // A progress label that ticks every capture: never the same screen twice.
+    val context = ctx { n -> FakeScreenState(treeOf("Loading $n%")) }
+
+    val (_, took) = timedWait(context, timeoutMs = 300)
+
+    assertTrue(took >= 300.milliseconds, "stopped on a changing screen after $took")
+  }
+
+  @Test
+  fun `an opted-in wait on a driver with no idle signal waits out the full timeout`() {
+    SettledScreen.appIdleProbe = null
+
+    val (_, took) = timedWait(staticCtx(FakeScreenState(treeOf("Checkout"))), timeoutMs = 300)
+
+    assertTrue(took >= 300.milliseconds, "stopped with no idle signal after $took")
+  }
+
+  @Test
+  fun `captures that lost nodes never count as a settled screen`() {
+    SettledScreen.appIdleProbe = { true }
+
+    // Same holey screen every poll: "unchanged and idle", but its emptiness was never measured.
+    val (result, _) = timedWait(
+      staticCtx(FakeScreenState(treeOf("Checkout"), droppedNodeFetches = 3)),
+      timeoutMs = 300,
+    )
+
+    assertIs<TrailblazeToolResult.Error>(result, "an early stop must not turn a holey capture into 'absent'")
+  }
+
+  @Test
+  fun `an opted-in wait still returns a match that appears`() {
+    SettledScreen.appIdleProbe = { true }
+    val context = ctx { n -> if (n < 3) FakeScreenState(treeOf("Checkout")) else FakeScreenState(treeOf("Welcome")) }
+
+    // A quiet window longer than the screen stays put, so the match lands before any early stop.
+    SettledScreen.quietWindowMs = 1.seconds.inWholeMilliseconds
+    val result = runBlocking {
+      FindSelectorMatchesTrailblazeTool(
+        selectors = listOf(selectorFor("Starting balance"), selectorFor("Welcome")),
+        timeoutMs = 600_000,
+        stopWhenSettled = true,
+      ).execute(context)
+    }
+
+    val matches = decode(result)
+    assertEquals(emptyList(), matches[0])
+    assertEquals(1, matches[1].size)
+  }
+
+  @Test
+  fun `a prompt that appears while the idle check runs is returned, not answered absent`() {
+    var promptUp = false
+    // The app goes idle, and its prompt lands while the check is still answering.
+    SettledScreen.appIdleProbe = {
+      promptUp = true
+      true
+    }
+    val context = ctx { if (promptUp) FakeScreenState(treeOf("Welcome")) else FakeScreenState(treeOf("Checkout")) }
+
+    val (result, _) = timedWait(context, timeoutMs = 600_000)
+
+    assertEquals(1, decode(result)[1].size, "answered from the capture taken before the idle check")
   }
 
   // -- Captures that lost nodes --

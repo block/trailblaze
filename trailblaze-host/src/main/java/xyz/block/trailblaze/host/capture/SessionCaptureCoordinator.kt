@@ -823,6 +823,16 @@ class SessionCaptureCoordinator(
   }
 
   /**
+   * True when [sessionId] is recording one device's screen and that recorder is running, so the
+   * report can take each capture's picture from the video. False once a companion is bound: the
+   * recordings overlap, and the report will not guess which one a capture came from.
+   */
+  fun isRecordingVideo(sessionId: SessionId): Boolean = synchronized(lock) {
+    val capture = active[sessionId]?.takeIf { it.started } ?: return false
+    capture.options.captureVideo && capture.companions.isEmpty() && capture.session.isRecordingVideo()
+  }
+
+  /**
    * Best-effort shutdown of every still-active capture session. Called from a JVM
    * shutdown hook (see [stopCapturesOnExit]) so a daemon exit (`trailblaze stop`, a CLI
    * source-change rebuild) doesn't leak stale `screenrecord` / `xcrun` processes.

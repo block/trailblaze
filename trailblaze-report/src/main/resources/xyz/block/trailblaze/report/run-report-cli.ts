@@ -374,16 +374,9 @@ export function screenshotDataUri(sessionDir: string, file: string, recompressed
   return dataUri(path);
 }
 
-// Device log (logcat). Matches LogcatParser: device.log, or any file whose name contains
-// "logcat" or "system_log". Skip empty/oversized; keep the last MAX_LOG_LINES lines.
-function readDeviceLog(sessionDir: string): string | null {
+/** A log file's last MAX_LOG_LINES lines, or null when it is empty, oversized or unreadable. */
+function readLogTail(path: string): string | null {
   try {
-    const name = readdirSync(sessionDir).find((n) => {
-      const l = n.toLowerCase();
-      return l === "device.log" || l.includes("logcat") || l.includes("system_log");
-    });
-    if (!name) return null;
-    const path = join(sessionDir, name);
     const size = statSync(path).size;
     if (size === 0 || size > MAX_LOG_BYTES) return null;
     return readFileSync(path, "utf8").split("\n").slice(-MAX_LOG_LINES).join("\n");
@@ -391,6 +384,83 @@ function readDeviceLog(sessionDir: string): string | null {
     return null;
   }
 }
+
+/**
+ * The start device's log file name: device.log, else (matching LogcatParser) a file whose name contains
+ * "logcat" or "system_log". A companion's `device-<name>.log` is never it, even one named `logcat`.
+ */
+function deviceLogFileName(sessionDir: string): string | null {
+  try {
+    const names = readdirSync(sessionDir);
+    if (names.includes("device.log")) return "device.log";
+    return names.find((n) => {
+      const l = n.toLowerCase();
+      return !COMPANION_DEVICE_LOG.test(n) && (l === "device.log" || l.includes("logcat") || l.includes("system_log"));
+    }) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Device log (logcat) of the device the session started on. Skip empty/oversized; keep the tail.
+export function readDeviceLog(sessionDir: string): string | null {
+  const name = deviceLogFileName(sessionDir);
+  return name ? readLogTail(join(sessionDir, name)) : null;
+}
+
+/** A companion device's log as the report carries it: the device's configuration name and its log tail. */
+export interface CompanionDeviceLogText {
+  device: string;
+  text: string;
+}
+
+/**
+ * The device logs of a multi-device session beyond the start device's: each companion's
+ * `device-<name>.log` (CaptureFilenames.companionDeviceLog), devices in the order
+ * capture_metadata.json lists them, then any it doesn't list. Each is named by the `deviceName` the metadata stamps
+ * on it, falling back to the file name's suffix when the metadata is missing (a run cut short before
+ * capture published it). `startDevice` is the name the metadata gives the start device's log, so the
+ * viewer can label it beside the companions. Empty, oversized and out-of-session files are skipped,
+ * the same as the start device's log.
+ */
+export function readCompanionDeviceLogs(sessionDir: string): { startDevice: string | null; companions: CompanionDeviceLogText[] } {
+  const none = { startDevice: null, companions: [] };
+  let names: string[];
+  try {
+    names = readdirSync(sessionDir).filter((n) => COMPANION_DEVICE_LOG.test(n));
+  } catch {
+    return none;
+  }
+  const owners = new Map<string, string>();
+  try {
+    const artifacts: any[] = JSON.parse(readFileSync(join(sessionDir, "capture_metadata.json"), "utf8")).artifacts || [];
+    for (const a of artifacts) {
+      if (a && a.type === "LOGCAT" && typeof a.filename === "string" && a.deviceName != null && !owners.has(a.filename)) {
+        owners.set(a.filename, String(a.deviceName));
+      }
+    }
+  } catch { /* no metadata: fall back to file names */ }
+  const deviceOf = (name: string) => owners.get(name) ?? COMPANION_DEVICE_LOG.exec(name)![1];
+  // Devices in the order capture first lists them; a device's own logs in bind order —
+  // `device-buyer.log`, then `device-buyer-2.log` — which is by length, as they share a prefix.
+  // Capture lists a log still being written at stop first, so its order is not the bind order.
+  const devices = [...owners.values()];
+  const rank = (name: string) => (devices.indexOf(deviceOf(name)) >= 0 ? devices.indexOf(deviceOf(name)) : devices.length);
+  names.sort((a, b) => rank(a) - rank(b) || a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+  const companions: CompanionDeviceLogText[] = [];
+  for (const name of names) {
+    const path = join(sessionDir, name);
+    if (!resolvesInsideSession(sessionDir, path)) continue;
+    const text = readLogTail(path);
+    if (text == null) continue;
+    companions.push({ device: deviceOf(name), text });
+  }
+  const startFile = deviceLogFileName(sessionDir);
+  return { startDevice: (startFile && owners.get(startFile)) || null, companions };
+}
+
+/** A companion device's log file name, `device-<name>.log`; group 1 is the name. */
+const COMPANION_DEVICE_LOG = /^device-(.+)\.log$/;
 
 // Network log (network.ndjson). One NetworkEvent JSON object per line; keep the fields the viewer
 // renders. Skip empty/oversized; keep the last MAX_LOG_LINES events.
@@ -987,6 +1057,10 @@ async function main(): Promise<void> {
     const video = readVideo(s.sessionDir, (path) => linkedShot(basename(path)) ?? embedClip(path));
     const attachments = readAttachments(s.sessionDir, streams, sessionId, imageBaseUrl, input.attachmentInlineMaxBytes ?? ATTACHMENT_INLINE_MAX_BYTES, embedBudget);
     const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
+    const { startDevice: deviceLogDevice, companions } = readCompanionDeviceLogs(s.sessionDir);
+    const companionDeviceLogs = companions.length
+      ? companions.map((c) => ({ device: c.device, ...packDeviceLog(c.text) }))
+      : null;
     const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
     const { spans, spansGz } = packSpans(readTraceFile(s.sessionDir));
     const { llmMessages, llmMessagesGz } = packLlmMessages(core.extractLlmTranscripts(llmLogs));
@@ -1006,6 +1080,7 @@ async function main(): Promise<void> {
       originalYaml: s.originalYaml || null,
       deviceLog,
       deviceLogGz,
+      ...(companionDeviceLogs ? { deviceLogDevice, companionDeviceLogs } : {}),
       network,
       networkGz,
       events,

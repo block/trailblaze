@@ -50,6 +50,7 @@ class MaestroHostRunnerImplSecondaryTreeTest {
    */
   private class FakeScreenState(
     secondaryTreeCapture: (() -> SecondaryTreeResult)? = null,
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   ) : ScreenState, SecondaryTreeCarrier {
     private val result: SecondaryTreeResult = secondaryTreeCapture?.invoke() ?: SecondaryTreeResult(null)
     override val secondaryTreeCaptureRan: Boolean = secondaryTreeCapture != null
@@ -61,7 +62,6 @@ class MaestroHostRunnerImplSecondaryTreeTest {
     override val deviceHeight: Int = 852
     override val viewHierarchy: ViewHierarchyTreeNode get() = error("not used by this test")
     override val trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS
-    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
     override val trailblazeNodeTree: TrailblazeNode = TrailblazeNode(
       nodeId = 42,
       driverDetail = DriverNodeDetail.IosMaestro(text = "driver tree"),
@@ -105,8 +105,8 @@ class MaestroHostRunnerImplSecondaryTreeTest {
       capturedUdids.add(udid)
       captureResult()
     },
-    driverScreenStateFactory = { _, secondaryTreeCapture ->
-      FakeScreenState(secondaryTreeCapture).also { lastDriverScreenState = it }
+    driverScreenStateFactory = { _, secondaryTreeCapture, classifiers ->
+      FakeScreenState(secondaryTreeCapture, classifiers).also { lastDriverScreenState = it }
     },
     migrationCaptureLog = { migrationCaptureLines.add(it) },
   )
@@ -126,6 +126,26 @@ class MaestroHostRunnerImplSecondaryTreeTest {
     // The runner resolves its screenshot mode at construction; the OFF path is the one under
     // test, and a leftover JVM-wide opt-in would route captures at a real baguette stream.
     EffectiveStreamScreenshotConfig.clearForTests()
+  }
+
+  @Test
+  fun `captures use the current regional identity even when the runner was constructed earlier`() {
+    val original = listOf("ios", "iphone", "es").map(::TrailblazeDeviceClassifier)
+    var current = original
+    val runner = MaestroHostRunnerImpl(
+      trailblazeDeviceId = TrailblazeDeviceId(fakeUdid, TrailblazeDevicePlatform.IOS),
+      trailblazeLogger = noopLogger,
+      sessionProvider = sessionProvider,
+      captureSecondaryTree = false,
+      deviceClassifiersProvider = { current },
+      driverScreenStateFactory = { _, capture, classifiers -> FakeScreenState(capture, classifiers) },
+    )
+    for (region in listOf("mx", "us")) {
+      current = original + TrailblazeDeviceClassifier(region)
+      assertThat(runner.screenStateProvider().deviceClassifiers).isEqualTo(current)
+    }
+    current = original
+    assertThat(runner.screenStateProvider().deviceClassifiers).isEqualTo(original)
   }
 
   @Test
@@ -328,7 +348,7 @@ class MaestroHostRunnerImplSecondaryTreeTest {
       sessionProvider = sessionProvider,
       captureSecondaryTree = true,
       secondaryTreeCapture = { SecondaryTreeResult.failed("axe describe-ui exited 127: not found") },
-      driverScreenStateFactory = { _, capture -> FakeScreenState(capture) },
+      driverScreenStateFactory = { _, capture, classifiers -> FakeScreenState(capture, classifiers) },
       migrationCaptureLog = { migrationCaptureLines.add(it) },
     )
 

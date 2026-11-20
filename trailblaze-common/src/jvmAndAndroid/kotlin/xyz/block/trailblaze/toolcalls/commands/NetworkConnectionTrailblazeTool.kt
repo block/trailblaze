@@ -646,7 +646,7 @@ data class NetworkConnectionTrailblazeTool(
      * This is NOT what this tool does. `mobile_networkConnection` sets the real airplane-mode flag with
      * [androidAirplaneModeShellCommand] and each radio separately. This exists for the Maestro
      * `Driver.setAirplaneMode` override the Android drivers implement, which is reached only by a
-     * raw `mobile_maestro: setAirplaneMode` command — a surface with one knob and no per-radio
+     * Maestro `setAirplaneMode` command — a surface with one knob and no per-radio
      * vocabulary, so the radios are the closest thing it can mean.
      *
      * Named for the surface rather than for airplane mode because it does not set airplane mode,

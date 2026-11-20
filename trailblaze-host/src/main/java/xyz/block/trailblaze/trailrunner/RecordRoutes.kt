@@ -774,23 +774,27 @@ internal class TrailRunnerRecordingService(
           error = refusal.explain(deviceId, binding, action = "recording"),
         )
       }
-      when (val state = deviceManager.connectionService.connectToDevice(device, bound)) {
-        is ConnectionState.Connected -> {
-          // Binding first, connection second. The fast path at the top of this method reads both
-          // maps outside the mutex, so a concurrent recorder connect landing between the two writes
-          // would re-attach with an empty binding, and the session would silently lose the target
-          // protection this connect earned.
-          connectionBindings[deviceId] = binding
-          connections[deviceId] = state.connection
-          // Publish the SAME live stream into the shared session registry so the `/devices/api/stream`
-          // H.264/CDP live-video socket (and its `/rpc` SubscribeFrames + screen-poll fallbacks) can
-          // serve this recorder-owned connection — no second physical connection. This service stays
-          // the lifecycle owner and detaches (without closing) on disconnect.
-          deviceManager.hostDeviceSessionManager.attach(deviceId, state.connection.stream, binding)
-          RecordConnectResponse(ok = true, deviceWidth = state.connection.stream.deviceWidth, deviceHeight = state.connection.stream.deviceHeight)
+      deviceManager.connectionService.whileConnecting(device) {
+        when (val state = deviceManager.connectionService.connectToDevice(device, bound)) {
+          is ConnectionState.Connected -> {
+            // Binding first, connection second. The fast path at the top of this method reads both
+            // maps outside the mutex, so a concurrent recorder connect landing between the two writes
+            // would re-attach with an empty binding, and the session would silently lose the target
+            // protection this connect earned.
+            connectionBindings[deviceId] = binding
+            connections[deviceId] = state.connection
+            // Publish the SAME live stream into the shared session registry so the `/devices/api/stream`
+            // H.264/CDP live-video socket (and its `/rpc` SubscribeFrames + screen-poll fallbacks) can
+            // serve this recorder-owned connection — no second physical connection. This service stays
+            // the lifecycle owner and detaches (without closing) on disconnect.
+            deviceManager.hostDeviceSessionManager.attach(deviceId, state.connection.stream, binding)
+            RecordConnectResponse(ok = true, deviceWidth = state.connection.stream.deviceWidth, deviceHeight = state.connection.stream.deviceHeight)
+          }
+          is ConnectionState.Error -> RecordConnectResponse(ok = false, error = state.message)
+          else -> RecordConnectResponse(ok = false, error = "Could not connect to ${deviceId.toFullyQualifiedDeviceId()}")
         }
-        is ConnectionState.Error -> RecordConnectResponse(ok = false, error = state.message)
-        else -> RecordConnectResponse(ok = false, error = "Could not connect to ${deviceId.toFullyQualifiedDeviceId()}")
+      }.getOrElse {
+        RecordConnectResponse(ok = false, error = it.message ?: "${deviceId.toFullyQualifiedDeviceId()} can't be used right now")
       }
     }
   }
@@ -890,6 +894,9 @@ internal class TrailRunnerRecordingService(
   suspend fun gesture(req: RecordGestureRequest): RecordGestureResponse {
     val conn = connections[req.trailblazeDeviceId]
       ?: return RecordGestureResponse(ok = false, error = "Not connected — call connect first")
+    deviceManager.hostDeviceSessionManager.beforeGesture(req.trailblazeDeviceId)?.let { refusal ->
+      return RecordGestureResponse(ok = false, error = refusal)
+    }
     val stream = conn.stream
     val factory = conn.toolFactory
     // Alternative tools the author can choose for a tap (selector candidates + coordinate). Set in

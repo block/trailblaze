@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -315,6 +316,32 @@ class AxeDeviceManagerNotificationAlertTest {
   }
 
   /** One simulator screen: the alert for [alertApp] stays up until one of its buttons is tapped. */
+  @Test
+  fun `a tap match seen before an alert is answered is not tapped when time runs out`() {
+    // Read 1 matches Pay while the screen is still changing; read 2 finds the alert and answers
+    // it, so Pay's position is no longer known. Every read after that fails until the timeout.
+    val reads = listOf(APP_SCREEN, alertScreen("Shop"), alertScreen("Shop"))
+    var read = 0
+    val sim = Simulator(alertApp = "Shop")
+    val appTaps = mutableListOf<Pair<Int, Int>>()
+    val manager = AxeDeviceManager(
+      udid = "test-udid",
+      deviceWidth = 402,
+      deviceHeight = 874,
+      notificationAlertAnswers = NotificationAlertAnswers().apply { arm(APP_ID, "Shop", "allow") },
+      describeUi = { AxeCli.Result(exitCode = 0, stdout = reads.getOrElse(read++) { "not json" }, stderr = "") },
+      tapNotificationAlert = { x, y -> sim.tap(x, y); AxeCli.Result(exitCode = 0, stdout = "", stderr = "") },
+      tapXy = { x, y -> appTaps += x to y; AxeCli.Result(exitCode = 0, stdout = "", stderr = "") },
+    )
+
+    assertFailsWith<IllegalStateException> {
+      manager.execute(IosDriverAction.TapOnElement(pay, timeoutMs = 1_000))
+    }
+
+    assertEquals(listOf(ALLOW_CENTER), sim.taps)
+    assertEquals(emptyList(), appTaps, "Pay's old position may now hold something else")
+  }
+
   private class Simulator(@Volatile var alertApp: String? = null, private val onTap: () -> Unit = {}) {
     val taps = mutableListOf<Pair<Int, Int>>()
     fun describe(): String = alertApp?.let(::alertScreen) ?: APP_SCREEN

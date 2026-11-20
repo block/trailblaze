@@ -691,6 +691,60 @@ class WorkspaceClientDtsGeneratorTest {
     }
   }
 
+  @Test
+  fun `declared memory keys render into TrailblazeMemoryKeysByTrailmap with their docs`() {
+    val trailmapDir = newTrailmapDir()
+    val outputPath = WorkspaceClientDtsGenerator().generateForTrailmap(
+      trailmapDir,
+      emptyList(),
+      emptyList(),
+      memoryKeys = listOf(
+        MemoryKeyDts(
+          name = "theme",
+          description = "The run's theme, applied at launch. Never */ closes the comment.",
+          declaredBy = "trailmap `app`",
+          trailmap = "app",
+        ),
+        MemoryKeyDts(
+          name = "account_email",
+          description = "The email of the account a setup tool created.",
+          declaredBy = "toolset `accounts`",
+          trailmap = "shared",
+        ),
+      ),
+    )
+    val rendered = Files.readString(outputPath)
+
+    val expected = """
+      |  interface TrailblazeMemoryKeysByTrailmap {
+      |    "app": {
+      |      /**
+      |       * The run's theme, applied at launch. Never * / closes the comment.
+      |       *
+      |       * Declared by trailmap `app`.
+      |       */
+      |      "theme": "theme";
+      |    };
+      |    "shared": {
+      |      /**
+      |       * The email of the account a setup tool created.
+      |       *
+      |       * Declared by toolset `accounts`.
+      |       */
+      |      "account_email": "account_email";
+      |    };
+      |  }
+      |}
+    """.trimMargin()
+    assertTrue("rendered: $rendered") { rendered.contains(expected) }
+  }
+
+  @Test
+  fun `no declared memory keys means no TrailblazeMemoryKeysByTrailmap block`() {
+    val rendered = Files.readString(WorkspaceClientDtsGenerator().generateForTrailmap(newTrailmapDir(), emptyList(), emptyList()))
+    assertFalse("rendered: $rendered") { rendered.contains("TrailblazeMemoryKeysByTrailmap") }
+  }
+
   // ---- helpers ----------------------------------------------------------------------------
 
   private fun newTrailmapDir(): Path {

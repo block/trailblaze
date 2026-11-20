@@ -16,6 +16,7 @@ import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
 import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
 import xyz.block.trailblaze.host.ResolvedTargetReportEmitter
 import xyz.block.trailblaze.host.TrailTscValidator
+import xyz.block.trailblaze.host.TrailmapMemoryKeys
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.host.trailmapDirIsInsideWorkspace
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
@@ -79,6 +80,18 @@ class CompileCommand : Callable<Int> {
       .toSet()
   }
   internal var stagedTrailmapProbe: (File) -> Boolean = { GitUtils.isPathIgnored(it) }
+
+  /**
+   * Memory keys declared twice within one of this workspace's trailmaps' reach, set by [call]. A
+   * warning here; [CheckCommand] fails on them. See [TrailmapMemoryKeys].
+   */
+  internal var memoryKeyConflicts: List<TrailmapMemoryKeys.Conflict> = emptyList()
+
+  /**
+   * Toolsets in reach of this workspace's trailmaps whose `memory:` block is malformed, set by
+   * [call]. A warning here; [CheckCommand] fails on them. The toolsets still load.
+   */
+  internal var malformedMemoryToolSets: List<String> = emptyList()
 
   @Option(
     names = ["--input", "-i"],
@@ -324,6 +337,19 @@ class CompileCommand : Callable<Int> {
       Console.error("trailblaze $commandLabel: typed-bindings codegen failed: ${e.message ?: e.javaClass.simpleName}")
       return EXIT_COMPILE_ERROR
     }
+    // Memory is one flat namespace, so a key declared twice in a trailmap's reach is a mistake
+    // rather than an override. Only this workspace's trailmaps are judged; a warning here, a
+    // failure in `trailblaze check`, and never a reason to stop a run.
+    val workspaceTrailmaps = resolvedTrailmaps.filter { trailmap ->
+      val dir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir
+      dir != null && trailmapDirIsInsideWorkspace(generatorRoot, dir.toPath())
+    }
+    val trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id }
+    memoryKeyConflicts = TrailmapMemoryKeys.conflicts(workspaceTrailmaps, trailmapsById, toolSetCatalog)
+    memoryKeyConflicts.forEach { Console.error("trailblaze $commandLabel: ${it.message()}") }
+    malformedMemoryToolSets = TrailmapMemoryKeys.malformedToolSets(workspaceTrailmaps, trailmapsById, toolSetCatalog)
+    malformedMemoryToolSets.forEach { Console.error("trailblaze $commandLabel: $it") }
+
     if (emitted.isNotEmpty()) {
       Console.log(
         "trailblaze $commandLabel: emitted ${emitted.size} typed-binding file(s) for IDE autocomplete:",
@@ -341,6 +367,7 @@ class CompileCommand : Callable<Int> {
         resolvedTargets = result.resolvedTargets,
         resolvedTrailmaps = resolvedTrailmaps,
         outputDir = resolvedOutputDir,
+        memoryKeyCatalog = toolSetCatalog,
       )
     } catch (e: Exception) {
       Console.error(

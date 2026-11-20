@@ -14,6 +14,8 @@
 // locally and flushes the diff on tool return, so authors write `ctx.memory.set("k", v)`
 // without `await` and the work happens in one atomic envelope at the boundary.
 
+import type { TrailblazeMemoryKeyArg } from "./memory-keys.js";
+
 /**
  * The scripted-tool memory primitive. Authors read/write through the 8 methods; the SDK
  * tracks the diff against an immutable inbound snapshot and flushes the buffered changes
@@ -30,22 +32,25 @@
  * the call. The host-side guard sits at the dispatch boundary
  * (`SubprocessTrailblazeTool.execute`), so the symmetric rollback is enforced
  * regardless of which failure mode the handler picks.
+ *
+ * **Keys.** Any string. The ones the trailmap, its dependencies and its toolsets declare in
+ * `memory:` (see `memoryKeys`) are offered first, with their documentation.
  */
 export interface TrailblazeMemory {
   /** Returns the string value for [key], or undefined if absent. */
-  get(key: string): string | undefined;
+  get(key: TrailblazeMemoryKeyArg): string | undefined;
 
   /** Sets [key] to [value]. Overwrites any prior value. */
-  set(key: string, value: string): void;
+  set(key: TrailblazeMemoryKeyArg, value: string): void;
 
   /** Returns true if [key] is set (including by a prior `.set()` in this invocation). */
-  has(key: string): boolean;
+  has(key: TrailblazeMemoryKeyArg): boolean;
 
   /** Snapshot of every currently-visible key. Order is not guaranteed. */
   keys(): readonly string[];
 
   /** Removes [key]. No-op if absent. */
-  delete(key: string): void;
+  delete(key: TrailblazeMemoryKeyArg): void;
 
   /**
    * Replaces `{{var}}` and `${var}` tokens in [template] with their current values.
@@ -75,7 +80,7 @@ export interface TrailblazeMemory {
    * deletion rather than a phantom write. `null` is distinct: `JSON.stringify(null)`
    * is the string `"null"`, which is stored verbatim.
    */
-  setJson<T>(key: string, value: T): void;
+  setJson<T>(key: TrailblazeMemoryKeyArg, value: T): void;
 
   /**
    * Convenience for retrieving a typed JSON value. Reads the string at [key] and runs
@@ -85,7 +90,7 @@ export interface TrailblazeMemory {
    *
    * The type parameter [T] is editor-time only; no runtime schema validation.
    */
-  getJson<T = unknown>(key: string): T | undefined;
+  getJson<T = unknown>(key: TrailblazeMemoryKeyArg): T | undefined;
 }
 
 /**

@@ -261,12 +261,36 @@ class QuickJsTrailblazeToolTest {
       };
       """.trimIndent(),
     )
-    val tablet = buildContext().trailblazeDeviceInfo.copy(
-      classifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("tablet")),
+    val regionalDevice = buildContext().trailblazeDeviceInfo.copy(
+      classifiers = listOf("android", "phone", "es", "mx").map(::TrailblazeDeviceClassifier),
+      metadata = mapOf("executionDeviceClass" to "android-phone-es"),
     )
     val result = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
-      .execute(buildContext(deviceInfo = tablet))
-    assertEquals("""["android","tablet"]""", (result as TrailblazeToolResult.Success).message)
+      .execute(buildContext(deviceInfo = regionalDevice))
+    assertEquals("""["android","phone","es","mx"]""", (result as TrailblazeToolResult.Success).message)
+  }
+
+  @Test
+  fun `execute ctx device carries the initial locale, omitted when unknown`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readCtx"] = {
+        name: "readCtx",
+        spec: {},
+        handler: async (_args, ctx) => ({
+          content: [{ type: "text", text: String("initialLocale" in ctx.device) + ":" + ctx.device.initialLocale }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val spanish = buildContext().trailblazeDeviceInfo.copy(initialLocale = "es-US")
+    val known = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
+      .execute(buildContext(deviceInfo = spanish))
+    assertEquals("true:es-US", (known as TrailblazeToolResult.Success).message)
+    val unknown = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
+      .execute(buildContext())
+    assertEquals("false:undefined", (unknown as TrailblazeToolResult.Success).message)
   }
 
   @Test

@@ -30,8 +30,8 @@ import xyz.block.trailblaze.util.isWindows
  * Smoke coverage for [ExecTrailblazeTool] exercising each branch of `execute`:
  * happy-path success, non-zero exit, timeout kill, regex filtering on success, regex
  * bypass on failure, working-directory honoring, and the load-bearing argv-safety
- * contract that distinguishes `exec` from [RunCommandTrailblazeTool] (no shell
- * evaluation of argv elements, even when they contain shell metacharacters).
+ * contract (no shell evaluation of argv elements, even when they contain shell
+ * metacharacters).
  *
  * Tests target POSIX semantics, so they are skipped on Windows. The implementation
  * itself is platform-agnostic — `ProcessBuilder(argv)` works the same on Windows for
@@ -159,7 +159,7 @@ class ExecTrailblazeToolTest {
   }
 
   /**
-   * The load-bearing reason `exec` exists alongside `runCommand`: argv elements MUST be
+   * The load-bearing contract of `exec`: argv elements MUST be
    * passed verbatim to the executable, never re-evaluated by a shell. This test pins the
    * contract by passing a single argv element that contains shell metacharacters
    * (`;`, `&&`, `$()`, backticks) — under shell evaluation those would be interpreted as
@@ -180,7 +180,7 @@ class ExecTrailblazeToolTest {
     val message = (result as TrailblazeToolResult.Success).message
     // The output must be EXACTLY the poisonous string — no command substitution, no
     // semicolon-chained execution, no backtick expansion. `echo` adds a trailing newline
-    // which `RunCommandTrailblazeTool`/`ExecTrailblazeTool` strip via line-based read.
+    // which `ExecTrailblazeTool` strips via line-based read.
     assertThat(message).isEqualTo(poisonous)
   }
 

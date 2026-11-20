@@ -102,8 +102,8 @@ class AccessibilityTrailblazeAgent(
   /**
    * The base implementation dispatches one command at a time, which would let earlier commands
    * of a batch execute before a later unsupported one fails conversion — and every tool call
-   * site ([xyz.block.trailblaze.toolcalls.MapsToMaestroCommands.execute],
-   * `MaestroTrailblazeTool`, etc.) lands here, not on [executeMaestroCommands]. Validate the
+   * site ([xyz.block.trailblaze.toolcalls.MapsToMaestroCommands.execute], etc.) lands here, not on
+   * [executeMaestroCommands]. Validate the
    * whole batch up front (conversion is pure), then keep the base per-command dispatch: unlike
    * the iOS twin's delegate-the-whole-batch approach, this preserves recorded ordering —
    * [executeMaestroCommands] hoists launch commands within a batch, which would reorder a

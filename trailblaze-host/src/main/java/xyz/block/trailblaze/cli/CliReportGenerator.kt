@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.devices.DeviceClassifierKey
 import kotlin.time.Duration.Companion.milliseconds
 import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import java.io.File
@@ -546,7 +547,9 @@ open class CliReportGenerator(
       platform = platform,
       execution_mode = ExecutionMode.classify(status, sessionInfo.hasRecordedSteps, recordingInfo),
       trail_source = determineTrailSource(sessionInfo.trailConfig),
-      device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
+      locale = sessionInfo.trailConfig?.locale,
+      device_classifier = sessionInfo.trailblazeDeviceInfo?.metadata?.get(DeviceClassifierKey.EXECUTION_DEVICE_CLASS)
+        ?: sessionInfo.trailblazeDeviceInfo?.classifiers
         ?.joinToString("-") { it.classifier },
       app_id = sessionInfo.targetAppInfo?.appId,
       app_version_name = sessionInfo.targetAppInfo?.versionName,

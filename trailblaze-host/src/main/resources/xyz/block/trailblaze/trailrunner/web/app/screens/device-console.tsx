@@ -458,10 +458,8 @@ function ToolComposer({ device, connected, target, style }) {
     setRun({ state: 'running', message: null, ms: 0 });
     const r = await TB.runTrailYamlOnDevice(tbId, runYaml);
     const ms = Date.now() - started;
-    // Android hands the run to the on-device runner and answers once it is accepted.
-    const accepted = device.platform === 'android';
     setRun(r.ok
-      ? { state: 'ok', message: accepted ? 'Sent to the device' : mode === 'prompt' && promptKind === 'verify' ? 'Verified' : 'Completed', ms }
+      ? { state: 'ok', message: mode === 'prompt' && promptKind === 'verify' ? 'Verified' : 'Completed', ms }
       : { state: 'error', message: DAM.runErrorSummary(r.error), ms });
   }
   const switchMode = (m) => { setMode(m); setRun(null); };

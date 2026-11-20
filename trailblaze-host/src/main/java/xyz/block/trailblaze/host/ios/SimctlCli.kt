@@ -1,22 +1,12 @@
 package xyz.block.trailblaze.host.ios
 
-import java.io.IOException
-import java.io.InputStream
-import java.nio.file.FileVisitResult
+import java.io.File
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.nio.file.SimpleFileVisitor
-import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.BasicFileAttributes
-import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
-import kotlin.io.path.CopyActionResult
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.copyToRecursively
-import kotlin.io.path.deleteRecursively
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -25,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.SimctlCommand
+import xyz.block.trailblaze.util.SimctlCommand.Result
 
 /**
  * Thin wrapper around `xcrun simctl` for iOS Simulator app-lifecycle operations that AXe
@@ -35,34 +26,30 @@ import xyz.block.trailblaze.util.SimctlCommand
  */
 object SimctlCli {
 
-  data class Result(val exitCode: Int, val stdout: String, val stderr: String) {
-    val success: Boolean get() = exitCode == 0
-  }
-
   /** Pure argv build for [launch], extracted so tests can pin that [launchArguments] reach the command. */
   internal fun launchCommand(udid: String, bundleId: String, launchArguments: List<String>): List<String> =
-    SimctlCommand.argv("launch", udid, bundleId) + launchArguments
+    listOf("launch", udid, bundleId) + launchArguments
 
   fun launch(udid: String, bundleId: String, launchArguments: List<String> = emptyList(), timeoutSeconds: Long = 15): Result =
     run(launchCommand(udid, bundleId, launchArguments), timeoutSeconds)
 
   fun terminate(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("terminate", udid, bundleId), timeoutSeconds)
+    run(listOf("terminate", udid, bundleId), timeoutSeconds)
 
   fun uninstall(udid: String, bundleId: String, timeoutSeconds: Long = 20): Result =
-    run(SimctlCommand.argv("uninstall", udid, bundleId), timeoutSeconds)
+    run(listOf("uninstall", udid, bundleId), timeoutSeconds)
 
   // 60s default: 30s proved tight for large (GB-plus) production app bundles.
   fun install(udid: String, appBundlePath: String, timeoutSeconds: Long = 60): Result =
-    run(SimctlCommand.argv("install", udid, appBundlePath), timeoutSeconds)
+    run(listOf("install", udid, appBundlePath), timeoutSeconds)
 
   /** Path of the installed .app bundle — the explicit `app` container arg (also simctl's default). */
   fun getAppContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("get_app_container", udid, bundleId, "app"), timeoutSeconds)
+    run(listOf("get_app_container", udid, bundleId, "app"), timeoutSeconds)
 
   /** Path of the app's writable data container. */
   fun getAppDataContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), timeoutSeconds)
+    run(listOf("get_app_container", udid, bundleId, "data"), timeoutSeconds)
 
   /**
    * The name iOS shows for [bundleId] (`CFBundleDisplayName`, else `CFBundleName`, from
@@ -70,7 +57,7 @@ object SimctlCli {
    * installed or the lookup fails.
    */
   fun appDisplayName(udid: String, bundleId: String, timeoutSeconds: Long = 10): String? {
-    val info = run(SimctlCommand.argv("appinfo", udid, bundleId), timeoutSeconds)
+    val info = run(listOf("appinfo", udid, bundleId), timeoutSeconds)
     return if (info.success) parseAppDisplayName(info.stdout) else null
   }
 
@@ -82,7 +69,7 @@ object SimctlCli {
   }
 
   fun openUrl(udid: String, url: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("openurl", udid, url), timeoutSeconds)
+    run(listOf("openurl", udid, url), timeoutSeconds)
 
   /**
    * `simctl privacy` — grants/revokes/resets a TCC service for an app without prompting
@@ -91,11 +78,11 @@ object SimctlCli {
    * driver uses it for every service simctl supports (see [IosSimulatorPermissions]).
    */
   fun privacy(udid: String, action: String, service: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("privacy", udid, action, service, bundleId), timeoutSeconds)
+    run(listOf("privacy", udid, action, service, bundleId), timeoutSeconds)
 
   /** Runs an arbitrary command inside the simulator via `simctl spawn` (e.g. `defaults write`). */
   fun spawn(udid: String, command: List<String>, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("spawn", udid) + command, timeoutSeconds)
+    run(listOf("spawn", udid) + command, timeoutSeconds)
 
   /**
    * Shuts the simulator down, boots it again and returns once it has finished booting, running
@@ -104,7 +91,7 @@ object SimctlCli {
    */
   fun reboot(udid: String, timeoutSeconds: Long = 120, afterBoot: () -> Unit = {}): Result =
     try {
-      val shutdown = run(SimctlCommand.argv("shutdown", udid), timeoutSeconds)
+      val shutdown = run(listOf("shutdown", udid), timeoutSeconds)
       bootAfterShutdown(udid, shutdown, timeoutSeconds).also { if (it.success) afterBoot() }
     } catch (e: InterruptedException) {
       thread(isDaemon = true, name = "simctl-reboot-$udid") {
@@ -124,7 +111,7 @@ object SimctlCli {
     shutdown: Result?,
     timeoutSeconds: Long,
     state: () -> String? = { deviceState(udid) },
-    boot: () -> Result = { run(SimctlCommand.argv("bootstatus", udid, "-b"), timeoutSeconds) },
+    boot: () -> Result = { run(listOf("bootstatus", udid, "-b"), timeoutSeconds) },
     nanoTime: () -> Long = System::nanoTime,
     sleep: (Long) -> Unit = Thread::sleep,
   ): Result {
@@ -149,8 +136,12 @@ object SimctlCli {
     }
   }
 
+  /** The folder holding simulator [udid]'s files in the default device set, the only set Trailblaze drives. */
+  internal fun deviceDirectory(udid: String, userHome: File): File =
+    File(userHome, "Library/Developer/CoreSimulator/Devices/$udid")
+
   /** The state `simctl list devices` shows for [udid] (`Booted`, `Shutdown`, `Shutting Down`, ...), or null. */
-  fun deviceState(udid: String): String? = parseDeviceState(run(SimctlCommand.argv("list", "devices"), 15).stdout, udid)
+  fun deviceState(udid: String): String? = parseDeviceState(run(listOf("list", "devices"), 15).stdout, udid)
 
   internal fun parseDeviceState(listing: String, udid: String): String? =
     Regex("\\(${Regex.escape(udid)}\\) \\(([^)]+)\\)").find(listing)?.groupValues?.get(1)
@@ -159,7 +150,7 @@ object SimctlCli {
 
   /** The device type `simctl` reports for [udid], such as `com.apple.CoreSimulator.SimDeviceType.iPad-A16`, or null. */
   fun deviceTypeIdentifier(udid: String): String? {
-    val listing = run(SimctlCommand.argv("list", "devices", "-j"), 15)
+    val listing = run(listOf("list", "devices", "-j"), 15)
     return listing.stdout.takeIf { listing.success }?.let { parseDeviceTypeIdentifier(it, udid) }
   }
 
@@ -173,7 +164,7 @@ object SimctlCli {
 
   /** Sets the simulated GPS location, `<latitude>,<longitude>`. It lasts until the device shuts down. */
   fun setLocation(udid: String, latitudeLongitude: String, timeoutSeconds: Long = 15): Result =
-    run(SimctlCommand.argv("location", udid, "set", latitudeLongitude), timeoutSeconds)
+    run(listOf("location", udid, "set", latitudeLongitude), timeoutSeconds)
 
   /**
    * Resets the simulator's keychain — the whole device keychain, same as Maestro's
@@ -181,7 +172,7 @@ object SimctlCli {
    * [clearAppState] alone can leave an app "signed in" after a wipe; this is the missing half.
    */
   fun keychainReset(udid: String, timeoutSeconds: Long = 10): Result =
-    run(SimctlCommand.argv("keychain", udid, "reset"), timeoutSeconds)
+    run(listOf("keychain", udid, "reset"), timeoutSeconds)
 
   /**
    * Cheap clearState: terminate, then delete the *children* of the app's data container AND of
@@ -204,22 +195,24 @@ object SimctlCli {
     val container = getAppDataContainer(udid, bundleId)
     if (!container.success) return container
     val dataPath = Paths.get(container.stdout.trim())
-    if (!Files.isDirectory(dataPath)) {
-      return Result(-1, "", "data container not found at $dataPath")
+    // An earlier wipe that deleted the owner record orphaned this container, so the simulator
+    // drops it on reboot; a reinstall is the only way to get an owned container back.
+    if (IosHostSimctlUtils.needsContainerRepair(bundleId, dataPath)) {
+      Console.log("[SimctlCli] $bundleId's data container has no owner record; reinstalling to repair it")
+      return clearAppState(udid, bundleId)
     }
     // `groups` lists one `<group-id>\t<path>` per app-group container and exits 0 with EMPTY
     // stdout when the app declares none (verified against simctl on a live device), so a
     // nonzero exit is always a real failure (unknown bundle, timeout) — propagate it rather
     // than silently skip a load-bearing wipe.
-    val groups = run(SimctlCommand.argv("get_app_container", udid, bundleId, "groups"), 10)
+    val groups = run(listOf("get_app_container", udid, bundleId, "groups"), 10)
     if (!groups.success) return groups
     val wipeRoots = listOf(dataPath) +
       groups.stdout.lineSequence()
         .mapNotNull { line -> line.substringAfter('\t', "").trim().takeIf { it.isNotEmpty() } }
         .map { Paths.get(it) }
         .filter { Files.isDirectory(it) }
-    val undeleted = mutableListOf<String>()
-    wipeRoots.forEach { root -> deleteChildrenWithoutFollowingLinks(root, undeleted) }
+    val undeleted = wipeRoots.flatMap { IosHostSimctlUtils.deleteChildrenWithoutFollowingLinks(it) }
     if (undeleted.isNotEmpty()) {
       // Same hard-fail contract as clearAppState: a partial wipe that reports success would
       // launch the next trail against dirty state, which is the exact bug clearState closes.
@@ -229,49 +222,7 @@ object SimctlCli {
     // Uninstall implicitly drops the app's TCC privacy grants (location, camera, ...), so flows
     // that expect a fresh permission prompt would silently keep a prior trail's grant under an
     // in-place wipe. Reset them explicitly to keep [clearAppState]'s fresh-install semantics.
-    return run(SimctlCommand.argv("privacy", udid, "reset", "all", bundleId), 10)
-  }
-
-  /**
-   * Deletes everything under [root] (keeping [root] itself) without following symlinks.
-   * Container contents are app-controlled, and `File.deleteRecursively()` follows symlinks —
-   * a link inside the container pointing outside it would get its *target* tree deleted (same
-   * hazard `CliReportGenerator`'s cleanup documents). [Files.walkFileTree]'s default options
-   * visit a symlink as a plain entry without descending into its target, so the link itself is
-   * removed and the target is untouched. Failures are collected into [undeleted] rather than
-   * thrown so the caller's error names every path that survived the wipe.
-   */
-  private fun deleteChildrenWithoutFollowingLinks(root: Path, undeleted: MutableList<String>) {
-    Files.newDirectoryStream(root).use { children ->
-      children.forEach { child ->
-        Files.walkFileTree(
-          child,
-          object : SimpleFileVisitor<Path>() {
-            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-              if (!tryDelete(file)) undeleted += file.toString()
-              return FileVisitResult.CONTINUE
-            }
-
-            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-              undeleted += file.toString()
-              return FileVisitResult.CONTINUE
-            }
-
-            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
-              if (exc != null || !tryDelete(dir)) undeleted += dir.toString()
-              return FileVisitResult.CONTINUE
-            }
-          },
-        )
-      }
-    }
-  }
-
-  private fun tryDelete(path: Path): Boolean = try {
-    Files.deleteIfExists(path)
-    true
-  } catch (e: IOException) {
-    false
+    return run(listOf("privacy", udid, "reset", "all", bundleId), 10)
   }
 
   /**
@@ -287,67 +238,11 @@ object SimctlCli {
     // `terminate` returns as soon as the signal is sent; a still-dying process can flush
     // state back to disk after the wipe. Poll until it's actually gone (Maestro does the same).
     ensureStopped(udid, bundleId)
-    val container = getAppContainer(udid, bundleId)
-    if (!container.success) return container
-    val appPath = Paths.get(container.stdout.trim())
-    if (!Files.isDirectory(appPath)) {
-      return Result(-1, "", "app bundle not found at $appPath")
-    }
-    val tmpDir = Files.createTempDirectory("axe-reinstall-")
-    val tmpBundle = tmpDir.resolve(appPath.fileName.toString())
-    try {
-      copyDirectoryPreservingAttributes(appPath, tmpBundle)
-      val uninstalled = uninstall(udid, bundleId)
-      if (!uninstalled.success) {
-        // A timed-out uninstall may have half-removed the app. Best-effort reinstall from the
-        // copy we still hold so a failed clearState can't leave the app missing for every
-        // subsequent trail in the suite (POC finding 9), then still report the uninstall
-        // failure — install over a half-removed app doesn't guarantee a wiped data container.
-        val recovered = installWithRetry(udid, tmpBundle.toString())
-        if (!recovered.success) {
-          // A silent recovery failure leaves the app missing and points triage at whichever
-          // later trail first hits the missing-app launch error.
-          Console.log(
-            "[SimctlCli] best-effort reinstall of $bundleId after failed uninstall also failed: " +
-              recovered.stderr.trim(),
-          )
-        }
-        return uninstalled
-      }
-      return installWithRetry(udid, tmpBundle.toString())
-    } finally {
-      // Cleanup must never mask the primary Result (or exception) from the try block.
-      runCatching { deleteRecursivelyNoFollowLinks(tmpBundle) }
-      runCatching { Files.deleteIfExists(tmpDir) }
-    }
-  }
-
-  /**
-   * Symlink-safe recursive delete for the temp bundle. `java.io.File.deleteRecursively()`
-   * follows directory symlinks, and [copyDirectoryPreservingAttributes] preserves links — an
-   * absolute symlink inside the app bundle would otherwise have its *target's* contents
-   * deleted. `kotlin.io.path`'s variant deletes the link itself without following it.
-   */
-  @OptIn(ExperimentalPathApi::class)
-  internal fun deleteRecursivelyNoFollowLinks(path: Path) {
-    path.deleteRecursively()
-  }
-
-  /**
-   * [install] with retry/backoff. A single timed-out install after the uninstall leaves the
-   * app missing for every subsequent trail in the suite (POC finding 9: 4 consecutive
-   * `NSPOSIXErrorDomain code=2` casualties until a manual reinstall). `simctl install` is
-   * idempotent — even if a timed-out attempt actually completed in the background, retrying
-   * is safe — and the backoff gives a busy installd time to recover.
-   */
-  private fun installWithRetry(udid: String, appBundlePath: String): Result {
-    var result = install(udid, appBundlePath)
-    for (backoffMs in longArrayOf(1_000L, 3_000L)) {
-      if (result.success) return result
-      Thread.sleep(backoffMs)
-      result = install(udid, appBundlePath)
-    }
-    return result
+    // The shared reinstall retries the install, finishes it even when the uninstall fails or the
+    // run is cancelled, and keeps the bundle copy if every install fails, so a failed clearState
+    // can't leave the app missing for every later trail (POC finding 9).
+    return runCatching { runBlocking { IosHostSimctlUtils.reinstallFromInstalledBundle(udid, bundleId) } }
+      .fold(onSuccess = { Result(0, "", "") }, onFailure = { Result(-1, "", it.message ?: it.toString()) })
   }
 
   /**
@@ -376,66 +271,5 @@ object SimctlCli {
         line.substringBefore('\t').trim().toIntOrNull() != null
     }
 
-  /**
-   * Recursive copy that preserves POSIX permissions. Kotlin's `File.copyRecursively` drops file
-   * modes — and so does `copyToRecursively`'s default copy action — while `simctl install` only
-   * repairs the main executable's mode, so embedded app-extension binaries in the reinstalled
-   * bundle would lose their execute bit and crash on launch. The custom copy action adds
-   * `COPY_ATTRIBUTES`; symlinks are replicated as links (not followed), matching `cp -R`.
-   */
-  @OptIn(ExperimentalPathApi::class)
-  internal fun copyDirectoryPreservingAttributes(source: Path, target: Path) {
-    source.copyToRecursively(target, followLinks = false) { src, dst ->
-      Files.copy(src, dst, StandardCopyOption.COPY_ATTRIBUTES, LinkOption.NOFOLLOW_LINKS)
-      CopyActionResult.CONTINUE
-    }
-  }
-
-  /**
-   * [Process.waitFor] that kills the child when the wait is interrupted, as it does on a timeout,
-   * rather than leave it running: a cancelled run's language write or SpringBoard stop must not
-   * land under the run that replaced it. The interrupt still propagates.
-   */
-  internal fun waitForOrKill(proc: Process, timeoutSeconds: Long): Boolean =
-    try {
-      proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-    } catch (e: InterruptedException) {
-      proc.destroyForcibly()
-      // The interrupt is consumed by the throw, so this short reap is not cut short again.
-      runCatching { proc.waitFor(KILL_REAP_SECONDS, TimeUnit.SECONDS) }
-      Thread.currentThread().interrupt()
-      throw e
-    }
-
-  private const val KILL_REAP_SECONDS = 2L
-
-  private fun run(args: List<String>, timeoutSeconds: Long): Result {
-    val proc = ProcessBuilder(args).redirectErrorStream(false).start()
-    // Read while it runs: output larger than the pipe buffer (`list devices -j` on a busy Mac)
-    // would otherwise block the child until the timeout.
-    val stdout = drain(proc.inputStream)
-    val stderr = drain(proc.errorStream)
-    val finished = waitForOrKill(proc, timeoutSeconds)
-    if (!finished) {
-      proc.destroyForcibly()
-      return Result(-1, "", "simctl timed out after ${timeoutSeconds}s")
-    }
-    // Output that could not be read fails the command: callers use stdout as a path to delete.
-    val output = try {
-      stdout.get(OUTPUT_DRAIN_SECONDS, TimeUnit.SECONDS) to stderr.get(OUTPUT_DRAIN_SECONDS, TimeUnit.SECONDS)
-    } catch (e: InterruptedException) {
-      Thread.currentThread().interrupt()
-      throw e
-    } catch (e: Exception) {
-      return Result(-1, "", "simctl exited but its output could not be read: $e")
-    }
-    return Result(proc.exitValue(), output.first, output.second)
-  }
-
-  private fun drain(stream: InputStream): FutureTask<String> =
-    FutureTask { stream.bufferedReader().use { it.readText() } }
-      .also { thread(isDaemon = true, name = "simctl-output") { it.run() } }
-
-  /** How long a child that left the pipe open (a process it started) may hold up the result. */
-  private const val OUTPUT_DRAIN_SECONDS = 5L
+  private fun run(args: List<String>, timeoutSeconds: Long): Result = SimctlCommand.run(args, timeoutSeconds)
 }

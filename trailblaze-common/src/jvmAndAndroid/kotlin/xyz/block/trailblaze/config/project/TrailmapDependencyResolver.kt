@@ -52,15 +52,12 @@ import xyz.block.trailblaze.config.PlatformConfig
  * a shallower value from an earlier sibling — which would violate the documented
  * semantics.
  *
- * ## Scope: JVM/host-side only
+ * ## Scope
  *
- * The framework `trailblaze` trailmap is auto-discovered via JVM classpath only — see
- * [TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath]. On-device builds (the
- * Android on-device MCP server) don't run that discovery, so a consumer trailmap with
- * `dependencies: [trailblaze]` will fail dep resolution on-device, get caught by the
- * loader's atomic-per-trailmap handler, and be silently skipped. This is intentional today
- * (trailmap discovery is a JVM-host CLI concern); on-device trailmap discovery is out of scope
- * until there's a real requirement for it.
+ * The framework `trailblaze` trailmap is auto-discovered through
+ * [TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath], which on-device also reads the
+ * APK's assets, so a consumer trailmap with `dependencies: [trailblaze]` resolves there whenever
+ * the APK bundles that trailmap.
  *
  * ## Parity contract with build-logic
  *

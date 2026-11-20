@@ -23,6 +23,15 @@ data class TrailblazeDeviceInfo(
    * itself the advertised id, which is every non-web driver.
    */
   val advertisedInstanceId: String? = null,
+  /**
+   * The language Trailblaze put the device in when this trail started (a BCP-47 tag): the trail's
+   * `locale:`, or `en-US` when it declares none. It is a snapshot from the start, not a
+   * reading of the device, so a step that changes the language mid-run (through Settings, say) is
+   * not reflected here; [locale], where a driver measures it, is the device's own reading. Null
+   * when this host did not set the device's language. Scripted tools read it as
+   * `ctx.device.initialLocale`.
+   */
+  val initialLocale: String? = null,
 ) {
   val platform = trailblazeDriverType.platform
 

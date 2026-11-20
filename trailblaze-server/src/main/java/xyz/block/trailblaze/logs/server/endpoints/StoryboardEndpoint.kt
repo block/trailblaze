@@ -6,6 +6,8 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.StoryboardHtmlBuilder
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -73,14 +75,20 @@ object StoryboardEndpoint {
 
       try {
         Console.log("[Storyboard] Generating storyboard HTML for session $requestedSession ...")
-        val prepared = StoryboardHtmlBuilder.prepare(
-          logs = logsRepo.getLogsForSession(sessionId),
-          resolveScreenshotFile = { logsRepo.getScreenshotFile(it) },
-          includeYaml = includeYaml,
-          localScreenshotToUrl = { file -> staticUrlForScreenshot(file, logsRepo.logsDir) },
-          enforceWebpDimensionCap = false,
-          sessionLabel = requestedSession,
-        )
+        // Off the request thread: saving video frames runs ffmpeg, and a handler that blocks
+        // parks a Netty worker (see ServerEndpoints' statusProvider note).
+        val prepared = withContext(Dispatchers.IO) {
+          val logs = logsRepo.getLogsForSession(sessionId)
+          logsRepo.saveVideoFrames(sessionId, logs)
+          StoryboardHtmlBuilder.prepare(
+            logs = logs,
+            resolveScreenshotFile = { logsRepo.getScreenshotFile(it) },
+            includeYaml = includeYaml,
+            localScreenshotToUrl = { file -> staticUrlForScreenshot(file, logsRepo.logsDir) },
+            enforceWebpDimensionCap = false,
+            sessionLabel = requestedSession,
+          )
+        }
         call.respondText(text = prepared.html, contentType = ContentType.Text.Html)
       } catch (e: IllegalStateException) {
         // prepare() throws IllegalStateException for the expected "can't build a

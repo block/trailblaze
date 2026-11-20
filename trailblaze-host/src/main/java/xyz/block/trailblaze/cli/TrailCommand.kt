@@ -75,6 +75,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedTrailItems
 import xyz.block.trailblaze.yaml.displayTitle
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
@@ -85,6 +86,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 import xyz.block.trailblaze.yaml.TrailMetadataValue
+import xyz.block.trailblaze.toolcalls.ToolAvailabilityMessages
 import xyz.block.trailblaze.util.fileUrl
 
 /**
@@ -673,6 +675,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     )
   }
 
+  /**
+   * True when this run's default device came only from the saved `cliDevicePlatform` (set by
+   * `trailblaze config device`) rather than from this run, this shell's pin, or the one connected
+   * device. [resolveDevicesForFile] still honors it, but warns
+   * when the trail declares other platforms.
+   */
+  private var defaultDeviceIsSavedPlatform: Boolean = false
+
   override fun call(): Int = quietUnlessVerbose(verbose) { runTrail() }
 
   /**
@@ -1006,12 +1016,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         ?: readShellPinDevice(port)
         ?: run {
           autodetect = runBlocking { autodetectSingleConnectedDevice(port) }
-          (autodetect as? DeviceAutodetectResult.Resolved)?.let {
-            reportAutodetectedDevice(it.deviceSpec)
-            it.deviceSpec
+          val driverPlatform = driverType?.let { TrailblazeDriverType.fromString(it)?.platform }
+          (autodetect as? DeviceAutodetectResult.Resolved)?.defaultFor(driverPlatform)?.also {
+            reportAutodetectedDevice(it)
           }
         }
-        ?: CliConfigHelper.readConfig()?.cliDevicePlatform
+        ?: CliConfigHelper.readConfig()?.cliDevicePlatform?.also { defaultDeviceIsSavedPlatform = true }
     }
     // `--all-devices` needs the full connected list even when the tiers above didn't autodetect
     // (e.g. a device is pinned). Enumerate it now if we haven't already.
@@ -1054,7 +1064,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     // daemon-delegated loops share the same list. See [resolveDevicesForFile].
     val connectedSpecs: List<String>? = when (val a = autodetect) {
       is DeviceAutodetectResult.Multiple -> a.specs
-      is DeviceAutodetectResult.Resolved -> listOf(a.deviceSpec)
+      is DeviceAutodetectResult.Resolved -> a.connectedSpecs
       else -> null
     }
 
@@ -1719,6 +1729,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     defaultDevice: String?,
     driverType: String?,
     connectedSpecs: List<String>?,
+    savedDefault: Boolean = defaultDeviceIsSavedPlatform,
   ): TrailDeviceSelection {
     val driverPlatform = driverType?.let { TrailblazeDriverType.fromString(it)?.platform }
 
@@ -1740,7 +1751,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           "[device-select] couldn't read ${file.name} to determine supported platforms; " +
             "asking for an explicit --device among $connectedSpecs",
         )
-        return TrailDeviceSelection.Ambiguous(connectedSpecs!!)
+        return TrailDeviceSelection.Ambiguous(connectedSpecs)
       }
       supportedPlatformsForTrail(yaml)
     } else {
@@ -1760,6 +1771,26 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           "virtual-device routing (ignoring connected real devices $connectedSpecs)",
       )
       return TrailDeviceSelection.Resolved(listOf(null))
+    }
+
+    // The saved default platform is machine-wide: only `trailblaze config device` sets it, so it
+    // can be stale, or another user's choice, in this terminal. It stays a valid choice (a trail
+    // runs as natural language anywhere), so it is honored -- but when the trail declares other
+    // platforms, say so up front, before recorded steps fail to replay on a device they weren't
+    // recorded for.
+    if (savedDefault && defaultDevice != null && driverPlatform == null && explicitDevices.isEmpty()) {
+      val declared = trailPlatforms ?: runCatching {
+        supportedPlatformsForTrail(TrailYamlTemplateResolver.resolve(file.readText(), file))
+      }.getOrNull()
+      val savedPlatform = TrailblazeDevicePlatform.fromString(defaultDevice.substringBefore('/'))
+      if (savedPlatform != null && !declared.isNullOrEmpty() && savedPlatform !in declared) {
+        Console.error(
+          "Warning: running ${file.name} on the saved default platform " +
+            "'${savedPlatform.name.lowercase()}' (from `trailblaze config device`), but it is for " +
+            "${ToolAvailabilityMessages.platformList(declared)}. Pass `--device <spec>` to choose a device, " +
+            "or clear the default with `trailblaze config device unset`.",
+        )
+      }
     }
 
     // The platform filter applied to the connected set comes ONLY from explicit signals:
@@ -2402,8 +2433,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    *
    * Not gated on `--no-report`: this is a data artifact a later locale or copy diff reads, not part
    * of the HTML report. It is one file write, plus, for a session with screenshot-less captures and
-   * a recording, probing and decoding that recording once to save their frames, and on macOS one
-   * OCR read per iOS AXe screenshot.
+   * a recording, probing and decoding that recording once to save their frames. With
+   * `TRAILBLAZE_VISIBLE_STRINGS_OCR` set on macOS, it also OCRs each iOS AXe screenshot, which is off
+   * by default because it adds about 40 s to a typical AXe run.
    */
   private fun writeVisibleStrings(sessions: List<Pair<SessionId, File>>) {
     sessions.groupBy({ it.second }, { it.first }).forEach { (logsDir, sessionIds) ->
@@ -2455,22 +2487,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       val pollMs = RECORDING_LOG_STABILITY_POLL_MS
       val waitStart = System.currentTimeMillis()
 
-      fun readLogs(): List<xyz.block.trailblaze.logs.client.TrailblazeLog> {
-        // By name first: log files are named in write order, and the timestamp sort below is
-        // stable, so logs stamped in the same millisecond keep that order. listFiles() order is
-        // the filesystem's (unsorted on Linux), and a zero-width objective window falls back to
-        // position, so an ObjectiveComplete listed before its ObjectiveStart dropped the step's tools.
-        val logFiles = sessionDir.listFiles()?.filter { it.extension == "json" }?.sortedBy { it.name }
-          ?: emptyList()
-        return logFiles.mapNotNull { file ->
-          try {
-            xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-              .decodeFromString<xyz.block.trailblaze.logs.client.TrailblazeLog>(file.readText())
-          } catch (_: Exception) {
-            null
-          }
-        }.sortedBy { it.timestamp }
-      }
+      fun readLogs() = readSessionLogs(sessionDir)
 
       var logs = readLogs()
       while (System.currentTimeMillis() - waitStart < maxWaitMs) {
@@ -2494,31 +2511,15 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         return
       }
 
-      // Extract session config from the Started status log
-      val startedStatus = logs
-        .filterIsInstance<xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeSessionStatusChangeLog>()
-        .map { it.sessionStatus }
-        .filterIsInstance<SessionStatus.Started>()
-        .firstOrNull()
-
-      val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
-
-      // Include driver-specific tool classes so the YAML serializer recognizes
-      // all tools that may appear in the session logs (e.g., Playwright tools are
-      // not in AllBuiltInTrailblazeToolsForSerialization).
-      val driverType = startedStatus?.trailblazeDeviceInfo?.trailblazeDriverType
-      val customToolClasses = driverType
-        ?.let { recordingToolDescriptors.forDriverOrNull(it)?.toolClasses(it) }
-        .orEmpty()
-
+      val inputs = recordingInputs(logs)
       // The on-disk intermediate is a unified trail document; the save-back step re-reads it and
       // merges this device's slot. A configuration session's legs are keyed by the configuration
       // NAME (from the Started log), never by the launch device's classifier chain.
       val recordingYaml = logs.generateUnifiedRecordedYaml(
-        sessionTrailConfig = sessionTrailConfig,
-        customToolClasses = customToolClasses,
-        selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
-        successfulObjectivesOnly = TrailblazeHostYamlRunner.recordHealedStepsOnly(logs),
+        sessionTrailConfig = inputs.trailConfig,
+        customToolClasses = inputs.customToolClasses,
+        selectedDeviceConfiguration = inputs.selectedDeviceConfiguration,
+        successfulObjectivesOnly = inputs.successfulObjectivesOnly,
       )
       if (recordingYaml.isBlank()) {
         // "No data" and "the data couldn't be rendered" are different failures, and reporting the
@@ -2774,6 +2775,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       recordedItems = recordedItems,
       classifier = classifier,
       selectedDeviceConfiguration = selectedDeviceConfiguration,
+      replayedRun = replayedRun(recordingFile.parentFile, deviceClassifiers, recordedItems),
     )
     when (outcome) {
       is UnifiedRecordingWriter.MergeOutcome.Merged ->
@@ -2966,8 +2968,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    *    authoring for the device, or a hybrid trail whose broken step had its recording removed.
    *
    * Everything else — in particular a clean replay of an existing recording, with or without
-   * `--self-heal` enabled — leaves the file byte-identical. So does a replay of a recording that
-   * still has a raw `mobile_maestro` step, whatever healed ([replaysRawMaestro]).
+   * `--self-heal` enabled — leaves the file byte-identical.
    *
    * "Nothing to replay" follows the executor's own resolution, so it never adds a copy of a leg the
    * run already used:
@@ -2989,38 +2990,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     selfHealed: Boolean,
   ): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
-    if (replaysRawMaestro(trailFile, deviceClassifiers, selectedDeviceConfiguration)) return false
     if (selfHealed) return true
     if (useRecordedSteps == false) return true
     return !deviceAlreadyRecorded(trailFile, deviceClassifiers, selectedDeviceConfiguration)
-  }
-
-  /**
-   * Whether this run replayed a raw `mobile_maestro` step from the recording it would overwrite.
-   * Such a step replays but is never recorded, so saving the run back would drop it from the trail
-   * and the next replay would skip that action.
-   *
-   * `--no-use-recorded-steps` has the AI re-drive every `trail:` step, recording typed tools in
-   * place of a raw one, so only the trailhead still counts: it always replays its recording. A
-   * per-device sibling is checked whole either way, since its raw step may sit in the trailhead.
-   */
-  private fun replaysRawMaestro(
-    trailFile: File,
-    deviceClassifiers: List<String>,
-    selectedDeviceConfiguration: String?,
-  ): Boolean = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
-    RecordingSaveTarget.CLASSIFIER_SIBLING ->
-      computeRecordingTargetFile(trailFile, deviceClassifiers)?.takeIf { it.isFile }
-        ?.let { sibling -> runCatching { RAW_MAESTRO_STEP.containsMatchIn(sibling.readText()) }.getOrDefault(false) }
-        ?: false
-    RecordingSaveTarget.UNIFIED_MERGE ->
-      RAW_MAESTRO_TOOL_NAME in
-        UnifiedRecordingWriter.replayedToolNamesForDevice(
-          trailFile,
-          deviceClassifiers,
-          selectedDeviceConfiguration,
-          trailheadOnly = useRecordedSteps == false,
-        )
   }
 
   /** The "this device already has a recording to replay" half of [shouldSaveRecording]. */
@@ -3064,10 +3036,6 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       RecordingSaveTarget.CLASSIFIER_SIBLING -> computeRecordingTargetFile(trailFile, deviceClassifiers)
       RecordingSaveTarget.UNIFIED_MERGE -> UnifiedRecordingWriter.unifiedRecordingTarget(trailFile)
     } ?: return
-    if (replaysRawMaestro(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
-      Console.info(rawMaestroRecordingMessage(unchangedFile, reRecordedSteps = useRecordedSteps == false))
-      return
-    }
     Console.info(skippedRecordingMessage(unchangedFile))
   }
 
@@ -3099,6 +3067,110 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       .ifEmpty { listOf(SessionStatus.Unknown) }
     return statuses.any { ExecutionMode.selfHealed(it, recordingInfo) }
   }
+
+  /**
+   * What this run replayed, so the save writes only the parts its AI drove. A run that drove every
+   * step on purpose (`--no-use-recorded-steps`) writes all its steps, but its trailhead still
+   * replayed. Null when the logs can't say what the AI drove: a heal logged without its step's
+   * position, or a heal with no log at all. With no way to tell, the whole recording is written,
+   * as before, and the save says so.
+   *
+   * [recordedItems] is what the save lowered the generated recording to. The generator moves every
+   * tool the trailhead recorded after its first to the front of the first step, so the logs are
+   * read again for how many it moved; if that doesn't match what the recording holds, the save
+   * can't tell those tools from the step's own and this is null too.
+   */
+  internal fun replayedRun(
+    sessionDir: File,
+    deviceClassifiers: List<String>,
+    recordedItems: List<TrailYamlItem>,
+  ): UnifiedRecordingWriter.ReplayedRun? {
+    fun wholeRecording(why: String): UnifiedRecordingWriter.ReplayedRun? {
+      Console.log("[unified-record] $why, so every step of this recording is saved, replayed ones included.")
+      return null
+    }
+    val logs = readSessionLogs(sessionDir)
+    val moved = trailheadToolsMovedToFirstStep(logs, recordedItems)
+      ?: return wholeRecording("Couldn't find the trailhead's extra tools in the recording's first step")
+    if (useRecordedSteps == false) {
+      return UnifiedRecordingWriter.ReplayedRun(deviceClassifiers, trailheadToolsInFirstStep = moved, stepsReRecorded = true)
+    }
+    val heals = logs.filterIsInstance<TrailblazeLog.SelfHealInvokedLog>()
+    // A trailhead never heals (its failure ends the run), so every position is a `trail:` step's.
+    val healedSteps = heals.map { it.stepIndex ?: return wholeRecording("A self-heal log doesn't say which step healed") }
+      .toSet()
+    if (healedSteps.isEmpty() && sessionSelfHealed(sessionDir)) {
+      return wholeRecording("The session self-healed but logged no step it healed")
+    }
+    return UnifiedRecordingWriter.ReplayedRun(deviceClassifiers, healedSteps, moved)
+  }
+
+  /**
+   * How many tools the recording generator moved from this session's trailhead to the front of
+   * [recordedItems]' first step: all but the first the trailhead recorded. Null when [recordedItems]
+   * doesn't hold them there, in order, behind that first tool.
+   */
+  private fun trailheadToolsMovedToFirstStep(logs: List<TrailblazeLog>, recordedItems: List<TrailYamlItem>): Int? {
+    val inputs = recordingInputs(logs)
+    val captured = runCatching {
+      logs.generateRecordedTrailItems(
+        createTrailblazeYaml(customTrailblazeToolClasses = inputs.customToolClasses),
+        inputs.trailConfig,
+        successfulObjectivesOnly = inputs.successfulObjectivesOnly,
+      )
+    }.getOrNull() ?: return null
+    fun List<TrailYamlItem>.trailheadTools() =
+      filterIsInstance<TrailYamlItem.TrailheadTrailItem>().firstOrNull()?.trailhead?.tools.orEmpty().map { it.name }
+    val capturedHead = captured.trailheadTools()
+    if (capturedHead.size <= 1) return 0
+    val moved = capturedHead.drop(1)
+    val firstStep = recordedItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .firstOrNull()?.promptSteps?.firstOrNull()?.recording?.tools.orEmpty().map { it.name }
+    val holdsThem = recordedItems.trailheadTools() == capturedHead.take(1) && firstStep.take(moved.size) == moved
+    return moved.size.takeIf { holdsThem }
+  }
+
+  /** What [generateRecordingForSession] renders a session's recording with, read from its logs. */
+  private class RecordingInputs(
+    val trailConfig: TrailConfig?,
+    val customToolClasses: Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>>,
+    val selectedDeviceConfiguration: String?,
+    val successfulObjectivesOnly: Boolean,
+  )
+
+  private fun recordingInputs(logs: List<TrailblazeLog>): RecordingInputs {
+    val startedStatus = logs
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .map { it.sessionStatus }
+      .filterIsInstance<SessionStatus.Started>()
+      .firstOrNull()
+    // Include driver-specific tool classes so the YAML serializer recognizes all tools that may
+    // appear in the session logs (e.g., Playwright tools are not in
+    // AllBuiltInTrailblazeToolsForSerialization).
+    val driverType = startedStatus?.trailblazeDeviceInfo?.trailblazeDriverType
+    return RecordingInputs(
+      trailConfig = startedStatus?.toRecordingTrailConfig(),
+      customToolClasses = driverType
+        ?.let { recordingToolDescriptors.forDriverOrNull(it)?.toolClasses(it) }
+        .orEmpty(),
+      selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+      successfulObjectivesOnly = TrailblazeHostYamlRunner.recordHealedStepsOnly(logs),
+    )
+  }
+
+  /**
+   * Every log in [sessionDir], in the order they were written. By name first: log files are named
+   * in write order, and the timestamp sort below is stable, so logs stamped in the same millisecond
+   * keep that order. listFiles() order is the filesystem's (unsorted on Linux), and a zero-width
+   * objective window falls back to position, so an ObjectiveComplete listed before its
+   * ObjectiveStart dropped the step's tools.
+   */
+  private fun readSessionLogs(sessionDir: File): List<TrailblazeLog> =
+    sessionDir.listFiles()?.filter { it.extension == "json" }?.sortedBy { it.name }.orEmpty()
+      .mapNotNull { file ->
+        runCatching { TrailblazeJsonInstance.decodeFromString(TrailblazeLog.serializer(), file.readText()) }.getOrNull()
+      }
+      .sortedBy { it.timestamp }
 
   /**
    * The request a delegated run sends the daemon for one trail on one device. Everything the
@@ -3510,20 +3582,6 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     internal fun skippedRecordingMessage(trailFile: File): String =
       "Trail file unchanged: this run replayed its recording and no step needed self-healing " +
         "(${trailFile.absolutePath}). To re-record every step, run with --no-use-recorded-steps."
-
-    internal fun rawMaestroRecordingMessage(trailFile: File, reRecordedSteps: Boolean): String =
-      "Trail file unchanged: its recording for this device still has a raw $RAW_MAESTRO_TOOL_NAME " +
-        "step, which saving would drop (${trailFile.absolutePath}). " +
-        if (reRecordedSteps) {
-          "The trailhead always replays its recording, so replace that step with typed tools."
-        } else {
-          "Replace it with typed tools, or run with --no-use-recorded-steps to re-record every step."
-        }
-
-    private const val RAW_MAESTRO_TOOL_NAME = UnifiedRecordingWriter.RAW_MAESTRO_TOOL_NAME
-
-    /** A `mobile_maestro:` tool key in a recording's YAML (block or list-item form). */
-    private val RAW_MAESTRO_STEP = Regex("""(?m)^\s*(?:-\s+)?["']?mobile_maestro["']?\s*:""")
 
     internal fun daemonVersionLine(status: CliStatusResponse?, port: Int): String =
       "Daemon version: ${status?.version ?: if (status == null) "unknown (status unavailable)" else "unknown (not reported by daemon)"} (port $port)"

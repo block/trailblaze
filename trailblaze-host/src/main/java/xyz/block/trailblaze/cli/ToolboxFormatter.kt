@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -263,16 +264,114 @@ internal object ToolboxFormatter {
     header: String,
     toolNames: List<String>,
     descriptionsByName: Map<String, String>,
+    notOfferedByName: Map<String, String> = emptyMap(),
   ): List<String> {
     if (toolNames.isEmpty()) return emptyList()
     val out = mutableListOf<String>()
     out += header
     for (n in toolNames) {
       val desc = descriptionsByName[n] ?: ""
-      out += "  ${compactToolPeekLine(n, desc)}"
+      out += "  ${compactToolPeekLine(markedToolName(n, notOfferedByName[n]), desc)}"
     }
     return out
   }
+
+  /** The `toolbox` JSON value for a tool that hides itself from the LLM (`surfaceToLlm: false`). */
+  const val NOT_OFFERED_HIDDEN = "hidden_by_tool"
+
+  /** The `toolbox` JSON value for a tool the target drops with `excluded_tools:`. */
+  const val NOT_OFFERED_EXCLUDED = "excluded_by_target"
+
+  /**
+   * [toolName] with the `--all` mark for a tool the in-session LLM is not offered, or as-is when
+   * [notOfferedReason] is null. An unknown reason still gets the generic mark: a newer daemon's
+   * reason must not read as "offered".
+   */
+  fun markedToolName(toolName: String, notOfferedReason: String?): String = when (notOfferedReason) {
+    null -> toolName
+    NOT_OFFERED_EXCLUDED -> "$toolName [excluded by target]"
+    else -> "$toolName [not offered to LLM]"
+  }
+
+  /** Name → not-offered reason for every marked tool in these toolset arrays (`all=true` responses). */
+  fun collectNotOffered(vararg toolsetSources: JsonArray?): Map<String, String> {
+    val byName = mutableMapOf<String, String>()
+    for (sources in toolsetSources) {
+      for (ts in sources ?: continue) {
+        val marks = (ts as? JsonObject)?.get("notOffered") as? JsonObject ?: continue
+        for ((name, reason) in marks) {
+          (reason as? JsonPrimitive)?.contentOrNull?.let { byName.putIfAbsent(name, it) }
+        }
+      }
+    }
+    return byName
+  }
+
+  /**
+   * The line above an `--all` listing that says what its marks mean, or null when nothing in it is
+   * marked.
+   */
+  fun notOfferedLegend(json: JsonObject): String? {
+    val anyMarked = collectNotOffered(
+      json["platformToolsets"] as? JsonArray,
+      json["targetToolsets"] as? JsonArray,
+      json["toolGroups"] as? JsonArray,
+      json["toolsByPlatform"] as? JsonArray,
+    ).isNotEmpty() || (json["matches"] as? JsonArray)?.any { (it as? JsonObject)?.get("notOffered") is JsonPrimitive } == true
+    if (!anyMarked) return null
+    return "Marked tools are not offered to the in-session LLM ([not offered to LLM]: the tool hides itself; " +
+      "[excluded by target]: this target drops it); call one with `trailblaze tool`, a trail step, or a TS " +
+      "tool (ctx.tools.<name>)."
+  }
+
+  /**
+   * The note that ends a default listing that left tools out: how many, what they are for, and the
+   * command that lists them. Empty when the daemon reports none (or predates the count).
+   */
+  fun notOfferedNoteLines(json: JsonObject, allCommand: String, matching: Boolean = false): List<String> {
+    val count = (json["notOfferedToolCount"] as? JsonPrimitive)?.intOrNull ?: return emptyList()
+    if (count <= 0) return emptyList()
+    val what = (if (matching) "matching " else "") + if (count == 1) "tool is" else "tools are"
+    return listOf(
+      "$count more $what not offered to the LLM. Run `$allCommand` to see them.",
+      NOT_OFFERED_PURPOSE,
+    )
+  }
+
+  /**
+   * What a default `--search` prints when it matched only tools the LLM is not offered: the matches
+   * exist, so say so and point at `--all`, rather than calling the search a miss. Null otherwise.
+   */
+  fun allMatchesNotOfferedLines(json: JsonObject, query: String, allCommand: String): List<String>? {
+    if ((json["matches"] as? JsonArray)?.isNotEmpty() == true) return null
+    val count = (json["notOfferedToolCount"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 } ?: return null
+    val what = if (count == 1) "The 1 tool" else "All $count tools"
+    return listOf(
+      "$what matching \"$query\" ${if (count == 1) "is" else "are"} not offered to the LLM. Run `$allCommand` to see them.",
+      NOT_OFFERED_PURPOSE,
+    )
+  }
+
+  private const val NOT_OFFERED_PURPOSE: String =
+    "The LLM is offered the tools that drive a flow; the rest are for specific use cases we don't want it " +
+      "calling all the time; call one with `trailblaze tool`, a trail step, or a TS tool (ctx.tools.<name>)."
+
+  /** Printed when `--all` gets back a listing that does not say it honoured the flag. */
+  const val DAEMON_PREDATES_ALL_WARNING: String =
+    "Warning: the daemon did not say it listed the tools the LLM is not offered, so it may predate --all " +
+      "and this list may be missing them. Restart it (`trailblaze app --stop`) and rerun."
+
+  /**
+   * The `toolbox` invocation that repeats this one with `--all`, for the note above. It drops any
+   * role filter: the count covers the whole catalog, and most of what it counts has no role.
+   */
+  fun allToolsCommand(target: String?, platform: String?, search: String?): String = buildList {
+    add("trailblaze toolbox")
+    search?.let { add("--search '${it.replace("'", "'\\''")}'") }
+    target?.let { add("--target $it") }
+    platform?.let { add("--device ${it.lowercase()}") }
+    add("--all")
+  }.joinToString(" ")
 
   /**
    * Renders the body of `toolbox --search <query>`: one `<source>:` heading per source, in the
@@ -301,7 +400,9 @@ internal object ToolboxFormatter {
       val lines = mutableListOf<String>()
       for (match in sourceMatches) {
         val tool = (match["tool"] as? JsonObject) ?: continue
-        val toolName = (tool["name"] as? JsonPrimitive)?.contentOrNull ?: continue
+        val toolName = (tool["name"] as? JsonPrimitive)?.contentOrNull
+          ?.let { markedToolName(it, (match["notOffered"] as? JsonPrimitive)?.contentOrNull) }
+          ?: continue
         val toolDesc = (tool["description"] as? JsonPrimitive)?.contentOrNull ?: ""
         if (detail) {
           lines += "    - $toolName: $toolDesc"
@@ -448,7 +549,15 @@ internal object ToolboxFormatter {
     out += ""
     out += renderParameterLines(tool, "  ")
     out += ""
-    out += "  Run: ${invocationExample(toolName, tool)}"
+    // A tool the LLM is not offered is refused by `trailblaze tool`, so a `Run:` line would be a
+    // command that fails. Show the forms that do call it — the daemon's usage for exactly this case.
+    val notOfferedUsage = (json["usage"] as? JsonPrimitive)?.contentOrNull
+      ?.takeIf { (json["notOffered"] as? JsonPrimitive)?.contentOrNull != null }
+    if (notOfferedUsage != null) {
+      out += notOfferedUsage.lines().map { "  $it" }
+    } else {
+      out += "  Run: ${invocationExample(toolName, tool)}"
+    }
 
     // Defensive joins: a malformed daemon payload (null entry, nested object, accidental
     // array-of-arrays) must not crash help rendering — sibling parsers in this file

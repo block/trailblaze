@@ -38,6 +38,7 @@ internal enum class ToolboxRenderOutcome(val exitCode: Int) {
  *   trailblaze toolbox --detail                  - Show full parameter descriptions
  *   trailblaze toolbox --name tap                - Show single tool details
  *   trailblaze toolbox --target default          - Show tools for a target app
+ *   trailblaze toolbox --all                     - Also show tools the LLM is not offered
  */
 @Command(
   name = "toolbox",
@@ -94,6 +95,17 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
     description = ["Show full parameter descriptions for all tools"],
   )
   var detail: Boolean = false
+
+  @Option(
+    names = ["--all", "-a"],
+    description = [
+      "Also list tools the in-session LLM is not offered: ones that hide themselves " +
+        "(surfaceToLlm: false) and ones the target drops (excluded_tools:). Each is marked. Call " +
+        "one with trailblaze tool, a trail step, or a TS tool (ctx.tools.<name>), except a target's " +
+        "own scripted tool that it also drops, which is never started.",
+    ],
+  )
+  var all: Boolean = false
 
   @Option(
     names = ["-v", "--verbose"],
@@ -199,6 +211,7 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
       // tool filter matches whatever the shell pinned via TRAILBLAZE_DEVICE.
       if (resolvedDevice != null) arguments["platform"] = resolvedDevice
       if (detail) arguments["detail"] = true
+      if (all) arguments["all"] = true
 
       val result = client.callTool("toolbox", arguments)
 
@@ -245,6 +258,12 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
         showDetail = detail,
         roleFilter = role?.lowercase(),
         suppressIndexContextLine = showResolvedTargetHeader,
+        showAll = all,
+        allCommand = ToolboxFormatter.allToolsCommand(
+          target = resolvedTarget,
+          platform = resolvedDevice?.substringBefore('/')?.takeIf { it.isNotBlank() },
+          search = search,
+        ),
       )
 
       // Agents shelling out distinguish "rendered the catalog" from "you asked about
@@ -265,6 +284,8 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
     showDetail: Boolean,
     roleFilter: String?,
     suppressIndexContextLine: Boolean,
+    showAll: Boolean = false,
+    allCommand: String = "trailblaze toolbox --all",
   ): ToolboxRenderOutcome {
     val json = try {
       Json.parseToJsonElement(content).jsonObject
@@ -302,6 +323,44 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
     ToolboxFormatter.systemPromptBlockForResponse(json, isNameMode = false)
       .forEach { Console.info(it) }
 
+    // `--all` listings mark tools the LLM is not offered; say once what the marks mean.
+    if (showAll) ToolboxFormatter.notOfferedLegend(json)?.let { Console.info(it); Console.info("") }
+
+    // A daemon that predates `all` ignores it and answers with the offered tools only, which reads
+    // exactly like a target that has nothing hidden. A current daemon says it honoured the flag.
+    if (showAll && json["includesNotOffered"] == null) {
+      Console.error(ToolboxFormatter.DAEMON_PREDATES_ALL_WARNING)
+      Console.error("")
+    }
+
+    // A search whose every match is one the LLM is not offered: the default view has nothing to
+    // list, but the matches exist, so point at them rather than calling the search a miss.
+    if (searchQuery != null && !showAll) {
+      ToolboxFormatter.allMatchesNotOfferedLines(json, searchQuery, allCommand)?.let { lines ->
+        lines.forEach { Console.info(it) }
+        return ToolboxRenderOutcome.OK
+      }
+    }
+
+    val outcome = formatListingResult(json, targetFilter, searchQuery, showDetail, roleFilter, suppressIndexContextLine)
+
+    // The default listing leaves out tools the LLM is not offered; end it with how many, and how to see them.
+    if (!showAll) {
+      ToolboxFormatter.notOfferedNoteLines(json, allCommand, matching = searchQuery != null)
+        .takeIf { it.isNotEmpty() }
+        ?.let { lines -> Console.info(""); lines.forEach { Console.info(it) } }
+    }
+    return outcome
+  }
+
+  private fun formatListingResult(
+    json: kotlinx.serialization.json.JsonObject,
+    targetFilter: String?,
+    searchQuery: String?,
+    showDetail: Boolean,
+    roleFilter: String?,
+    suppressIndexContextLine: Boolean,
+  ): ToolboxRenderOutcome {
     // Search mode: keyword matches
     if (searchQuery != null) {
       return formatSearchResult(json)
@@ -435,6 +494,7 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
       Console.info("  toolbox --search <keyword>  Search tools by keyword (e.g. 'launch', 'payment')")
       Console.info("  toolbox --name <tool>       Show full details and parameters for a tool")
       Console.info("  toolbox --detail            Expand all descriptions and parameters")
+      Console.info("  toolbox --all               Also list tools the LLM is not offered")
       // The `--target` switch hint is suppressed when the resolved-target header
       // already emitted its own "To switch: --target <name>" line at the top — same
       // de-duplication reasoning as the "Other targets:" block above.
@@ -484,7 +544,12 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
       json["toolGroups"] as? JsonArray,
       json["toolsByPlatform"] as? JsonArray,
     )
-    ToolboxFormatter.renderRoleSection("Trailheads (start your trail here):", names, descriptionsByName)
+    val markers = ToolboxFormatter.collectNotOffered(
+      json["platformToolsets"] as? JsonArray,
+      json["targetToolsets"] as? JsonArray,
+      json["toolGroups"] as? JsonArray,
+    )
+    ToolboxFormatter.renderRoleSection("Trailheads (start your trail here):", names, descriptionsByName, markers)
       .forEach { Console.info(it) }
     Console.info("")
     Console.info("Use `trailblaze toolbox --name <tool>` for full description, parameters, and usage.")
@@ -506,7 +571,8 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
     val names = (json[roleKey] as? JsonArray)?.mapNotNull { it.jsonPrimitive.content } ?: return
     if (names.isEmpty()) return
     val descriptionsByName = ToolboxFormatter.collectToolDescriptions(platformToolsets, targetToolsets)
-    ToolboxFormatter.renderRoleSection(header, names, descriptionsByName)
+    val markers = ToolboxFormatter.collectNotOffered(platformToolsets, targetToolsets)
+    ToolboxFormatter.renderRoleSection(header, names, descriptionsByName, markers)
       .forEach { Console.info(it) }
     Console.info("")
   }
@@ -575,10 +641,13 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
         val obj = platformTools.jsonObject
         val platform = obj["platform"]?.jsonPrimitive?.content ?: continue
         val tools = obj["tools"] as? JsonArray ?: continue
+        val markers = ToolboxFormatter.collectNotOffered(JsonArray(listOf(obj)))
         Console.info("  $platform tools:")
         for (tool in tools) {
           val toolObj = tool.jsonObject
-          val toolName = toolObj["name"]?.jsonPrimitive?.content ?: continue
+          val toolName = toolObj["name"]?.jsonPrimitive?.content
+            ?.let { ToolboxFormatter.markedToolName(it, markers[it]) }
+            ?: continue
           val toolDesc = toolObj["description"]?.jsonPrimitive?.content ?: ""
           Console.info("    - $toolName: $toolDesc")
         }
@@ -626,10 +695,13 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
       val desc = obj["description"]?.jsonPrimitive?.content ?: ""
       Console.info("")
       Console.info("  [$tsName]  $desc")
+      val markers = ToolboxFormatter.collectNotOffered(JsonArray(listOf(obj)))
       val toolDetails = obj["toolDetails"] as? JsonArray
       toolDetails?.forEach { tool ->
         val toolObj = tool.jsonObject
-        val toolName = toolObj["name"]?.jsonPrimitive?.content ?: return@forEach
+        val toolName = toolObj["name"]?.jsonPrimitive?.content
+          ?.let { ToolboxFormatter.markedToolName(it, markers[it]) }
+          ?: return@forEach
         val toolDesc = toolObj["description"]?.jsonPrimitive?.content ?: ""
         if (showDetail) {
           // Detail mode: full description + parameters. Description rendered verbatim

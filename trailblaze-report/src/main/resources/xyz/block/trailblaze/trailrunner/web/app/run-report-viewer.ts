@@ -26,7 +26,7 @@ import { formatShotClipLength, formatShotClipTime, nextShotClipSpeed, SHOT_CLIP_
 import { formatUsd, trailSourceDetails } from './report-format';
 import { formatMs } from './run-report-summary-model';
 import { mountSummary, summaryAvailable } from './run-report-summary';
-import { mountTheater, theaterAvailable } from './run-report-theater';
+import { containIn, mountTheater, theaterAvailable } from './run-report-theater';
 import type { ReportTabHost, ReportTabMount } from './run-report-tab-host';
 import crashFormatter from '../../../report/event-formatters/crash.formatter';
 import { findAttachmentRefs, formatRows } from '../../../report/run-report-events';
@@ -1361,14 +1361,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // no payload at all, and one that captured an empty set inflates to [] — neither reads as this.
   const sessionEventsUnavailable = (session) => Boolean((session.eventsGz || session.eventsHref) && !session.events
     && eventsInflater.cache.has(session) && !eventsInflater.cache.get(session));
+  const companionLogs = (session): CompanionDeviceLog[] => session.companionDeviceLogs || [];
   const logsInflater = makeInflater(
-    (session) => session.deviceLogGz || session.networkGz,
+    (session) => session.deviceLogGz || session.networkGz || companionLogs(session).some((c) => c.deviceLogGz),
     async (session) => {
-      const [deviceLog, network] = await Promise.all([
+      const [deviceLog, network, companions] = await Promise.all([
         session.deviceLogGz ? inflateGzText(session.deviceLogGz) : null,
         session.networkGz ? inflateGzJsonArray(session.networkGz) : null,
+        Promise.all(companionLogs(session).map((c) => (c.deviceLogGz ? inflateGzText(c.deviceLogGz) : null))),
       ]);
-      return { deviceLog, network };
+      return { deviceLog, network, companions };
     },
   );
   const ensureLogsInflated = logsInflater.ensure;
@@ -1381,6 +1383,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const ensureSpansInflated = spansInflater.ensure;
   const sessionSpans = (session: SessionPayload): TracerSpan[] => session.spans || (spansInflater.cache.get(session) as TracerSpan[] | null) || [];
   const sessionDeviceLog = (session) => session.deviceLog || (logsInflater.cache.get(session) || {}).deviceLog || null;
+  // Every device log the session carries, start device first: one entry on a single-device run, one
+  // per device that captured a log on a multi-device one. `log` is null while (or if failing) a
+  // compressed log inflates; `gz` says one is coming. `label` is unique within the session: a device
+  // unbound and bound again writes a second log under the same name, labeled `buyer (2)`.
+  // `label` is what the picker shows; `key` (device and ordinal) is what a pick is remembered as,
+  // since a device may literally be named `buyer (2)` — the same rule as sessionRecordingKeys.
+  const sessionDeviceLogs = (session): Array<{ device: string | null; label: string; key: string; log: string | null; gz: string | null }> => {
+    const inflated = ((logsInflater.cache.get(session) || {}).companions || []) as Array<string | null>;
+    const entries = [
+      { device: session.deviceLogDevice || null, log: sessionDeviceLog(session), gz: session.deviceLogGz || null },
+      ...companionLogs(session).map((c, i) => ({ device: c.device || null, log: c.deviceLog || inflated[i] || null, gz: c.deviceLogGz || null })),
+    ].filter((entry, i) => i === 0 || entry.log || entry.gz);
+    const seen = new Map<string, number>();
+    const ordinals = new Map<string | null, number>();
+    return entries.map((entry, i) => {
+      const name = entry.device || `Device ${i + 1}`;
+      const n = (seen.get(name) || 0) + 1;
+      seen.set(name, n);
+      const ordinal = (ordinals.get(entry.device) || 0) + 1;
+      ordinals.set(entry.device, ordinal);
+      return { ...entry, label: n > 1 ? `${name} (${n})` : name, key: JSON.stringify([entry.device, ordinal]) };
+    });
+  };
+  const hasDeviceLog = (session) => sessionDeviceLogs(session).some((entry) => entry.log || entry.gz);
   const sessionNetwork = (session) => session.network || (logsInflater.cache.get(session) || {}).network || null;
   const transcriptInflater = makeInflater(
     (session) => session.llmMessagesGz && !session.llmMessages,
@@ -1411,6 +1437,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const logPayload = (session) => ({
     run: session.meta || {},
     deviceLog: sessionDeviceLog(session),
+    ...(companionLogs(session).length
+      ? { deviceLogDevice: session.deviceLogDevice || null, companionDeviceLogs: sessionDeviceLogs(session).slice(1).map(({ device, log }) => ({ device, deviceLog: log })) }
+      : {}),
     network: sessionNetwork(session) || [],
     // `null` plus a note, not `[]`: an empty list reads as a run that captured no events.
     ...(sessionEventsUnavailable(session)
@@ -1424,7 +1453,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     llmMessages: sessionTranscripts(session),
   });
   const hasLogs = (session) =>
-    Boolean(sessionDeviceLog(session) || session.deviceLogGz || (session.network && session.network.length) || session.networkGz || hasEvents(session) || (session.llm && session.llm.length));
+    Boolean(hasDeviceLog(session) || (session.network && session.network.length) || session.networkGz || hasEvents(session) || (session.llm && session.llm.length));
   const exportLogs = async (session) => {
     if (!hasLogs(session)) return;
     // Compressed payloads export inflated, never as opaque base64 - wait out any in-flight
@@ -1484,7 +1513,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlStreamName: null as string | null, tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, deviceSetupOpen: true, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlStreamName: null as string | null, tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, deviceSetupOpen: true, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, logDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, tabAt: null as number | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -2824,7 +2853,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const pane = mode === 'shot'
       ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${subject.pos + 1}" />${paneMark}</div>`
       : mode === 'clip'
-      ? `<div class="shotwrap"><video class="tlvframe tlvclip" id="tlvclip" muted playsinline preload="auto" disablepictureinpicture tabindex="-1" aria-label="Screen recording at ${esc(paneLabel)}, step ${subject.pos + 1}" src="${esc(clipUrl)}"></video>${captureMark ?? markHtml(cur)}</div>`
+      ? `<div class="shotwrap"><video class="tlvframe tlvclip" id="tlvclip" muted playsinline preload="auto" disablepictureinpicture tabindex="-1" aria-label="Screen recording at ${esc(paneLabel)}, step ${subject.pos + 1}" src="${esc(clipUrl)}"></video><div class="markframe">${captureMark ?? markHtml(cur)}</div></div>`
       : `<div class="noshot">No screenshot captured before this step.</div>`;
     return {
       cur,
@@ -2877,10 +2906,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The run-clock instant the current selection describes, which is what the video frame under it
   // must show. A selected dispatch has an instant of its own - its entry carries one even when the
   // log had none - and a fold can span seconds, so falling back to the row's clock here would draw
-  // that dispatch's mark over a screen from a different interaction.
+  // that dispatch's mark over a screen from a different interaction. A row's instant is when its
+  // screenshot was TAKEN (ReportTimelineEntry.capturedTs), not when its tool started: on a busy
+  // device the capture can land seconds after the start, and a recording seeked to the start shows
+  // the screen from before the step's action, under a mark and assertion about the screen after it.
+  // Playback is the exception: its schedule runs on each entry's start, and the recording it plays
+  // has to be picked on that same clock, or a device that recorded twice could have the pane on one
+  // file while playback maps its clock onto the other.
   const clockMsFor = (stepId, kid) => {
     const entry = timelineEntries()[entryIndexFor(stepId, kid)];
-    if (entry && entry.row.i === stepId && entry.kid === kid && entry.ts != null) return entry.ts;
+    const entryAt = entry && entry.row.i === stepId && entry.kid === kid ? (st.playing ? entry.ts : entry.capturedTs) : null;
+    if (entryAt != null) return entryAt;
     const child = childAt(traceRowById(stepId), kid);
     return (child && child.ts != null) ? child.ts : stepClockMs(stepId);
   };
@@ -3794,7 +3830,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     </div>`;
   };
 
-  const fmtN = (n) => n == null ? '—' : n.toLocaleString();
+  // Counts come from uploader-written logs and land in HTML: a string passed through toLocaleString
+  // unchanged, so anything that is not a finite number shows as a dash.
+  const fmtN = (n) => { if (n == null) return '—'; const value = Number(n); return Number.isFinite(value) ? value.toLocaleString() : '—'; };
   const fmtCost = (c) => c == null ? '—' : formatUsd(c);
   const decisionOf = (r) => { if (r.kind === 'decision') return r.outcome || 'decision request'; const t = (r.response || []).find((p) => p.kind === 'tool'); return t ? t.tool : ((r.response || []).find((p) => p.kind === 'text') ? 'text reply' : r.label); };
   // The repo's canonical LLM identity: `<provider id>/<model id>` — the form `trailblaze config`
@@ -4265,14 +4303,27 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     : logsInflater.inflight.has(D) ? `Decompressing ${label}…`
     : `Could not decompress the ${label} (requires DecompressionStream support).`;
 
+  // A multi-device session captured a log on each device, so the tab grows a device picker
+  // (st.logDevice, a log's key), as the Video tab does for recordings. An unknown or unset pick is
+  // the start device's log, which is also the only one a single-device run has.
+  const deviceLogTabIndex = (logs) => {
+    const k = st.logDevice != null ? logs.findIndex((entry) => entry.key === st.logDevice) : -1;
+    return k >= 0 ? k : 0;
+  };
   const renderDevice = () => {
-    const deviceLog = sessionDeviceLog(D);
+    const logs = sessionDeviceLogs(D);
+    const k = deviceLogTabIndex(logs);
+    const { label, log: deviceLog, gz } = logs[k];
+    const picker = logs.length > 1
+      ? `<div class="vdevs" role="tablist" aria-label="Device">${logs.map((entry, i) => `<button class="btn dlogdev${i === k ? ' on' : ''}" role="tab" aria-selected="${i === k}" data-dlogdev="${i}" title="Show the ${esc(entry.label)} log">${esc(entry.label)}</button>`).join('')}</div>`
+      : '';
+    const title = logs.length > 1 ? `Device log · ${label}` : 'Device log';
     if (!deviceLog) {
-      return viewPage('Device log', '', `<div class="empty">${gzEmptyNote('device log', D.deviceLogGz, 'No device log captured.')}</div>`);
+      return viewPage(title, '', `${picker}<div class="empty">${gzEmptyNote('device log', gz, 'No device log captured.')}</div>`);
     }
     const lines = deviceLog.split('\n');
     const html = lines.map((l) => `<div class="ln ${logLevelClass(l)}">${esc(l)}</div>`).join('');
-    return viewPage('Device log', `${lines.length} lines`, `
+    return viewPage(title, `${lines.length} lines`, `${picker}
       <div class="lfilter" id="dlbar"><input id="dlq" type="search" placeholder="Filter log lines…" />
         <button class="evchip on" data-lvl="">All</button>
         <button class="evchip" data-lvl="w">Warn+</button>
@@ -8375,7 +8426,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ...(D.llm.length ? [['llm', `LLM <span class="counttoken">${D.llm.length}</span>`]] : []),
       ...(yamlRootSection(D.recordingYaml, 'config') || yamlRootSection(D.originalYaml, 'config') ? [['config', 'Config']] : []),
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
-      ...(D.deviceLog || D.deviceLogGz ? [['device', 'Device logs']] : []),
+      ...(hasDeviceLog(D) ? [['device', 'Device logs']] : []),
       ...(D.visibleStrings && D.visibleStrings.length ? [['strings', 'Strings']] : []),
       ['info', 'Info'],
     ];
@@ -9749,6 +9800,41 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       openCurrentShot();
     };
   };
+  // The recording's element takes the pane's whole height budget and is clamped to the column's
+  // width (.tlvframe), so a picture wider than the box that leaves — a landscape tablet's — sits
+  // letterboxed inside it by object-fit: contain. Marks are placed in percentages of their layer,
+  // so the layer is fitted to the picture itself, not to the element and its bars; otherwise every
+  // tap and assertion is stretched over the black above and below the screen. A screenshot needs
+  // none of this: the <img> box keeps the picture's own aspect, so its marks sit on the wrap.
+  let clipMarkFrameObserver: ResizeObserver | null = null;
+  const fitClipMarkFrame = () => {
+    const vid = document.getElementById('tlvclip') as HTMLVideoElement | null;
+    const frame = vid && vid.parentElement ? vid.parentElement.querySelector<HTMLElement>('.markframe') : null;
+    if (!vid || !frame) return;
+    const box = containIn(vid.videoWidth, vid.videoHeight, vid.clientWidth, vid.clientHeight);
+    // Before the clip's dimensions are known the element's box is all there is to go on.
+    if (!box) { frame.style.left = ''; frame.style.top = ''; frame.style.width = ''; frame.style.height = ''; return; }
+    // Rounded: the fit's float noise would otherwise write lengths like 2.8e-14px.
+    const px = (n: number) => `${Math.round(n * 1000) / 1000}px`;
+    frame.style.left = px(vid.offsetLeft + box.x);
+    frame.style.top = px(vid.offsetTop + box.y);
+    frame.style.width = px(box.w);
+    frame.style.height = px(box.h);
+  };
+  // Refit when the clip's dimensions arrive and whenever its box changes size (a window resize, or
+  // event tracks opening under the pane). One observer, moved to whichever element is current.
+  const wireClipMarkFrame = () => {
+    const vid = document.getElementById('tlvclip') as HTMLVideoElement | null;
+    if (clipMarkFrameObserver) clipMarkFrameObserver.disconnect();
+    if (!vid) return;
+    vid.addEventListener('loadedmetadata', fitClipMarkFrame);
+    vid.addEventListener('resize', fitClipMarkFrame);
+    if (typeof ResizeObserver === 'function') {
+      if (!clipMarkFrameObserver) clipMarkFrameObserver = new ResizeObserver(fitClipMarkFrame);
+      clipMarkFrameObserver.observe(vid);
+    }
+    fitClipMarkFrame();
+  };
   // Per-step paint of the preview pane during playback and hover: swap the screenshot <img> source
   // (steps mode only — in video mode the frame follows the clock), the pane's accessible name (img
   // alt / frame aria-label, kept in lockstep with what the static render would produce), and the
@@ -9799,8 +9885,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (img && view.shot) { img.src = view.shot; if (cur) img.alt = `${view.paneLabel} at step ${view.pos + 1}`; }
     }
     wrap.querySelectorAll<HTMLElement>('.mark, .swipe, .markborder').forEach((el) => el.remove());
-    if (view.paneMark) wrap.insertAdjacentHTML('beforeend', view.paneMark);
+    const markLayer = wrap.querySelector<HTMLElement>('.markframe') || wrap;
+    if (view.paneMark) markLayer.insertAdjacentHTML('beforeend', view.paneMark);
     wireTimelineShotZoom();
+    wireClipMarkFrame();
   };
   // The clip's duration arriving is what promotes the pane from a screenshot to the recording, so
   // it repaints exactly that surface — not a full render, which would collapse an open dispatch
@@ -10945,8 +11033,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // While playing, keep the advancing step in view in the step list.
     if (st.playing) { const selEl = root.querySelector('.step.sel'); if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' }); }
     wireTimelineShotZoom();
+    wireClipMarkFrame();
     if (st.tab === 'video') wireVideo();
-    if (st.tab === 'device') wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
+    if (st.tab === 'device') {
+      wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
+      const logs = sessionDeviceLogs(D);
+      root.querySelectorAll<HTMLElement>('[data-dlogdev]').forEach((b) => {
+        b.onclick = () => {
+          st.logDevice = (logs[Number(b.dataset.dlogdev)] || {}).key ?? null;
+          render();
+        };
+      });
+    }
     if (st.tab === 'strings') wireStrings(); else unmountStringCrops();
     if (st.tab === 'timeline') wireLazyTimelineBodies();
     const copycmd = document.getElementById('copycmd');
@@ -11154,6 +11252,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (disposeThemeListener) { try { disposeThemeListener(); } catch (e) { /* media query already gone */ } }
     // A timeline left playing would keep stepping the previous run's state into a replaced DOM.
     try { stopTimeline(); } catch (e) { /* previous run's timers are already gone */ }
+    // The recording's mark-layer observer still holds the replaced report's <video>; a shell that
+    // opens one archive after another would otherwise keep one observer per report alive.
+    if (clipMarkFrameObserver) { clipMarkFrameObserver.disconnect(); clipMarkFrameObserver = null; }
     // The zoom overlay lives on document.body, not inside #app, so a caller that swaps the report out
     // (the shell clearing #app for the next archive) would otherwise leave it stranded over the new
     // one — and the next boot's Escape handler sees its own zoomEl as null, so it can't dismiss it.

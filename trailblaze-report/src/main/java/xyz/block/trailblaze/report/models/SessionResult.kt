@@ -134,7 +134,7 @@ data class SessionResult(
   /** Source of the trail file (handwritten vs generated), null if unknown */
   val trail_source: String,
 
-  /** Device classifier used */
+  /** Original execution lane when recorded, otherwise the legacy device classifiers. */
   val device_classifier: String? = null,
 
   // === App Under Test ===
@@ -376,4 +376,8 @@ data class SessionResult(
 
   /** Immutable GitHub permalink for the source trail YAML, when the run had one. */
   val trail_source_url: String? = null,
+
+  /** Selected trail declaration; observed device/app locale never supplies a missing value. */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val locale: String? = null,
 )

@@ -32,7 +32,9 @@ import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
  * [xyz.block.trailblaze.maestro.LoggingDriver] path does. The screen is captured
  * *before* the action executes (so tap coordinates overlay on the target element), while the
  * screenshot file write + log emission run asynchronously off the action loop — the same
- * split the Android accessibility runner uses. Errors short-circuit the run.
+ * split the Android accessibility runner uses. Errors short-circuit the run. A session that records
+ * video logs the tree alone, and the report takes the picture from the video; see
+ * [shouldScreenshotBeforeAction].
  */
 object IosDriverTrailRunner {
 
@@ -67,12 +69,13 @@ object IosDriverTrailRunner {
     deviceManager: IosDeviceManager,
     trailblazeLogger: TrailblazeLogger? = null,
     sessionProvider: TrailblazeSessionProvider? = null,
+    screenshotBeforeAction: Boolean = shouldScreenshotBeforeAction(recordingVideo = false),
   ): TrailblazeToolResult {
     val loggingEnabled = trailblazeLogger != null && sessionProvider != null
     for (action in actions) {
       // Pre-action capture so the screenshot shows the UI at the moment the action was
       // decided — and, on failure, the screen the action failed against.
-      val preScreenState = if (loggingEnabled) captureScreenStateForLogging(deviceManager, action) else null
+      val preScreenState = if (loggingEnabled) captureScreenStateForLogging(deviceManager, action, screenshotBeforeAction) else null
 
       val startTime = Clock.System.now()
       val (result, executionResult) = try {
@@ -136,18 +139,55 @@ object IosDriverTrailRunner {
   private fun captureScreenStateForLogging(
     deviceManager: IosDeviceManager,
     action: IosDriverAction,
+    withScreenshot: Boolean,
   ): ScreenState? = try {
     // Shared: this capture describes the screen the action is about to act on, which is the same
     // screen the action's own first selector poll reads.
-    deviceManager.sharedScreenStateBefore(action).also { screenState ->
+    val screenState = deviceManager.sharedScreenStateBefore(action)
+    // Read first, always: forcing it here is what keeps the logged tree the pre-action one.
+    val tree = screenState.trailblazeNodeTree
+    // A log with no tree gets no capture id, so the video can't fill in its picture: keep the
+    // screenshot then, even while recording.
+    if (withScreenshot || tree == null) {
       screenState.screenshotBytes
-      screenState.trailblazeNodeTree
+      screenState
+    } else {
+      if (screenState is MigrationScreenState) {
+        MigrationScreenState.wrap(TreeOnly(screenState.primary), screenState.driverMigrationTreeNode)
+      } else {
+        TreeOnly(screenState)
+      }
     }
   } catch (e: CancellationException) {
     throw e
   } catch (t: Throwable) {
     Console.log("[IosDriverTrailRunner] screen capture for logging failed (continuing without): ${t.message}")
     null
+  }
+
+  /**
+   * Whether [runActions] should take a screenshot before each action, for its log.
+   *
+   * Off while the session records video: the report takes each capture's picture from the video
+   * instead, as it does for a web replay, which saves the ~400 ms a simulator screenshot costs per
+   * action. [REPLAY_CAPTURE_ENV] overrides it either way: `tree` never takes one, `screenshot`
+   * always does.
+   */
+  fun shouldScreenshotBeforeAction(
+    recordingVideo: Boolean,
+    override: String? = System.getenv(REPLAY_CAPTURE_ENV),
+  ): Boolean = when (override?.trim()?.lowercase()) {
+    "tree" -> false
+    "screenshot" -> true
+    else -> !recordingVideo
+  }
+
+  const val REPLAY_CAPTURE_ENV = "TRAILBLAZE_IOS_REPLAY_CAPTURE"
+
+  /** A capture logged without its screenshot; never takes one, even when read after the action. */
+  private class TreeOnly(capture: ScreenState) : ScreenState by capture {
+    override val screenshotBytes: ByteArray? get() = null
+    override val annotatedScreenshotBytes: ByteArray? get() = null
   }
 
   /**

@@ -184,8 +184,7 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
     },
     /**
      * RunTrailYamlRequest → { ok, error }. Runs trail YAML on a connected device, in that device's
-     * existing connection. Android returns once the on-device runner accepts it; web and iOS return
-     * when the run finishes, with the failure reason as the error.
+     * existing connection. Returns when the run finishes, with the failure reason as the error.
      */
     runTrailYaml: async (
       trailblazeDeviceId: TrailblazeDeviceId,

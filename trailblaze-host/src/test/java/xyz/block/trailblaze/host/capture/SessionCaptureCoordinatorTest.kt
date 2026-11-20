@@ -82,6 +82,8 @@ class SessionCaptureCoordinatorTest {
   ) : CaptureStream {
     val startCalls = AtomicInteger(0)
     val stopCalls = AtomicInteger(0)
+    @Volatile var recording: Boolean = true
+    override val isRecording: Boolean get() = recording
     override fun start(sessionDir: File, deviceId: String, appId: String?) {
       startCalls.incrementAndGet()
       if (throwOnStart) throw RuntimeException("simulated startAll failure")
@@ -172,6 +174,43 @@ class SessionCaptureCoordinatorTest {
     assertTrue(started, "first call should return true")
     assertTrue(coord.isActive(id), "session should be active after start")
     assertEquals(1, stream.startCalls.get(), "stream.start should fire exactly once")
+  }
+
+  @Test
+  fun `isRecordingVideo follows the session's video option`() {
+    val (coord, _) = coordinatorWith()
+    val withVideo = sessionId("with-video")
+    val withoutVideo = sessionId("without-video")
+    assertFalse(coord.isRecordingVideo(withVideo), "nothing is recording before the start")
+    coord.startForSession(withVideo, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions(captureVideo = true))
+    coord.startForSession(withoutVideo, "ios-2", TrailblazeDevicePlatform.IOS, CaptureOptions(captureVideo = false))
+    assertTrue(coord.isRecordingVideo(withVideo))
+    assertFalse(coord.isRecordingVideo(withoutVideo), "a capture without video has no frames to give the report")
+    coord.stopForSession(withVideo)
+    assertFalse(coord.isRecordingVideo(withVideo), "a stopped session no longer records")
+  }
+
+  @Test
+  fun `isRecordingVideo is false once the video recorder has stopped`() {
+    val (coord, stream) = coordinatorWith()
+    val id = sessionId("recorder-died")
+    coord.startForSession(id, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions(captureVideo = true))
+    assertTrue(coord.isRecordingVideo(id))
+    stream.recording = false
+    assertFalse(coord.isRecordingVideo(id), "with no recorder running the report has no frames to take")
+  }
+
+  @Test
+  fun `isRecordingVideo is false while a companion records too`() {
+    val coord = multiDeviceCoordinator()
+    val id = sessionId("x2-video")
+    assertTrue(coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn))
+    assertTrue(coord.isRecordingVideo(id))
+    coord.bindDevices(id, listOf(seller, buyer))
+    assertFalse(
+      coord.isRecordingVideo(id),
+      "two recordings cover each capture, and the report will not pick one, so steps must keep their screenshots",
+    )
   }
 
   @Test

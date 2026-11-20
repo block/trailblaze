@@ -27,6 +27,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.report.SkippedTrails
+import xyz.block.trailblaze.report.strings.CaptureVideoFrames
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
@@ -1169,19 +1170,48 @@ class LogsRepo(
   }
 
   /**
-   * Returns the screenshot File for a log that has a screenshot.
-   * Returns null if the log has no screenshot or the file doesn't exist.
+   * Returns the image File for a log that has a screenshot: the screenshot itself, or for a capture
+   * logged without one (an iOS replay that records video skips it) the frame [saveVideoFrames] saved
+   * from the recording. Returns null if the log has neither or the file doesn't exist.
    *
    * @param log A log that implements both TrailblazeLog and HasScreenshot
-   * @return The screenshot File, or null if unavailable
+   * @return The image File, or null if unavailable
    */
   fun getScreenshotFile(log: TrailblazeLog): File? {
     if (log !is HasScreenshot) return null
-    val screenshotFile = log.screenshotFile ?: return null
     val sessionDir = File(logsDir, log.session.value)
+    val screenshotFile = log.screenshotFile ?: return CaptureVideoFrames.savedFrame(sessionDir, log)
     val file = File(sessionDir, screenshotFile)
     return if (file.exists()) file else null
   }
+
+  /**
+   * Saves a frame from [sessionId]'s recording for every capture in [logs] that has no screenshot
+   * (see [CaptureVideoFrames]), so [getScreenshotFile] can return it. Call it before reading a
+   * session's images. A capture that already has one costs a file check. Best-effort: a frame that
+   * can't be saved leaves that capture without an image. A no-op when [readOnly].
+   *
+   * Blocks while ffmpeg runs, so call it off request threads. Callers for the same session take
+   * turns: the second finds the first one's frames on disk instead of decoding the video again.
+   */
+  fun saveVideoFrames(sessionId: SessionId, logs: List<TrailblazeLog>) {
+    if (readOnly) return
+    synchronized(videoFrameLocks.computeIfAbsent(sessionId) { Any() }) {
+      try {
+        val result = CaptureVideoFrames.fill(getSessionDir(sessionId), logs)
+        if (result.written > 0) {
+          Console.log("[LogsRepo] ${sessionId.value}: saved ${result.written} video frame(s)")
+        }
+      } catch (e: Exception) {
+        Console.log(
+          "[LogsRepo] ${sessionId.value}: could not save video frames: " +
+            "${e::class.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
+        )
+      }
+    }
+  }
+
+  private val videoFrameLocks = ConcurrentHashMap<SessionId, Any>()
 
   /**
    * Finds the log file on disk for a specific TrailblazeLog.

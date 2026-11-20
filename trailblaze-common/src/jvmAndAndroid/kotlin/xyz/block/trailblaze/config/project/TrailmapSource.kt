@@ -1,7 +1,8 @@
 package xyz.block.trailblaze.config.project
 
 import java.io.File
-import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 
 /**
  * Where a [LoadedTrailblazeTrailmapManifest] came from, and how to read its sibling resources.
@@ -53,7 +54,7 @@ sealed class TrailmapSource {
     requireTrailmapRelativePath(relativePath)
     return when (this) {
       is Filesystem -> readFilesystemSibling(relativePath)
-      is Classpath -> ClasspathResourceDiscovery.loadResource("$resourceDir/$relativePath")
+      is Classpath -> resourceSource.readResource("$resourceDir/$relativePath")
     }
   }
 
@@ -116,11 +117,16 @@ sealed class TrailmapSource {
 
   /**
    * Classpath-backed trailmap — the trailmap manifest lives at `<resourceDir>/trailmap.yaml` inside
-   * a JAR or compiled-resources directory. Sibling reads go through
-   * [ClasspathResourceDiscovery.loadResource] so the same call works for both `file:`
-   * and `jar:` classpath entries.
+   * a JAR or compiled-resources directory, or (on device) under the APK's assets. Sibling reads and
+   * listings go through [resourceSource] so the same call works for `file:` and `jar:` classpath
+   * entries and for Android assets, which a plain classloader cannot enumerate.
    */
-  data class Classpath(val resourceDir: String) : TrailmapSource() {
+  // @JvmOverloads keeps the one-argument JVM constructor that callers compiled before
+  // [resourceSource] existed still link against.
+  data class Classpath @JvmOverloads constructor(
+    val resourceDir: String,
+    val resourceSource: ConfigResourceSource = bundledConfigResourceSource(),
+  ) : TrailmapSource() {
     override fun describe(): String = "classpath:$resourceDir"
   }
 
@@ -153,15 +159,9 @@ sealed class TrailmapSource {
     relativeDir: String,
     suffixes: List<String>,
   ): List<String> {
-    val resourceDirPath = "$resourceDir/$relativeDir"
-    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
-      directoryPath = resourceDirPath,
-      suffix = "", // we filter by suffix manually below — recursive walk returns relative paths
-    )
-    return matches.asSequence()
+    return discoverSiblingNames(relativeDir, suffixes)
       // Direct children only: relative path inside `relativeDir` must contain no `/`.
       .filter { !it.contains('/') }
-      .filter { name -> suffixes.any { name.endsWith(it) } }
       .map { "$relativeDir/$it" }
       .sorted()
       .toList()
@@ -196,16 +196,25 @@ sealed class TrailmapSource {
     relativeDir: String,
     suffixes: List<String>,
   ): List<String> {
-    val resourceDirPath = "$resourceDir/$relativeDir"
-    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
-      directoryPath = resourceDirPath,
-      suffix = "", // suffix filter applied per-entry below
-    )
-    return matches.asSequence()
-      .filter { name -> suffixes.any { name.endsWith(it) } }
+    return discoverSiblingNames(relativeDir, suffixes)
       .map { "$relativeDir/$it" }
       .sorted()
       .toList()
+  }
+
+  /**
+   * Names (relative to [relativeDir], any depth) of the files ending in one of [suffixes].
+   * Enumerates once per suffix rather than with an empty one, so [resourceSource] only ever reads
+   * the files callers asked for — never the binary siblings (`.webp`, `.json`) next to them.
+   */
+  private fun Classpath.discoverSiblingNames(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): Sequence<String> {
+    val resourceDirPath = "$resourceDir/$relativeDir"
+    return suffixes.asSequence()
+      .flatMap { suffix -> resourceSource.discoverFilenamesRecursive(resourceDirPath, suffix) }
+      .distinct()
   }
 
   private fun Filesystem.readFilesystemSibling(relativePath: String): String? {

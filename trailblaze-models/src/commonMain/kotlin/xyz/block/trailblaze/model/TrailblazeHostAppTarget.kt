@@ -179,6 +179,13 @@ abstract class TrailblazeHostAppTarget(
   open fun getElectronAppConfig(): xyz.block.trailblaze.yaml.ElectronAppConfig? = null
 
   /**
+   * The target's device classifier, which extends the framework's device key with the target's
+   * own dimensions. Default null keeps the framework's key; YAML-backed targets return
+   * [xyz.block.trailblaze.config.AppTargetYamlConfig.classifier].
+   */
+  open fun getDeviceClassifierConfig(): xyz.block.trailblaze.config.TargetDeviceClassifierConfig? = null
+
+  /**
    * When `true`, on-device app-id resolution falls back to the configured app id even when the
    * package isn't installed on the device. Use this for targets whose configured id is a stand-in
    * (e.g. the generic default target) rather than a real product package — the absence of the

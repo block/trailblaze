@@ -6,8 +6,13 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryIndexResult
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryTargetResult
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolSet
+import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolsetInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import xyz.block.trailblaze.scripting.ScriptedToolCatalog
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.isCallableOnlyFromTools
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 
 /**
@@ -19,6 +24,10 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  * the palette's "available tools" list is by construction the same set the agent runtime sees:
  * platform toolsets filtered by driver, plus the active target app's custom + YAML + inline
  * scripted tools. New custom toolsets a target adds tomorrow show up here without UI changes.
+ * Both calls pass `all = true`: a recording can call the tools the LLM is not offered (ones that
+ * hide themselves or that the target excludes), so the palette lists them too — except the ones
+ * the recorder never writes (`isRecordable = false`, e.g. setup plumbing), which no recording can
+ * carry.
  *
  * **Two-call shape.** `toolbox()` in its default index mode returns target tools from *every*
  * target the daemon has loaded (so an LLM agent sees the full superset). The recording UI
@@ -58,23 +67,39 @@ suspend fun discoverAvailableTools(
   // `suppressTargetTools = true` and we get only the platform side. Decoding this as
   // ToolDiscoveryIndexResult is correct: `default` is the one target value that does NOT
   // route through `handleTargetMode`.
-  val platformJson = toolset.toolbox(target = DefaultTrailblazeHostAppTarget.id, detail = true)
+  // One descriptor walk for every recordability check below.
+  val catalog = ScriptedToolCatalog()
+  val platformJson = toolset.toolbox(target = DefaultTrailblazeHostAppTarget.id, detail = true, all = true)
   val platformResult = paletteJson.decodeFromString<ToolDiscoveryIndexResult>(platformJson)
-  val platformDescriptors = platformResult.platformToolsets.flatMap { it.toolDetails ?: emptyList() }
+  val platformDescriptors = platformResult.platformToolsets.flatMap { it.recordableTools(toolset, catalog) }
 
   // Target-scoped tools — only the selected target. Without a selected target we have nothing
   // to scope to, so return platform-only rather than leaking every target's tools.
   val targetDescriptors: List<TrailblazeToolDescriptor> = if (currentTarget != null) {
-    val targetJson = toolset.toolbox(target = currentTarget.id, detail = true)
+    val targetJson = toolset.toolbox(target = currentTarget.id, detail = true, all = true)
     val targetResult = paletteJson.decodeFromString<ToolDiscoveryTargetResult>(targetJson)
-    targetResult.toolGroups?.flatMap { it.toolDetails ?: emptyList() } ?: emptyList()
+    targetResult.toolGroups?.flatMap { it.recordableTools(toolset, catalog) } ?: emptyList()
   } else {
     emptyList()
   }
 
+  // A tool only another tool may call (`exec`) is no step a recording can hold: the
+  // trail decoder refuses it, so the palette would offer a card that can't be inserted.
+  val allToolClasses = TrailblazeSerializationInitializer.buildAllTools()
   return (platformDescriptors + targetDescriptors)
+    .filterNot { allToolClasses[ToolName(it.name)]?.isCallableOnlyFromTools() == true }
     .distinctBy { it.name }
     .sortedBy { it.name }
 }
+
+/**
+ * This toolset's tools a recording can carry: everything the LLM is offered, plus the not-offered
+ * ones the recorder writes. An offered tool stays even if it is not recordable, as it always has.
+ */
+private fun ToolDiscoveryToolsetInfo.recordableTools(
+  toolset: ToolDiscoveryToolSet,
+  catalog: ScriptedToolCatalog,
+): List<TrailblazeToolDescriptor> =
+  toolDetails.orEmpty().filter { notOffered?.containsKey(it.name) != true || toolset.recordable(it.name, catalog) }
 
 private val paletteJson = Json { ignoreUnknownKeys = true }

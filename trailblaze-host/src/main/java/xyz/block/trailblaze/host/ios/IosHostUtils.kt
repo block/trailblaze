@@ -19,17 +19,19 @@ object IosHostUtils {
    */
   fun killAppOnSimulator(deviceId: String, appId: String): Boolean {
     if (!isMacOs()) return false
-    val result = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      SimctlCommand.argv(
-        "terminate",
-        deviceId,
-        appId,
-      ),
-    ).runProcess {}
-    return result.exitCode == 0 || result.exitCode == SIMCTL_NOTHING_TO_TERMINATE
+    // Same bound as the tools' terminate: a cold or loaded simulator can take well past 10s.
+    val result = SimctlCli.terminate(deviceId, appId, timeoutSeconds = TERMINATE_TIMEOUT_SECONDS)
+    return result.success || result.exitCode == SIMCTL_NOTHING_TO_TERMINATE
   }
 
   private const val SIMCTL_NOTHING_TO_TERMINATE = 3
+  private const val TERMINATE_TIMEOUT_SECONDS = 120L
+
+  /** `simctl listapps` stdout; blank when it fails or does not answer within [LISTAPPS_TIMEOUT_SECONDS]. */
+  private fun listApps(deviceId: String): String =
+    SimctlCommand.run(listOf("listapps", deviceId), LISTAPPS_TIMEOUT_SECONDS).stdout
+
+  private const val LISTAPPS_TIMEOUT_SECONDS = 60L
 
   /**
    * Bundle identifiers of the apps installed on the simulator. Delegates to the canonical
@@ -112,16 +114,8 @@ object IosHostUtils {
     val deviceId = trailblazeDeviceId.instanceId
     return try {
       // Get the app path from listapps output
-      val listAppsOutput = TrailblazeProcessBuilderUtils.createProcessBuilder(
-        SimctlCommand.argv(
-          "listapps",
-          deviceId,
-        ),
-      ).runProcess {}
-
-      // Parse the app path from listapps output
       // Format: "com.example.app" = { ... Path = "/path/to/App.app"; ... }
-      val appPath = parseAppPathFromListApps(listAppsOutput.fullOutput, appId)
+      val appPath = parseAppPathFromListApps(listApps(deviceId), appId)
       if (appPath.isNullOrBlank()) {
         return null
       }
@@ -158,10 +152,7 @@ object IosHostUtils {
   fun getAppBundlePath(deviceId: String, appId: String): String? {
     if (!isMacOs()) return null
     return try {
-      val listAppsOutput = TrailblazeProcessBuilderUtils.createProcessBuilder(
-        SimctlCommand.argv("listapps", deviceId),
-      ).runProcess {}
-      parseAppPathFromListApps(listAppsOutput.fullOutput, appId)
+      parseAppPathFromListApps(listApps(deviceId), appId)
     } catch (e: Exception) {
       null
     }

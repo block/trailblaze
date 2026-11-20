@@ -12,6 +12,7 @@ import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.IosAppProcess
 import xyz.block.trailblaze.util.IosHostSimctlUtils
+import xyz.block.trailblaze.util.SimctlCommand
 import xyz.block.trailblaze.util.isMacOs
 
 /**
@@ -108,7 +109,7 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   /** Blocks until [deviceId] has booted; false when it does not within [BOOT_WAIT_SECONDS] or capture stops. */
   private fun awaitBoot(deviceId: String): Boolean {
     val wait = try {
-      ProcessBuilder("xcrun", "simctl", "bootstatus", deviceId)
+      ProcessBuilder(SimctlCommand.argv("bootstatus", deviceId))
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectErrorStream(true)
         .start()
@@ -202,7 +203,7 @@ internal data class IosLogStreamCommand(val argv: List<String>, val isAppScoped:
 internal const val IOS_UNSCOPED_LOG_PREDICATE = "messageType == error OR messageType == fault"
 
 /**
- * Builds the `xcrun simctl spawn <device> log stream` argv. Scoped to the app under test when
+ * Builds the `simctl spawn <device> log stream` argv. Scoped to the app under test when
  * [appId] yields a predicate (see [buildIosLogStreamPredicate]); otherwise limited to
  * [IOS_UNSCOPED_LOG_PREDICATE] rather than capturing the whole simulator log.
  */
@@ -212,9 +213,7 @@ internal fun buildIosLogStreamCommand(
   installed: IosAppProcess? = null,
 ): IosLogStreamCommand {
   val argv =
-    mutableListOf(
-      "xcrun",
-      "simctl",
+    SimctlCommand.argv(
       "spawn",
       deviceId,
       "log",
@@ -226,7 +225,7 @@ internal fun buildIosLogStreamCommand(
       // output, not the firehose. The iOS analog of not dumping every logcat VERBOSE line.
       "--level",
       "info",
-    )
+    ).toMutableList()
   val appPredicate = buildIosLogStreamPredicate(appId, installed)
   argv.addAll(listOf("--predicate", appPredicate ?: IOS_UNSCOPED_LOG_PREDICATE))
   return IosLogStreamCommand(argv, isAppScoped = appPredicate != null)

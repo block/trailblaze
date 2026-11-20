@@ -771,8 +771,25 @@ internal fun readShellPinDevice(port: Int): String? {
  * wording.
  */
 internal sealed class DeviceAutodetectResult {
-  /** Exactly one device connected; safe to use without ambiguity. */
-  data class Resolved(val deviceSpec: String) : DeviceAutodetectResult()
+  /**
+   * One device to use without ambiguity: the only one connected, or the machine's only own device
+   * when borrowed ones are listed too. [connectedSpecs] is every connected device, borrowed ones
+   * included, for callers that fan out over all of them.
+   */
+  data class Resolved(
+    val deviceSpec: String,
+    val connectedSpecs: List<String> = listOf(deviceSpec),
+  ) : DeviceAutodetectResult() {
+    /**
+     * The default device for a run asked to use [driverPlatform], or null to choose among
+     * [connectedSpecs] instead: when [deviceSpec] was picked from several devices only for being
+     * this machine's own, a driver for another platform must not be pinned to it.
+     */
+    fun defaultFor(driverPlatform: TrailblazeDevicePlatform?): String? = deviceSpec.takeUnless {
+      connectedSpecs.size > 1 && driverPlatform != null &&
+        TrailblazeDevicePlatform.fromString(deviceSpec.substringBefore('/')) != driverPlatform
+    }
+  }
   /** No devices connected — caller should advise the user to start one. */
   data object NoDevices : DeviceAutodetectResult()
   /** Multiple devices connected — caller should list them and ask to pick. */
@@ -859,6 +876,21 @@ internal fun reportDaemonConnectFailure(e: Throwable) {
  * Costs one extra daemon round-trip in the autodetect-success case (oneshot
  * MCP connect → tool call → close). Cheap enough to not warrant caching.
  */
+/**
+ * Picks the device a command uses when none is named. The machine's own devices win over borrowed
+ * ones, so a single own emulator resolves even with a workstation's devices listed; the full list,
+ * borrowed devices included, still reaches callers that fan out over every device.
+ */
+internal fun classifyConnectedDevices(devices: List<CliMcpClient.DeviceListEntry>): DeviceAutodetectResult {
+  val all = devices.map { it.toFullyQualifiedDeviceId() }
+  val own = with(CliMcpClient) { devices.preferOwnDevices() }
+  return when {
+    devices.isEmpty() -> DeviceAutodetectResult.NoDevices
+    own.size == 1 -> DeviceAutodetectResult.Resolved(own.single().toFullyQualifiedDeviceId(), connectedSpecs = all)
+    else -> DeviceAutodetectResult.Multiple(all)
+  }
+}
+
 internal suspend fun autodetectSingleConnectedDevice(port: Int): DeviceAutodetectResult {
   // connectOrStartDaemonOneShot already prints its own daemon-unreachable
   // envelope on failure, so flag this branch as already-reported to keep
@@ -905,12 +937,7 @@ internal suspend fun autodetectSingleConnectedDevice(port: Int): DeviceAutodetec
       // user intent. Authoring a web trail explicitly via `--device web` or
       // `eval $(trailblaze device connect web)` still works; we just don't
       // pick it implicitly.
-      val devices = with(CliMcpClient) { parseDeviceList(result.content).filterRealDevices() }
-      when (devices.size) {
-        0 -> DeviceAutodetectResult.NoDevices
-        1 -> DeviceAutodetectResult.Resolved(devices.single().toFullyQualifiedDeviceId())
-        else -> DeviceAutodetectResult.Multiple(devices.map { it.toFullyQualifiedDeviceId() })
-      }
+      classifyConnectedDevices(with(CliMcpClient) { parseDeviceList(result.content).filterRealDevices() })
     } catch (e: kotlinx.coroutines.CancellationException) {
       // Never swallow cancellation — propagate so Ctrl+C / structured
       // cancellation surfaces as a cancel, not a "daemon unreachable"

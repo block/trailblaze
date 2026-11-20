@@ -13,7 +13,6 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.server.endpoints.CliDaemonCapabilities
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.util.Console
@@ -283,13 +282,9 @@ class SessionStartCommand : Callable<Int>, QuietUnlessVerbose {
           evictShellPinIfMatches(resolvedDevice, deviceError)
           return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
         }
-        // Save the platform to config so other commands (e.g., `trail`) that still
-        // fall back to cliDevicePlatform when --device is omitted see the most recent
-        // value. The session lifecycle no longer falls back to it itself.
-        val platformStr = resolvedDevice.split("/", limit = 2)[0]
-        if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
-          CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
-        }
+        // Not saved as the machine-wide default (`trailblaze config device`): `trailblaze run`
+        // in every terminal falls back to it, so one terminal's session would pick the device
+        // for another terminal's run.
         // Session-scope the target on the daemon for the bound device when
         // the user pinned one — either via explicit `--target` or via
         // `TRAILBLAZE_TARGET` in the calling shell. No-op when neither tier

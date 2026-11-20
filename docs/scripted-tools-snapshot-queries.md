@@ -181,6 +181,28 @@ const [wizard, home] = await ctx.tools.findSelectorMatches({
 if (wizard.length > 0) { /* handle the wizard */ }
 ```
 
+### Stopping early when the answer is usually "no"
+
+A check for something that usually never shows up (an optional prompt, a one-time
+sheet) normally runs its whole `timeoutMs`. Add `stopWhenSettled: true` and the wait
+ends with an empty answer once nothing has matched, the screen has stayed the same for
+1.5 s, and the app is idle:
+
+```ts
+const [prompt] = await ctx.tools.findSelectorMatches({
+  selectors: [optionalPromptAnchor],
+  timeoutMs: 15_000,
+  stopWhenSettled: true,
+});
+```
+
+- **Only for waits on something to appear.** There is no early stop for waiting until
+  something is gone: a static loading screen looks settled and would stop that wait with
+  a false "still there".
+- **The trade-off:** a static loading screen can also answer an appear-wait "no" early.
+  Leave it off when the thing you wait for shows up only after a long, silent load.
+- Android accessibility driver only; elsewhere the wait runs to its timeout as before.
+
 ## When NOT to use `findSelectorMatches`
 
 - **For mutation** — it never taps, scrolls, or types. Pair it with

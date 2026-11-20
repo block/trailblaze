@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.recording.rpc
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.host.lease.RemoteDevicePools
 import xyz.block.trailblaze.recording.DeviceScreenStream
 import java.util.concurrent.ConcurrentHashMap
 
@@ -24,8 +25,13 @@ import java.util.concurrent.ConcurrentHashMap
  *   racing past the "already connected?" check. Its final publication is atomic with [attach],
  *   which can publish an externally-owned stream while physical connection setup is suspended.
  * - [remove]: removes from the map and closes the stream if this manager owns it.
+ *
+ * A borrowed emulator stays leased while it has a session here ([RemoteDevicePools.viewerOpened]),
+ * however long someone watches it between gestures.
  */
-class HostDeviceSessionManager {
+class HostDeviceSessionManager(
+  private val devicePools: RemoteDevicePools = RemoteDevicePools.shared,
+) {
 
   private class Session(
     val stream: DeviceScreenStream,
@@ -86,6 +92,15 @@ class HostDeviceSessionManager {
   private val claims = ConcurrentHashMap<TrailblazeDeviceId, Binding>()
 
   private val connectMutexes = ConcurrentHashMap<TrailblazeDeviceId, Mutex>()
+
+  /**
+   * Held while a device's session is published or dropped together with its viewer count, so an
+   * overlapping connect and disconnect can't leave the count behind with no session to close it.
+   */
+  private val publishLocks = ConcurrentHashMap<TrailblazeDeviceId, Any>()
+
+  private inline fun <T> publishing(deviceId: TrailblazeDeviceId, block: () -> T): T =
+    synchronized(publishLocks.computeIfAbsent(deviceId) { Any() }, block)
 
   fun get(deviceId: TrailblazeDeviceId): DeviceScreenStream? = sessions[deviceId]?.stream
 
@@ -171,7 +186,10 @@ class HostDeviceSessionManager {
       resultFromCurrentState(deviceId, binding)?.let { return@withLock it }
       val candidate = connect()
         ?: return@withLock resultFromCurrentState(deviceId, binding) ?: ConnectResult.Unavailable
-      val winner = sessions.putIfAbsent(deviceId, Session(candidate, externallyOwned = false, binding = binding))
+      val winner = publishing(deviceId) {
+        sessions.putIfAbsent(deviceId, Session(candidate, externallyOwned = false, binding = binding))
+          .also { if (it == null) devicePools.viewerOpened(deviceId) }
+      }
       if (winner == null) {
         ConnectResult.Ready(candidate)
       } else {
@@ -372,7 +390,11 @@ class HostDeviceSessionManager {
    * - a caller that can't say what its connection is driving makes that refusal impossible.
    */
   fun attach(deviceId: TrailblazeDeviceId, stream: DeviceScreenStream, binding: Binding = Binding()) {
-    sessions.putIfAbsent(deviceId, Session(stream, externallyOwned = true, binding = binding))
+    publishing(deviceId) {
+      if (sessions.putIfAbsent(deviceId, Session(stream, externallyOwned = true, binding = binding)) == null) {
+        devicePools.viewerOpened(deviceId)
+      }
+    }
   }
 
   /**
@@ -381,7 +403,11 @@ class HostDeviceSessionManager {
    * in the same slot is left untouched: it belongs to the viewer path, not the detaching caller.
    */
   fun detach(deviceId: TrailblazeDeviceId) {
-    sessions.computeIfPresent(deviceId) { _, session -> if (session.externallyOwned) null else session }
+    publishing(deviceId) {
+      var detached = false
+      sessions.computeIfPresent(deviceId) { _, session -> if (session.externallyOwned) null.also { detached = true } else session }
+      if (detached) devicePools.viewerClosed(deviceId)
+    }
   }
 
   /**
@@ -390,9 +416,18 @@ class HostDeviceSessionManager {
    * (Trail Runner's recorder) keeps using it and re-publishes via [attach] on its next connect.
    */
   fun remove(deviceId: TrailblazeDeviceId) {
-    val session = sessions.remove(deviceId) ?: return
+    val session = publishing(deviceId) {
+      sessions.remove(deviceId)?.also { devicePools.viewerClosed(deviceId) }
+    } ?: return
     if (!session.externallyOwned) (session.stream as? AutoCloseable)?.close()
   }
 
   fun isConnected(deviceId: TrailblazeDeviceId): Boolean = sessions.containsKey(deviceId)
+
+  /**
+   * Before a viewer or recorder sends [deviceId] a gesture, which reaches it without adb: why it
+   * can't be used now (a borrower is using an emulator lent from here, or a borrowed one can't be
+   * leased), or null. See [RemoteDevicePools.beforeInteractiveUse].
+   */
+  fun beforeGesture(deviceId: TrailblazeDeviceId): String? = devicePools.beforeInteractiveUse(deviceId)
 }

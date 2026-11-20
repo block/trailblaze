@@ -8,6 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.testing.ClasspathFixture
+import xyz.block.trailblaze.testing.InMemoryConfigResourceSource
 
 /**
  * Tests for [TrailmapSource] containment validation. The [TrailmapSource.readSibling] entry
@@ -376,6 +377,58 @@ class TrailmapSourceTest {
     assertFailsWith<IllegalArgumentException> {
       source.listSiblings(relativeDir = "", suffixes = listOf(".yaml"))
     }
+  }
+
+  // The trailmap's resource source is what reads and lists its siblings, so a source that can
+  // enumerate where a classloader cannot (Android APK assets) works the same way.
+  private val sampleDir = "trails/config/trailmaps/sample"
+
+  private fun inMemorySource() = InMemoryConfigResourceSource(
+    mapOf(
+      "$sampleDir/trailmap.yaml" to "id: sample",
+      "$sampleDir/waypoints/home.waypoint.yaml" to "id: sample/home",
+      "$sampleDir/waypoints/android/more.waypoint.yaml" to "id: sample/more",
+      "$sampleDir/waypoints/android/more.example.json" to "{}",
+      "$sampleDir/waypoints/android/more.webp" to "binary",
+      "$sampleDir/tools/foo.tool.yaml" to "name: foo",
+    ),
+  )
+
+  @Test
+  fun `Classpath readSibling reads through its resource source, not the classloader`() {
+    val resources = inMemorySource()
+    val source = TrailmapSource.Classpath(resourceDir = sampleDir, resourceSource = resources)
+
+    assertEquals("id: sample/home", source.readSibling("waypoints/home.waypoint.yaml"))
+    assertNull(source.readSibling("waypoints/missing.waypoint.yaml"))
+    assertEquals(
+      listOf("$sampleDir/waypoints/home.waypoint.yaml", "$sampleDir/waypoints/missing.waypoint.yaml"),
+      resources.readPaths,
+    )
+  }
+
+  @Test
+  fun `Classpath listSiblingsRecursive lists through its resource source and enumerates only the requested suffixes`() {
+    val resources = inMemorySource()
+    val source = TrailmapSource.Classpath(resourceDir = sampleDir, resourceSource = resources)
+
+    assertEquals(
+      listOf("waypoints/android/more.waypoint.yaml", "waypoints/home.waypoint.yaml"),
+      source.listSiblingsRecursive(relativeDir = "waypoints", suffixes = listOf(".waypoint.yaml")),
+    )
+    // Never an empty suffix: that would read the binary .webp / .json siblings as text.
+    assertEquals(listOf(".waypoint.yaml"), resources.enumeratedSuffixes)
+    assertTrue(source.listSiblingsRecursive(relativeDir = "nothing", suffixes = listOf(".yaml")).isEmpty())
+  }
+
+  @Test
+  fun `Classpath listSiblings returns direct children from its resource source`() {
+    val source = TrailmapSource.Classpath(resourceDir = sampleDir, resourceSource = inMemorySource())
+
+    assertEquals(
+      listOf("waypoints/home.waypoint.yaml"),
+      source.listSiblings(relativeDir = "waypoints", suffixes = listOf(".waypoint.yaml")),
+    )
   }
 
   private fun newTempDir(): File = classpath.newTempDir(prefix = "trailmap-source-test")

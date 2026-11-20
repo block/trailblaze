@@ -62,6 +62,8 @@ object ResolvedTargetReportEmitter {
     resolvedTargets: List<AppTargetYamlConfig>,
     resolvedTrailmaps: List<ResolvedTrailmap>,
     outputDir: File,
+    /** Toolsets whose `memory:` blocks the report's memory-key section reads; the workspace's own included. */
+    memoryKeyCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
   ): List<File> {
     if (resolvedTargets.isEmpty()) {
       deleteOrphanReports(outputDir, keepNames = emptySet())
@@ -119,6 +121,7 @@ object ResolvedTargetReportEmitter {
         resolutionTrace = resolutionTrace,
         catalog = catalog,
         toolDetails = toolDetails,
+        memoryKeys = TrailmapMemoryKeys.inReach(trailmap, trailmapsById, memoryKeyCatalog),
       )
       val outFile = File(outputDir, "${target.id}.report.md")
       keepNames += outFile.name
@@ -298,6 +301,7 @@ object ResolvedTargetReportEmitter {
     resolutionTrace: ResolutionTrace,
     catalog: List<ToolSetCatalogEntry>,
     toolDetails: Map<String, ResolvedTargetToolDetailRenderer.ToolDetail>,
+    memoryKeys: TrailmapMemoryKeys.InReach,
   ): String {
     val platformKeys = (
       target.platforms.orEmpty().keys +
@@ -346,6 +350,8 @@ object ResolvedTargetReportEmitter {
 
       renderAvailabilityMatrix(target, agentToolbox, runtimeRegistry, catalog, toolDetails)
 
+      renderMemoryKeys(memoryKeys)
+
       appendLine("## Resolution trace")
       appendLine()
       appendLine(
@@ -380,6 +386,34 @@ object ResolvedTargetReportEmitter {
       appendLine("- $totalExcluded tool(s) excluded by `excluded_tools:`")
       appendLine("- $totalScripted scripted tool(s) in typed surface (trailmap-local + transitive exports)")
     }
+  }
+
+  /**
+   * Every memory key this target's session can meet — declared by the trailmap, its dependencies or
+   * the toolsets they load — in one flat list, because memory is one flat namespace.
+   */
+  private fun StringBuilder.renderMemoryKeys(memoryKeys: TrailmapMemoryKeys.InReach) {
+    appendLine("## Memory keys")
+    appendLine()
+    if (memoryKeys.keys.isEmpty()) {
+      appendLine("_(no `memory:` block in this trailmap's reach declares a key)_")
+      appendLine()
+      return
+    }
+    appendLine(
+      "Declared by this trailmap, its dependencies, or the toolsets they load. Memory is one flat " +
+        "namespace: any tool can read any key, so each is declared once.",
+    )
+    appendLine()
+    appendLine("| Key | Declared by | Description |")
+    appendLine("|-----|-------------|-------------|")
+    memoryKeys.keys.forEach { key ->
+      val description = key.declaration.description.trim().replace("|", "\\|").replace("\n", " ")
+      appendLine("| `${key.name}` | ${key.declaredBy} | $description |")
+    }
+    appendLine()
+    memoryKeys.conflicts.forEach { appendLine("> **Declared twice:** ${it.message()}") }
+    if (memoryKeys.conflicts.isNotEmpty()) appendLine()
   }
 
   private fun StringBuilder.renderRuntimeRegistry(

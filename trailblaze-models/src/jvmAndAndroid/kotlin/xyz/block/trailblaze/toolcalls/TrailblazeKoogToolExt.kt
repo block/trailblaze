@@ -4,15 +4,7 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.InternalSerializationApi
-import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.descriptors.PrimitiveKind
-import kotlinx.serialization.descriptors.SerialKind
-import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.serializer
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.util.Console
@@ -258,88 +250,6 @@ fun TrailblazeToolDescriptor.withSelectorParamsRestored(
   )
 }
 
-/** One element of a hand-written serializer's wire shape. */
-private data class SerializedElement(val name: String, val type: String, val optional: Boolean)
-
-/** The descriptor-side type string for a serialized element's kind. */
-@OptIn(ExperimentalSerializationApi::class)
-private fun SerialKind.toParameterTypeName(): String = when (this) {
-  StructureKind.LIST -> "ARRAY"
-  StructureKind.MAP, StructureKind.CLASS, StructureKind.OBJECT -> "OBJECT"
-  PrimitiveKind.BOOLEAN -> "BOOLEAN"
-  PrimitiveKind.BYTE, PrimitiveKind.SHORT, PrimitiveKind.INT, PrimitiveKind.LONG -> "INTEGER"
-  PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE -> "FLOAT"
-  // Enums and anything unmodelled read as a scalar, which is what the YAML author writes.
-  else -> "STRING"
-}
-
-/**
- * The wire shape of [this] tool's **hand-written** serializer, or null when it has none — which is
- * every tool but one. The compiler-generated serializer reads exactly the primary-constructor
- * params reflection already found, so there is nothing to reconcile for those.
- */
-@OptIn(ExperimentalSerializationApi::class, InternalSerializationApi::class)
-private fun KClass<out TrailblazeTool>.handWrittenSerializedElements(): List<SerializedElement>? {
-  val custom = findAnnotation<Serializable>()?.with?.takeIf { it != KSerializer::class } ?: return null
-  val descriptor = try {
-    serializer().descriptor
-  } catch (_: Throwable) {
-    // A serializer that cannot be resolved reflectively is a reason to keep the constructor-derived
-    // answer, not to fail a help lookup.
-    Console.log("Could not read the serial descriptor of $custom for $qualifiedName")
-    return null
-  }
-  if (descriptor.kind != StructureKind.CLASS) return null
-  return (0 until descriptor.elementsCount).map { index ->
-    SerializedElement(
-      name = descriptor.getElementName(index),
-      type = descriptor.getElementDescriptor(index).kind.toParameterTypeName(),
-      optional = descriptor.isElementOptional(index),
-    )
-  }
-}
-
-/**
- * This descriptor's parameters reconciled against [toolClass]'s serializer — the thing that
- * actually decodes a trail step — for a **human-facing** description of the tool. A no-op for
- * every tool whose serializer the compiler generated, which is all but one of them.
- *
- * `mobile_maestro` is the exception and the reason this exists: it holds a single `yaml` string in
- * Kotlin and reads and writes `commands: [...]` on the wire. Describing it from the primary
- * constructor printed a trail step keyed on `yaml`, which its own deserializer rejects outright —
- * help that cannot be copied. It is `surfaceToLlm = false`, so this lookup is the only surface
- * that describes it at all.
- *
- * Reconciles rather than replaces: a parameter the serializer also knows keeps the type,
- * `@LLMDescription` and required/optional verdict the reflection path gave it, because a serial
- * descriptor carries none of those. Only names the serializer does not know are dropped, and only
- * names it alone knows are added.
- */
-fun TrailblazeToolDescriptor.withSerializedParameterNames(
-  toolClass: KClass<out TrailblazeTool>,
-): TrailblazeToolDescriptor {
-  val serialized = toolClass.handWrittenSerializedElements() ?: return this
-  val described = requiredParameters + optionalParameters
-  if (serialized.map { it.name }.toSet() == described.map { it.name }.toSet()) return this
-
-  val requiredByName = requiredParameters.associateBy { it.name }
-  val optionalByName = optionalParameters.associateBy { it.name }
-  val newRequired = mutableListOf<TrailblazeToolParameterDescriptor>()
-  val newOptional = mutableListOf<TrailblazeToolParameterDescriptor>()
-  serialized.forEach { element ->
-    val known = requiredByName[element.name] ?: optionalByName[element.name]
-    when {
-      known != null && optionalByName.containsKey(element.name) -> newOptional += known
-      known != null -> newRequired += known
-      else -> {
-        val added = TrailblazeToolParameterDescriptor(name = element.name, type = element.type)
-        if (element.optional) newOptional += added else newRequired += added
-      }
-    }
-  }
-  return copy(requiredParameters = newRequired, optionalParameters = newOptional)
-}
-
 /**
  * A stripped selector param re-surfaced with a hand-picked TypeScript type so the trail-recording
  * type-validation surface can model it. See [selectorParamsForTs].
@@ -462,7 +372,8 @@ fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescrip
  * (where authors choose them explicitly).
  */
 fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
-  if (!trailblazeToolClassAnnotation().surfaceToLlm) return null
+  // A tool only another tool may call is never offered, whatever its `surfaceToLlm` says.
+  if (!trailblazeToolClassAnnotation().surfaceToLlm || isCallableOnlyFromTools()) return null
   return buildToolDescriptorIgnoringSurface()
 }
 

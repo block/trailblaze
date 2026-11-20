@@ -15,6 +15,7 @@ import ai.koog.utils.time.KoogClock
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
+import assertk.assertions.isGreaterThan
 import assertk.assertions.isInstanceOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.datetime.Clock
@@ -52,6 +53,9 @@ import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.prompt.TRAIL_CONTEXT_CLOSE
+import xyz.block.trailblaze.prompt.TRAIL_CONTEXT_HEADER
+import xyz.block.trailblaze.prompt.TRAIL_CONTEXT_OPEN
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -174,6 +178,28 @@ class KoogTestAgentRunnerRecoverTest {
     assertThat(model.systemPromptOnFirstRequest).doesNotContain("always use dark mode")
   }
 
+  /** A trail's context reaches the agent as labelled context, not an instruction; the step is the only task. */
+  @Test
+  fun `trail context reaches the agent as context and the step stays the task`() {
+    val model = ScriptedModel(firstStatus = "COMPLETED")
+    val context = "This trail opens a check, adds two items, then saves it as Table 4."
+
+    recover(
+      DirectionStep(step = "Tap Checkout on the cart tile"),
+      recorded = listOf(TapOnByElementSelector(reason = "checkout")),
+      model = model,
+    ) { runner -> runner.appendToSystemPrompt(context) }
+
+    val system = model.systemPromptOnFirstRequest
+    val header = system.indexOf(TRAIL_CONTEXT_HEADER)
+    assertThat(header).isGreaterThan(-1)
+    assertThat(system.indexOf(context)).isGreaterThan(system.indexOf(TRAIL_CONTEXT_OPEN))
+    assertThat(system.indexOf(TRAIL_CONTEXT_CLOSE)).isGreaterThan(system.indexOf(context))
+    assertThat(system.indexOf(TRAIL_CONTEXT_OPEN)).isGreaterThan(header)
+    assertThat(model.userTextOnFirstRequest).contains("Tap Checkout on the cart tile")
+    assertThat(model.userTextOnFirstRequest).doesNotContain(context)
+  }
+
   private fun recover(
     step: DirectionStep,
     recorded: List<TrailblazeTool>,
@@ -236,6 +262,7 @@ class KoogTestAgentRunnerRecoverTest {
   private class ScriptedModel(private val firstStatus: String) {
     val advertisedOnFirstRequest = mutableListOf<String>()
     var systemPromptOnFirstRequest = ""
+    var userTextOnFirstRequest = ""
     private var requests = 0
 
     fun client(provider: LLMProvider): LLMClient = object : LLMClient() {
@@ -245,6 +272,8 @@ class KoogTestAgentRunnerRecoverTest {
         if (requests == 1) {
           advertisedOnFirstRequest += tools.map { it.name }
           systemPromptOnFirstRequest = prompt.messages.filterIsInstance<Message.System>().flatMap { it.parts }
+            .filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
+          userTextOnFirstRequest = prompt.messages.filterIsInstance<Message.User>().flatMap { it.parts }
             .filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
         }
         val status = if (requests == 1) firstStatus else "FAILED"

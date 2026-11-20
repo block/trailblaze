@@ -105,6 +105,41 @@ describe("createMockClient: stub", () => {
   });
 });
 
+describe("createMockClient: stubSequence", () => {
+  const call = (client: ReturnType<typeof createMockClient>, tool: string) =>
+    (client.tools as Record<string, (a: Record<string, unknown>) => Promise<string>>)[tool]({});
+
+  test("calls take the responses in order, and the last one repeats", async () => {
+    const client = createMockClient();
+    client.stubSequence("read", [{ textContent: "light" }, { textContent: "dark" }]);
+    expect(await call(client, "read")).toBe("light");
+    expect(await call(client, "read")).toBe("dark");
+    expect(await call(client, "read")).toBe("dark");
+  });
+
+  test("an entry with errorMessage fails that call only", async () => {
+    const client = createMockClient();
+    client.stubSequence("read", [{ textContent: "", errorMessage: "black screen" }, { textContent: "dark" }]);
+    await expect(call(client, "read")).rejects.toThrow(/tool failed: black screen/);
+    expect(await call(client, "read")).toBe("dark");
+  });
+
+  test("a sequence wins over a stub for the same tool, and reset clears it", async () => {
+    const client = createMockClient();
+    client.stub("read", { textContent: "stub" });
+    client.stubSequence("read", [{ textContent: "sequence" }]);
+    expect(await call(client, "read")).toBe("sequence");
+    client.reset();
+    expect(await call(client, "read")).toBe("");
+  });
+
+  test("an empty sequence or a blank tool name throws", () => {
+    const client = createMockClient();
+    expect(() => client.stubSequence("read", [])).toThrow(/at least one response/);
+    expect(() => client.stubSequence(" ", [{ textContent: "" }])).toThrow(/empty or whitespace-only/);
+  });
+});
+
 describe("createMockClient: tools Proxy guards", () => {
   const reserved = [
     "then",
