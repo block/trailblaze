@@ -24,7 +24,8 @@ import java.nio.file.Paths
  * trailmap-id-prefixed string like `trailmap:clock` for classpath-bundled ones.
  *
  * [example] is the captured screen tree + screenshot bundled alongside the waypoint
- * (`<id>.example.json` + `<id>.example.webp/png`).
+ * (`<id>.example.json` + `<id>.example.webp/png`, or a classifier-labeled pair when there is no
+ * unlabeled one — see [waypointExampleCandidates]).
  */
 data class WaypointDisplayItem(
   val definition: WaypointDefinition,
@@ -74,7 +75,7 @@ internal fun loadWaypoints(root: File, fromPath: Path = Paths.get("")): Waypoint
     idToFile = idToFile,
     trailmapContents = trailmapContents,
     root = root,
-    loadFilesystemExample = { file, id -> tryLoadFilesystemExample(file, id, exampleFailures, root) },
+    loadFilesystemExample = { file, def -> tryLoadFilesystemExample(file, def, exampleFailures, root) },
   )
 
   val rootFailureMessages = discovery.rootFailures.failures.map { failure ->
@@ -126,7 +127,7 @@ internal fun mergeWaypointSources(
   idToFile: Map<String, File>,
   trailmapContents: TrailmapContents,
   root: File,
-  loadFilesystemExample: (File, String) -> WaypointExample?,
+  loadFilesystemExample: (File, WaypointDefinition) -> WaypointExample?,
 ): List<WaypointDisplayItem> = definitions.map { def ->
   val isTrailmapProvenance = def.id in trailmapContents.ids
   val trailmapExample = trailmapContents.examples[def.id]
@@ -142,7 +143,7 @@ internal fun mergeWaypointSources(
     isTrailmapProvenance -> trailmapContents.idToTrailmapPath[def.id] ?: "(trailmap-bundled)"
     else -> "(trailmap-bundled)"
   }
-  val example = file?.let { loadFilesystemExample(it, def.id) } ?: trailmapExample?.example
+  val example = file?.let { loadFilesystemExample(it, def) } ?: trailmapExample?.example
   WaypointDisplayItem(definition = def, sourceLabel = sourceLabel, example = example)
 }
 
@@ -156,24 +157,61 @@ private fun buildIdToFileMap(root: File): Map<String, File> {
 }
 
 /**
- * Locates and parses the `<basename>.example.json` companion file next to a waypoint
- * YAML, returning a [WaypointExample] (tree + screenshot bytes) on success.
+ * The example files a waypoint's display may use, in preference order, as paths relative to
+ * the waypoint YAML's directory. The display shows one example, so it takes the first of these
+ * that exists:
+ *  1. the unlabeled default `<basename>.example.json`, then
+ *  2. the classifier-keyed examples, sorted by name so the pick is deterministic: the
+ *     `example.file` refs declared in the waypoint's classifier blocks, plus any
+ *     `<basename>.example.<classifier>.json` among [siblingFileNames].
+ *
+ * Without step 2, a waypoint whose only example was captured with a device classifier
+ * (`capture-example` writes `<basename>.example.<classifier>.json` and no default then) showed
+ * "(no screenshot)". The set mirrors the one `waypoint validate` resolves for its sibling examples.
+ *
+ * Lazy so the common case — a default example exists — never lists the directory, which for a
+ * classpath trailmap means a classpath scan per waypoint.
+ */
+internal fun waypointExampleCandidates(
+  basename: String,
+  definition: WaypointDefinition,
+  siblingFileNames: () -> Collection<String>,
+): Sequence<String> = sequence {
+  val default = "$basename.example.json"
+  yield(default)
+  val declared = definition.byClassifier.values.mapNotNull { it.example?.file }
+  val classifierLabeled = siblingFileNames().filter {
+    it.startsWith("$basename.example.") && it.endsWith(".json")
+  }
+  yieldAll((declared + classifierLabeled).filter { it != default }.distinct().sorted())
+}
+
+/**
+ * Locates and parses the example companion file next to a waypoint YAML (see
+ * [waypointExampleCandidates]), returning a [WaypointExample] (tree + screenshot bytes) on success.
  *
  * Reuses [SessionLogScreenState.loadStep] because example.json files are deliberately
  * shape-compatible with `_TrailblazeLlmRequestLog.json` files — same `trailblazeNodeTree`,
  * `screenshotFile`, `deviceWidth`/`deviceHeight` keys. Extra waypoint-specific fields
  * (`waypointId`, `capturedAt`, `capturedFrom`) are ignored thanks to
  * [xyz.block.trailblaze.logs.client.TrailblazeJson]'s `ignoreUnknownKeys = true`.
+ *
+ * `internal` for unit testing the example resolution against a real directory.
  */
-private fun tryLoadFilesystemExample(
+internal fun tryLoadFilesystemExample(
   waypointFile: File,
-  waypointId: String,
+  definition: WaypointDefinition,
   failures: MutableList<String>,
   root: File,
 ): WaypointExample? {
+  val waypointId = definition.id
   val basename = waypointFile.name.removeSuffix(".waypoint.yaml")
-  val exampleJson = File(waypointFile.parentFile, "$basename.example.json")
-  if (!exampleJson.exists()) return null
+  val exampleJson = waypointExampleCandidates(basename, definition) {
+    waypointFile.parentFile?.list()?.toList().orEmpty()
+  }
+    .map { File(waypointFile.parentFile, it) }
+    .firstOrNull { it.isFile }
+    ?: return null
   return try {
     val state = SessionLogScreenState.loadStep(exampleJson)
     val tree = state.trailblazeNodeTree ?: run {
@@ -322,11 +360,22 @@ internal fun loadTrailmapWaypointAndExample(
     failures += "$trailmapLabel: failed to parse waypoint yaml (${e.message ?: e::class.simpleName})"
     return null
   }
-  val basename = waypointPath.removeSuffix(".waypoint.yaml")
-  val exampleJsonPath = "$basename.example.json"
-  // example.json is optional — readSibling returning null means "no companion file",
-  // not a parse error, so we don't add a failure entry here.
-  val exampleText = runCatching { trailmap.source.readSibling(exampleJsonPath) }.getOrNull()
+  val parentDir = waypointPath.substringBeforeLast('/', missingDelimiterValue = "")
+  fun inParentDir(fileName: String) = if (parentDir.isEmpty()) fileName else "$parentDir/$fileName"
+  val basename = waypointPath.substringAfterLast('/').removeSuffix(".waypoint.yaml")
+  // The example is optional — readSibling returning null for every candidate means "no
+  // companion file", not a parse error, so we don't add a failure entry here.
+  val exampleText = waypointExampleCandidates(basename, def) {
+    // listSiblings rejects a blank dir; a waypoint at the trailmap root has no siblings to scan.
+    if (parentDir.isEmpty()) {
+      emptyList()
+    } else {
+      runCatching { trailmap.source.listSiblings(parentDir, suffixes = listOf(".json")) }
+        .getOrDefault(emptyList())
+        .map { it.substringAfterLast('/') }
+    }
+  }
+    .firstNotNullOfOrNull { runCatching { trailmap.source.readSibling(inParentDir(it)) }.getOrNull() }
     ?: return TrailmapParse(def.id, example = null)
   val projection = runCatching {
     TrailblazeJson.defaultWithoutToolsInstance
@@ -339,10 +388,8 @@ internal fun loadTrailmapWaypointAndExample(
     failures += "$trailmapLabel: example.json has no trailblazeNodeTree (waypoint=${def.id})"
     return TrailmapParse(def.id, example = null)
   }
-  val parentDir = waypointPath.substringBeforeLast('/', missingDelimiterValue = "")
   val screenshotBytes = projection.screenshotFile?.let { fileName ->
-    val relPath = if (parentDir.isEmpty()) fileName else "$parentDir/$fileName"
-    readTrailmapBytes(trailmap.source, relPath)
+    readTrailmapBytes(trailmap.source, inParentDir(fileName))
   }
   return TrailmapParse(
     id = def.id,
